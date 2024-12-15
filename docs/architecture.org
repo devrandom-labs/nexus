@@ -3,17 +3,12 @@
 - Totally Event Driven
 ** Services
 - following are the services needed for tixlys working
-*** steersman (load-balancer):
-- pingora based load balancer
-- SSL termination
-- Rate limiting
-- Throttling
-*** steersman-cpt (api-gateway):
-- transforms http to avro.
-- routing to kafka events
-- authentication
-- schema management
-- error handling
-  - circuit breaking
-  - retry
-- monitoring
+*** steersman (version: 1.0.0):
+- pingora proxy
+- transform http to avro
+- route events to kafka topics
+- circuit breaking
+- rate limiting
+- throttling
+- metrics and logs
+- security and auth
