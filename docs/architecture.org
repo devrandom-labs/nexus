@@ -1,0 +1,19 @@
+* Tixlys Core Architecture
+- Microservices
+- Totally Event Driven
+** Services
+- following are the services needed for tixlys working
+*** steersman (load-balancer):
+- pingora based load balancer
+- SSL termination
+- Rate limiting
+- Throttling
+*** steersman-cpt (api-gateway):
+- transforms http to avro.
+- routing to kafka events
+- authentication
+- schema management
+- error handling
+  - circuit breaking
+  - retry
+- monitoring
