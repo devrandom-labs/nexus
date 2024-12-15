@@ -1,0 +1,3 @@
+[submodule "kafka-config"]
+	path = kafka-config
+	url = git@github.com:tixlys/kafka-config.git
