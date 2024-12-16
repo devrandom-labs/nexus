@@ -49,12 +49,23 @@
         fileSetForCrate = crate:
           lib.fileset.toSource {
             root = ./.;
-            fileset = lib.fileset.unions [ ./Cargo.toml ./Cargo.lock ];
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              (craneLib.fileset.commonCargoSources crate)
+            ];
           };
+
+        steersman = craneLib.buildPackage (individualCrateArgs // {
+          pname = "steersman";
+          cargoExtraArgs = "-p steersman";
+          src = fileSetForCrate ./bin/steersman;
+        });
 
       in with pkgs; {
 
         checks = {
+          inherit steersman;
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
@@ -85,10 +96,12 @@
           });
         };
 
-        # packages = { } // lib.optionalAttrs (!stdenv.isDarwin) {
-        #   tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
-        #     (commonArgs // { inherit cargoArtifacts; });
-        # };
+        packages = {
+          inherit steersman;
+
+          tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
+            (commonArgs // { inherit cargoArtifacts; });
+        };
 
         devShells.default = let
           pkgsWithUnfree = import nixpkgs {
