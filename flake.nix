@@ -60,7 +60,10 @@
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
           });
 
-          tixlys-doc = craneLib.cargoFmt { inherit src; };
+          tixlys-doc =
+            craneLib.cargoDoc (commonArgs // { inherit cargoArtifacts; });
+
+          tixlys-fmt = craneLib.cargoFmt { inherit src; };
 
           tixlys-toml-fmt = craneLib.taploFmt {
             src = pkgs.lib.sources.sourceFilesBySuffices src [ ".toml" ];
@@ -82,13 +85,10 @@
           });
         };
 
-        packages = { } // lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
-          tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
-            (commonArgs // { inherit cargoArtifacts; });
-        };
-
-        # devShells.default =
-        #   mkShell { buildInputs = [ podman podman-compose kafkactl ]; };
+        # packages = { } // lib.optionalAttrs (!stdenv.isDarwin) {
+        #   tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
+        #     (commonArgs // { inherit cargoArtifacts; });
+        # };
 
         devShells.default = let
           pkgsWithUnfree = import nixpkgs {
