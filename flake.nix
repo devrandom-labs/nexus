@@ -32,7 +32,7 @@
         };
 
         craneLibLLvmTools = craneLib.overrideToolchain
-          (fenix.packages.${system}.complete.toolchain);
+          (fenix.packages.${system}.default.toolchain);
 
         # Build *just* the cargo dependencies (of the entire workspace),
         # so we can reuse all of that work (e.g. via cachix) when running in CI
