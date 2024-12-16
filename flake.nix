@@ -31,8 +31,8 @@
           buildInputs = with pkgs; [ ];
         };
 
-        craneLibLLvmTools =
-          craneLib.overrideToolchain (fenix.packages.${system}.complete);
+        craneLibLLvmTools = craneLib.overrideToolchain
+          (fenix.packages.${system}.complete.toolchain);
 
         # Build *just* the cargo dependencies (of the entire workspace),
         # so we can reuse all of that work (e.g. via cachix) when running in CI
