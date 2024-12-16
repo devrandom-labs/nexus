@@ -1,6 +1,8 @@
 [package]
 name = "steersman"
+license.workspace = true
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
 
 [dependencies]
