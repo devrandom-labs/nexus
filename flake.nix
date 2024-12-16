@@ -7,7 +7,7 @@
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        ## TODO: need jikkou in development shell for kafka state management
+
       in with pkgs; {
         devShells.default =
           mkShell { buildInputs = [ podman podman-compose kafkactl ]; };
