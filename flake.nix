@@ -53,7 +53,7 @@
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
-              (craneLib.fileset.commonCargoSources ./bin/steersman)
+              (craneLib.fileset.commonCargoSources ./bins/steersman)
             ];
           };
 
