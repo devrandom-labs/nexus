@@ -66,11 +66,20 @@
         ## crates
         ## personal scripts
 
-        startPodmanCompose = pkgs.writeShellScriptBin "podman-start" ''
-          exec podman-compose up -d
+        startInfra = pkgs.writeShellScriptBin "start-infra" ''
+          set -euo pipefail
+          podman compose up -d
+          if [[ $? -eq 0 ]]; then
+            echo "Podman compose started successfully. Applying Kafka configuration.."
+            cd ./kafka-config || exit 1
+            nix run .#apply
+          else
+            echo "Podman compose failed. Not applying Kafka configruation."
+            exit 1
+          fi
         '';
 
-        stopPodmanCompose = pkgs.writeShellScriptBin "podman-stop" ''
+        stopInfra = pkgs.writeShellScriptBin "stop-infra" ''
           exec podman-compose down
         '';
 
@@ -110,6 +119,8 @@
 
         packages = {
           inherit steersman;
+          start = startInfra;
+          stop = stopInfra;
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
