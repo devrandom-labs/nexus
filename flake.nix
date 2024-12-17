@@ -64,6 +64,15 @@
         });
 
         ## crates
+        ## personal scripts
+
+        startPodmanCompose = pkgs.writeShellScriptBin "podman-start" ''
+          exec podman-compose up -d
+        '';
+
+        stopPodmanCompose = pkgs.writeShellScriptBin "podman-stop" ''
+          exec podman-compose down
+        '';
 
       in with pkgs; {
 
@@ -101,7 +110,6 @@
 
         packages = {
           inherit steersman;
-
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
