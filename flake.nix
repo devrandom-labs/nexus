@@ -28,7 +28,7 @@
           inherit src;
           strictDeps = true;
           nativeBuildInputs = with pkgs; [ ];
-          buildInputs = with pkgs; [ ];
+          buildInputs = with pkgs; [ rust-analyzer ];
         };
 
         craneLibLLvmTools = craneLib.overrideToolchain
