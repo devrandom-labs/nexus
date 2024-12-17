@@ -52,7 +52,8 @@
             fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
-              (craneLib.fileset.commonCargoSources crate)
+              (craneLib.fileset.commonCargoSources ./crates/errors)
+              (craneLib.fileset.commonCargoSources ./bin/steersman)
             ];
           };
 
@@ -61,6 +62,8 @@
           cargoExtraArgs = "-p steersman";
           src = fileSetForCrate ./bin/steersman;
         });
+
+        ## crates
 
       in with pkgs; {
 

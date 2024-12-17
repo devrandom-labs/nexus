@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["bin/steersman"]
+members = ["bin/steersman", "crates/errors"]
 
 [workspace.dependencies]
 
