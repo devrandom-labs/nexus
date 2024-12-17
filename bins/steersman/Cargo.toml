@@ -6,3 +6,4 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+rdkafka = { workspace = true }
