@@ -3,7 +3,7 @@ resolver = "2"
 members = ["bins/steersman", "crates/errors"]
 
 [workspace.dependencies]
-thiserror = {workspace = true}
+thiserror = "2.0.7"
 
 [workspace.package]
 version = "0.1.0"
