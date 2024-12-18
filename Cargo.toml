@@ -3,6 +3,7 @@ resolver = "2"
 members = ["bins/events", "bins/steersman", "crates/errors"]
 
 [workspace.dependencies]
+chrono = "0.4.39"
 rdkafka = { version = "0.37.0", features = ["tracing", "cmake-build"] }
 thiserror = "2.0.7"
 

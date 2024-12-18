@@ -1,5 +1,6 @@
-pub struct EventId(String);
-pub struct CreateEvent;
-pub struct DeleteEvent {
-    id: EventId,
+use chrono::{DateTime, Utc};
+
+pub struct CreateEvent {
+    title: String,
+    created_on: DateTime<Utc>,
 }
