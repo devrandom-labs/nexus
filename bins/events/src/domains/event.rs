@@ -1,5 +1,20 @@
 use chrono::{DateTime, Utc};
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum Tag {
+    Music,
+    Summer,
+    Concert,
+}
+
+#[derive(Debug)]
+pub enum EventStatus {
+    Draft,
+    Active,
+    Cancelled,
+    Postponed,
+}
+
 pub struct EventId(Vec<u8>);
 pub struct Event {
     id: EventId,
