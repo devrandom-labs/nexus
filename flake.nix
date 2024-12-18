@@ -27,7 +27,7 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          nativeBuildInputs = with pkgs; [ ];
+          nativeBuildInputs = with pkgs; [ cmake ];
           buildInputs = with pkgs; [ rust-analyzer ];
         };
 
@@ -46,6 +46,7 @@
           doCheck = false;
         };
 
+        ## FIXME: fix giving path to this does not load it
         fileSetForCrate = crates:
           lib.fileset.toSource {
             root = ./.;
@@ -53,6 +54,8 @@
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
+              (craneLib.fileset.commonCargoSources ./bins/steersman)
+              (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
@@ -60,13 +63,13 @@
         steersman = craneLib.buildPackage (individualCrateArgs // {
           pname = "steersman";
           cargoExtraArgs = "-p steersman";
-          src = fileSetForCrate ./bins/steersman;
+          src = (fileSetForCrate ./bins/steersman);
         });
 
         events = craneLib.buildPackage (individualCrateArgs // {
           pname = "events";
           cargoExtraArgs = "-p steersman";
-          src = fileSetForCrate ./bins/events;
+          src = (fileSetForCrate ./bins/events);
         });
 
         ## crates
