@@ -6,4 +6,4 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-rdkafka = { workspace = true }
+rdkafka = { workspace = true, features = ["tracing", "cmake-build"] }
