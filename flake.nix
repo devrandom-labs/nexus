@@ -128,8 +128,8 @@
 
         packages = {
           inherit steersman events;
-          start = startInfra;
-          stop = stopInfra;
+          start-infra = startInfra;
+          stop-infra = stopInfra;
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
