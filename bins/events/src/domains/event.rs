@@ -16,7 +16,10 @@ pub enum EventStatus {
     Postponed,
 }
 
-pub struct EventId(Vec<u8>);
+#[derive(Debug)]
+pub struct EventId(String);
+
+#[derive(Debug)]
 pub struct Event {
     id: EventId,
     created_on: DateTime<Utc>,
@@ -25,5 +28,5 @@ pub struct Event {
     start_time: DateTime<Utc>, // optional?
     end_time: DateTime<Utc>,   // optional?
     status: EventStatus,
-    tag: Option<HashSet<Tag>>,
+    tags: Option<HashSet<Tag>>,
 }
