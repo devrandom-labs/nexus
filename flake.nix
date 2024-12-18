@@ -46,21 +46,27 @@
           doCheck = false;
         };
 
-        fileSetForCrate = crate:
+        fileSetForCrate = crates:
           lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
-              (craneLib.fileset.commonCargoSources ./bins/steersman)
+              (craneLib.fileset.commonCargoSources crates)
             ];
           };
 
         steersman = craneLib.buildPackage (individualCrateArgs // {
           pname = "steersman";
           cargoExtraArgs = "-p steersman";
-          src = fileSetForCrate ./bin/steersman;
+          src = fileSetForCrate ./bins/steersman;
+        });
+
+        events = craneLib.buildPackage (individualCrateArgs // {
+          pname = "events";
+          cargoExtraArgs = "-p steersman";
+          src = fileSetForCrate ./bins/events;
         });
 
         ## crates
@@ -86,7 +92,7 @@
       in with pkgs; {
 
         checks = {
-          inherit steersman;
+          inherit steersman events;
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
@@ -118,7 +124,7 @@
         };
 
         packages = {
-          inherit steersman;
+          inherit steersman events;
           start = startInfra;
           stop = stopInfra;
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
