@@ -6,6 +6,9 @@ pub struct Location {
 pub struct Address {
     line_1: String,
     line_2: Option<String>,
+    state: String,
+    pin_code: String,
+    city: String,
 }
 
 pub struct Coordinates {
