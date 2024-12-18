@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Tag {
@@ -23,4 +24,6 @@ pub struct Event {
     description: String,
     start_time: DateTime<Utc>, // optional?
     end_time: DateTime<Utc>,   // optional?
+    status: EventStatus,
+    tag: Option<HashSet<Tag>>,
 }
