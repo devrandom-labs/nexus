@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = [ "bins/events","bins/steersman", "crates/errors"]
+members = ["bins/events", "bins/steersman", "crates/errors"]
 
 [workspace.dependencies]
-thiserror = "2.0.7"
 rdkafka = { version = "0.37.0", features = ["tracing"] }
+thiserror = "2.0.7"
 
 [workspace.package]
 version = "0.1.0"
