@@ -56,6 +56,12 @@
           src = (fileSetForCrate ./bins/events);
         });
 
+        events-image = pkgs.dockerTools.buildLayeredImage {
+          name = "tixlys-core/events";
+          tag = "latest";
+          config.Cmd = "${events}/bin/events";
+        };
+
         ## crates
         ## personal scripts
         startInfra = pkgs.writeShellScriptBin "start-infra" ''
@@ -110,7 +116,7 @@
         };
 
         packages = {
-          inherit events;
+          inherit events-image;
           start-infra = startInfra;
           stop-infra = stopInfra;
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
