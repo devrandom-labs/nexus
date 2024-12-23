@@ -53,13 +53,12 @@
 
         events = craneLib.buildPackage (individualCrateArgs // {
           pname = "events";
-          cargoExtraArgs = "-p steersman";
+          cargoExtraArgs = "-p events";
           src = (fileSetForCrate ./bins/events);
         });
 
         ## crates
         ## personal scripts
-
         startInfra = pkgs.writeShellScriptBin "start-infra" ''
           set -euo pipefail
           podman compose up -d
