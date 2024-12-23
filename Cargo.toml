@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["bins/events", "bins/steersman", "crates/errors"]
+members = ["bins/events", "crates/errors"]
 
 [workspace.dependencies]
 chrono = "0.4.39"
