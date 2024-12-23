@@ -58,8 +58,9 @@
 
         events-image = pkgs.dockerTools.buildLayeredImage {
           name = "tixlys-core/events";
+          created = "now";
           tag = "latest";
-          config.Cmd = "${events}/bin/events";
+          config.Cmd = [ "${events}/bin/events" ];
         };
 
         ## crates

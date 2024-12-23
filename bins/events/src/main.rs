@@ -1,3 +1,3 @@
 fn main() {
-    println!("events application");
+    println!("hello world events");
 }
