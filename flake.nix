@@ -132,6 +132,7 @@
         in craneLib.devShell {
           checks = self.checks.${system};
           packages = with pkgsWithUnfree; [
+            dive
             podman
             podman-compose
             kafkactl
