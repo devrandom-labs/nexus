@@ -82,6 +82,10 @@
           exec podman-compose down
         '';
 
+        dive-docker = pkgs.writeShellScriptBin "dive-oci" ''
+          gunzip --stdout result > /tmp/image.tar && dive docker-archive:///tmp/image.tar
+        '';
+
       in with pkgs; {
 
         checks = {
@@ -120,6 +124,7 @@
           inherit events-image;
           start-infra = startInfra;
           stop-infra = stopInfra;
+          dive-docker = dive-docker;
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
