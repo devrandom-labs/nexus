@@ -26,7 +26,6 @@
           inherit src;
           strictDeps = true;
           nativeBuildInputs = with pkgs; [ cmake ];
-          buildInputs = with pkgs; [ rust-analyzer ];
         };
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
@@ -125,7 +124,12 @@
           };
         in craneLib.devShell {
           checks = self.checks.${system};
-          packages = with pkgsWithUnfree; [ podman podman-compose kafkactl ];
+          packages = with pkgsWithUnfree; [
+            podman
+            podman-compose
+            kafkactl
+            rust-analyzer
+          ];
         };
 
       });
