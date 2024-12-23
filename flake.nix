@@ -20,24 +20,16 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
-
         craneLib = crane.mkLib pkgs;
         src = craneLib.cleanCargoSource ./.;
-
         commonArgs = {
           inherit src;
           strictDeps = true;
           nativeBuildInputs = with pkgs; [ cmake ];
           buildInputs = with pkgs; [ rust-analyzer ];
         };
-
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
-
-        # Build *just* the cargo dependencies (of the entire workspace),
-        # so we can reuse all of that work (e.g. via cachix) when running in CI
-        # It is *highly* recommended to use something like cargo-hakari to avoid
-        # cache misses when building individual top-level-crates
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
         individualCrateArgs = commonArgs // {
@@ -54,17 +46,10 @@
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
-              (craneLib.fileset.commonCargoSources ./bins/steersman)
               (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
-
-        steersman = craneLib.buildPackage (individualCrateArgs // {
-          pname = "steersman";
-          cargoExtraArgs = "-p steersman";
-          src = (fileSetForCrate ./bins/steersman);
-        });
 
         events = craneLib.buildPackage (individualCrateArgs // {
           pname = "events";
@@ -95,7 +80,7 @@
       in with pkgs; {
 
         checks = {
-          inherit steersman events;
+          inherit events;
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
@@ -127,7 +112,7 @@
         };
 
         packages = {
-          inherit steersman events;
+          inherit events;
           start-infra = startInfra;
           stop-infra = stopInfra;
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
