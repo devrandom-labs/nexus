@@ -59,7 +59,6 @@
         events-image = pkgs.dockerTools.buildLayeredImage {
           name = "tixlys-core/events";
           tag = "latest";
-          contents = [ events ];
           config.Cmd = "${events}/bin/events";
         };
 
