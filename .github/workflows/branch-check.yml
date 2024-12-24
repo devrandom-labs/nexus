@@ -1,5 +1,5 @@
 name: Branch Check for tixlys-core
-run-name: ${{ gihub.actor }} checking out if code checks out
+run-name: checking out if code checks out
 on: [push]
 jobs:
   checks:
