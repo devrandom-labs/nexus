@@ -145,13 +145,13 @@
           ];
 
           shellHook = ''
-            echo "====================tixlys-core===================="
-            \n\n\n
-            echo "--------------------Available Commands--------------------"
-            \n
-            echo "``nix build .#events-image`` [Build events OCI Image]"
-            echo "``nix build .#events`` [Build events binary package]"
-            echo "``nix run .#dockerImage [Run div on built image]"
+            echo "tixlys development environment"
+            echo "<<<<<<<<<<<<<<<<<<<< Available Commands >>>>>>>>>>>>>>>>>>>>"
+            echo -e "\n\n\n"
+            echo "nix build .#events-image [Build events OCI Image]"
+            echo "nix build .#events [Build events binary package]"
+            echo "nix run .#dockerImage [Run dive on built image]"
+            echo -e "\n\n\n"
           '';
         };
 
