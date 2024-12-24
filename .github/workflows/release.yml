@@ -5,7 +5,7 @@ on:
       - main
       - dev
 jobs:
-  checks:
+  install:
     name: check tixlys-core
     runs-on: ubuntu-latest
     steps:
