@@ -12,12 +12,13 @@ on:
 
 jobs:
   checks:
-    name: nix flake check
+    name: Checks
     runs-on: ubuntu-latest
     steps:
-      - name: git checkout
+      - name: Git Checkout
         uses: actions/checkout@v4
-      - uses: nixbuild/nix-quick-install-action@v29
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v29
       - name: Restore and save Nix store
         uses: nix-community/cache-nix-action@v5
         with:
