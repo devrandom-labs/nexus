@@ -137,11 +137,12 @@
         in craneLib.devShell {
           checks = self.checks.${system};
           packages = with pkgsWithUnfree; [
-            dive
+            dive # inspect oci images
             podman
             podman-compose
             kafkactl
             rust-analyzer
+            act # # check github workflows locally
           ];
 
           shellHook = ''
@@ -154,6 +155,5 @@
             echo -e "\n\n\n"
           '';
         };
-
       });
 }
