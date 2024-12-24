@@ -155,8 +155,5 @@
             echo -e "\n\n\n"
           '';
         };
-
-        users.users.${USER}.groups = [ "podman" ]; # Add docker group
-
       });
 }
