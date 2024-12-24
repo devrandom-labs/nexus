@@ -1,5 +1,9 @@
 name: Branch Check for tixlys-core
-on: push
+on:
+  push:
+    branches-ignore:
+      - main
+      - dev
 jobs:
   checks:
     name: check tixlys-core
