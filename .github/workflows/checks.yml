@@ -29,5 +29,5 @@ jobs:
           purge-prefixes: cache-${{ runner.os }}-
           purge-created: 0
           purge-primary-key: never
-      - name: run flake check
+      - name: Flake Checking
         run: nix flake check
