@@ -5,16 +5,9 @@ on:
       - main
       - dev
 jobs:
-  install:
-    name: check tixlys-core
-    runs-on: ubuntu-latest
-    steps:
-    - name: git checkout
-      uses: actions/checkout@v4
-    - name: install nix
-      uses: cachix/install-nix-action@v27
-      with:
-        nix_path: nixpkgs=channel:nixos-unstable
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: checks
 
 
 ## TODO: release steps
