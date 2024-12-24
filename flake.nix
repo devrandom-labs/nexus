@@ -156,5 +156,7 @@
           '';
         };
 
+        users.users.${USER}.groups = [ "podman" ]; # Add docker group
+
       });
 }
