@@ -82,7 +82,7 @@
           exec podman-compose down
         '';
 
-        diveImage = pkgs.writeShellScriptBin "dive-image" ''
+        dive = pkgs.writeShellScriptBin "dive-image" ''
           gunzip --stdout result > /tmp/image.tar && dive docker-archive:///tmp/image.tar
         '';
 
@@ -124,7 +124,7 @@
           inherit events-image;
           start-infra = startInfra;
           stop-infra = stopInfra;
-          diveImage = diveImage;
+          dive = dive;
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
@@ -150,7 +150,7 @@
             echo -e "\n\n\n"
             echo "nix build .#events-image [Build events OCI Image]"
             echo "nix build .#events [Build events binary package]"
-            echo "nix run .#dockerImage [Run dive on built image]"
+            echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
         };
