@@ -37,7 +37,6 @@
           doCheck = false;
         };
 
-        ## FIXME: fix giving path to this does not load it
         fileSetForCrate = crates:
           lib.fileset.toSource {
             root = ./.;
@@ -45,23 +44,17 @@
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
-              (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
 
-        events = craneLib.buildPackage (individualCrateArgs // {
-          pname = "events";
-          cargoExtraArgs = "-p events";
-          src = (fileSetForCrate ./bins/events);
-        });
-
-        events-image = pkgs.dockerTools.buildLayeredImage {
-          name = "tixlys-core/events";
-          created = "now";
-          tag = "latest";
-          config.Cmd = [ "${events}/bin/events" ];
-        };
+        mkBinaries = name:
+          let
+            path = ./bins/${name}/build.nix;
+            _ = assert builtins.pathExists path; true;
+          in pkgs.callPackage path {
+            inherit craneLib fileSetForCrate individualCrateArgs;
+          };
 
         ## crates
         ## personal scripts
@@ -87,9 +80,8 @@
         '';
 
       in with pkgs; {
-
         checks = {
-          inherit events;
+          events = mkBinaries "events";
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
@@ -121,10 +113,12 @@
         };
 
         packages = {
-          inherit events-image;
+          events = mkBinaries "events";
           start-infra = startInfra;
           stop-infra = stopInfra;
           dive = dive;
+
+          ## FIXME: only put this for darwin? maybe
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
@@ -137,11 +131,12 @@
         in craneLib.devShell {
           checks = self.checks.${system};
           packages = with pkgsWithUnfree; [
-            dive
+            dive # inspect oci images
             podman
             podman-compose
             kafkactl
             rust-analyzer
+            release-plz
           ];
 
           shellHook = ''
@@ -154,6 +149,5 @@
             echo -e "\n\n\n"
           '';
         };
-
       });
 }
