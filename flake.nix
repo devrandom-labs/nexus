@@ -145,6 +145,7 @@
             kafkactl
             rust-analyzer
             act # # check github workflows locally
+            release-plz
           ];
 
           shellHook = ''
