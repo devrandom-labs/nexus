@@ -1,0 +1,36 @@
+name: checks
+on:
+  push:
+    branches-ignore:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Git Checkout
+        uses: actions/checkout@v4
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v29
+      - name: Restore and save Nix store
+        uses: nix-community/cache-nix-action@v5
+        with:
+          primary-key: build-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'Cargo.toml', 'flake.nix', 'flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 1073741824
+          purge: true
+          purge-prefixes: cache-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+      - name: Flake Checking
+        run: nix flake check

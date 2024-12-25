@@ -1,0 +1,31 @@
+name: Build and publish OCI image
+permissions:
+  contents: write
+on:
+  release:
+    types: [published]
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-dept: 0
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v29
+      - name: Restore and save Nix store
+        uses: nix-community/cache-nix-action@v5
+        with:
+          primary-key: build-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'Cargo.toml', 'flake.nix', 'flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 1073741824
+          purge: true
+          purge-prefixes: cache-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+      - name: Get the release tag
+        id: get_tag
+        run: echo "TAG=$(git describe --tags --abbrev=0 | grep events)" >> $GITHUB_ENV
+      - name: Build events image
+        run: nix build .#events
