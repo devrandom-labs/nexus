@@ -1,0 +1,25 @@
+name: Release
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depts: 0
+      - name: Install nix
+        uses: nixbuild/nix-quick-install-action@v29
+      - name: Check semver
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+      - name: Run release
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
