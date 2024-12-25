@@ -37,7 +37,6 @@
           doCheck = false;
         };
 
-
         fileSetForCrate = crates:
           lib.fileset.toSource {
             root = ./.;
@@ -81,8 +80,8 @@
         '';
 
       in with pkgs; {
-
         checks = {
+          events = mkBinaries "events";
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
