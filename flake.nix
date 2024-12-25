@@ -50,18 +50,26 @@
             ];
           };
 
-        events = craneLib.buildPackage (individualCrateArgs // {
-          pname = "events";
-          cargoExtraArgs = "-p events";
-          src = (fileSetForCrate ./bins/events);
-        });
+        mkBinaries = name:
+          let
+            path = ./bins/${name}/build.nix;
+            _ = assert builtins.pathExists path; true;
+          in pkgs.callPackage path {
+            inherit craneLib fileSetForCrate individualCrateArgs;
+          };
 
-        events-image = pkgs.dockerTools.buildLayeredImage {
-          name = "tixlys-core/events";
-          created = "now";
-          tag = "latest";
-          config.Cmd = [ "${events}/bin/events" ];
-        };
+        # events = craneLib.buildPackage (individualCrateArgs // {
+        #   pname = "events";
+        #   cargoExtraArgs = "-p events";
+        #   src = (fileSetForCrate ./bins/events);
+        # });
+
+        # events-image = pkgs.dockerTools.buildLayeredImage {
+        #   name = "tixlys-core/events";
+        #   created = "now";
+        #   tag = "latest";
+        #   config.Cmd = [ "${events}/bin/events" ];
+        # };
 
         ## crates
         ## personal scripts
@@ -89,7 +97,6 @@
       in with pkgs; {
 
         checks = {
-          inherit events;
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
@@ -121,7 +128,7 @@
         };
 
         packages = {
-          inherit events-image;
+          events = mkBinaries "events";
           start-infra = startInfra;
           stop-infra = stopInfra;
           dive = dive;
