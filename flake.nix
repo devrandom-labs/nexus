@@ -125,6 +125,8 @@
           start-infra = startInfra;
           stop-infra = stopInfra;
           dive = dive;
+
+          ## FIXME: only put this for darwin? maybe
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
