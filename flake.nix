@@ -37,7 +37,7 @@
           doCheck = false;
         };
 
-        ## FIXME: fix giving path to this does not load it
+
         fileSetForCrate = crates:
           lib.fileset.toSource {
             root = ./.;
@@ -45,7 +45,6 @@
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
-              (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
@@ -57,19 +56,6 @@
           in pkgs.callPackage path {
             inherit craneLib fileSetForCrate individualCrateArgs;
           };
-
-        # events = craneLib.buildPackage (individualCrateArgs // {
-        #   pname = "events";
-        #   cargoExtraArgs = "-p events";
-        #   src = (fileSetForCrate ./bins/events);
-        # });
-
-        # events-image = pkgs.dockerTools.buildLayeredImage {
-        #   name = "tixlys-core/events";
-        #   created = "now";
-        #   tag = "latest";
-        #   config.Cmd = [ "${events}/bin/events" ];
-        # };
 
         ## crates
         ## personal scripts
