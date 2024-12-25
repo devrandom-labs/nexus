@@ -32,3 +32,4 @@ jobs:
           purge-primary-key: never
       - name: Flake Checking
         run: nix flake check
+## TODO: run integration tests if its a pull request into main

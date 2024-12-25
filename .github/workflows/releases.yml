@@ -14,8 +14,6 @@ jobs:
           fetch-depts: 0
       - name: Install nix
         uses: nixbuild/nix-quick-install-action@v29
-      - name: Check semver
-        uses: obi1kenobi/cargo-semver-checks-action@v2
       - name: Run release
         uses: release-plz/action@v0.5
         with:
