@@ -1,4 +1,4 @@
-name: Build and publish OCI image
+name: deploys
 permissions:
   contents: write
 on:
