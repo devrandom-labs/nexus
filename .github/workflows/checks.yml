@@ -3,11 +3,9 @@ on:
   push:
     branches-ignore:
       - main
-      - dev
   pull_request:
     branches:
       - main
-      - dev
   workflow_dispatch:
 
 jobs:
@@ -18,7 +16,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      - name: Git Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
       - name: Install Nix
         uses: nixbuild/nix-quick-install-action@v29
@@ -34,3 +32,4 @@ jobs:
           purge-primary-key: never
       - name: Flake Checking
         run: nix flake check
+## TODO: run integration tests if its a pull request into main

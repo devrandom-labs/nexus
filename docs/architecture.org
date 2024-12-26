@@ -3,12 +3,20 @@
 - Totally Event Driven
 ** Services
 - following are the services needed for tixlys working
-*** steersman (version: 1.0.0):
+*** steersman (version: 0.x.x):
 - pingora proxy
-- transform http to avro
-- route events to kafka topics
-- circuit breaking
-- rate limiting
-- throttling
-- metrics and logs
+- ssl termination
 - security and auth (mock)
+*** events (version: 0.x.x)
+- create events
+- update events
+- delete events
+- get events
+- list events
+*** sphynx (version: 0.x.x)
+- user management
+- autentication
+- authorization
+*** tickets (version: 0.x.x)
+- generate tickets
+- sell tickets
