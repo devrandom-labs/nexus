@@ -4,8 +4,4 @@ semver_check = true
 
 [[package]]
 name = "errors"
-publish = false
-
-[[package]]
-name = "events"
-publish = false
+release = false
