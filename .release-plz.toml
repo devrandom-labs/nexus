@@ -1,0 +1,11 @@
+[workspace]
+pr_branch_prefix = "release-"
+semver_check = true
+
+[[package]]
+name = "error"
+publish = false
+
+[[package]]
+name = "events"
+publish = false
