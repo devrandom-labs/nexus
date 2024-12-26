@@ -1,3 +1,7 @@
 [workspace]
 pr_branch_prefix = "release-"
 semver_check = true
+
+[[package]]
+name = "errors"
+release = false
