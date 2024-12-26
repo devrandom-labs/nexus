@@ -13,10 +13,28 @@
 - delete events
 - get events
 - list events
+- add to calendar (action)
+*** contacts (version: 0.x.x)
+- create contact
+- delete contact
+- update contact
+- get contact
+- import phone contacts (action)
+- import email contacts (action)
+*** template hub (version: 0.x.x)
+- create templates
+- delete template
+- update template
+- get templates
+*** notification (version: 0.x.x)
+- notify(type, template)
 *** sphynx (version: 0.x.x)
 - user management
 - autentication
 - authorization
-*** tickets (version: 0.x.x)
-- generate tickets
-- sell tickets
+*** booking (version: 0.x.x)
+- book event
+- set reminder for booked event
+- get booked event info
+- get all booked event
+- cancel booked event
