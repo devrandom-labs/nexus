@@ -3,7 +3,7 @@ pr_branch_prefix = "release-"
 semver_check = true
 
 [[package]]
-name = "error"
+name = "errors"
 publish = false
 
 [[package]]
