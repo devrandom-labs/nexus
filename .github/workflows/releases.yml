@@ -12,6 +12,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depts: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
       - name: Install nix
         uses: nixbuild/nix-quick-install-action@v29
       - name: Run release
@@ -19,7 +20,7 @@ jobs:
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
   release-pr:
     name: Release PR
     runs-on: ubuntu-latest
@@ -40,4 +41,4 @@ jobs:
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
