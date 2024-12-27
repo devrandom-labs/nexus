@@ -1,20 +1,17 @@
-name: checks
+name: integration
 on:
-  push:
-    branches-ignore:
+  pull_request:
+    branches:
       - main
   workflow_dispatch:
-
 jobs:
-  checks:
-    name: Checks
+  build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-dept: 0
       - name: Install Nix
         uses: nixbuild/nix-quick-install-action@v29
       - name: Restore and save Nix store
@@ -27,6 +24,3 @@ jobs:
           purge-prefixes: cache-${{ runner.os }}-
           purge-created: 0
           purge-primary-key: never
-      - name: Flake Checking
-        run: nix flake check
-## TODO: run integration tests if its a pull request into main
