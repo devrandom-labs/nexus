@@ -1,12 +1,13 @@
 name: deploys
-permissions:
-  contents: write
+concurrency: production
 on:
-  release:
-    types: [published]
+  push:
+    branches:
+      - main
 jobs:
-  build-and-push:
+  deployment:
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,8 +25,5 @@ jobs:
           purge-prefixes: cache-${{ runner.os }}-
           purge-created: 0
           purge-primary-key: never
-      - name: Get the release tag
-        id: get_tag
-        run: echo "TAG=$(git describe --tags --abbrev=0 | grep events)" >> $GITHUB_ENV
       - name: Build events image
         run: nix build .#events

@@ -136,7 +136,6 @@
             podman-compose
             kafkactl
             rust-analyzer
-            release-plz
           ];
 
           shellHook = ''
