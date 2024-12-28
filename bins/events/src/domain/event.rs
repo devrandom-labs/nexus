@@ -53,6 +53,7 @@ mod tests {
     use super::*;
 
     const EVENT_ID: &str = "event-id";
+    #[allow(dead_code)]
     const EVENT_NAME: &str = "event name";
 
     #[test]
