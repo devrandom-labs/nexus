@@ -52,18 +52,22 @@ impl Event {
 mod tests {
     use super::*;
 
+    const EVENT_ID: &str = "event-id";
+    const EVENT_NAME: &str = "event name";
+
     #[test]
     fn should_create_event_id() {
-        let id = "some_id";
-
-        let event_id = EventId::new(id.to_string()).unwrap();
-        assert_eq!(id, event_id.value());
+        let event_id = EventId::new(EVENT_ID.to_string()).unwrap();
+        assert_eq!(EVENT_ID, event_id.value());
     }
 
     #[test]
     fn event_id_should_not_be_created_if_empty() {
         let id = "".to_string();
-        let event_id = EventId::new(id.clone());
+        let event_id = EventId::new(id);
         assert!(event_id.is_err());
     }
+
+    #[test]
+    fn event_should_be_created() {}
 }
