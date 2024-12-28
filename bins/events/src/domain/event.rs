@@ -5,7 +5,7 @@ pub enum EventError {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct EventId(pub String);
+pub struct EventId(String);
 
 impl EventId {
     #[allow(dead_code)]
@@ -16,7 +16,13 @@ impl EventId {
 
         Ok(EventId(id))
     }
+
+    #[allow(dead_code)]
+    pub fn value(&self) -> &str {
+        &self.0
+    }
 }
+
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Event {
@@ -30,10 +36,10 @@ mod tests {
 
     #[test]
     fn should_create_event_id() {
-        let id = "some_id".to_string();
+        let id = "some_id";
 
-        let event_id = EventId::new(id.clone()).unwrap();
-        assert_eq!(id, event_id.0);
+        let event_id = EventId::new(id.to_string()).unwrap();
+        assert_eq!(id, event_id.value());
     }
 
     #[test]
