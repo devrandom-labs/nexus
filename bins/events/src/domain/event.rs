@@ -1,14 +1,15 @@
 #[derive(Debug)]
 pub enum EventError {
     InvalidId,
+    EmptyTitle,
 }
 
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct EventId(String);
 
+#[allow(dead_code)]
 impl EventId {
-    #[allow(dead_code)]
     pub fn new(id: String) -> Result<Self, EventError> {
         if id.is_empty() {
             return Err(EventError::InvalidId);
@@ -17,9 +18,15 @@ impl EventId {
         Ok(EventId(id))
     }
 
-    #[allow(dead_code)]
     pub fn value(&self) -> &str {
         &self.0
+    }
+}
+
+impl TryFrom<String> for EventId {
+    type Error = EventError;
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        Self::new(id)
     }
 }
 
@@ -28,6 +35,17 @@ impl EventId {
 pub struct Event {
     id: EventId,
     title: String,
+}
+
+#[allow(dead_code)]
+impl Event {
+    pub fn new(id: EventId, title: String) -> Result<Self, EventError> {
+        if title.is_empty() {
+            return Err(EventError::EmptyTitle);
+        }
+
+        Ok(Event { id, title })
+    }
 }
 
 #[cfg(test)]
