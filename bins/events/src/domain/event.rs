@@ -3,10 +3,12 @@ pub enum EventError {
     InvalidId,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct EventId(pub String);
 
 impl EventId {
+    #[allow(dead_code)]
     pub fn new(id: String) -> Result<Self, EventError> {
         if id.is_empty() {
             return Err(EventError::InvalidId);
@@ -15,7 +17,7 @@ impl EventId {
         Ok(EventId(id))
     }
 }
-
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Event {
     id: EventId,
