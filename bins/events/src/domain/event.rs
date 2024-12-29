@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum EventError {
     InvalidId,
     EmptyTitle,
@@ -66,6 +66,7 @@ mod tests {
         let id = "".to_string();
         let event_id = EventId::new(id);
         assert!(event_id.is_err());
+        assert_eq!(event_id.unwrap_err(), EventError::InvalidId);
     }
 
     #[test]
@@ -75,5 +76,13 @@ mod tests {
 
         assert_eq!(EVENT_NAME, &event.title);
         assert_eq!(EVENT_ID, event.id.value());
+    }
+
+    #[test]
+    fn event_not_created_on_empty_title() {
+        let event_id = EventId::try_from(EVENT_ID.to_string()).unwrap();
+        let event = Event::new(event_id, "".to_string());
+        assert!(event.is_err());
+        assert_eq!(event.unwrap_err(), EventError::EmptyTitle);
     }
 }
