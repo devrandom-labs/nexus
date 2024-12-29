@@ -53,7 +53,6 @@ mod tests {
     use super::*;
 
     const EVENT_ID: &str = "event-id";
-    #[allow(dead_code)]
     const EVENT_NAME: &str = "event name";
 
     #[test]
@@ -70,5 +69,11 @@ mod tests {
     }
 
     #[test]
-    fn event_should_be_created() {}
+    fn event_should_be_created() {
+        let event_id = EventId::try_from(EVENT_ID.to_string()).unwrap();
+        let event = Event::new(event_id, EVENT_NAME.to_string()).unwrap();
+
+        assert_eq!(EVENT_NAME, &event.title);
+        assert_eq!(EVENT_ID, event.id.value());
+    }
 }
