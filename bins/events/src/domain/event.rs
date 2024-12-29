@@ -1,15 +1,35 @@
+//! This module defines the `Events` struct and releated types.
+
 #[derive(Debug, PartialEq)]
+/// Errors that can occur when creating the `Event` or `EventId`.
 pub enum EventError {
+    /// Indicates that an invalid ID was provided.
     InvalidId,
+    /// Indicates that an empty title was provided.
     EmptyTitle,
 }
 
+/// A unique identifier for an event.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct EventId(String);
 
 #[allow(dead_code)]
 impl EventId {
+    /// Creates a new `EventId`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `EventError::InvalidId` if the provided `id` is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use events::EventId;
+    ///
+    /// let event_id = EventId::new("event-123".to_string()).unwrap();
+    /// assert_eq!(event_id.value(), "event-123");
+    /// ```
     pub fn new(id: String) -> Result<Self, EventError> {
         if id.is_empty() {
             return Err(EventError::InvalidId);
@@ -18,6 +38,14 @@ impl EventId {
         Ok(EventId(id))
     }
 
+    /// Returns the value of the `EventId`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use events::EventId;
+    /// let event_id = EventId::new("event-123".to_string()).unwrap();
+    /// assert_eq!(event_id.value(), "event-123");
     pub fn value(&self) -> &str {
         &self.0
     }
@@ -25,11 +53,28 @@ impl EventId {
 
 impl TryFrom<String> for EventId {
     type Error = EventError;
+
+    /// Creates a new `EventId` from a `String`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `EventError::InvalidId` if the provided `id` is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use events::EventId;
+    /// use std::convert::TryFrom;
+    ///
+    /// let event_id = EventId::try_from("event-123".to_string()).unwrap();
+    /// assert_eq!(event_id.value(), "event-123");
+    /// ```
     fn try_from(id: String) -> Result<Self, Self::Error> {
         Self::new(id)
     }
 }
 
+/// Represents an event with an ID and a title.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Event {
@@ -39,6 +84,21 @@ pub struct Event {
 
 #[allow(dead_code)]
 impl Event {
+    /// Creates a new `Event`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `EventError::EmptyTitle` if the provided `title` is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use events::{Event, EventId};
+    ///
+    /// let event_id = EventId::new("event-123".to_string()).unwrap();
+    /// let event = Event::new(event_id, "My Event".to_string()).unwrap();
+    /// assert_eq!(event.title, "My Event");
+    /// ```
     pub fn new(id: EventId, title: String) -> Result<Self, EventError> {
         if title.is_empty() {
             return Err(EventError::EmptyTitle);
