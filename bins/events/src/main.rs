@@ -1,3 +1,4 @@
+mod application;
 mod domain;
 
 fn main() {
