@@ -1,4 +1,5 @@
 mod application;
+mod cqrs;
 mod domain;
 
 fn main() {
