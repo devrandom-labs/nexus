@@ -3,4 +3,5 @@ pub trait Aggregate: Send + Sync {
     type Events;
     type Errors;
     fn handle(&self, commands: Self::Commands) -> Result<Vec<Self::Events>, Self::Errors>;
+    fn apply(&mut self, event: Self::Events);
 }
