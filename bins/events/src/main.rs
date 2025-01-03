@@ -30,6 +30,19 @@ pub enum Events {
 }
 
 impl EventAggregate {
+    pub fn handle(&self, commands: Commands) -> Result<Vec<Events>, String> {
+        match commands {
+            Commands::CreateEvent { id, title } => Ok(vec![Events::EventCreated {
+                id,
+                title,
+                status: EventStatus::Draft,
+            }]),
+            Commands::DeleteEvent { id } => Ok(vec![Events::EventDeleted {
+                id,
+                status: EventStatus::Deleted,
+            }]),
+        }
+    }
     pub fn apply(&mut self, events: Events) {
         match events {
             Events::EventCreated { title, status, .. } => {
