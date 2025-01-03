@@ -1,6 +1,7 @@
 mod application;
 mod cqrs;
 mod domain;
+mod infra;
 
 fn main() {
     println!("hello world events");

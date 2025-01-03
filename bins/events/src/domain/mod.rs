@@ -6,7 +6,15 @@ pub mod event;
 
 pub enum EventErrors {}
 
-pub struct EventAggregate;
+pub struct EventAggregate {
+    id: String,
+}
+
+impl EventAggregate {
+    fn new(id: String) -> Self {
+        EventAggregate { id }
+    }
+}
 
 impl Aggregate for EventAggregate {
     type Commands = EventCommand;
@@ -18,8 +26,8 @@ impl Aggregate for EventAggregate {
             EventCommand::DeleteEvent => Ok(vec![EventEvent::EventDeleted]),
         }
     }
-    fn apply(&mut self, _event: Self::Events) {}
-    fn get_aggregate() -> String {
-        "event".to_string()
+    fn apply(&mut self, _event: Self::Events) {} // shouldnt apply create the aggregate? returns a new aggregate?
+    fn get_id(&self) -> &str {
+        &self.id
     }
 }
