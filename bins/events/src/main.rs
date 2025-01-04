@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub enum EventStatus {
     Draft,
     Cancelled,
@@ -6,6 +7,7 @@ pub enum EventStatus {
     Deleted,
 }
 
+#[derive(Default)]
 pub struct EventAggregate {
     id: String,
     title: String,
