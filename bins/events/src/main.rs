@@ -10,6 +10,7 @@ pub enum EventStatus {
 
 #[derive(Default)]
 pub struct EventAggregate {
+    #[allow(dead_code)]
     id: String,
     title: String,
     status: EventStatus,
