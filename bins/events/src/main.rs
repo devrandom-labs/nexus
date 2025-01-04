@@ -1,5 +1,6 @@
 #[derive(Default)]
 pub enum EventStatus {
+    #[default]
     Draft,
     Cancelled,
     Published,
