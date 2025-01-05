@@ -126,6 +126,26 @@ mod tests {
         ea
     }
 
+    fn get_published_event() -> EventAggregate {
+        let mut ea = EventAggregate::default();
+        let history = vec![
+            Events::Created {
+                id: "1".to_string(),
+                title: "some event".to_string(),
+                status: EventStatus::Draft,
+            },
+            Events::Published {
+                id: "1".to_string(),
+                status: EventStatus::Published,
+            },
+        ];
+
+        for event in history {
+            ea.apply(event);
+        }
+        ea
+    }
+
     #[test]
     fn create_events_aggregator_with_defaults() {
         let event_aggregator = EventAggregate::default();
@@ -180,7 +200,18 @@ mod tests {
     }
 
     #[test]
-    fn should_cancel_from_publish() {}
+    fn should_cancel_from_publish() {
+        let ea = get_published_event();
+        let cancel_command = Commands::Cancel {
+            id: "1".to_string(),
+        };
+        let output_events = ea.handle(cancel_command).unwrap();
+        let expected_events = vec![Events::Cancelled {
+            id: "1".to_string(),
+            status: EventStatus::Cancelled,
+        }];
+        assert_eq!(output_events, expected_events);
+    }
 }
 
 // TODO: compile time type checking that publish events can only have publish status
