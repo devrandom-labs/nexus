@@ -123,4 +123,22 @@ mod tests {
         assert_eq!(event_aggregator.id, EVENT_ID);
         assert_eq!(event_aggregator.title, EVENT_TITLE);
     }
+
+    #[test]
+    fn should_emit_created_event() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn should_emit_cancelled_event() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn should_emit_published_event() {
+        unimplemented!()
+    }
+
+    #[test]
+    fn should_emit_completed_event() {}
 }
