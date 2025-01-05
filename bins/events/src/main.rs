@@ -5,6 +5,7 @@ use tracing_subscriber::{
     EnvFilter, Layer,
 };
 mod events;
+mod events_v2;
 
 #[instrument]
 fn main() {

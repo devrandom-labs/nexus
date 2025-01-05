@@ -6,6 +6,7 @@ members = ["bins/events", "crates/errors"]
 thiserror = "2.0.7"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+chrono = "0.4.39"
 
 [workspace.package]
 version = "0.1.0"
