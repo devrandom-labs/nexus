@@ -9,6 +9,9 @@ pub enum EventStatus {
     Completed,
 }
 
+/// Have derived default so initially the state would be empty,
+/// to apply events on it and rehydrate it.
+/// we can actually deserialize it from the aggregator snapshot, but thats later.
 #[derive(Default, Debug)]
 pub struct EventAggregate {
     id: String,
@@ -24,7 +27,7 @@ pub enum Commands {
     Complete { id: String },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Events {
     Created {
         id: String,
@@ -49,10 +52,6 @@ pub enum Events {
 }
 
 impl EventAggregate {
-    pub fn new(id: String, title: String, status: EventStatus) -> Self {
-        EventAggregate { id, title, status }
-    }
-
     pub fn handle(&self, commands: Commands) -> Result<Vec<Events>, String> {
         match commands {
             Commands::Create { id, title } => Ok(vec![Events::Created {
@@ -95,7 +94,8 @@ impl EventAggregate {
     }
     pub fn apply(&mut self, events: Events) {
         match events {
-            Events::Created { title, status, .. } => {
+            Events::Created { title, status, id } => {
+                self.id = id;
                 self.title = title;
                 self.status = status;
             }
@@ -115,29 +115,34 @@ mod tests {
 
     #[test]
     fn create_events_aggregator_with_defaults() {
-        let status = EventStatus::default();
-        assert_eq!(status, EventStatus::Draft);
-        let event_aggregator =
-            EventAggregate::new(EVENT_ID.to_string(), EVENT_TITLE.to_string(), status);
-
-        assert_eq!(event_aggregator.id, EVENT_ID);
-        assert_eq!(event_aggregator.title, EVENT_TITLE);
+        let event_aggregator = EventAggregate::default();
+        assert_eq!(event_aggregator.id, "".to_string());
+        assert_eq!(event_aggregator.title, "".to_string());
+        assert_eq!(event_aggregator.status, EventStatus::Draft);
     }
 
     #[test]
     fn should_emit_created_event() {
-        unimplemented!()
+        let ea = EventAggregate::default();
+        let create_command = Commands::Create {
+            id: "1".to_string(),
+            title: "some event".to_string(),
+        };
+
+        let output_events = ea.handle(create_command).unwrap();
+        let expected_events = vec![Events::Created {
+            id: "1".to_string(),
+            title: "some event".to_string(),
+            status: EventStatus::Draft,
+        }];
+        assert_eq!(output_events, expected_events);
     }
 
     #[test]
-    fn should_emit_cancelled_event() {
-        unimplemented!()
-    }
+    fn should_emit_cancelled_event() {}
 
     #[test]
-    fn should_emit_published_event() {
-        unimplemented!()
-    }
+    fn should_emit_published_event() {}
 
     #[test]
     fn should_emit_completed_event() {}
