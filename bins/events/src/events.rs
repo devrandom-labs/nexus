@@ -7,32 +7,47 @@ pub enum EventStatus {
     Cancelled,
     Published,
     Completed,
-    Deleted,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct EventAggregate {
     id: String,
     title: String,
     status: EventStatus,
 }
 
+#[derive(Debug)]
 pub enum Commands {
-    CreateEvent { id: String, title: String },
-    DeleteEvent { id: String },
+    Create { id: String, title: String },
+    Cancel { id: String },
+    Publish { id: String },
+    Complete { id: String },
 }
 
+#[derive(Debug)]
 pub enum Events {
-    EventCreated {
+    Created {
         id: String,
         title: String,
         status: EventStatus,
     },
-    EventDeleted {
+
+    Cancelled {
+        id: String,
+        status: EventStatus,
+    },
+
+    Completed {
+        id: String,
+        status: EventStatus,
+    },
+
+    Published {
         id: String,
         status: EventStatus,
     },
 }
+
 impl EventAggregate {
     pub fn new(id: String, title: String, status: EventStatus) -> Self {
         EventAggregate { id, title, status }
@@ -40,26 +55,53 @@ impl EventAggregate {
 
     pub fn handle(&self, commands: Commands) -> Result<Vec<Events>, String> {
         match commands {
-            Commands::CreateEvent { id, title } => Ok(vec![Events::EventCreated {
+            Commands::Create { id, title } => Ok(vec![Events::Created {
                 id,
                 title,
                 status: EventStatus::Draft,
             }]),
-            Commands::DeleteEvent { id } => Ok(vec![Events::EventDeleted {
-                id,
-                status: EventStatus::Deleted,
-            }]),
+
+            Commands::Cancel { id } => {
+                if let EventStatus::Published | EventStatus::Draft = &self.status {
+                    Ok(vec![Events::Cancelled {
+                        id,
+                        status: EventStatus::Cancelled,
+                    }])
+                } else {
+                    Err("Cannot cancel event".to_string())
+                }
+            }
+            Commands::Complete { id } => {
+                if let EventStatus::Published = &self.status {
+                    Ok(vec![Events::Completed {
+                        id,
+                        status: EventStatus::Completed,
+                    }])
+                } else {
+                    Err("Cannot complete event".to_string())
+                }
+            }
+            Commands::Publish { id } => {
+                if let EventStatus::Draft = &self.status {
+                    Ok(vec![Events::Published {
+                        id,
+                        status: EventStatus::Published,
+                    }])
+                } else {
+                    Err("Cannot publish event".to_string())
+                }
+            }
         }
     }
     pub fn apply(&mut self, events: Events) {
         match events {
-            Events::EventCreated { title, status, .. } => {
+            Events::Created { title, status, .. } => {
                 self.title = title;
                 self.status = status;
             }
-            Events::EventDeleted { status, .. } => {
-                self.status = status;
-            }
+            Events::Completed { status, .. }
+            | Events::Published { status, .. }
+            | Events::Cancelled { status, .. } => self.status = status,
         }
     }
 }
