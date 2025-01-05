@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 #[derive(Default, Debug, PartialEq)]
 pub enum EventStatus {
     #[default]
@@ -8,6 +9,7 @@ pub enum EventStatus {
     Deleted,
 }
 
+#[allow(dead_code)]
 #[derive(Default)]
 pub struct EventAggregate {
     id: String,
@@ -15,11 +17,13 @@ pub struct EventAggregate {
     status: EventStatus,
 }
 
+#[allow(dead_code)]
 pub enum Commands {
     CreateEvent { id: String, title: String },
     DeleteEvent { id: String },
 }
 
+#[allow(dead_code)]
 pub enum Events {
     EventCreated {
         id: String,
@@ -32,6 +36,7 @@ pub enum Events {
     },
 }
 
+#[allow(dead_code)]
 impl EventAggregate {
     pub fn new(id: String, title: String, status: EventStatus) -> Self {
         EventAggregate { id, title, status }
@@ -67,9 +72,10 @@ impl EventAggregate {
 mod tests {
     use super::*;
 
-    static EVENT_ID: &'static str = "event-id";
-    static EVENT_TITLE: &'static str = "event title";
+    const EVENT_ID: &str = "event-id";
+    const EVENT_TITLE: &str = "event title";
 
+    #[test]
     fn create_events_aggregator_with_defaults() {
         let status = EventStatus::default();
         assert_eq!(status, EventStatus::Draft);
