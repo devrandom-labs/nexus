@@ -136,6 +136,7 @@
             podman-compose
             kafkactl
             rust-analyzer
+            bacon
           ];
 
           shellHook = ''

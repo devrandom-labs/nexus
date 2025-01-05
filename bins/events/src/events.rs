@@ -92,6 +92,9 @@ impl EventAggregate {
             }
         }
     }
+
+    // rehydrate the aggregator
+    // get it from one state to another
     pub fn apply(&mut self, events: Events) {
         match events {
             Events::Created { title, status, id } => {
