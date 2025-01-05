@@ -1,14 +1,15 @@
 #+title: Events
 
+Describes the domain of events in tixlys-core.
 
-* States
+* State transitions
 #+begin_src mermaid
 stateDiagram-v2
     [*] --> Draft
-    Draft --> Published : Publish
-    Draft --> Cancelled : Cancel
-    Published --> Cancelled : Cancel
-    Published --> Completed : Complete
+    Draft --> Published : PublishEvent
+    Draft --> Cancelled : CancelEvent
+    Published --> Cancelled : CancelEvent
+    Published --> Completed : CompleteEvent
     Completed --> [*]
     Cancelled --> [*]
 #+end_src
