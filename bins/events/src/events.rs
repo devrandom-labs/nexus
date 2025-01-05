@@ -113,6 +113,19 @@ mod tests {
     const EVENT_ID: &str = "event-id";
     const EVENT_TITLE: &str = "event title";
 
+    fn get_draft_event() -> EventAggregate {
+        let mut ea = EventAggregate::default();
+        let history = vec![Events::Created {
+            id: "1".to_string(),
+            title: "some event".to_string(),
+            status: EventStatus::Draft,
+        }];
+        for event in history {
+            ea.apply(event);
+        }
+        ea
+    }
+
     #[test]
     fn create_events_aggregator_with_defaults() {
         let event_aggregator = EventAggregate::default();
@@ -122,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn should_emit_created_event() {
+    fn should_create() {
         let ea = EventAggregate::default();
         let create_command = Commands::Create {
             id: "1".to_string(),
@@ -139,11 +152,35 @@ mod tests {
     }
 
     #[test]
-    fn should_emit_cancelled_event() {}
+    fn should_cancel_from_draft() {
+        let ea = get_draft_event();
+        let cancel_command = Commands::Cancel {
+            id: "1".to_string(),
+        };
+        let output_events = ea.handle(cancel_command).unwrap();
+        let expected_events = vec![Events::Cancelled {
+            id: "1".to_string(),
+            status: EventStatus::Cancelled,
+        }];
+        assert_eq!(output_events, expected_events);
+    }
 
     #[test]
-    fn should_emit_published_event() {}
+    fn should_publish() {
+        let ea = get_draft_event();
+        let publish_command = Commands::Publish {
+            id: "1".to_string(),
+        };
+        let output_events = ea.handle(publish_command).unwrap();
+        let expected_events = vec![Events::Published {
+            id: "1".to_string(),
+            status: EventStatus::Published,
+        }];
+        assert_eq!(output_events, expected_events);
+    }
 
     #[test]
-    fn should_emit_completed_event() {}
+    fn should_cancel_from_publish() {}
 }
+
+// TODO: compile time type checking that publish events can only have publish status
