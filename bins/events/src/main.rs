@@ -18,5 +18,10 @@ fn main() {
         .with_span_events(FmtSpan::CLOSE)
         .with_filter(filter);
     tracing_subscriber::registry().with(console).init();
-    info!("🚀🚀🎆{}🎆🚀🚀", "tixlys event systems");
+
+    let workspace = "tixlys";
+    let name = env!("CARGO_BIN_NAME");
+    let version = env!("CARGO_PKG_VERSION");
+
+    info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 }
