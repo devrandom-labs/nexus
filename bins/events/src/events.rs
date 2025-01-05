@@ -212,6 +212,20 @@ mod tests {
         }];
         assert_eq!(output_events, expected_events);
     }
+
+    #[test]
+    fn should_complete_form_publish() {
+        let ea = get_published_event();
+        let command = Commands::Complete {
+            id: "1".to_string(),
+        };
+        let output = ea.handle(command).unwrap();
+        let expected = vec![Events::Completed {
+            id: "1".to_string(),
+            status: EventStatus::Completed,
+        }];
+        assert_eq!(output, expected);
+    }
 }
 
 // TODO: compile time type checking that publish events can only have publish status
