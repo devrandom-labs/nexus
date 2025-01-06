@@ -1,11 +1,9 @@
 #![allow(dead_code)]
-
-pub mod status {
+pub mod domain {
     use chrono::{DateTime, Utc};
+    use ulid::Ulid;
 
-    pub struct Draft {
-        created_at: DateTime<Utc>,
-    }
+    pub struct Draft;
     pub struct Cancelled {
         cancelled_at: DateTime<Utc>,
     }
@@ -21,14 +19,46 @@ pub mod status {
     impl EventState for Cancelled {}
     impl EventState for Completed {}
     impl EventState for Published {}
+
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+    pub struct EventId(Ulid);
+
+    impl EventId {
+        pub fn new() -> Self {
+            EventId(Ulid::new())
+        }
+    }
+    pub struct EventAggregate<S: EventState> {
+        id: Option<EventId>,
+        status: S,
+    }
+}
+use chrono::{DateTime, Utc};
+type EventId = domain::EventId;
+
+#[derive(Debug)]
+pub enum Commands {
+    Create,
+    Cancel,
+    Publish,
+    Complete,
 }
 
-pub struct EventId(String);
-
-pub struct EventAggregate<S: status::EventState> {
-    id: Option<EventId>,
-    status: S,
+#[derive(Debug)]
+pub enum Events {
+    Created {
+        id: EventId,
+    },
+    Cancelled {
+        id: EventId,
+        cancelled_at: DateTime<Utc>,
+    },
+    Published {
+        id: EventId,
+        published_at: DateTime<Utc>,
+    },
+    Completed {
+        id: EventId,
+        completed_at: DateTime<Utc>,
+    },
 }
-
-impl EventAggregate<status::Draft> {}
-impl EventAggregate<status::Cancelled> {}
