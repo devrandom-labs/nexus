@@ -30,7 +30,7 @@
 - notify(type, template)
 *** sphynx (version: 0.x.x)
 - user management
-- autentication
+- authentication
 - authorization
 *** booking (version: 0.x.x)
 - book event
@@ -38,3 +38,18 @@
 - get booked event info
 - get all booked event
 - cancel booked event
+
+
+* Environment: Slack UI
+- budget
+- location
+- type of event
+  - web scraper ai agent
+    - location
+    - weather , others events, amount of peopel, type
+
+- org decides based on budget / promps / type of events / other things happening
+  - suggests things?
+
+- graphic designer ai agent
+  - type of events and designs something based on location and type of people

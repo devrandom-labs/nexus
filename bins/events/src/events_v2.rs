@@ -1,4 +1,19 @@
 #![allow(dead_code)]
+
+pub mod cqrs {
+    use std::fmt::Display;
+
+    pub trait DomainEvents: Display {
+        fn get_version(&self) -> String;
+    }
+
+    pub trait Aggregate {
+        type Command;
+        type Event;
+        type Error;
+    }
+}
+
 pub mod domain {
     use chrono::{DateTime, Utc};
     use ulid::Ulid;
@@ -28,11 +43,13 @@ pub mod domain {
             EventId(Ulid::new())
         }
     }
+
     pub struct EventAggregate<S: EventState> {
         id: Option<EventId>,
         status: S,
     }
 }
+
 use chrono::{DateTime, Utc};
 type EventId = domain::EventId;
 
