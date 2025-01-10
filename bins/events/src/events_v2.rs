@@ -25,14 +25,25 @@ pub mod cqrs {
             NoEventsFound(String),
         }
 
+        // TODO: impl commit event feature for store trait
+
         pub trait Store {
             type Error: StdError;
             fn get_events(&self, id: &str) -> Result<Vec<String>, Self::Error>;
         }
 
+        type EventHashMap = HashMap<String, Vec<String>>;
+
         #[derive(Clone)]
         pub struct MemStore {
-            events: HashMap<String, Vec<String>>,
+            events: EventHashMap,
+        }
+
+        impl MemStore {
+            pub fn init(initial: Option<EventHashMap>) -> Self {
+                let events = initial.unwrap_or(EventHashMap::new());
+                MemStore { events }
+            }
         }
 
         impl Store for MemStore {
@@ -43,6 +54,13 @@ pub mod cqrs {
                     .ok_or(StoreError::NoEventsFound(id.into()))
                     .cloned()
             }
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+            // TODO: test get_events for existing aggregate type
+            // TODO: test get_events for non existing aggregate type
         }
     }
 }
