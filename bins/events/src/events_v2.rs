@@ -8,10 +8,10 @@ pub mod cqrs {
     }
 
     pub trait Aggregate {
+        const TYPE: &'static str;
         type Command;
         type Event: DomainEvents;
         type Error: Error;
-
         fn handle(&self, command: Self::Command) -> Result<Vec<Self::Event>, Self::Error>;
         fn apply(&mut self, event: Self::Event);
     }
