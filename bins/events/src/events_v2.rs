@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod cqrs {
+    use std::collections::HashMap;
     use std::error::Error;
 
     pub trait DomainEvents {
@@ -11,6 +12,23 @@ pub mod cqrs {
         type Event: DomainEvents;
         type Error: Error;
         fn apply(&mut self, event: Self::Event);
+    }
+
+    pub trait Store {
+        type Error;
+        // provided an aggregator type  id, get all events for that id.
+        fn get_events(&self, id: String) -> Result<Vec<String>, Self::Error>;
+    }
+
+    pub struct MemStore {
+        events: HashMap<String, String>,
+    }
+
+    impl Store for MemStore {
+        type Error: Error;
+        fn get_events(&self, id: String) -> Result<Vec<String>, Error> {
+            self.events.get(&id).ok_or(Err("cant find"))?
+        }
     }
 }
 
