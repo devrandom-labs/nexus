@@ -11,6 +11,9 @@ pub mod cqrs {
         type Command;
         type Event: DomainEvents;
         type Error: Error;
+
+        fn handle(&self, command: Self::Command) -> Result<Vec<Self::Event>, Self::Error>;
+        fn apply(&mut self, event: Self::Event);
     }
 }
 
