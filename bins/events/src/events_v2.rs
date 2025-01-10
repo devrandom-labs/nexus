@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 pub mod cqrs {
-    use std::collections::HashMap;
+
     use std::error::Error;
 
     pub trait DomainEvents {
@@ -14,20 +14,35 @@ pub mod cqrs {
         fn apply(&mut self, event: Self::Event);
     }
 
-    pub trait Store {
-        type Error;
-        // provided an aggregator type  id, get all events for that id.
-        fn get_events(&self, id: String) -> Result<Vec<String>, Self::Error>;
-    }
+    pub mod store {
+        use std::collections::HashMap;
+        use std::error::Error as StdError;
+        use thiserror::Error;
 
-    pub struct MemStore {
-        events: HashMap<String, String>,
-    }
+        #[derive(Debug, Error)]
+        pub enum StoreError {
+            #[error("Events not found for this `{0}` aggregator")]
+            NoEventsFound(String),
+        }
 
-    impl Store for MemStore {
-        type Error: Error;
-        fn get_events(&self, id: String) -> Result<Vec<String>, Error> {
-            self.events.get(&id).ok_or(Err("cant find"))?
+        pub trait Store {
+            type Error: StdError;
+            fn get_events(&self, id: &str) -> Result<Vec<String>, Self::Error>;
+        }
+
+        #[derive(Clone)]
+        pub struct MemStore {
+            events: HashMap<String, Vec<String>>,
+        }
+
+        impl Store for MemStore {
+            type Error = StoreError;
+            fn get_events(&self, id: &str) -> Result<Vec<String>, Self::Error> {
+                self.events
+                    .get(id)
+                    .ok_or(StoreError::NoEventsFound(id.into()))
+                    .cloned()
+            }
         }
     }
 }

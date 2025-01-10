@@ -91,6 +91,7 @@ name = "events"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "thiserror",
  "tracing",
  "tracing-subscriber",
  "ulid",
