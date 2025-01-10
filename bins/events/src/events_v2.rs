@@ -1,16 +1,16 @@
 #![allow(dead_code)]
 
 pub mod cqrs {
-    use std::fmt::Display;
+    use std::error::Error;
 
-    pub trait DomainEvents: Display {
+    pub trait DomainEvents {
         fn get_version(&self) -> String;
     }
 
     pub trait Aggregate {
         type Command;
-        type Event;
-        type Error;
+        type Event: DomainEvents;
+        type Error: Error;
     }
 }
 

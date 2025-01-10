@@ -76,7 +76,7 @@
         '';
 
         dive = pkgs.writeShellScriptBin "dive-image" ''
-          gunzip --stdout result > /tmp/image.tar && dive docker-archive:///tmp/image.tar
+          gunzip --stdout result > /tmp/image.tar && dive docker-archive: ///tmp/image.tar
         '';
 
       in with pkgs; {
