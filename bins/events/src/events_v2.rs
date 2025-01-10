@@ -6,13 +6,10 @@ pub mod cqrs {
     pub trait DomainEvents {
         fn get_version(&self) -> String;
     }
-
     pub trait Aggregate {
         const TYPE: &'static str;
-        type Command;
         type Event: DomainEvents;
         type Error: Error;
-        fn handle(&self, command: Self::Command) -> Result<Vec<Self::Event>, Self::Error>;
         fn apply(&mut self, event: Self::Event);
     }
 }
@@ -55,14 +52,6 @@ pub mod domain {
 
 use chrono::{DateTime, Utc};
 type EventId = domain::EventId;
-
-#[derive(Debug)]
-pub enum Commands {
-    Create,
-    Cancel,
-    Publish,
-    Complete,
-}
 
 #[derive(Debug)]
 pub enum Events {
