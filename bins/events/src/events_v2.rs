@@ -62,7 +62,10 @@ pub mod cqrs {
 
             fn get_test_data() -> MemStore {
                 let mut initial_data: EventHashMap = HashMap::new();
-                initial_data.insert(String::from(AGGREGATE_TYPE), vec![]);
+                initial_data.insert(
+                    String::from(AGGREGATE_TYPE),
+                    vec![String::from("1"), String::from("2")],
+                );
                 MemStore::init(Some(initial_data))
             }
 
@@ -70,7 +73,7 @@ pub mod cqrs {
             fn get_events_for_an_aggregate_type() {
                 let mem_store = get_test_data();
                 let events = mem_store.get_events(AGGREGATE_TYPE).unwrap();
-                let expected: Vec<String> = vec![];
+                let expected: Vec<String> = vec!["1".to_string(), "2".to_string()];
                 assert_eq!(events, expected);
             }
 
@@ -139,9 +142,3 @@ pub enum Events {
     Published {
         id: EventId,
         published_at: DateTime<Utc>,
-    },
-    Completed {
-        id: EventId,
-        completed_at: DateTime<Utc>,
-    },
-}
