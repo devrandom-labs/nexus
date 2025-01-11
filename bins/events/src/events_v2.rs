@@ -41,7 +41,7 @@ pub mod cqrs {
 
         impl MemStore {
             pub fn init(initial: Option<EventHashMap>) -> Self {
-                let events = initial.unwrap_or(EventHashMap::new());
+                let events = initial.unwrap_or_default();
                 MemStore { events }
             }
         }
@@ -58,7 +58,6 @@ pub mod cqrs {
 
         #[cfg(test)]
         mod tests {
-            use super::*;
             // TODO: test get_events for existing aggregate type
             // TODO: test get_events for non existing aggregate type
         }
