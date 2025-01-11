@@ -30,6 +30,8 @@ impl Store for MemStore {
             .ok_or(StoreError::NoEventsFound(id.into()))
             .cloned()
     }
+
+    fn commit(&self, aggregate_type: &str, events: &[String]) -> Result<(), Self::Error> {}
 }
 
 #[cfg(test)]
