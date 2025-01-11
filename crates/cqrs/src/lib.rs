@@ -1,4 +1,4 @@
 pub mod aggregate;
+pub mod error;
 pub mod event;
-pub mod mem_store;
 pub mod store;

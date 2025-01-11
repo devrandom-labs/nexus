@@ -7,3 +7,4 @@ authors.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+chrono = { workspace = true }
