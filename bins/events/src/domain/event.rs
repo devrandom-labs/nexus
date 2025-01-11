@@ -8,3 +8,20 @@ impl EventId {
         EventId(Ulid::new())
     }
 }
+
+impl Default for EventId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_should_give_ulid() {
+        let event_id = EventId::default();
+        assert!(!event_id.0.is_nil());
+    }
+}
