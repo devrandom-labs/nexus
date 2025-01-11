@@ -4,8 +4,7 @@ use tracing_subscriber::{
     prelude::*,
     EnvFilter, Layer,
 };
-mod events;
-mod events_v2;
+pub mod domain;
 
 #[instrument]
 fn main() {
