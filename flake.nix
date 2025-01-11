@@ -44,6 +44,7 @@
               ./Cargo.toml
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
+              (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
@@ -76,7 +77,7 @@
         '';
 
         dive = pkgs.writeShellScriptBin "dive-image" ''
-          gunzip --stdout result > /tmp/image.tar && dive docker-archive:///tmp/image.tar
+          gunzip --stdout result > /tmp/image.tar && dive docker-archive: ///tmp/image.tar
         '';
 
       in with pkgs; {
