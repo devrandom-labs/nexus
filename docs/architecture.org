@@ -40,6 +40,32 @@
 - cancel booked event
 
 
+* Crates
+- crates and functionalities which we would like to create
+** command-bus
+- ephimerial queue for commands
+- deletes data after 7 days (programmable) for crash handling
+- commands would be stored in sqlite
+- once executed completed_at would be marked.
+** event-store
+- replicated store to tixlys cloud server.
+- usual event store where events are stored.
+** cqrs
+- framework that brings the following together
+  + aggregator
+  + events
+  + commands
+  + queries
+  + stores
+** quic http framework
+- to give the fast event source edge.
+** io_uring runtime.
+- to make the application even faster while running all the above.
+
+
+
+
+
 * Environment: Slack UI
 - budget
 - location
