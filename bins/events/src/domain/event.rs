@@ -1,4 +1,11 @@
+use thiserror::Error;
 use ulid::Ulid;
+
+#[derive(Debug, Error)]
+pub enum EventError {
+    #[error("Event title is empty")]
+    EmptyTitle,
+}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct EventId(Ulid);
@@ -15,6 +22,15 @@ impl Default for EventId {
     }
 }
 
+#[derive(Debug)]
+pub struct EventTitle(String); // should show meaningful title in unicode format.
+
+impl EventTitle {
+    pub fn value(&self) -> &str {
+        &self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24,4 +40,17 @@ mod tests {
         let event_id = EventId::default();
         assert!(!event_id.0.is_nil());
     }
+
+    #[test]
+    fn default_title_should_be_untitled() {}
+    #[test]
+    fn id_can_be_created_by_str() {}
+    #[test]
+    fn id_can_be_created_by_string() {}
+    #[test]
+    fn id_should_not_be_empty() {}
+    #[test]
+    fn id_should_not_be_more_than_80_char() {}
+    #[test]
+    fn id_should_not_be_less_than_1_char() {}
 }
