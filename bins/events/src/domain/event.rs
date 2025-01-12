@@ -2,12 +2,6 @@ use thiserror::Error;
 use tracing::{debug, error, info, instrument};
 use ulid::Ulid;
 
-#[derive(Debug, Error)]
-pub enum EventError {
-    #[error("{0}")]
-    Title(String),
-}
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct EventId(Ulid);
 
@@ -83,6 +77,12 @@ impl Default for EventTitle {
         info!("creating default event title");
         Self::try_from("Untitled").unwrap()
     }
+}
+
+#[derive(Debug, Default)]
+pub struct Event {
+    pub id: EventId,
+    pub title: EventTitle,
 }
 
 #[cfg(test)]

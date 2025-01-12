@@ -24,5 +24,6 @@ fn main() {
 
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 
-    let _ = domain::event::EventTitle::default();
+    let event = domain::event::Event::default();
+    info!(?event);
 }
