@@ -24,4 +24,6 @@ fn main() {
     let version = env!("CARGO_PKG_VERSION");
 
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
+
+    let _ = domain::event::EventTitle::default();
 }

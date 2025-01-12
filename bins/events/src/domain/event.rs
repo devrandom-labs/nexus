@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tracing::{debug, error, info, instrument};
 use ulid::Ulid;
 
 #[derive(Debug, Error)]
@@ -36,20 +37,25 @@ pub enum TitleError {
 pub struct EventTitle(String); // should show meaningful title in unicode format.
 
 impl EventTitle {
+    #[instrument]
     pub fn new(title: String) -> Result<Self, TitleError> {
+        debug!("creating new event title: {}", title);
         let title = title.trim().to_string();
-        // series of checks on title.
         if title.is_empty() {
+            error!("{}", TitleError::EmptyTitle);
             return Err(TitleError::EmptyTitle);
         }
         if title.len() < 2 {
+            error!("{}", TitleError::ShortTitle);
             return Err(TitleError::ShortTitle);
         }
         if title.len() > 80 {
+            error!("{}", TitleError::LongTitle);
             return Err(TitleError::LongTitle);
         }
         Ok(EventTitle(title))
     }
+
     pub fn value(&self) -> &str {
         &self.0
     }
@@ -71,7 +77,9 @@ impl TryFrom<String> for EventTitle {
 }
 
 impl Default for EventTitle {
+    #[instrument]
     fn default() -> Self {
+        info!("creating default event title");
         Self::try_from("Untitled").unwrap()
     }
 }
