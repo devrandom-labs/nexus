@@ -134,3 +134,5 @@ mod tests {
         assert_eq!(event_title.err().unwrap(), TitleError::ShortTitle);
     }
 }
+
+// socket servers can have backlog / queue for incoming requests.
