@@ -8,3 +8,4 @@ authors.workspace = true
 [dependencies]
 chrono = { workspace = true }
 thiserror = { workspace = true }
+ulid = { workspace = true }
