@@ -4,10 +4,12 @@ use tracing_subscriber::{
     prelude::*,
     EnvFilter, Layer,
 };
+pub mod application;
 pub mod domain;
 
 #[instrument]
-fn main() {
+#[tokio::main]
+async fn main() {
     let filter = EnvFilter::from_default_env();
     let console = fmt::layer()
         .with_file(true)
