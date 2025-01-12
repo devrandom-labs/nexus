@@ -13,7 +13,6 @@ fn main() {
         .with_file(true)
         .with_line_number(true)
         .with_thread_ids(true)
-        .with_thread_names(true)
         .with_level(true)
         .with_span_events(FmtSpan::CLOSE)
         .with_filter(filter);
@@ -24,4 +23,7 @@ fn main() {
     let version = env!("CARGO_PKG_VERSION");
 
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
+
+    let event = domain::event::Event::default();
+    info!(?event);
 }
