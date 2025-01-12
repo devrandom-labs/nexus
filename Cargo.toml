@@ -14,6 +14,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 authors = ["Joel DSouza <joel@tixlys.com>"]
+repository = "https://github.com/tixlys/tixlys-core"
 
 [workspace.metadata.crane]
 name = "tixlys"
