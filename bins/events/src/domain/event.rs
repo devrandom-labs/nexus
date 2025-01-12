@@ -53,6 +53,7 @@ impl EventTitle {
             error!("{}", TitleError::LongTitle);
             return Err(TitleError::LongTitle);
         }
+        info!("passes all title checks, creating the title");
         Ok(EventTitle(title))
     }
 
