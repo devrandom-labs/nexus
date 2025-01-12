@@ -14,7 +14,6 @@ impl EventId {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::EventId; // Replace your_crate with the actual crate name
     ///
     /// let event_id = EventId::new();
     /// println!("{:?}", event_id); // Output: EventId(...)
@@ -79,7 +78,6 @@ impl EventTitle {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::EventTitle; // Replace your_crate with the actual crate name
     ///
     /// let title = EventTitle::new("My Event".to_string()).unwrap();
     /// assert_eq!(title.value(), "My Event");
@@ -112,7 +110,6 @@ impl EventTitle {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::EventTitle; // Replace your_crate with the actual crate name
     ///
     /// let title = EventTitle::new("My Event".to_string()).unwrap();
     /// assert_eq!(title.value(), "My Event");
@@ -148,7 +145,6 @@ impl Default for EventTitle {
     /// # Examples
     ///
     /// ```
-    /// use your_crate::EventTitle; // Replace your_crate with the actual crate name
     ///
     /// let title = EventTitle::default();
     /// assert_eq!(title.value(), "Untitled");

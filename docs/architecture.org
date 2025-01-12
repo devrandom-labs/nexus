@@ -63,9 +63,6 @@
 - to make the application even faster while running all the above.
 
 
-
-
-
 * Environment: Slack UI
 - budget
 - location
