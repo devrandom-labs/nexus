@@ -138,6 +138,7 @@
             kafkactl
             rust-analyzer
             bacon
+            sqlx-cli
           ];
 
           shellHook = ''
