@@ -57,10 +57,19 @@
   + commands
   + queries
   + stores
-** quic http framework
+** quic http framework [NOT]
 - to give the fast event source edge.
-** io_uring runtime.
+- Not yet ready, no need.
+** io_uring runtime. [NOT]
 - to make the application even faster while running all the above.
+- not much performance gains.
+
+
+
+
+
+
+
 
 
 * Environment: Slack UI

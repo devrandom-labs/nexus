@@ -28,4 +28,6 @@ async fn main() {
 
     let event = domain::event::Event::default();
     info!(?event);
+
+    // TODO: create a command handler.
 }

@@ -13,3 +13,6 @@ stateDiagram-v2
     Completed --> [*]
     Cancelled --> [*]
 #+end_src
+
+
+* CLI

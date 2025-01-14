@@ -9,11 +9,9 @@ pub enum StoreError {
     #[error("{0}")]
     CannotCreatePool(#[from] Error),
 }
-
 pub struct Store {
     pool: SqlitePool,
 }
-
 impl Store {
     pub async fn new(name: &str) -> Result<Self, StoreError> {
         let pool = SqlitePoolOptions::new()
