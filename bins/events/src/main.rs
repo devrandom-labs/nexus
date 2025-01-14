@@ -4,9 +4,8 @@ use tracing_subscriber::{
     prelude::*,
     EnvFilter, Layer,
 };
-pub mod application;
 pub mod domain;
-pub mod infra;
+pub mod store;
 
 #[instrument]
 #[tokio::main]
