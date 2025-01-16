@@ -17,3 +17,10 @@ stateDiagram-v2
 
 * Database
 - single database on postgresql
+
+* Cqrs
+- framework: takes
+  - services
+- command handlers / command processors: take
+  + command struct
+  + event repository
