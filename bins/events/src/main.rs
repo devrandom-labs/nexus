@@ -4,6 +4,7 @@ use tracing_subscriber::{
     prelude::*,
     EnvFilter, Layer,
 };
+pub mod commander;
 pub mod domain;
 pub mod store;
 
@@ -28,6 +29,5 @@ async fn main() {
 
     let event = domain::event::Event::default();
     info!(?event);
-
-    // TODO: create a command handler.
+    // TODO: create a command handler
 }
