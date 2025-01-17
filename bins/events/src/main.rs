@@ -1,11 +1,10 @@
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{info, instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     prelude::*,
     EnvFilter, Layer,
 };
-
 pub mod commander;
 pub mod domain;
 pub mod store;
@@ -31,9 +30,10 @@ async fn main() {
 
     let event = domain::event::Event::default();
     info!(?event);
+
     // created a channel which takes commands enum
     // configure the bounds of this channel for better control.
-    let (tx, mut rx) = mpsc::channel::<Command>(15);
+
     tokio::spawn({
         let tx = tx.clone();
         async move {
@@ -54,30 +54,13 @@ async fn main() {
             .unwrap();
         }
     });
-    while let Some(command) = rx.recv().await {
-        info!(
-            "command version: {},command name: {}",
-            Command::get_version(),
-            command.get_name()
-        );
-        match command {
-            Command::Create { title } => {
-                info!("executing create command: {}", title);
-            }
-        }
-    }
-}
-
-trait DomainCommand {
-    fn get_name(&self) -> &str;
-    fn get_version() -> &'static str;
 }
 
 #[derive(Debug)]
 pub enum Command {
     Create { title: String },
 }
-impl DomainCommand for Command {
+impl commander::DomainCommand for Command {
     fn get_name(&self) -> &str {
         match self {
             Command::Create { .. } => "create events",
