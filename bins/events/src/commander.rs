@@ -55,6 +55,7 @@ where
 {
     #[instrument]
     pub async fn start(mut self) -> Result<(), error::Error> {
+        // I can move this? to a separate thread and return this method with the sender
         while let Some(c_env) = self.receiver.recv().await {
             // get the handler assigned to this command
             tokio::spawn(async move {
@@ -84,6 +85,10 @@ where
 {
     pub fn new(bound: usize) -> Self {
         // let (tx, mut rx) = mpsc::channel::<CommandEnvelop<R, C>>(bound);
-        Commander { bound }
+        Commander {
+            bound,
+            _res: PhantomData,
+            _com: PhantomData,
+        }
     }
 }
