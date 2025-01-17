@@ -1,6 +1,8 @@
-use std::marker::PhantomData;
 use thiserror::Error as ThisError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{
+    mpsc::{self, Receiver},
+    oneshot,
+};
 use tracing::{info, instrument};
 
 #[derive(Debug, ThisError)]
@@ -25,13 +27,13 @@ where
     payload: C,
 }
 
+#[derive(Debug)]
 pub struct Commander<R, C>
 where
     R: CommanderResponse,
-    C: DomainCommand + Send + Sync,
+    C: DomainCommand + Send + Sync + 'static,
 {
-    _responder: PhantomData<R>,
-    _payload: PhantomData<C>,
+    receiver: Receiver<CommandEnvelop<R, C>>,
 }
 
 impl<R, C> Commander<R, C>
@@ -39,10 +41,14 @@ where
     R: CommanderResponse,
     C: DomainCommand + Send + Sync,
 {
+    pub fn new(bound: usize) -> Self {
+        let (tx, mut rx) = mpsc::channel::<CommandEnvelop<R, C>>(bound);
+        Self { receiver: rx }
+    }
+
     #[instrument]
-    pub async fn start() -> Result<(), Error> {
-        let (tx, mut rx) = mpsc::channel::<CommandEnvelop<R, C>>(15);
-        while let Some(c_env) = rx.recv().await {
+    pub async fn start(mut self) -> Result<(), Error> {
+        while let Some(c_env) = self.receiver.recv().await {
             // get the handler assigned to this command
             tokio::spawn(async move {
                 info!("command name: {}", c_env.payload.get_name());
