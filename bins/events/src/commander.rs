@@ -42,17 +42,14 @@ where
         CommandExecutor(tx)
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     pub async fn execute(self, command: T) -> Result<String, Error> {
-        tokio::spawn(async move {
-            let (tx, rx) = oneshot::channel();
-            let _ = self.0.send(Command::new(tx, command)).await;
-            let receive = rx.await;
-            let result = receive.unwrap().unwrap();
-            info!("response for command 2: {}", result);
-            Ok(result)
-        })
-        .await?
+        let (tx, rx) = oneshot::channel();
+        let _ = self.0.send(Command::new(tx, command)).await;
+        let receive = rx.await;
+        let result = receive.unwrap().unwrap();
+        info!("response for command 2: {}", result);
+        Ok(result)
     }
 }
 
