@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Error, SqlitePool,
