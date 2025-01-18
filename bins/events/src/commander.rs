@@ -63,9 +63,10 @@ where
     tokio::spawn(async move {
         while let Some(command) = rx.recv().await {
             info!("received in command bus: {:?}", command.payload);
-            // TODO: execute a tower service which takes this command as request and the response is sent back as response
             let _ = command.res.send(Ok(String::from("got your message guv")));
         }
     });
     CommandExecutor::new(tx)
 }
+
+// this command bus is not tied to any aggregator
