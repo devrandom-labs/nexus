@@ -1,13 +1,29 @@
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::{
+    mpsc::{self, Sender},
+    oneshot::Sender as OneShotSender,
+};
 use tracing::{debug, info, instrument};
 
+#[derive(Debug)]
+pub struct Command {
+    res: OneShotSender<Result<String, String>>,
+    payload: String,
+}
+
+impl Command {
+    pub fn new(res: OneShotSender<Result<String, String>>, payload: String) -> Self {
+        Command { res, payload }
+    }
+}
+
 #[instrument]
-pub fn commander(bound: usize) -> Sender<String> {
+pub fn commander(bound: usize) -> Sender<Command> {
     debug!("initializing channel between commander and the application");
-    let (tx, mut rx) = mpsc::channel::<String>(bound);
+    let (tx, mut rx) = mpsc::channel::<Command>(bound);
     tokio::spawn(async move {
-        while let Some(rec) = rx.recv().await {
-            info!("received: {}", rec);
+        while let Some(command) = rx.recv().await {
+            info!("received in command bus: {}", command.payload);
+            let _ = command.res.send(Ok(String::from("got your message guv")));
         }
     });
     tx

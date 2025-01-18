@@ -1,9 +1,11 @@
+use tokio::sync::oneshot;
 use tracing::{info, instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     prelude::*,
     EnvFilter, Layer,
 };
+
 pub mod commander;
 pub mod domain;
 pub mod store;
@@ -27,13 +29,31 @@ async fn main() {
 
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 
-    let event = domain::event::Event::default();
-    info!(?event);
-
-    // created a channel which takes commands enum
-    // configure the bounds of this channel for better control
     let sender = commander::commander(20);
+    let command_handler_1 = tokio::spawn({
+        let sender = sender.clone();
+        async move {
+            let (tx, rx) = oneshot::channel();
+            let _ = sender
+                .send(commander::Command::new(tx, String::from("create event")))
+                .await;
 
-    let _ = sender.send(String::from("whats up")).await;
-    let _ = sender.send(String::from("some thing else")).await;
+            let receive = rx.await;
+            info!("response for command 1: {}", receive.unwrap().unwrap());
+        }
+    });
+
+    let command_handler_2 = tokio::spawn({
+        let sender = sender.clone();
+        async move {
+            let (tx, rx) = oneshot::channel();
+            let _ = sender
+                .send(commander::Command::new(tx, String::from("delete event")))
+                .await;
+            let receive = rx.await;
+            info!("response for command 2: {}", receive.unwrap().unwrap());
+        }
+    });
+
+    let _ = tokio::join!(command_handler_1, command_handler_2);
 }
