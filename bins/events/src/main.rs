@@ -31,5 +31,9 @@ async fn main() {
     info!(?event);
 
     // created a channel which takes commands enum
-    // configure the bounds of this channel for better control.
+    // configure the bounds of this channel for better control
+    let sender = commander::commander(20);
+
+    let _ = sender.send(String::from("whats up")).await;
+    let _ = sender.send(String::from("some thing else")).await;
 }
