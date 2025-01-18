@@ -2,3 +2,7 @@
 ignore = [
 "RUSTSEC-2023-0071"
 ]
+
+[yanked]
+enabled = true
+update_index = true
