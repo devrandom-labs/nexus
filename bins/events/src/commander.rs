@@ -1,17 +1,21 @@
+use thiserror::Error as Err;
 use tokio::sync::{
     mpsc::{self, Sender},
     oneshot::Sender as OneShotSender,
 };
 use tracing::{debug, info, instrument};
 
+#[derive(Debug, Err)]
+pub enum Error {}
+
 #[derive(Debug)]
 pub struct Command {
-    res: OneShotSender<Result<String, String>>,
+    res: OneShotSender<Result<String, Error>>,
     payload: String,
 }
 
 impl Command {
-    pub fn new(res: OneShotSender<Result<String, String>>, payload: String) -> Self {
+    pub fn new(res: OneShotSender<Result<String, Error>>, payload: String) -> Self {
         Command { res, payload }
     }
 }
@@ -22,7 +26,7 @@ pub fn commander(bound: usize) -> Sender<Command> {
     let (tx, mut rx) = mpsc::channel::<Command>(bound);
     tokio::spawn(async move {
         while let Some(command) = rx.recv().await {
-            info!("received in command bus: {}", command.payload);
+            info!("received in command bus: {:?}", command.payload);
             let _ = command.res.send(Ok(String::from("got your message guv")));
         }
     });
