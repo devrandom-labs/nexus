@@ -10,6 +10,12 @@ pub mod commander;
 pub mod domain;
 pub mod store;
 
+#[derive(Debug, Clone, Copy)]
+pub enum Command {
+    CreateEvent,
+    DeleteEvent,
+}
+
 #[instrument]
 #[tokio::main]
 async fn main() {
@@ -30,12 +36,14 @@ async fn main() {
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 
     let sender = commander::commander(20);
+
+    // send first command
     let command_handler_1 = tokio::spawn({
         let sender = sender.clone();
         async move {
             let (tx, rx) = oneshot::channel();
             let _ = sender
-                .send(commander::Command::new(tx, String::from("create event")))
+                .send(commander::Command::new(tx, Command::CreateEvent))
                 .await;
 
             let receive = rx.await;
@@ -43,12 +51,13 @@ async fn main() {
         }
     });
 
+    // send second command
     let command_handler_2 = tokio::spawn({
         let sender = sender.clone();
         async move {
             let (tx, rx) = oneshot::channel();
             let _ = sender
-                .send(commander::Command::new(tx, String::from("delete event")))
+                .send(commander::Command::new(tx, Command::DeleteEvent))
                 .await;
             let receive = rx.await;
             info!("response for command 2: {}", receive.unwrap().unwrap());

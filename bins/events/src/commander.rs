@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use thiserror::Error as Err;
 use tokio::sync::{
     mpsc::{self, Sender},
@@ -9,21 +10,30 @@ use tracing::{debug, info, instrument};
 pub enum Error {}
 
 #[derive(Debug)]
-pub struct Command {
+pub struct Command<T>
+where
+    T: Debug + Send + Sync + 'static,
+{
     res: OneShotSender<Result<String, Error>>,
-    payload: String,
+    payload: T,
 }
 
-impl Command {
-    pub fn new(res: OneShotSender<Result<String, Error>>, payload: String) -> Self {
+impl<T> Command<T>
+where
+    T: Debug + Send + Sync + 'static,
+{
+    pub fn new(res: OneShotSender<Result<String, Error>>, payload: T) -> Self {
         Command { res, payload }
     }
 }
 
 #[instrument]
-pub fn commander(bound: usize) -> Sender<Command> {
+pub fn commander<T>(bound: usize) -> Sender<Command<T>>
+where
+    T: Debug + Send + Sync + 'static,
+{
     debug!("initializing channel between commander and the application");
-    let (tx, mut rx) = mpsc::channel::<Command>(bound);
+    let (tx, mut rx) = mpsc::channel::<Command<T>>(bound);
     tokio::spawn(async move {
         while let Some(command) = rx.recv().await {
             info!("received in command bus: {:?}", command.payload);
