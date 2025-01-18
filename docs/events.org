@@ -13,3 +13,25 @@ stateDiagram-v2
     Completed --> [*]
     Cancelled --> [*]
 #+end_src
+
+
+* Database
+- single database on postgresql / database per user in sqlite
+- stores:
+  + event store
+  + snapshot of the aggregate in regular intervals.
+* LRU (least read cache):
+- database connection per user
+- aggregate: with optimistic locking
+* State retrevial stragegy
+- if cache miss: get aggregate state form db
+- if aggregate data not present: get aggregate from snapshot
+- if snapshot not present: apply all events to aggregate to get the current aggregate
+
+
+* Cqrs
+- framework: takes
+  - services
+- command handlers / command processors: take
+  + command struct
+  + event repository

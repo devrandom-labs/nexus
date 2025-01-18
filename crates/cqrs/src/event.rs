@@ -1,6 +1,5 @@
 use crate::aggregate::Aggregate;
 use std::collections::HashMap;
-use ulid::Ulid;
 
 pub trait DomainEvent {
     fn event_type(&self) -> String;
@@ -12,7 +11,8 @@ pub struct EventEnvelope<A>
 where
     A: Aggregate,
 {
-    pub stream_id: Ulid,
+    pub aggregate_id: String,
+    pub stream_id: String,
     pub payload: A::Event,
     pub metadata: HashMap<String, String>,
 }
