@@ -48,9 +48,9 @@ where
             let (tx, rx) = oneshot::channel();
             let _ = self.0.send(Command::new(tx, command)).await;
             let receive = rx.await;
-            let result = receive.unwrap();
-            info!("response for command 2: {}", result.unwrap());
-            Ok(String::from("hello"))
+            let result = receive.unwrap().unwrap();
+            info!("response for command 2: {}", result);
+            Ok(result)
         })
         .await?
     }

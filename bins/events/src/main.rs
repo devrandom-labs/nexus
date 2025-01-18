@@ -36,6 +36,8 @@ async fn main() {
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 
     let command_executor = commander::commander(20);
-    let _ = command_executor.clone().execute(Command::CreateEvent).await;
-    let _ = command_executor.clone().execute(Command::DeleteEvent).await;
+    let result = command_executor.clone().execute(Command::CreateEvent).await;
+    info!("{}", result.unwrap());
+    let result = command_executor.clone().execute(Command::DeleteEvent).await;
+    info!("{}", result.unwrap());
 }
