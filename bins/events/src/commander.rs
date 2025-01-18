@@ -56,6 +56,24 @@ where
     #[instrument]
     pub async fn start(mut self) -> Result<(), error::Error> {
         // I can move this? to a separate thread and return this method with the sender
+        //
+        // async fn background_task(mut rx: mpsc::Receiver<String>) {
+        //     while let Some(message) = rx.recv().await {
+        //         println!("Received in background task: {}", message);
+        //         // ... process the message ...
+        //     }
+        //     println!("Background task exiting: receiver dropped");
+        // }
+
+        // fn start_background_task() -> mpsc::Sender<String> {
+        //     let (tx, rx) = mpsc::channel::<String>(10); // Bounded channel with capacity 10
+
+        //     tokio::spawn(async move {
+        //         background_task(rx).await;
+        //     });
+
+        //     tx
+        // }
         while let Some(c_env) = self.receiver.recv().await {
             // get the handler assigned to this command
             tokio::spawn(async move {

@@ -1,4 +1,3 @@
-use tokio::sync::{mpsc, oneshot};
 use tracing::{info, instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
@@ -33,39 +32,4 @@ async fn main() {
 
     // created a channel which takes commands enum
     // configure the bounds of this channel for better control.
-    tokio::spawn({
-        let tx = tx.clone();
-        async move {
-            tx.send(Command::Create {
-                title: "some festival".to_string(),
-            })
-            .await
-            .unwrap();
-        }
-    });
-    tokio::spawn({
-        let tx = tx.clone();
-        async move {
-            tx.send(Command::Create {
-                title: "other festival".to_string(),
-            })
-            .await
-            .unwrap();
-        }
-    });
-}
-
-#[derive(Debug)]
-pub enum Command {
-    Create { title: String },
-}
-impl commander::DomainCommand for Command {
-    fn get_name(&self) -> &str {
-        match self {
-            Command::Create { .. } => "create events",
-        }
-    }
-    fn get_version() -> &'static str {
-        "1"
-    }
 }
