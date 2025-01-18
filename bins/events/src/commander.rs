@@ -2,17 +2,21 @@ use std::fmt::Debug;
 use thiserror::Error as Err;
 use tokio::sync::{
     mpsc::{self, Sender},
-    oneshot::Sender as OneShotSender,
+    oneshot::{self, Sender as OneShotSender},
 };
+use tokio::task::JoinError;
 use tracing::{debug, info, instrument};
 
 #[derive(Debug, Err)]
-pub enum Error {}
+pub enum Error {
+    #[error("{0}")]
+    Executor(#[from] JoinError),
+}
 
 #[derive(Debug)]
 pub struct Command<T>
 where
-    T: Debug + Send + Sync + 'static,
+    T: Send + Sync + 'static,
 {
     res: OneShotSender<Result<String, Error>>,
     payload: T,
@@ -20,15 +24,40 @@ where
 
 impl<T> Command<T>
 where
-    T: Debug + Send + Sync + 'static,
+    T: Send + Sync + 'static,
 {
     pub fn new(res: OneShotSender<Result<String, Error>>, payload: T) -> Self {
         Command { res, payload }
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CommandExecutor<T: Debug + Send + Sync + 'static>(Sender<Command<T>>);
+
+impl<T> CommandExecutor<T>
+where
+    T: Debug + Send + Sync + 'static,
+{
+    pub fn new(tx: Sender<Command<T>>) -> Self {
+        CommandExecutor(tx)
+    }
+
+    #[instrument]
+    pub async fn execute(self, command: T) -> Result<String, Error> {
+        tokio::spawn(async move {
+            let (tx, rx) = oneshot::channel();
+            let _ = self.0.send(Command::new(tx, command)).await;
+            let receive = rx.await;
+            let result = receive.unwrap();
+            info!("response for command 2: {}", result.unwrap());
+            Ok(String::from("hello"))
+        })
+        .await?
+    }
+}
+
 #[instrument]
-pub fn commander<T>(bound: usize) -> Sender<Command<T>>
+pub fn commander<T>(bound: usize) -> CommandExecutor<T>
 where
     T: Debug + Send + Sync + 'static,
 {
@@ -40,5 +69,5 @@ where
             let _ = command.res.send(Ok(String::from("got your message guv")));
         }
     });
-    tx
+    CommandExecutor::new(tx)
 }

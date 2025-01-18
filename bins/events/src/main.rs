@@ -35,34 +35,7 @@ async fn main() {
 
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 
-    let sender = commander::commander(20);
-
-    // send first command
-    let command_handler_1 = tokio::spawn({
-        let sender = sender.clone();
-        async move {
-            let (tx, rx) = oneshot::channel();
-            let _ = sender
-                .send(commander::Command::new(tx, Command::CreateEvent))
-                .await;
-
-            let receive = rx.await;
-            info!("response for command 1: {}", receive.unwrap().unwrap());
-        }
-    });
-
-    // send second command
-    let command_handler_2 = tokio::spawn({
-        let sender = sender.clone();
-        async move {
-            let (tx, rx) = oneshot::channel();
-            let _ = sender
-                .send(commander::Command::new(tx, Command::DeleteEvent))
-                .await;
-            let receive = rx.await;
-            info!("response for command 2: {}", receive.unwrap().unwrap());
-        }
-    });
-
-    let _ = tokio::join!(command_handler_1, command_handler_2);
+    let command_executor = commander::commander(20);
+    let _ = command_executor.clone().execute(Command::CreateEvent).await;
+    let _ = command_executor.clone().execute(Command::DeleteEvent).await;
 }
