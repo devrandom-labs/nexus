@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::marker::PhantomData;
 use thiserror::Error as Err;
 
@@ -12,12 +13,11 @@ pub struct Cache<C> {
     _type: PhantomData<C>,
 }
 
-pub trait Cacher<C>
-where
-    C: Clone,
-{
-    fn get(&self) -> C;
-    fn put(&mut self, data: C) -> Result<C, Error>;
+pub trait Cacher {
+    type Value;
+    type Key;
+    fn get(&self, key: Self::Key) -> Result<Self::Value, Error>;
+    fn put(&mut self, key: Self::Key, data: Self::Value) -> Result<Self::Value, Error>;
 }
 
 impl<C> Cache<C> {
@@ -32,4 +32,9 @@ impl<C> Cache<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_capacity_for_caching() {
+        let cache = Cache::<i32>::new(10);
+    }
 }

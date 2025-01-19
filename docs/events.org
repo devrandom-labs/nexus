@@ -32,8 +32,6 @@ stateDiagram-v2
 - Problem: Connections can be timed out, so need a mechanism to drop timed out connections
 
 
-
-
 * Cqrs
 - framework: takes
   - services
