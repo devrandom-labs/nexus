@@ -4,9 +4,16 @@ use tracing_subscriber::{
     prelude::*,
     EnvFilter, Layer,
 };
+
 pub mod commander;
 pub mod domain;
 pub mod store;
+
+#[derive(Debug, Clone, Copy)]
+pub enum Command {
+    CreateEvent,
+    DeleteEvent,
+}
 
 #[instrument]
 #[tokio::main]
@@ -24,16 +31,11 @@ async fn main() {
     let workspace = "tixlys";
     let name = env!("CARGO_BIN_NAME");
     let version = env!("CARGO_PKG_VERSION");
-
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 
-    let event = domain::event::Event::default();
-    info!(?event);
-
-    // created a channel which takes commands enum
-    // configure the bounds of this channel for better control
-    let sender = commander::commander(20);
-
-    let _ = sender.send(String::from("whats up")).await;
-    let _ = sender.send(String::from("some thing else")).await;
+    let command_executor = commander::commander(20);
+    let result = command_executor.clone().execute(Command::CreateEvent).await;
+    info!("{}", result.unwrap());
+    let result = command_executor.clone().execute(Command::DeleteEvent).await;
+    info!("{}", result.unwrap());
 }
