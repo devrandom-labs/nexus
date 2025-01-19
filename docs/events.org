@@ -24,7 +24,6 @@ stateDiagram-v2
 - database connection per user
 - aggregate: with optimistic locking
 * State retrevial stragegy
-- if cache miss: get aggregate state form db
 - if aggregate data not present: get aggregate from snapshot
 - if snapshot not present: apply all events to aggregate to get the current aggregate
 
