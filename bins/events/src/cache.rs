@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use thiserror::Error as Err;
 
@@ -8,9 +9,9 @@ pub enum Error {
     KeyNotFound,
 }
 
-pub struct Cache<C> {
+pub struct Cache<K, V> {
     capacity: usize,
-    _type: PhantomData<C>,
+    store: HashMap<K, V>,
 }
 
 pub trait Cacher {
@@ -20,11 +21,11 @@ pub trait Cacher {
     fn put(&mut self, key: Self::Key, data: Self::Value) -> Result<Self::Value, Error>;
 }
 
-impl<C> Cache<C> {
+impl<K, V> Cache<K, V> {
     pub fn new(capacity: usize) -> Self {
         Cache {
             capacity,
-            _type: PhantomData,
+            store: HashMap::new(),
         }
     }
 }
@@ -35,6 +36,6 @@ mod tests {
 
     #[test]
     fn add_capacity_for_caching() {
-        let cache = Cache::<i32>::new(10);
+        let cache = Cache::new(10);
     }
 }
