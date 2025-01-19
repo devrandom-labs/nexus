@@ -5,6 +5,7 @@ use tracing_subscriber::{
     EnvFilter, Layer,
 };
 
+pub mod cache;
 pub mod commander;
 pub mod domain;
 pub mod store;
