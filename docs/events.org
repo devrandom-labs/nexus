@@ -30,6 +30,9 @@ stateDiagram-v2
 - Every Client will have a connection to their database.
 - This connection will be in LRU cache and
 - Problem: Connections can be timed out, so need a mechanism to drop timed out connections
+- do not evict connection which is in use right now,
+- if the connection is removed from the cache, do not drop the connection till the connection is dropped by the user.
+
 
 
 * Cqrs
