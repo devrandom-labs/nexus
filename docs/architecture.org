@@ -63,8 +63,9 @@
 ** io_uring runtime. [NOT]
 - to make the application even faster while running all the above.
 - not much performance gains.
-
-
+* LRU Cache:
+- aggregate in memory for quick retreival of aggregates
+- sqlite connection pool
 
 
 
