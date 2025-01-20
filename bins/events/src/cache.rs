@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use thiserror::Error as Err;
 
 #[derive(Debug, Err)]
