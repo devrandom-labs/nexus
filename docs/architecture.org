@@ -66,6 +66,9 @@
 * LRU Cache:
 - aggregate in memory for quick retrieval of aggregates
 - sqlite connection pool
+* Authorization in our system:
+- biscuit token [[https://doc.biscuitsec.org/getting-started/my-first-biscuit][My First Biscuit - Biscuit]]
+- memchache or db to hold public key of every service
 
 
 
