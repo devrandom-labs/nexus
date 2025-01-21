@@ -55,7 +55,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn able_to_send_and_receive_message() {
+    async fn send_message_and_receive_reply() {
         let (tx, mut rx) = channel(10);
         let message = TestMessage {
             content: "Hello".to_string(),

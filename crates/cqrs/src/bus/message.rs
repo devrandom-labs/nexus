@@ -37,3 +37,37 @@ impl<T, R> MessageEnvelope<T, R> {
             .map_err(|_| Error::ReplyFailed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::oneshot::channel;
+
+    #[derive(Debug)]
+    struct TestMessage {
+        content: String,
+    }
+
+    #[derive(Debug)]
+    struct TestReply {
+        result: String,
+    }
+
+    #[tokio::test]
+    async fn construct_and_reply() {
+        let (tx, rx) = channel();
+        let message = TestMessage {
+            content: "Hello".to_string(),
+        };
+        let message_envelope = MessageEnvelope::new(tx, message);
+        let response = TestReply {
+            result: "Hei Hei".to_string(),
+        };
+        let result = message_envelope.reply(Ok(response));
+        assert!(result.is_ok());
+        let result = tokio::spawn(async move { rx.await.unwrap() }).await;
+        assert!(result.is_ok(), "Reply message failed: {:?}", result);
+        let response = result.unwrap().unwrap();
+        assert_eq!(response.result, "Hei Hei");
+    }
+}
