@@ -12,20 +12,12 @@ pub type Reply<R> = Sender<MessageResult<R>>;
 ///
 /// but reply can transfer any kind of type back, so it can be dynamic dispatch
 #[derive(Debug)]
-pub struct MessageEnvelope<T, R>
-where
-    R: Debug,
-    T: Debug,
-{
+pub struct MessageEnvelope<T, R> {
     reply: Reply<R>,
     message: T,
 }
 
-impl<T, R> MessageEnvelope<T, R>
-where
-    R: Debug,
-    T: Debug,
-{
+impl<T, R> MessageEnvelope<T, R> {
     pub fn new(reply: Reply<R>, message: T) -> Self {
         MessageEnvelope { reply, message }
     }
