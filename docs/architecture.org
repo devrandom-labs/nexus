@@ -64,7 +64,7 @@
 - to make the application even faster while running all the above.
 - not much performance gains.
 * LRU Cache:
-- aggregate in memory for quick retreival of aggregates
+- aggregate in memory for quick retrieval of aggregates
 - sqlite connection pool
 
 

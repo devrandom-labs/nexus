@@ -139,6 +139,7 @@
             rust-analyzer
             bacon
             sqlx-cli
+            biscuit-cli
           ];
 
           shellHook = ''
