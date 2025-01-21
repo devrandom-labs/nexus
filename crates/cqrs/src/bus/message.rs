@@ -41,6 +41,7 @@ impl<T, R> MessageEnvelope<T, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bus::error::Error;
     use tokio::sync::oneshot::channel;
 
     #[derive(Debug)]
@@ -48,7 +49,7 @@ mod tests {
         content: String,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     struct TestReply {
         result: String,
     }
@@ -64,10 +65,41 @@ mod tests {
             result: "Hei Hei".to_string(),
         };
         let result = message_envelope.reply(Ok(response));
-        assert!(result.is_ok());
-        let result = tokio::spawn(async move { rx.await.unwrap() }).await;
-        assert!(result.is_ok(), "Reply message failed: {:?}", result);
-        let response = result.unwrap().unwrap();
-        assert_eq!(response.result, "Hei Hei");
+        assert!(result.is_ok(), "Reply should succeed");
+        let received_response = rx.await;
+        assert!(received_response.is_ok(), "Receiving reply should succeed");
+        let received_response = received_response.unwrap();
+        assert!(received_response.is_ok(), "Response should be Ok");
+        assert_eq!(
+            received_response.unwrap(),
+            TestReply {
+                result: "Hei Hei".to_string()
+            },
+            "Response should match"
+        )
+    }
+
+    #[tokio::test]
+    async fn reply_failed_when_receiver_dropped() {
+        let (tx, rx) = channel();
+        let message = TestMessage {
+            content: "Hello".to_string(),
+        };
+
+        let message_envelope = MessageEnvelope::new(tx, message);
+        let response = TestReply {
+            result: "Hei Hei".to_string(),
+        };
+
+        drop(rx);
+        let reply_result = message_envelope.reply(Ok(response));
+        assert!(
+            reply_result.is_err(),
+            "Reply should fail receiver is dropped"
+        );
+        assert!(
+            matches!(reply_result, Err(Error::ReplyFailed)),
+            "Error should be ReplyFailed"
+        );
     }
 }
