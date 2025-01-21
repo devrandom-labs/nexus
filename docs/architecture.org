@@ -68,7 +68,14 @@
 - sqlite connection pool
 * Authorization in our system:
 - biscuit token [[https://doc.biscuitsec.org/getting-started/my-first-biscuit][My First Biscuit - Biscuit]]
-- memchache or db to hold public key of every service
+- need a database to map user_id to initial authority datalog block
+  - facts (depending on subscription)
+  - rules (based on facts above)
+  - checks (depending on subscription)
+- create authorizer datalog
+  - facts, rules
+  - create checks
+  - create policies.
 
 
 
