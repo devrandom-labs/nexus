@@ -7,4 +7,6 @@ pub enum Error {
     SendingFailed,
     #[error("Handler execution failed")]
     HandlerExecutionFailed,
+    #[error("Failed to reply")]
+    ReplyFailed,
 }

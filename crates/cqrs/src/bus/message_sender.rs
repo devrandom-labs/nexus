@@ -42,12 +42,41 @@ impl<T, R> MessageSender<T, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::message::MessageEnvelope;
-    use tokio::sync::mpsc::Sender;
+    use tokio::sync::mpsc::channel;
 
-    #[test]
-    fn able_to_send_message() {}
-    // figure out a way to pass any struct as message
-    // no need for debug trait,
-    // maybe figure out how I can involve tracing as a drop in config
+    #[derive(Debug)]
+    struct TestMessage {
+        content: String,
+    }
+
+    #[derive(Debug)]
+    struct TestResponse {
+        result: String,
+    }
+
+    #[tokio::test]
+    async fn able_to_send_and_receive_message() {
+        let (tx, mut rx) = channel(10);
+        let message = TestMessage {
+            content: "Hello".to_string(),
+        };
+        let sender = MessageSender::<TestMessage, TestResponse>::new(tx);
+
+        tokio::spawn(async move {
+            if let Some(msg_env) = rx.recv().await {
+                let response = TestResponse {
+                    result: "Ok".to_string(),
+                };
+                msg_env
+                    .reply(Ok(response))
+                    .expect("Failed to send response");
+            }
+        });
+
+        let result = sender.send(message).await;
+
+        assert!(result.is_ok(), "Sending message failed: {:?}", result);
+        let response = result.unwrap();
+        assert_eq!(response.result, "Ok");
+    }
 }
