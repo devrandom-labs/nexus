@@ -37,3 +37,18 @@ where
             .map_err(|_| Error::HandlerExecutionFailed)?
     }
 }
+
+/// testing
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bus::message::MessageEnvelope;
+    use tokio::sync::mpsc::Sender;
+
+    #[test]
+    fn able_to_send_message() {}
+
+    // figure out a way to pass any struct as message
+    // no need for debug trait,
+    // maybe figure out how I can involve tracing as a drop in config
+}
