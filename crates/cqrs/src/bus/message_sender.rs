@@ -79,4 +79,6 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.result, "Ok");
     }
+
+    // TODO: test drop receiver
 }

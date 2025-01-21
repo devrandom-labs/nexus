@@ -1,4 +1,3 @@
-use cqrs::commander;
 use tracing::{info, instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
@@ -33,10 +32,4 @@ async fn main() {
     let name = env!("CARGO_BIN_NAME");
     let version = env!("CARGO_PKG_VERSION");
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
-
-    let command_executor = commander::commander(20);
-    let result = command_executor.clone().execute(Command::CreateEvent).await;
-    info!("{}", result.unwrap());
-    let result = command_executor.clone().execute(Command::DeleteEvent).await;
-    info!("{}", result.unwrap());
 }
