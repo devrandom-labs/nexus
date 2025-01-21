@@ -1,6 +1,6 @@
 pub mod error;
-pub mod executor;
 pub mod message;
+pub mod message_sender;
 
 pub struct Bus {
     bound: usize,
