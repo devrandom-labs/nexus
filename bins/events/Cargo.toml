@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
+cqrs = { path = "../../crates/cqrs" }
 sqlx = { workspace = true, features = ["sqlite", "migrate", "runtime-tokio-rustls"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }

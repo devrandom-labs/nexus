@@ -1,3 +1,4 @@
+use cqrs::commander;
 use tracing::{info, instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
@@ -6,7 +7,6 @@ use tracing_subscriber::{
 };
 
 pub mod cache;
-pub mod commander;
 pub mod domain;
 pub mod store;
 
