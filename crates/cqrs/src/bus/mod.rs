@@ -1,8 +1,9 @@
 #![allow(dead_code)]
-
 pub mod error;
 pub mod message;
 pub mod message_sender;
+
+pub type MessageHandler<M, E, S, R> = Box<dyn Fn(M, E, S) -> message::MessageResult<R>>;
 
 #[derive(Debug)]
 pub struct Bus {
