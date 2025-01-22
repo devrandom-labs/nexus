@@ -28,13 +28,3 @@ impl<K, V> Cache<K, V> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn add_capacity_for_caching() {
-        let cache = Cache::new(10);
-    }
-}
