@@ -190,6 +190,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "thiserror",
+ "tokio",
+ "tracing",
  "ulid",
 ]
 
@@ -332,6 +334,7 @@ name = "events"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "cqrs",
  "sqlx",
  "thiserror",
  "tokio",

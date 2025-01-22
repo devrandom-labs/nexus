@@ -1,4 +1,10 @@
 * Inbox
+** TODO feature scope to tracing and have a non debug trait method as well
+
+[[file:~/Code/tixlys/tixlys-core/crates/cqrs/src/bus/message_sender.rs::\[instrument(skip(self))\]]]
+** TODO create lock free, doubly linked list
+
+[[file:~/Code/tixlys/tixlys-core/bins/events/src/cache.rs::fn put(&mut self, data: C) -> Result<C, Error>;]]
 ** TODO create a type which ensures that there is something called aggregate_id in commands
 
 [[file:~/Code/tixlys/tixlys-core/bins/events/src/main.rs::let result = command_executor.clone().execute(Command::CreateEvent).await;]]

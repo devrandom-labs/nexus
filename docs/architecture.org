@@ -63,8 +63,19 @@
 ** io_uring runtime. [NOT]
 - to make the application even faster while running all the above.
 - not much performance gains.
-
-
+* LRU Cache:
+- aggregate in memory for quick retrieval of aggregates
+- sqlite connection pool
+* Authorization in our system:
+- biscuit token [[https://doc.biscuitsec.org/getting-started/my-first-biscuit][My First Biscuit - Biscuit]]
+- need a database to map user_id to initial authority datalog block
+  - facts (depending on subscription)
+  - rules (based on facts above)
+  - checks (depending on subscription)
+- create authorizer datalog
+  - facts, rules
+  - create checks
+  - create policies.
 
 
 

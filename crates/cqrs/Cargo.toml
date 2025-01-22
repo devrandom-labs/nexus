@@ -8,4 +8,6 @@ authors.workspace = true
 [dependencies]
 chrono = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
 ulid = { workspace = true }

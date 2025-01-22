@@ -1,4 +1,9 @@
-pub mod aggregate;
-pub mod error;
-pub mod event;
-pub mod store;
+mod bus;
+mod service;
+mod store;
+
+pub struct Cqrs;
+
+// should take event store repository
+// takes command handlers
+// maps commands to command handlers how?
