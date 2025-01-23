@@ -40,6 +40,19 @@ impl<F> MessageHandlers<F> {
             handlers: Arc::new(RwLock::new(HashMap::default())),
         }
     }
+
+    pub fn with<T>(self, handler: F) -> Self
+    where
+        T: 'static,
+    {
+        let type_id = TypeId::of::<T>();
+        let message_handler = service_fn(handler);
+        self.handlers
+            .write()
+            .unwrap()
+            .insert(type_id, Arc::new(message_handler));
+        self
+    }
 }
 
 #[cfg(test)]
