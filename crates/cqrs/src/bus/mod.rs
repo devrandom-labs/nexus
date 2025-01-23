@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 pub mod error;
 pub mod message;
-pub mod message_handers;
+pub mod message_handlers;
 pub mod message_sender;
 
 #[derive(Debug)]
