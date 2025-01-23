@@ -57,7 +57,6 @@ impl<F> MessageHandlers<F> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use std::any::TypeId;
     use std::collections::HashMap;
     use std::sync::{Arc, RwLock};
@@ -92,9 +91,10 @@ mod test {
             .unwrap()
             .insert(TypeId::of::<Command>(), Arc::new(service_fn(handle)));
 
-        let handler = handlers.read().unwrap();
-        let handler = handler.get(&TypeId::of::<Command>()).clone();
-
+        let handler = {
+            let handler_gaurd = handlers.read().unwrap();
+            handler_gaurd.get(&TypeId::of::<Command>()).cloned()
+        };
         if let Some(msg_handler) = handler {
             let response = msg_handler.oneshot(command.clone()).await;
             // Assert the response is Ok and the content is as expected
