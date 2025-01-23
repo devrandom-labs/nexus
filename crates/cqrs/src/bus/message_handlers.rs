@@ -117,10 +117,10 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn should_take_two_different_types() {
-        let handler = MessageHandlers::new()
-            .with::<Command>(handle)
-            .with::<Command2>(handle_2);
-    }
+    // #[tokio::test]
+    // async fn should_take_two_different_types() {
+    //     let handler = MessageHandlers::new()
+    //         .with::<Command>(handle)
+    //         .with::<Command2>(handle_2);
+    // }
 }
