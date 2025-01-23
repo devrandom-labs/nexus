@@ -68,7 +68,6 @@ mod test {
     use super::*;
     use tower::{BoxError, ServiceExt};
 
-    #[derive(PartialEq, Eq, Hash, Clone)]
     struct Command {
         content: String,
     }
