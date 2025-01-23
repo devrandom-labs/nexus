@@ -1,23 +1,43 @@
-use std::cmp::Eq;
+use std::any::TypeId;
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, RwLock};
 use tower::{service_fn, util::ServiceFn};
 
-pub struct MessageHandlers<T, F>
-where
-    T: Hash + Eq,
-{
-    handlers: Arc<RwLock<HashMap<T, Arc<ServiceFn<F>>>>>,
+// https://docs.rs/http/0.2.5/src/http/extensions.rs.html#8-28
+// With TypeIds as keys, there's no need to hash them. They are already hashes
+// themselves, coming from the compiler. The IdHasher just holds the u64 of
+// the TypeId, and then returns it, instead of doing any bit fiddling.
+// got the idea from https://github.com/gotham-rs/gotham/blob/main/gotham/src/state/mod.rs
+#[derive(Default)]
+struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    fn write(&mut self, _bytes: &[u8]) {
+        unreachable!("TypeId calls write-u64");
+    }
+
+    #[inline]
+    fn write_u64(&mut self, id: u64) {
+        self.0 = id;
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
 }
 
-impl<T, F> MessageHandlers<T, F>
-where
-    T: Hash + Eq,
-{
+type MessageHandlerMap<F> = HashMap<TypeId, Arc<ServiceFn<F>>, BuildHasherDefault<IdHasher>>;
+
+pub struct MessageHandlers<F> {
+    handlers: Arc<RwLock<MessageHandlerMap<F>>>,
+}
+
+impl<F> MessageHandlers<F> {
     pub fn new() -> Self {
         MessageHandlers {
-            handlers: Arc::new(RwLock::new(HashMap::new())),
+            handlers: Arc::new(RwLock::new(HashMap::default())),
         }
     }
 }
