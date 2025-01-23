@@ -54,7 +54,7 @@ impl<F> MessageHandlers<F> {
         self
     }
 
-    pub fn get<T>(&self, _message: T) -> Option<Arc<ServiceFn<F>>>
+    pub fn get<T>(&self, _message: &T) -> Option<Arc<ServiceFn<F>>>
     where
         T: 'static,
     {
@@ -65,10 +65,8 @@ impl<F> MessageHandlers<F> {
 
 #[cfg(test)]
 mod test {
-    use std::any::TypeId;
-    use std::collections::HashMap;
-    use std::sync::{Arc, RwLock};
-    use tower::{service_fn, util::ServiceFn, BoxError, ServiceExt};
+    use super::*;
+    use tower::{BoxError, ServiceExt};
 
     #[derive(PartialEq, Eq, Hash, Clone)]
     struct Command {
@@ -88,23 +86,13 @@ mod test {
 
     #[tokio::test]
     async fn should_take_function() {
-        let handlers: Arc<RwLock<HashMap<TypeId, Arc<ServiceFn<_>>>>> =
-            Arc::new(RwLock::new(HashMap::new()));
-
+        let handlers = MessageHandlers::new().with::<Command>(handle);
         let command = Command {
             content: "Hello".to_string(),
         };
-        handlers
-            .write()
-            .unwrap()
-            .insert(TypeId::of::<Command>(), Arc::new(service_fn(handle)));
-
-        let handler = {
-            let handler_gaurd = handlers.read().unwrap();
-            handler_gaurd.get(&TypeId::of::<Command>()).cloned()
-        };
+        let handler = handlers.get(&command);
         if let Some(msg_handler) = handler {
-            let response = msg_handler.oneshot(command.clone()).await;
+            let response = msg_handler.oneshot(command).await;
             // Assert the response is Ok and the content is as expected
             match response {
                 Ok(event) => {
