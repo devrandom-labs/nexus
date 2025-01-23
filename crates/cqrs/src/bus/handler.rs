@@ -53,6 +53,14 @@ impl<F> MessageHandlers<F> {
             .insert(type_id, Arc::new(message_handler));
         self
     }
+
+    pub fn get<T>(&self, _message: T) -> Option<Arc<ServiceFn<F>>>
+    where
+        T: 'static,
+    {
+        let type_id = TypeId::of::<T>();
+        self.handlers.read().unwrap().get(&type_id).cloned()
+    }
 }
 
 #[cfg(test)]
