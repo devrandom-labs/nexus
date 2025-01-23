@@ -83,6 +83,17 @@ mod test {
         Ok(event)
     }
 
+    struct Command2 {
+        content: String,
+    }
+
+    async fn handle_2(_command: Command2) -> Result<Event, BoxError> {
+        let event = Event {
+            content: "Reply".to_string(),
+        };
+        Ok(event)
+    }
+
     #[tokio::test]
     async fn should_take_function() {
         let handlers = MessageHandlers::new().with::<Command>(handle);
@@ -104,5 +115,12 @@ mod test {
         } else {
             panic!("Handler not found for command");
         }
+    }
+
+    #[tokio::test]
+    async fn should_take_two_different_types() {
+        let handler = MessageHandlers::new()
+            .with::<Command>(handle)
+            .with::<Command2>(handle_2);
     }
 }
