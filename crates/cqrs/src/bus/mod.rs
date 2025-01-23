@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 pub mod error;
+pub mod handler;
 pub mod message;
 pub mod message_sender;
 
