@@ -9,5 +9,6 @@ authors.workspace = true
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
 tracing = { workspace = true }
 ulid = { workspace = true }
