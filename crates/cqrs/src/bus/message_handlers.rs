@@ -46,7 +46,7 @@ impl<F> MessageHandlers<F> {
         T: 'static,
     {
         let type_id = TypeId::of::<T>();
-        let message_handler = service_fn(handler);
+        let message_handler = service_fn(handler); // TODO: change this so F async fn has the argument of T
         self.handlers
             .write()
             .unwrap()
