@@ -1,5 +1,7 @@
+use std::any::Any;
 use std::any::TypeId;
 use std::collections::HashMap;
+use std::future::Future;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, RwLock};
 use tower::{service_fn, util::ServiceFn};
@@ -28,10 +30,11 @@ impl Hasher for IdHasher {
     }
 }
 
-type MessageHandlerMap<F> = HashMap<TypeId, Arc<ServiceFn<F>>, BuildHasherDefault<IdHasher>>;
+// TODO: fix the handler
+type MessageHandler = FnMut(dyn Any) -> impl Future<Output = Result<dyn Any, dyn Any>>;
 
-pub struct MessageHandlers<F> {
-    handlers: Arc<RwLock<MessageHandlerMap<F>>>,
+pub struct MessageHandlers {
+    handlers: Arc<RwLock<HashMap<TypeId, Arc<ServiceFn>, BuildHasherDefault<IdHasher>>>>,
 }
 
 impl<F> MessageHandlers<F> {
@@ -41,9 +44,11 @@ impl<F> MessageHandlers<F> {
         }
     }
 
-    pub fn with<T>(self, handler: F) -> Self
+    pub fn with<T, M, Fut, R, E>(self, handler: M) -> Self
     where
         T: 'static,
+        M: FnMut(T) -> Fut,
+        Fut: Future<Output = Result<R, E>>,
     {
         let type_id = TypeId::of::<T>();
         let message_handler = service_fn(handler); // TODO: change this so F async fn has the argument of T
