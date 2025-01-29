@@ -1,11 +1,8 @@
 #![allow(dead_code)]
 use super::error::Error;
+use super::{MessageResult, Reply};
 use std::fmt::Debug;
-use tokio::sync::oneshot::Sender;
 use tracing::{error, instrument};
-
-pub type MessageResult<R> = Result<R, Error>;
-pub type Reply<R> = Sender<MessageResult<R>>;
 
 /// payload should not be dynamic dispatch,
 /// sum type of messages should be sent through the messages,

@@ -1,16 +1,12 @@
 #![allow(dead_code)]
+use tokio::sync::oneshot::Sender;
+
 pub mod error;
-pub mod message;
+pub mod message_envelope;
 pub mod message_handlers;
 pub mod message_sender;
 
-#[derive(Debug)]
-pub struct Bus {
-    bound: usize,
-}
+pub type MessageResult<R> = Result<R, error::Error>;
 
-impl Bus {
-    pub fn new(bound: usize) -> Self {
-        Bus { bound }
-    }
-}
+// Every reply should send this message.
+pub type Reply<R> = Sender<MessageResult<R>>;

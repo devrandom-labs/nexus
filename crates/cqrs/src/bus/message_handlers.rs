@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::{Arc, RwLock};
-use tower::{service_fn, util::ServiceFn};
+use tower::{service_fn, util::ServiceFn, Service};
 
 // https://docs.rs/http/0.2.5/src/http/extensions.rs.html#8-28
 // With TypeIds as keys, there's no need to hash them. They are already hashes
@@ -30,11 +30,9 @@ impl Hasher for IdHasher {
     }
 }
 
-// TODO: fix the handler
-type MessageHandler = FnMut(dyn Any) -> impl Future<Output = Result<dyn Any, dyn Any>>;
-
-pub struct MessageHandlers {
-    handlers: Arc<RwLock<HashMap<TypeId, Arc<ServiceFn>, BuildHasherDefault<IdHasher>>>>,
+// TODO: takes any service of any
+pub struct MessageHandlers<T> {
+    handlers: Arc<RwLock<HashMap<TypeId, Arc<dyn Service<T>>, BuildHasherDefault<IdHasher>>>>,
 }
 
 impl<F> MessageHandlers<F> {
