@@ -1,5 +1,6 @@
 use super::{Message, MessageResponse, MessageResult};
 use std::future::Future;
+use std::marker::PhantomData;
 
 // not cloning this , this would be used in the thread where message handler would be executed
 pub struct MessageRouter<M, F, Fut, R>
@@ -10,9 +11,10 @@ where
     Fut: Future<Output = MessageResult<R>>,
 {
     router: Box<F>,
+    _message: PhantomData<M>,
 }
 
-impl MessageRouter<M, F, Fut, R>
+impl<M, F, Fut, R> MessageRouter<M, F, Fut, R>
 where
     M: Message,
     R: MessageResponse,
@@ -20,6 +22,10 @@ where
     Fut: Future<Output = MessageResult<R>>,
 {
     pub fn new(router: F) -> Self {
-        MessageRouter { router }
+        let router = Box::new(router);
+        MessageRouter {
+            router,
+            _message: PhantomData,
+        }
     }
 }
