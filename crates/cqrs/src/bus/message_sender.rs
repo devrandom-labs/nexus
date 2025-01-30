@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use super::error::Error;
-use super::message::{MessageEnvelope, MessageResult};
+use super::message_envelope::MessageEnvelope;
+use super::{Error, MessageResult};
 use std::fmt::Debug;
 use tokio::sync::{mpsc::Sender, oneshot};
 use tracing::{error, instrument};

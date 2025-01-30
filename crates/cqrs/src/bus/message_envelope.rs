@@ -1,11 +1,9 @@
 #![allow(dead_code)]
-use super::error::Error;
+use super::Error;
+use super::MessageResult;
 use std::fmt::Debug;
 use tokio::sync::oneshot::Sender;
 use tracing::{error, instrument};
-
-pub type MessageResult<R> = Result<R, Error>;
-pub type Reply<R> = Sender<MessageResult<R>>;
 
 /// payload should not be dynamic dispatch,
 /// sum type of messages should be sent through the messages,
@@ -13,12 +11,12 @@ pub type Reply<R> = Sender<MessageResult<R>>;
 /// but reply can transfer any kind of type back, so it can be dynamic dispatch
 #[derive(Debug)]
 pub struct MessageEnvelope<T, R> {
-    reply: Reply<R>,
+    reply: Sender<MessageResult<R>>,
     message: T,
 }
 
 impl<T, R> MessageEnvelope<T, R> {
-    pub fn new(reply: Reply<R>, message: T) -> Self {
+    pub fn new(reply: Sender<MessageResult<R>>, message: T) -> Self {
         MessageEnvelope { reply, message }
     }
 
@@ -41,7 +39,7 @@ impl<T, R> MessageEnvelope<T, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::error::Error;
+    use crate::bus::Error;
     use tokio::sync::oneshot::channel;
 
     #[derive(Debug)]
@@ -50,6 +48,7 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq)]
+
     struct TestReply {
         result: String,
     }
