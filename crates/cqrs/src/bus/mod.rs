@@ -6,7 +6,6 @@ use tokio::sync::{mpsc::channel, oneshot::Sender};
 use tokio::task;
 
 pub mod message_envelope;
-pub mod message_router;
 pub mod message_sender;
 
 #[allow(clippy::enum_variant_names)]
@@ -54,6 +53,7 @@ impl Bus {
     }
 
     // should return serializeable.
+    // change handler to services, takes tower services.
     pub async fn start<M, F, Fut, R>(
         &self,
         mut handler: F,
