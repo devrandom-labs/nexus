@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-use super::error::Error;
-use super::{MessageResult, Reply};
+use super::Error;
+use super::{MessageResponse, MessageResult, Reply};
 use std::fmt::Debug;
 use tracing::{error, instrument};
 
@@ -9,12 +9,18 @@ use tracing::{error, instrument};
 ///
 /// but reply can transfer any kind of type back, so it can be dynamic dispatch
 #[derive(Debug)]
-pub struct MessageEnvelope<T, R> {
+pub struct MessageEnvelope<T, R>
+where
+    R: MessageResponse,
+{
     reply: Reply<R>,
     message: T,
 }
 
-impl<T, R> MessageEnvelope<T, R> {
+impl<T, R> MessageEnvelope<T, R>
+where
+    R: MessageResponse,
+{
     pub fn new(reply: Reply<R>, message: T) -> Self {
         MessageEnvelope { reply, message }
     }
@@ -38,7 +44,7 @@ impl<T, R> MessageEnvelope<T, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::error::Error;
+    use crate::bus::{Error, MessageResponse};
     use tokio::sync::oneshot::channel;
 
     #[derive(Debug)]
@@ -47,9 +53,12 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq)]
+
     struct TestReply {
         result: String,
     }
+
+    impl MessageResponse for TestReply {}
 
     #[tokio::test]
     async fn construct_and_reply() {
