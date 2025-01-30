@@ -69,6 +69,7 @@ impl Bus {
         task::spawn(async move {
             while let Some(msg_env) = rx.recv().await {
                 let resp = handler(msg_env.message()).await;
+                // have to handle the errors here.
                 let _ = msg_env.reply(resp);
             }
         });
