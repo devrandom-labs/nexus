@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 use super::Error;
-use super::{MessageResult, Reply};
+use super::MessageResult;
 use std::fmt::Debug;
+use tokio::sync::oneshot::Sender;
 use tracing::{error, instrument};
 
 /// payload should not be dynamic dispatch,
@@ -10,12 +11,12 @@ use tracing::{error, instrument};
 /// but reply can transfer any kind of type back, so it can be dynamic dispatch
 #[derive(Debug)]
 pub struct MessageEnvelope<T, R> {
-    reply: Reply<R>,
+    reply: Sender<MessageResult<R>>,
     message: T,
 }
 
 impl<T, R> MessageEnvelope<T, R> {
-    pub fn new(reply: Reply<R>, message: T) -> Self {
+    pub fn new(reply: Sender<MessageResult<R>>, message: T) -> Self {
         MessageEnvelope { reply, message }
     }
 

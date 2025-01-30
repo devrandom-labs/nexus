@@ -2,7 +2,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use thiserror::Error as Err;
-use tokio::sync::{mpsc::channel, oneshot::Sender};
+use tokio::sync::mpsc::channel;
 use tokio::task;
 
 pub mod message_envelope;
@@ -22,9 +22,6 @@ pub enum Error {
 }
 
 pub type MessageResult<R> = Result<R, Error>;
-
-// Every reply should send this message.
-pub type Reply<R> = Sender<MessageResult<R>>;
 
 pub trait Message {
     fn get_version(&self) -> String;
@@ -59,7 +56,7 @@ impl Bus {
         mut handler: F,
     ) -> Result<message_sender::MessageSender<M, R>, Error>
     where
-        R: Send + Sync + 'static + Debug,
+        R: Send + Sync + 'static + Debug, // takes only one type of reply, should be able to take dyn MessageReplys
         M: Message + Send + Sync + 'static,
         F: FnMut(&M) -> Fut + Send + 'static,
         Fut: Future<Output = MessageResult<R>> + Send + Sync,
@@ -75,4 +72,9 @@ impl Bus {
         });
         Ok(sender)
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
 }
