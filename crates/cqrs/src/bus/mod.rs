@@ -2,10 +2,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use thiserror::Error as Err;
-use tokio::sync::{
-    mpsc::{channel, Sender as MpscSender},
-    oneshot::Sender,
-};
+use tokio::sync::{mpsc::channel, oneshot::Sender};
 use tokio::task;
 
 pub mod message_envelope;
@@ -43,25 +40,38 @@ pub struct Bus {
     bound: usize,
 }
 impl Bus {
+    const DEFAULT_BOUND: usize = 10;
+    const MAX_BOUND: usize = 1000;
     pub fn new(bound: usize) -> Self {
-        // TODO: should there be a cutoff, uppwer bound?
-        // TODO: should there be a lower bound?
-        Bus { bound }
+        let bounded_size = match bound {
+            0 => Self::DEFAULT_BOUND,
+            b if b > Self::MAX_BOUND => Self::MAX_BOUND,
+            _ => bound,
+        };
+        Bus {
+            bound: bounded_size,
+        }
     }
 
     // should return serializeable.
     pub async fn start<M, F, Fut, R>(
         &self,
-        handler: F,
+        mut handler: F,
     ) -> Result<message_sender::MessageSender<M, R>, Error>
     where
-        M: Message,
-        F: FnMut(M) -> Fut,
-        Fut: Future<Output = MessageResult<R>>,
+        R: Send + Sync + 'static + Debug,
+        M: Message + Send + Sync + 'static,
+        F: FnMut(&M) -> Fut + Send + 'static,
+        Fut: Future<Output = MessageResult<R>> + Send + Sync,
     {
         let (tx, mut rx) = channel(self.bound);
         let sender = message_sender::MessageSender::<M, R>::new(tx);
-        task::spawn(async move {});
+        task::spawn(async move {
+            while let Some(msg_env) = rx.recv().await {
+                let resp = handler(msg_env.message()).await;
+                let _ = msg_env.reply(resp);
+            }
+        });
         Ok(sender)
     }
 }
