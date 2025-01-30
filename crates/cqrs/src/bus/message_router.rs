@@ -1,4 +1,4 @@
-use super::{Message, MessageResponse, MessageResult};
+use super::{Message, MessageResult};
 use std::future::Future;
 use std::marker::PhantomData;
 
@@ -6,7 +6,6 @@ use std::marker::PhantomData;
 pub struct MessageRouter<M, F, Fut, R>
 where
     M: Message,
-    R: MessageResponse,
     F: FnMut(M) -> Fut,
     Fut: Future<Output = MessageResult<R>>,
 {
@@ -17,7 +16,6 @@ where
 impl<M, F, Fut, R> MessageRouter<M, F, Fut, R>
 where
     M: Message,
-    R: MessageResponse,
     F: FnMut(M) -> Fut,
     Fut: Future<Output = MessageResult<R>>,
 {
@@ -27,5 +25,42 @@ where
             router,
             _message: PhantomData,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::bus::Error;
+
+    pub enum Messages {
+        SomeMessage { content: String },
+    }
+
+    impl Message for Messages {
+        fn get_type(&self) -> String {
+            match *self {
+                Self::SomeMessage { .. } => String::from("Some message"),
+            }
+        }
+
+        fn get_version(&self) -> String {
+            "1".to_string()
+        }
+    }
+
+    pub struct SomeMessageResponse {
+        reply: String,
+    }
+
+    async fn router(messages: Messages) -> Result<SomeMessageResponse, Error> {
+        match messages {
+            Messages::SomeMessage { content } => Ok(SomeMessageResponse { reply: content }),
+        }
+    }
+
+    #[test]
+    fn should_take_async_closure() {
+        let _router = MessageRouter::new(router);
     }
 }

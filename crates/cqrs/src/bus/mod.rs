@@ -28,7 +28,5 @@ pub trait Message {
     fn get_type(&self) -> String;
 }
 
-pub trait MessageResponse {}
-
 // takes an enum of messages handlers can process
 // sends out trait object of message response [which can derive serialize / deserialize, depends]
