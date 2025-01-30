@@ -73,8 +73,3 @@ impl Bus {
         Ok(sender)
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-}
