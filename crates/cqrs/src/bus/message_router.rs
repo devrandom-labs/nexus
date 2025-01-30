@@ -59,8 +59,12 @@ mod test {
         }
     }
 
-    #[test]
-    fn should_take_async_closure() {
-        let _router = MessageRouter::new(router);
+    #[tokio::test]
+    async fn should_take_async_closure() {
+        let router = MessageRouter::new(router);
+        let message = Messages::SomeMessage {
+            content: "hello".to_string(),
+        };
+        let _response = (router.router)(message).await;
     }
 }
