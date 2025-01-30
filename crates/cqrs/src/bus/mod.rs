@@ -1,7 +1,12 @@
 #![allow(dead_code)]
 use std::fmt::Debug;
+use std::future::Future;
 use thiserror::Error as Err;
-use tokio::sync::oneshot::Sender;
+use tokio::sync::{
+    mpsc::{channel, Sender as MpscSender},
+    oneshot::Sender,
+};
+use tokio::task;
 
 pub mod message_envelope;
 pub mod message_router;
@@ -16,6 +21,8 @@ pub enum Error {
     HandlerExecutionFailed,
     #[error("Failed to reply")]
     ReplyFailed,
+    #[error("Failed to start message bus")]
+    BusStartFailed,
 }
 
 pub type MessageResult<R> = Result<R, Error>;
@@ -30,3 +37,31 @@ pub trait Message {
 
 // takes an enum of messages handlers can process
 // sends out trait object of message response [which can derive serialize / deserialize, depends]
+pub trait MessageResponse {}
+
+pub struct Bus {
+    bound: usize,
+}
+impl Bus {
+    pub fn new(bound: usize) -> Self {
+        // TODO: should there be a cutoff, uppwer bound?
+        // TODO: should there be a lower bound?
+        Bus { bound }
+    }
+
+    // should return serializeable.
+    pub async fn start<M, F, Fut, R>(
+        &self,
+        handler: F,
+    ) -> Result<message_sender::MessageSender<M, R>, Error>
+    where
+        M: Message,
+        F: FnMut(M) -> Fut,
+        Fut: Future<Output = MessageResult<R>>,
+    {
+        let (tx, mut rx) = channel(self.bound);
+        let sender = message_sender::MessageSender::<M, R>::new(tx);
+        task::spawn(async move {});
+        Ok(sender)
+    }
+}
