@@ -55,7 +55,9 @@ mod test {
 
     async fn router(messages: Messages) -> Result<SomeMessageResponse, Error> {
         match messages {
-            Messages::SomeMessage { content } => Ok(SomeMessageResponse { reply: content }),
+            Messages::SomeMessage { content } => Ok(SomeMessageResponse {
+                reply: format!("{}-reply", content),
+            }),
         }
     }
 
@@ -65,6 +67,9 @@ mod test {
         let message = Messages::SomeMessage {
             content: "hello".to_string(),
         };
-        let _response = (router.router)(message).await;
+        let response = (router.router)(message).await;
+        assert!(response.is_ok());
+        let reply = response.unwrap();
+        assert_eq!(reply.reply, "hello-reply".to_string());
     }
 }
