@@ -76,7 +76,6 @@ impl Bus {
 
 mod test {
     use super::*;
-
     #[derive(Debug)]
     enum BusMessage {
         Hello,
@@ -99,9 +98,15 @@ mod test {
         content: String,
     }
 
+    #[derive(Debug, PartialEq)]
+    struct HeiHeiResponse {
+        content: String,
+    }
+
     #[tokio::test]
     async fn should_be_able_to_take_handlers() {
         let bus = Bus::new(20);
+        // now response really needs to just be Dyn Serializeable
         let sender = bus
             .start(|msg: &BusMessage| async move {
                 match msg {
