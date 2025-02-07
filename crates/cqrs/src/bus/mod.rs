@@ -73,3 +73,54 @@ impl Bus {
         Ok(sender)
     }
 }
+
+mod test {
+    use super::*;
+
+    #[derive(Debug)]
+    enum BusMessage {
+        Hello,
+    }
+
+    impl Message for BusMessage {
+        fn get_type(&self) -> String {
+            match self {
+                BusMessage::Hello => "hello".to_string(),
+            }
+        }
+
+        fn get_version(&self) -> String {
+            "0".to_string()
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct HelloResponse {
+        content: String,
+    }
+
+    #[tokio::test]
+    async fn should_be_able_to_take_handlers() {
+        let bus = Bus::new(20);
+        let sender = bus
+            .start(|msg: &BusMessage| async move {
+                match msg {
+                    BusMessage::Hello => Ok(HelloResponse {
+                        content: "whats up".to_string(),
+                    }),
+                }
+            })
+            .await
+            .unwrap();
+
+        let reply = sender.send(BusMessage::Hello).await;
+        assert!(reply.is_ok());
+        let result = reply.unwrap();
+        assert_eq!(
+            result,
+            HelloResponse {
+                content: "whats up".to_string()
+            }
+        )
+    }
+}
