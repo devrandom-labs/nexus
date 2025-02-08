@@ -18,7 +18,7 @@ impl<T, R> MessageSender<T, R> {
     }
 
     #[instrument(skip(self))]
-    pub async fn send(self, message: T) -> Result<R, Error>
+    pub async fn send(&self, message: T) -> Result<R, Error>
     where
         T: Debug,
         R: Debug,
@@ -36,17 +36,19 @@ impl<T, R> MessageSender<T, R> {
     }
 }
 
+// TODO: to clone Message sender, we do not need T and R to be cloneable.
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::sync::mpsc::channel;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestMessage {
         content: String,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestResponse {
         result: String,
     }
@@ -77,5 +79,49 @@ mod tests {
         assert_eq!(response.result, "Ok");
     }
 
+    // TODO: test sender in multiple tokio tasks
+    #[tokio::test]
+    async fn send_message_in_different_task() {
+        let (tx, mut rx) = channel(10);
+        let message = TestMessage {
+            content: "Hello".to_string(),
+        };
+        let sender = MessageSender::<TestMessage, TestResponse>::new(tx);
+
+        tokio::spawn(async move {
+            if let Some(msg_env) = rx.recv().await {
+                let response = TestResponse {
+                    result: "Ok".to_string(),
+                };
+                msg_env
+                    .reply(Ok(response))
+                    .expect("Failed to send response");
+            }
+        });
+
+        tokio::spawn({
+            let sender = sender.clone();
+            let message = message.clone();
+            async move {
+                let result = sender.send(message).await;
+
+                assert!(result.is_ok(), "Sending message failed: {:?}", result);
+                let response = result.unwrap();
+                assert_eq!(response.result, "Ok");
+            }
+        });
+
+        tokio::spawn({
+            let sender = sender.clone();
+            let message = message.clone();
+            async move {
+                let result = sender.send(message).await;
+
+                assert!(result.is_ok(), "Sending message failed: {:?}", result);
+                let response = result.unwrap();
+                assert_eq!(response.result, "Ok");
+            }
+        });
+    }
     // TODO: test drop receiver
 }

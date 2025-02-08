@@ -31,7 +31,6 @@ pub trait Message {
 // takes an enum of messages handlers can process
 // sends out trait object of message response [which can derive serialize / deserialize, depends]
 pub trait MessageResponse {}
-
 pub struct Bus {
     bound: usize,
 }
@@ -76,7 +75,7 @@ impl Bus {
 
 mod test {
     use super::*;
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     enum BusMessage {
         Hello,
     }
@@ -93,7 +92,7 @@ mod test {
         }
     }
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     struct HelloResponse {
         content: String,
     }
@@ -127,5 +126,51 @@ mod test {
                 content: "whats up".to_string()
             }
         )
+    }
+
+    #[tokio::test]
+    async fn should_be_able_to_work_between_tasks() {
+        let bus = Bus::new(20);
+        // now response really needs to just be Dyn Serializeable
+        let sender = bus
+            .start(|msg: &BusMessage| async move {
+                match msg {
+                    BusMessage::Hello => Ok(HelloResponse {
+                        content: "whats up".to_string(),
+                    }),
+                }
+            })
+            .await
+            .unwrap();
+
+        tokio::spawn({
+            let sender = sender.clone();
+            async move {
+                let reply = sender.send(BusMessage::Hello).await;
+                assert!(reply.is_ok());
+                let result = reply.unwrap();
+                assert_eq!(
+                    result,
+                    HelloResponse {
+                        content: "whats up".to_string()
+                    }
+                )
+            }
+        });
+
+        tokio::spawn({
+            let sender = sender.clone();
+            async move {
+                let reply = sender.send(BusMessage::Hello).await;
+                assert!(reply.is_ok());
+                let result = reply.unwrap();
+                assert_eq!(
+                    result,
+                    HelloResponse {
+                        content: "whats up".to_string()
+                    }
+                )
+            }
+        });
     }
 }
