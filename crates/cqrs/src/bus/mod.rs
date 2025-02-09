@@ -3,7 +3,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use thiserror::Error as Err;
 use tokio::sync::mpsc::channel;
-use tokio::task;
 
 pub mod message_envelope;
 pub mod message_sender;
@@ -30,7 +29,6 @@ pub trait Message {
 
 // takes an enum of messages handlers can process
 // sends out trait object of message response [which can derive serialize / deserialize, depends]
-pub trait MessageResponse {}
 pub struct Bus {
     bound: usize,
 }
@@ -50,23 +48,29 @@ impl Bus {
 
     pub async fn start<M, F, Fut, R>(
         &self,
-        mut handler: F,
+        handler: F,
     ) -> Result<message_sender::MessageSender<M, R>, Error>
     where
-        R: Send + Sync + 'static + Debug, // takes only one type of reply, should be able to take dyn MessageReplys
+        R: Message + Debug + Send + Sync + 'static,
         M: Message + Send + Sync + 'static,
-        F: FnMut(&M) -> Fut + Send + 'static,
-        Fut: Future<Output = MessageResult<R>> + Send + Sync,
+        F: Fn(&M) -> Fut + Clone + Sync + Send + 'static,
+        Fut: Future<Output = MessageResult<R>> + Send + Sync + 'static,
     {
         let (tx, mut rx) = channel(self.bound);
         let sender = message_sender::MessageSender::<M, R>::new(tx);
-        task::spawn(async move {
+        tokio::spawn(async move {
             while let Some(msg_env) = rx.recv().await {
-                let resp = handler(msg_env.message()).await;
-                // have to handle the errors here.
-                let _ = msg_env.reply(resp);
+                tokio::spawn({
+                    let handler = handler.clone();
+                    async move {
+                        let msg = msg_env.message();
+                        let response = handler(msg).await;
+                        let _ = msg_env.reply(response);
+                    }
+                });
             }
         });
+
         Ok(sender)
     }
 }
@@ -76,12 +80,14 @@ mod test {
     #[derive(Debug, Clone)]
     enum BusMessage {
         Hello,
+        HeiHei,
     }
 
     impl Message for BusMessage {
         fn get_type(&self) -> String {
             match self {
                 BusMessage::Hello => "hello".to_string(),
+                BusMessage::HeiHei => "heihei".to_string(),
             }
         }
 
@@ -91,13 +97,22 @@ mod test {
     }
 
     #[derive(Debug, PartialEq, Clone)]
-    struct HelloResponse {
-        content: String,
+    enum MessageResponse {
+        HelloResponse,
+        HeiHeiResponse,
     }
 
-    #[derive(Debug, PartialEq)]
-    struct HeiHeiResponse {
-        content: String,
+    impl Message for MessageResponse {
+        fn get_type(&self) -> String {
+            match self {
+                Self::HelloResponse => "hello response".to_string(),
+                Self::HeiHeiResponse => "hei hei response".to_string(),
+            }
+        }
+
+        fn get_version(&self) -> String {
+            "0".to_string()
+        }
     }
 
     #[tokio::test]
@@ -107,10 +122,9 @@ mod test {
         let sender = bus
             .start(|msg: &BusMessage| async move {
                 match msg {
-                    BusMessage::Hello => Ok(HelloResponse {
-                        content: "whats up".to_string(),
-                    }),
-                }
+                    BusMessage::Hello => Ok(MessageResponse::HelloResponse),
+                    BusMessage::HeiHei => Ok(MessageResponse::HeiHeiResponse),
+                };
             })
             .await
             .unwrap();
@@ -118,12 +132,7 @@ mod test {
         let reply = sender.send(BusMessage::Hello).await;
         assert!(reply.is_ok());
         let result = reply.unwrap();
-        assert_eq!(
-            result,
-            HelloResponse {
-                content: "whats up".to_string()
-            }
-        )
+        assert_eq!(result, MessageResponse::HelloResponse)
     }
 
     #[tokio::test]
@@ -133,9 +142,8 @@ mod test {
         let sender = bus
             .start(|msg: &BusMessage| async move {
                 match msg {
-                    BusMessage::Hello => Ok(HelloResponse {
-                        content: "whats up".to_string(),
-                    }),
+                    BusMessage::Hello => Ok(MessageResponse::HelloResponse),
+                    BusMessage::HeiHei => Ok(MessageResponse::HeiHeiResponse),
                 }
             })
             .await
@@ -147,28 +155,21 @@ mod test {
                 let reply = sender.send(BusMessage::Hello).await;
                 assert!(reply.is_ok());
                 let result = reply.unwrap();
-                assert_eq!(
-                    result,
-                    HelloResponse {
-                        content: "whats up".to_string()
-                    }
-                )
+                assert_eq!(result, MessageResponse::HelloResponse)
             }
         });
 
         tokio::spawn({
             let sender = sender.clone();
             async move {
-                let reply = sender.send(BusMessage::Hello).await;
+                let reply = sender.send(BusMessage::HeiHei).await;
                 assert!(reply.is_ok());
                 let result = reply.unwrap();
-                assert_eq!(
-                    result,
-                    HelloResponse {
-                        content: "whats up".to_string()
-                    }
-                )
+                assert_eq!(result, MessageResponse::HeiHeiResponse)
             }
         });
     }
 }
+
+// TODO: messages should be serialized and deserialized while getting processed.
+// TODO: since we do not care platform specific serialization, we need quick, efficient serialization
