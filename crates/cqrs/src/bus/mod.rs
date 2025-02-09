@@ -48,13 +48,13 @@ impl Bus {
 
     pub async fn start<M, F, Fut, R>(
         &self,
-        handler: F,
+        handler: F, // TODO: change handler to tower service.
     ) -> Result<message_sender::MessageSender<M, R>, Error>
     where
         R: Message + Debug + Send + Sync + 'static,
         M: Message + Send + Sync + 'static,
         F: Fn(&M) -> Fut + Clone + Sync + Send + 'static,
-        Fut: Future<Output = MessageResult<R>> + Send + Sync + 'static,
+        Fut: Future<Output = MessageResult<R>> + Send + Sync + 'static, // TODO: change handler to tower service.
     {
         let (tx, mut rx) = channel(self.bound);
         let sender = message_sender::MessageSender::<M, R>::new(tx);
