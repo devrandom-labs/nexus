@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use super::message_envelope::MessageEnvelope;
 use super::{Error, MessageResult};
+use std::clone::Clone;
 use std::fmt::Debug;
 use tokio::sync::{mpsc::Sender, oneshot};
 use tracing::{error, instrument};
@@ -10,9 +11,12 @@ type BusSender<T, R> = Sender<MessageEnvelope<T, R>>;
 // exector should return a reply back
 // this can be used to denote whether the function passed or failed,
 #[derive(Clone)]
-pub struct MessageSender<T, R>(Sender<MessageEnvelope<T, R>>);
+pub struct MessageSender<T: Clone, R>(Sender<MessageEnvelope<T, R>>);
 
-impl<T, R> MessageSender<T, R> {
+impl<T, R> MessageSender<T, R>
+where
+    T: Clone,
+{
     pub fn new(sender: BusSender<T, R>) -> Self {
         MessageSender(sender)
     }

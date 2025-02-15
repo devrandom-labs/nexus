@@ -4,6 +4,7 @@ use std::future::Future;
 use thiserror::Error as Err;
 use tokio::sync::mpsc::channel;
 
+pub mod message;
 pub mod message_envelope;
 pub mod message_sender;
 
@@ -29,6 +30,7 @@ pub trait Message {
 
 // takes an enum of messages handlers can process
 // sends out trait object of message response [which can derive serialize / deserialize, depends]
+// bus also takes the context that is provided to the handler execute function
 pub struct Bus {
     bound: usize,
 }
@@ -52,25 +54,22 @@ impl Bus {
     ) -> Result<message_sender::MessageSender<M, R>, Error>
     where
         R: Message + Debug + Send + Sync + 'static,
-        M: Message + Send + Sync + 'static,
-        F: Fn(&M) -> Fut + Clone + Sync + Send + 'static,
+        M: Message + Send + Sync + 'static + Clone,
+        F: Fn(M) -> Fut + Clone + Sync + Send + 'static,
         Fut: Future<Output = MessageResult<R>> + Send + Sync + 'static, // TODO: change handler to tower service.
     {
         let (tx, mut rx) = channel(self.bound);
         let sender = message_sender::MessageSender::<M, R>::new(tx);
+
         tokio::spawn(async move {
             while let Some(msg_env) = rx.recv().await {
-                tokio::spawn({
-                    let handler = handler.clone();
-                    async move {
-                        let msg = msg_env.message();
-                        let response = handler(msg).await;
-                        let _ = msg_env.reply(response);
-                    }
-                });
+                async move {
+                    let msg = msg_env.message();
+                    let response = handler(msg).await;
+                    let _ = msg_env.reply(response);
+                }
             }
         });
-
         Ok(sender)
     }
 }
@@ -120,10 +119,11 @@ mod test {
         let bus = Bus::new(20);
         // now response really needs to just be Dyn Serializeable
         let sender = bus
-            .start(|msg: &BusMessage| async move {
+            .start(|msg: BusMessage| async move {
                 match msg {
                     BusMessage::Hello => Ok(MessageResponse::HelloResponse),
                     BusMessage::HeiHei => Ok(MessageResponse::HeiHeiResponse),
+                    _ => Err(Error::ReplyFailed),
                 };
             })
             .await
@@ -140,11 +140,12 @@ mod test {
         let bus = Bus::new(20);
         // now response really needs to just be Dyn Serializeable
         let sender = bus
-            .start(|msg: &BusMessage| async move {
+            .start(|msg: BusMessage| async move {
                 match msg {
                     BusMessage::Hello => Ok(MessageResponse::HelloResponse),
                     BusMessage::HeiHei => Ok(MessageResponse::HeiHeiResponse),
-                }
+                    _ => Err(Error::ReplyFailed),
+                };
             })
             .await
             .unwrap();
