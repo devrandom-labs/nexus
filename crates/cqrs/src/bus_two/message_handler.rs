@@ -1,30 +1,35 @@
 #![allow(dead_code)]
+use std::future::Future;
 
 pub trait MessageHandler {
     type Response;
     type Error;
-    fn execute(self) -> Result<Self::Response, Self::Error>;
+    type Future: Future<Output = Result<Self::Response, Self::Error>>;
+    fn execute(self) -> Self::Future;
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::pin::Pin;
 
-    #[test]
-    fn basic_message_handler_test() {
-        struct Test(String);
+    struct Test(String);
 
-        impl MessageHandler for Test {
-            type Response = ();
-            type Error = String;
-            fn execute(self) -> Result<Self::Response, Self::Error> {
-                Ok(())
-            }
+    impl MessageHandler for Test {
+        type Response = String;
+        type Error = String;
+        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+        fn execute(self) -> Self::Future {
+            Box::pin(async { Ok(self.0) })
         }
-        let test_message = Test("hello".to_string());
-        let reply = test_message.execute();
+    }
+
+    #[tokio::test]
+    async fn message_handler_should_be_a_future() {
+        let test_message = Test("Test Message".to_string());
+        let reply = test_message.execute().await;
         assert!(reply.is_ok());
         let reply = reply.unwrap();
-        assert_eq!(reply, ());
+        assert_eq!(reply, "Test Message".to_string());
     }
 }
