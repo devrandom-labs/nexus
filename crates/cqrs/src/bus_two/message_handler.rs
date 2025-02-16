@@ -1,7 +1,21 @@
 #![allow(dead_code)]
+use std::collections::HashMap;
 use std::future::Future;
+use ulid::Ulid;
 
-pub trait MessageHandler {
+pub struct MessageTypeId(Ulid);
+
+impl MessageTypeId {
+    pub fn new() -> Self {
+        MessageTypeId(Ulid::new())
+    }
+}
+
+pub trait Message {
+    fn type_id(&self) -> MessageTypeId;
+}
+
+pub trait MessageHandler: Message {
     type Response;
     type Error;
     type Future: Future<Output = Result<Self::Response, Self::Error>>;
@@ -14,6 +28,13 @@ mod test {
     use std::pin::Pin;
 
     struct Test(String);
+
+    // each message should have a unique id.
+    impl Message for Test {
+        fn type_id(&self) -> MessageTypeId {
+            MessageTypeId::new()
+        }
+    }
 
     impl MessageHandler for Test {
         type Response = String;
