@@ -36,4 +36,57 @@ mod test {
         let s = TestMessage("hello".to_string());
         assert_eq!(s.type_id(), TypeId::of::<TestMessage>()); // on way to check if Message works.
     }
+
+    //-------------------- tower service test --------------------//
+    use std::future::{ready, Ready};
+    use std::task::Poll;
+    use tower::Service;
+
+    // mock request
+    struct Request(String);
+    #[derive(Debug)]
+    struct Response(String);
+    struct GreetingService;
+
+    impl Service<Request> for GreetingService {
+        type Response = Response;
+        type Error = String;
+        type Future = Ready<Result<Self::Response, Self::Error>>;
+
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, req: Request) -> Self::Future {
+            if req.0.is_empty() {
+                return ready(Err("req is empty".to_string()));
+            }
+            ready(Ok(Response("Response".to_string())))
+        }
+    }
+    // mock response
+
+    #[tokio::test]
+    async fn test_service_handler() {
+        let mut service = GreetingService;
+        let request = Request("request".to_string());
+        let response = service.call(request).await;
+        assert!(response.is_ok());
+        assert_eq!(response.unwrap().0, "Response");
+    }
+
+    #[tokio::test]
+    async fn test_service_error() {
+        let mut service = GreetingService;
+        let request = Request("".to_string());
+        let response = service.call(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.unwrap_err(), "req is empty");
+    }
+
+    //--------------------message handler tests--------------------//
+    //
 }
