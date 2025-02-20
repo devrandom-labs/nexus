@@ -1,16 +1,24 @@
 #![allow(dead_code)]
-use thiserror::Error as Err;
-
-#[derive(Err, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Error {}
-
 use std::any::{Any, TypeId};
 pub trait Message: Any + Send + Sync + 'static {
     fn type_id(&self) -> TypeId {
         TypeId::of::<Self>()
     }
 }
+//-------------------- error --------------------//
+use thiserror::Error as Err;
+#[derive(Debug, Err, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BusError {}
 
+//-------------------- handler --------------------//
+use tower::Service;
+
+pub trait MessageHandler<M: Message>:
+    Service<M, Response = (), Error = BusError> + Send + Sync + 'static
+{
+}
+
+//-------------------- tests --------------------//
 #[cfg(test)]
 mod test {
     use super::Message;
