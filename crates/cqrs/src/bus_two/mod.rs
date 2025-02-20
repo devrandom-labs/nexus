@@ -13,6 +13,11 @@ pub enum BusError {}
 //-------------------- handler --------------------//
 use tower::Service;
 
+/// Message Handlers are specialized tower service.
+/// they take Message as requests and Respond by ()
+/// and emit BusError only.
+///
+/// extremely specialized.
 pub trait MessageHandler<M: Message>:
     Service<M, Response = (), Error = BusError> + Send + Sync + 'static
 {
