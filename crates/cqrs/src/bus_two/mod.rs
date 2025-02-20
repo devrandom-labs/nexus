@@ -89,4 +89,11 @@ mod test {
 
     //--------------------message handler tests--------------------//
     //
+    //
+
+    use super::BusError;
+    use super::MessageHandler;
+
+    // think: can I control what a message handler sends as an error?
+    // no.
 }
