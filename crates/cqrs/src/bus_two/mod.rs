@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use thiserror::Error as Err;
 
 #[derive(Err, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -10,3 +11,9 @@ pub trait Message: Any + Send + Sync + 'static {}
 
 // blanket impl, I think this is okay for now.
 impl<T: Any + Send + Sync + 'static> Message for T {}
+
+#[cfg(test)]
+mod test {
+    // any static type which is send and sync shoudl be message.
+    // how can I test that?
+}
