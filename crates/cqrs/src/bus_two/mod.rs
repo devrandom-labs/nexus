@@ -23,6 +23,11 @@ pub trait MessageHandler<M: Message>:
 {
 }
 
+//-------------------- utils --------------------//
+//
+// TODO: converst async fn to MessageHandler
+// TODO: how to hold service.
+
 //-------------------- tests --------------------//
 #[cfg(test)]
 mod test {
