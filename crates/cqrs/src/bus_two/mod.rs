@@ -100,5 +100,5 @@ mod test {
     use super::MessageHandler;
 
     // think: can I control what a message handler sends as an error?
-    // no.
+    // no. message handler can give any error.
 }
