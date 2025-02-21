@@ -5,12 +5,9 @@ pub trait Message: Any + Send + Sync + 'static {
         TypeId::of::<Self>()
     }
 }
-//-------------------- error --------------------//
-use thiserror::Error as Err;
-#[derive(Debug, Err, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BusError {}
 
 //-------------------- handler --------------------//
+use std::error::Error;
 use tower::Service;
 
 /// Message Handlers are specialized tower service.
@@ -18,9 +15,9 @@ use tower::Service;
 /// and emit BusError only.
 ///
 /// extremely specialized.
-pub trait MessageHandler<M: Message>:
-    Service<M, Response = (), Error = BusError> + Send + Sync + 'static
-{
+pub trait MessageHandler<M: Message>: Service<M> + Send + Sync + 'static {
+    type Response;
+    type Error: Error + Send + Sync + 'static;
 }
 
 //-------------------- utils --------------------//
@@ -95,9 +92,6 @@ mod test {
     //--------------------message handler tests--------------------//
     //
     //
-
-    use super::BusError;
-    use super::MessageHandler;
 
     // think: can I control what a message handler sends as an error?
     // no. message handler can give any error.
