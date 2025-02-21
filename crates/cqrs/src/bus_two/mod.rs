@@ -9,7 +9,6 @@ pub trait Message: Any + Send + Sync + 'static {
 //-------------------- handler --------------------//
 use std::error::Error;
 use tower::Service;
-
 /// Message Handlers are specialized tower service.
 /// they take Message as requests and Respond by ()
 /// and emit BusError only.
@@ -19,6 +18,8 @@ pub trait MessageHandler<M: Message>: Service<M> + Send + Sync + 'static {
     type Response;
     type Error: Error + Send + Sync + 'static;
 }
+
+impl<S> MessageHandler for S {}
 
 //-------------------- utils --------------------//
 //
@@ -92,7 +93,7 @@ mod test {
     //--------------------message handler tests--------------------//
     //
     //
-
     // think: can I control what a message handler sends as an error?
     // no. message handler can give any error.
+    //
 }
