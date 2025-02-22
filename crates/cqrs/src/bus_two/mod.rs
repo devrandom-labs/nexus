@@ -5,21 +5,30 @@ pub trait Message: Any + Send + Sync + 'static {
         TypeId::of::<Self>()
     }
 }
+//-------------------- error --------------------//
+use std::error::Error;
+pub trait MessageHandlerError: Error + Send + Sync {}
 
 //-------------------- handler --------------------//
-use std::error::Error;
 use tower::Service;
+
 /// Message Handlers are specialized tower service.
 /// they take Message as requests and Respond by ()
 /// and emit BusError only.
 ///
 /// extremely specialized.
-pub trait MessageHandler<M: Message>: Service<M> + Send + Sync + 'static {
-    type Response;
-    type Error: Error + Send + Sync + 'static;
+pub trait MessageHandler<M: Message, E: MessageHandlerError>:
+    Service<M, Response = (), Error = E> + Send + Sync + 'static
+{
 }
 
-impl<S> MessageHandler for S {}
+impl<M, E, S> MessageHandler<M, E> for S
+where
+    M: Message,
+    E: MessageHandlerError,
+    S: Service<M, Response = (), Error = E> + Send + Sync + 'static,
+{
+}
 
 //-------------------- utils --------------------//
 //
@@ -29,8 +38,10 @@ impl<S> MessageHandler for S {}
 //-------------------- tests --------------------//
 #[cfg(test)]
 mod test {
-    use super::Message;
+    use super::{Message, MessageHandler, MessageHandlerError};
     use std::any::TypeId;
+
+    // TODO: Test blanked impl of message for types which have any, sync and send;
 
     #[test]
     fn test_message_impl() {
@@ -41,19 +52,24 @@ mod test {
     }
 
     //-------------------- tower service test --------------------//
+
     use std::future::{ready, Ready};
     use std::task::Poll;
+    use thiserror::Error;
     use tower::Service;
 
     // mock request
+    // a service which is also a good candidate for GreetingService.
     struct Request(String);
-    #[derive(Debug)]
-    struct Response(String);
-    struct GreetingService;
 
+    #[derive(Debug, Error, PartialEq)]
+    #[error("{0}")]
+    struct GreetingServiceError(String);
+    impl MessageHandlerError for GreetingServiceError {}
+    struct GreetingService;
     impl Service<Request> for GreetingService {
-        type Response = Response;
-        type Error = String;
+        type Response = ();
+        type Error = GreetingServiceError; // this is too generic, should I only understand my errors?
         type Future = Ready<Result<Self::Response, Self::Error>>;
 
         fn poll_ready(
@@ -65,9 +81,9 @@ mod test {
 
         fn call(&mut self, req: Request) -> Self::Future {
             if req.0.is_empty() {
-                return ready(Err("req is empty".to_string()));
+                return ready(Err(GreetingServiceError("req is empty".to_string())));
             }
-            ready(Ok(Response("Response".to_string())))
+            ready(Ok(()))
         }
     }
     // mock response
@@ -78,7 +94,6 @@ mod test {
         let request = Request("request".to_string());
         let response = service.call(request).await;
         assert!(response.is_ok());
-        assert_eq!(response.unwrap().0, "Response");
     }
 
     #[tokio::test]
@@ -87,13 +102,36 @@ mod test {
         let request = Request("".to_string());
         let response = service.call(request).await;
         assert!(response.is_err());
-        assert_eq!(response.unwrap_err(), "req is empty");
+        assert_eq!(
+            response.unwrap_err(),
+            GreetingServiceError("req is empty".to_string())
+        );
     }
 
     //--------------------message handler tests--------------------//
     //
     //
-    // think: can I control what a message handler sends as an error?
-    // no. message handler can give any error.
-    //
+
+    impl Message for Request {}
+    trait AssertMessageHandler<M: Message, E: MessageHandlerError> {
+        fn assert_in_message_handler(self);
+    }
+
+    impl<M, E, S> AssertMessageHandler<M, E> for S
+    where
+        M: Message,
+        E: MessageHandlerError,
+        S: MessageHandler<M, E>,
+    {
+        fn assert_in_message_handler(self) {}
+    }
+
+    #[tokio::test]
+    async fn auto_impl_message_handler() {
+        let service = GreetingService;
+        service.assert_in_message_handler();
+    }
+
+    #[tokio::test]
+    async fn message_handlers_should_be_executabl() {}
 }
