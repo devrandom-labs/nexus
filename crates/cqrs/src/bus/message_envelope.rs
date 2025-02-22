@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use super::Error;
 use super::MessageResult;
+use std::clone::Clone;
 use std::fmt::Debug;
 use tokio::sync::oneshot::Sender;
 use tracing::{error, instrument};
@@ -10,18 +11,25 @@ use tracing::{error, instrument};
 ///
 /// but reply can transfer any kind of type back, so it can be dynamic dispatch
 #[derive(Debug)]
-pub struct MessageEnvelope<T, R> {
+pub struct MessageEnvelope<T, R>
+where
+    T: Clone,
+{
     reply: Sender<MessageResult<R>>,
     message: T,
 }
 
-impl<T, R> MessageEnvelope<T, R> {
+impl<T, R> MessageEnvelope<T, R>
+where
+    T: Clone,
+{
     pub fn new(reply: Sender<MessageResult<R>>, message: T) -> Self {
         MessageEnvelope { reply, message }
     }
 
-    pub fn message(&self) -> &T {
-        &self.message
+    // this returns a type, which this message envelope needs to know
+    pub fn message(&self) -> T {
+        self.message.clone()
     }
 
     #[instrument(skip(self))]
@@ -42,7 +50,7 @@ mod tests {
     use crate::bus::Error;
     use tokio::sync::oneshot::channel;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestMessage {
         content: String,
     }
