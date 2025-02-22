@@ -5,28 +5,24 @@ pub trait Message: Any + Send + Sync + 'static {
         TypeId::of::<Self>()
     }
 }
-//-------------------- error --------------------//
-use std::error::Error;
-pub trait MessageHandlerError: Error + Send + Sync {}
 
 //-------------------- handler --------------------//
-use tower::Service;
+use tower::{BoxError, Service};
 
 /// Message Handlers are specialized tower service.
 /// they take Message as requests and Respond by ()
 /// and emit BusError only.
 ///
 /// extremely specialized.
-pub trait MessageHandler<M: Message, E: MessageHandlerError>:
-    Service<M, Response = (), Error = E> + Send + Sync + 'static
+pub trait MessageHandler<M: Message>:
+    Service<M, Response = (), Error = BoxError> + Send + Sync + 'static
 {
 }
 
-impl<M, E, S> MessageHandler<M, E> for S
+impl<M, S> MessageHandler<M> for S
 where
     M: Message,
-    E: MessageHandlerError,
-    S: Service<M, Response = (), Error = E> + Send + Sync + 'static,
+    S: Service<M, Response = (), Error = BoxError> + Send + Sync + 'static,
 {
 }
 
@@ -38,7 +34,7 @@ where
 //-------------------- tests --------------------//
 #[cfg(test)]
 mod test {
-    use super::{Message, MessageHandler, MessageHandlerError};
+    use super::{Message, MessageHandler};
     use std::any::TypeId;
 
     // TODO: Test blanked impl of message for types which have any, sync and send;
@@ -65,7 +61,6 @@ mod test {
     #[derive(Debug, Error, PartialEq)]
     #[error("{0}")]
     struct GreetingServiceError(String);
-    impl MessageHandlerError for GreetingServiceError {}
     struct GreetingService;
     impl Service<Request> for GreetingService {
         type Response = ();
@@ -113,15 +108,14 @@ mod test {
     //
 
     impl Message for Request {}
-    trait AssertMessageHandler<M: Message, E: MessageHandlerError> {
+    trait AssertMessageHandler<M: Message> {
         fn assert_in_message_handler(self);
     }
 
-    impl<M, E, S> AssertMessageHandler<M, E> for S
+    impl<M, S> AssertMessageHandler<M> for S
     where
         M: Message,
-        E: MessageHandlerError,
-        S: MessageHandler<M, E>,
+        S: MessageHandler<M>,
     {
         fn assert_in_message_handler(self) {}
     }
@@ -133,5 +127,8 @@ mod test {
     }
 
     #[tokio::test]
-    async fn message_handlers_should_be_executabl() {}
+    async fn message_handlers_should_be_executabl() {
+        // cant hold generic MessageHandler with any Message and Error type
+        // I would need to erase the concrete types of Message and Error.
+    }
 }
