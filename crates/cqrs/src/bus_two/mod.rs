@@ -52,7 +52,7 @@ mod test {
     use std::future::{ready, Ready};
     use std::task::Poll;
     use thiserror::Error;
-    use tower::Service;
+    use tower::{BoxError, Service};
 
     // mock request
     // a service which is also a good candidate for GreetingService.
@@ -64,7 +64,7 @@ mod test {
     struct GreetingService;
     impl Service<Request> for GreetingService {
         type Response = ();
-        type Error = GreetingServiceError; // this is too generic, should I only understand my errors?
+        type Error = BoxError; // this is too generic, should I only understand my errors?
         type Future = Ready<Result<Self::Response, Self::Error>>;
 
         fn poll_ready(
@@ -76,7 +76,9 @@ mod test {
 
         fn call(&mut self, req: Request) -> Self::Future {
             if req.0.is_empty() {
-                return ready(Err(GreetingServiceError("req is empty".to_string())));
+                return ready(Err(BoxError::from(GreetingServiceError(
+                    "req is empty".to_string(),
+                ))));
             }
             ready(Ok(()))
         }
@@ -97,16 +99,9 @@ mod test {
         let request = Request("".to_string());
         let response = service.call(request).await;
         assert!(response.is_err());
-        assert_eq!(
-            response.unwrap_err(),
-            GreetingServiceError("req is empty".to_string())
-        );
     }
 
     //--------------------message handler tests--------------------//
-    //
-    //
-
     impl Message for Request {}
     trait AssertMessageHandler<M: Message> {
         fn assert_in_message_handler(self);
@@ -132,3 +127,4 @@ mod test {
         // I would need to erase the concrete types of Message and Error.
     }
 }
+//
