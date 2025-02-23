@@ -29,8 +29,6 @@ where
 
 //-------------------- utils --------------------//
 //
-// TODO: converst async fn to MessageHandler
-// TODO: how to hold service.
 
 //-------------------- tests --------------------//
 #[cfg(test)]
@@ -120,7 +118,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn auto_impl_message_handler() {
+    async fn specific_services_are_message_handlers() {
         let service = GreetingService;
         service.assert_in_message_handler();
     }
@@ -128,10 +126,7 @@ mod test {
     use tower::util::BoxCloneSyncService;
 
     #[tokio::test]
-    async fn message_handlers_should_be_executable() {
-        // if I have to store the message handlers
-        // the only way I can do now is have a data structure of message handlers
-        // tied to a concrete type of a Message.
+    async fn message_handlers_into_box_service() {
         let greeting_service = GreetingService;
         let mut service = BoxCloneSyncService::new(greeting_service);
         let response = service.call(Request("some request".to_string())).await;
