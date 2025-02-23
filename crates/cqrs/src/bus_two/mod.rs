@@ -7,6 +7,7 @@ pub trait Message: Any + Send + Sync + 'static {
 }
 
 //-------------------- handler --------------------//
+use std::clone::Clone;
 use tower::{BoxError, Service};
 
 /// Message Handlers are specialized tower service.
@@ -15,14 +16,14 @@ use tower::{BoxError, Service};
 ///
 /// extremely specialized.
 pub trait MessageHandler<M: Message>:
-    Service<M, Response = (), Error = BoxError> + Send + Sync + 'static
+    Service<M, Response = (), Error = BoxError> + Send + Sync + Clone
 {
 }
 
 impl<M, S> MessageHandler<M> for S
 where
     M: Message,
-    S: Service<M, Response = (), Error = BoxError> + Send + Sync + 'static,
+    S: Service<M, Response = (), Error = BoxError> + Send + Sync + Clone,
 {
 }
 
@@ -57,14 +58,16 @@ mod test {
     // mock request
     // a service which is also a good candidate for GreetingService.
     struct Request(String);
-
     #[derive(Debug, Error, PartialEq)]
     #[error("{0}")]
     struct GreetingServiceError(String);
+
+    #[derive(Clone)]
     struct GreetingService;
+    // need a way to convert all ser
     impl Service<Request> for GreetingService {
         type Response = ();
-        type Error = BoxError; // this is too generic, should I only understand my errors?
+        type Error = BoxError; // this is too generic,
         type Future = Ready<Result<Self::Response, Self::Error>>;
 
         fn poll_ready(
@@ -122,9 +125,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn message_handlers_should_be_executabl() {
-        // cant hold generic MessageHandler with any Message and Error type
-        // I would need to erase the concrete types of Message and Error.
+    async fn message_handlers_should_be_executable() {
+        // if I have to store the message handlers
+        // the only way I can do now is have a data structure of message handlers
+        // tied to a concrete type of a Message.
+        //
     }
 }
-//
