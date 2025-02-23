@@ -102,6 +102,7 @@ mod test {
         let request = Request("".to_string());
         let response = service.call(request).await;
         assert!(response.is_err());
+        // TODO: assert the type of error.
     }
 
     //--------------------message handler tests--------------------//
@@ -124,11 +125,16 @@ mod test {
         service.assert_in_message_handler();
     }
 
+    use tower::util::BoxCloneSyncService;
+
     #[tokio::test]
     async fn message_handlers_should_be_executable() {
         // if I have to store the message handlers
         // the only way I can do now is have a data structure of message handlers
         // tied to a concrete type of a Message.
-        //
+        let greeting_service = GreetingService;
+        let mut service = BoxCloneSyncService::new(greeting_service);
+        let response = service.call(Request("some request".to_string())).await;
+        assert!(response.is_ok());
     }
 }
