@@ -1,30 +1,56 @@
 #![allow(dead_code)]
-use std::any::{Any, TypeId};
+use std::{
+    ops::Deref,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
+static ID: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone)]
+pub struct Id(usize);
+impl Id {
+    pub fn new() -> Self {
+        let id = ID.fetch_add(1, Ordering::Relaxed);
+        Id(id)
+    }
+}
+
+impl Deref for Id {
+    type Target = usize;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Clone)]
 pub struct Message<T>
 where
-    T: Any + Send + Sync,
+    T: Send + Sync,
 {
+    id: Id,
     body: T,
 }
 
 impl<T> Message<T>
 where
-    T: Any + Send + Sync,
+    T: Send + Sync,
 {
     pub fn new(body: T) -> Self {
-        Message { body }
+        let id = Id::new();
+        Message { id, body }
     }
 
     pub fn body(&self) -> &T {
         &self.body
     }
 
-    pub fn type_id(&self) -> TypeId {
-        TypeId::of::<T>()
+    pub fn id(&self) -> usize {
+        *self.id
     }
 }
+
+//-------------------- handlers --------------------//
+//
 
 #[cfg(test)]
 mod test {
@@ -44,30 +70,30 @@ mod test {
             assert_eq!(message.body(), "Hello");
         });
     }
+
+    #[tokio::test]
+    async fn messages_between_tasks() {
+        let message = Message::new(String::from("Hello"));
+        tokio::spawn(async move {
+            assert_eq!(message.body(), "Hello");
+        });
+    }
+
+    #[test]
+    fn every_new_message_is_unique() {
+        let message_one = Message::new(String::from("Hello"));
+        let message_two = Message::new(String::from("Hello"));
+        assert_ne!(message_one.id(), message_two.id());
+    }
+
+    #[test]
+    fn cloned_messages_have_same_id() {
+        let message_one = Message::new(String::from("Hello"));
+        let message_two = message_one.clone();
+        assert_eq!(message_one.id(), message_two.id());
+        assert_eq!(message_one.body(), message_two.body());
+    }
 }
-
-// use std::any::{Any, TypeId};
-// pub trait Message: Any + Send + Sync + 'static {
-//     fn type_id(&self) -> TypeId {
-//         TypeId::of::<Self>()
-//     }
-// }
-
-// pub struct MessageEnvelope<T>
-// where
-//     T: Message,
-// {
-//     message: T,
-// }
-
-// impl MessageEnvelope<T>
-// where
-//     T: Message,
-// {
-//     pub fn new(message: T) -> Self {
-//         MessageEnvelope { message }
-//     }
-// }
 
 // //-------------------- handler --------------------//
 // use std::clone::Clone;
