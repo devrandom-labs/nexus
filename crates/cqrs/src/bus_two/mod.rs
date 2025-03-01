@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 use std::{
+    any::{Any, TypeId},
     ops::Deref,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+//-------------------- ID--------------------//
 static ID: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
@@ -22,6 +24,8 @@ impl Deref for Id {
     }
 }
 
+//-------------------- Message--------------------//
+
 #[derive(Clone)]
 pub struct Message<T>
 where
@@ -33,7 +37,7 @@ where
 
 impl<T> Message<T>
 where
-    T: Send + Sync,
+    T: Any + Send + Sync,
 {
     pub fn new(body: T) -> Self {
         let id = Id::new();
@@ -47,10 +51,13 @@ where
     pub fn id(&self) -> usize {
         *self.id
     }
+
+    pub fn type_id(&self) -> TypeId {
+        TypeId::of::<Self>()
+    }
 }
 
 //-------------------- handlers --------------------//
-//
 
 #[cfg(test)]
 mod test {
@@ -92,6 +99,13 @@ mod test {
         let message_two = message_one.clone();
         assert_eq!(message_one.id(), message_two.id());
         assert_eq!(message_one.body(), message_two.body());
+    }
+
+    #[test]
+    fn message_type_id_should_be_different() {
+        let message_one = Message::new(String::from("Hello"));
+        let message_two = Message::new(0);
+        assert_ne!(message_one.type_id(), message_two.type_id());
     }
 }
 
