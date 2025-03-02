@@ -34,7 +34,6 @@ pub struct Body<T: Any + Send + Sync>(Box<T>);
 /// messages should be able to be sent acorss threads and tasks
 /// for messages to be able to send and sync across threads we would need the body to be sent and sync
 /// across threads.
-///
 /// ID inherently is usize, so it can copy/clone and hence its sync + send
 #[derive(Clone)]
 pub struct Message<T>
@@ -238,7 +237,7 @@ mod test {
         create_user_command_handler.assert_message_service();
     }
 
-    //-------------------- Erase concrete types in MessageService--------------------//
+    //-------------------- Route handler test--------------------//
     //
     use super::Route;
 
@@ -248,22 +247,3 @@ mod test {
         let mut _route = Route::new().with(_service);
     }
 }
-
-//     use tower::util::BoxCloneSyncService;
-//     #[tokio::test]
-//     async fn message_handlers_into_box_service() {
-//         let greeting_service = GreetingService;
-//         let mut service = BoxCloneSyncService::new(greeting_service);
-//         let response = service.call(Request("some request".to_string())).await;
-//         assert!(response.is_ok());
-//     }
-
-//     //TODO: test whether we can erase the type of request and response to Message
-
-//     #[tokio::test]
-//     async fn box_service_dynamic_dispatch() {
-//         let greeting_service = GreetingService;
-//     }
-// }
-//
-//
