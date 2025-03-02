@@ -64,6 +64,9 @@ where
 //-------------------- handlers --------------------//
 use tower::{BoxError, Service};
 
+// any service which takes message of any type T as request
+// any service which gives message of any type R as response
+// is eligible to be a message service.
 pub trait MessageService<T, R>:
     Service<Message<T>, Response = Message<R>, Error = BoxError>
 where
