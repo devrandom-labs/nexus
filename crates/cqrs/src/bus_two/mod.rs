@@ -24,6 +24,11 @@ impl Deref for Id {
     }
 }
 
+//-------------------- Body--------------------//
+//
+
+pub struct Body<T: Any + Send + Sync>(Box<T>);
+
 //-------------------- Message--------------------//
 
 /// messages should be able to be sent acorss threads and tasks
