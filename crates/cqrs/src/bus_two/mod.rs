@@ -97,6 +97,8 @@ where
 
 //--------------------Data structure--------------------//
 //
+//
+// should be able to take any type of service
 use std::collections::HashMap;
 
 pub struct Route<T, R>
@@ -104,9 +106,32 @@ where
     T: Any + Send + Sync,
     R: Any + Send + Sync,
 {
-    inner: HashMap<TypeId, BoxCloneSyncService<T, R, BoxError>>,
+    inner: HashMap<TypeId, BoxCloneSyncService<Message<T>, Message<R>, BoxError>>,
 }
 
+impl<T, R> Route<T, R>
+where
+    T: Any + Send + Sync,
+    R: Any + Send + Sync,
+{
+    pub fn new() -> Self {
+        Route {
+            inner: HashMap::new(),
+        }
+    }
+
+    pub fn with<M>(mut self, service: M) -> Self
+    where
+        M: MessageService<T, R> + Send + Sync + 'static,
+        M::Future: Send,
+    {
+        let service = BoxCloneSyncService::new(service);
+        self.inner.insert(TypeId::of::<Message<T>>(), service);
+        self
+    }
+}
+
+//-------------------- Test --------------------//
 #[cfg(test)]
 mod test {
     use super::{Message, MessageService};
@@ -210,24 +235,12 @@ mod test {
 
     //-------------------- Erase concrete types in MessageService--------------------//
     //
-    use tower::{util::BoxCloneService, ServiceBuilder};
+    use super::Route;
 
     #[tokio::test]
     async fn erase_message_service_concrete_type() {
-        let service = ServiceBuilder::new()
-            .map_request(|req| {
-                println!("received request");
-                req
-            })
-            .map_response(|res| {
-                println!("resposne produced");
-                res
-            })
-            .service_fn(|_req: Message<String>| async {
-                Ok::<_, BoxError>(Message::new("Hello".to_string()))
-            });
-
-        let _service = BoxCloneService::new(service);
+        let mut _service = CreateUserCommandHandler;
+        let mut _route = Route::new().with(_service);
     }
 }
 
@@ -247,4 +260,5 @@ mod test {
 //         let greeting_service = GreetingService;
 //     }
 // }
+//
 //
