@@ -26,6 +26,11 @@ impl Deref for Id {
 
 //-------------------- Message--------------------//
 
+/// messages should be able to be sent acorss threads and tasks
+/// for messages to be able to send and sync across threads we would need the body to be sent and sync
+/// across threads.
+///
+/// ID inherently is usize, so it can copy/clone and hence its sync + send
 #[derive(Clone)]
 pub struct Message<T>
 where
@@ -67,11 +72,25 @@ use tower::{BoxError, Service};
 // any service which takes message of any type T as request
 // any service which gives message of any type R as response
 // is eligible to be a message service.
+//
+// Message service can be executed in any tasks, it has to be send and sync,
+//
+// if a message service is executed in a task, it would need to last longer than life time of Request
+//
 pub trait MessageService<T, R>:
-    Service<Message<T>, Response = Message<R>, Error = BoxError>
+    Service<Message<T>, Response = Message<R>, Error = BoxError> + Send + Sync
 where
-    T: Send + Sync + 'static,
-    R: Send + Sync + 'static,
+    T: Any + Send + Sync,
+    R: Any + Send + Sync,
+{
+}
+
+// blanket auto impl of Message Service to all services which fall in this category.
+impl<S, T, R> MessageService<T, R> for S
+where
+    S: Service<Message<T>, Response = Message<R>, Error = BoxError> + Send + Sync,
+    T: Any + Send + Sync,
+    R: Any + Send + Sync,
 {
 }
 
@@ -80,6 +99,7 @@ mod test {
     use super::Message;
     use std::thread::spawn;
 
+    //-------------------- message tests --------------------//
     #[test]
     fn create_message() {
         let message = Message::new(1);
@@ -130,28 +150,10 @@ mod test {
         let message_two = Message::new(String::from("Hello"));
         assert_eq!(message_one.type_id(), message_two.type_id());
     }
+
+    //-------------------- handler tests --------------------//
+    //
 }
-
-// //-------------------- handler --------------------//
-// use std::clone::Clone;
-// use tower::{BoxError, Service};
-
-// /// Message Handlers are specialized tower service.
-// /// they take Message as requests and Respond by ()
-// /// and emit BusError only.
-// ///
-// /// extremely specialized.
-// pub trait MessageHandler:
-//     Service<MessageEnvelope, Response = (), Error = BoxError> + Send + Sync + Clone + 'static
-// {
-// }
-
-// impl<M, S> MessageHandler<M> for S
-// where
-//     M: Message,
-//     S: Service<MessageEnvelope<M>, Response = (), Error = BoxError> + Send + Sync + Clone + 'static,
-// {
-// }
 
 // //-------------------- tests --------------------//
 // #[cfg(test)]
