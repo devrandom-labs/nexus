@@ -61,13 +61,13 @@ where
     /// not based on what the instance is of that type.
     ///
     /// all Message<String> would be handled by the same handler.
-    pub fn type_id(&self) -> TypeId {
+    pub fn type_id() -> TypeId {
         TypeId::of::<Self>()
     }
 }
 
 //-------------------- handlers --------------------//
-use tower::{BoxError, Service};
+use tower::{util::BoxCloneSyncService, BoxError, Service};
 
 // any service which takes message of any type T as request
 // any service which gives message of any type R as response
@@ -78,25 +78,38 @@ use tower::{BoxError, Service};
 // if a message service is executed in a task, it would need to last longer than life time of Request
 //
 pub trait MessageService<T, R>:
-    Service<Message<T>, Response = Message<R>, Error = BoxError> + Send + Sync
+    Service<Message<T>, Response = Message<R>, Error = BoxError> + Send + Sync + Clone
 where
     T: Any + Send + Sync,
     R: Any + Send + Sync,
 {
 }
 
-// blanket auto impl of Message Service to all services which fall in this category.
+// blanket auto impl of Message Service to all services which fall in this category
+// any service which has Message<T> for Request/Respone would be treated as MessageService.
 impl<S, T, R> MessageService<T, R> for S
 where
-    S: Service<Message<T>, Response = Message<R>, Error = BoxError> + Send + Sync,
+    S: Service<Message<T>, Response = Message<R>, Error = BoxError> + Send + Sync + Clone,
     T: Any + Send + Sync,
     R: Any + Send + Sync,
 {
+}
+
+//--------------------Data structure--------------------//
+//
+use std::collections::HashMap;
+
+pub struct Route<T, R>
+where
+    T: Any + Send + Sync,
+    R: Any + Send + Sync,
+{
+    inner: HashMap<TypeId, BoxCloneSyncService<T, R, BoxError>>,
 }
 
 #[cfg(test)]
 mod test {
-    use super::Message;
+    use super::{Message, MessageService};
     use std::thread::spawn;
 
     //-------------------- message tests --------------------//
@@ -139,117 +152,86 @@ mod test {
 
     #[test]
     fn message_type_id_should_be_different_for_different_types() {
-        let message_one = Message::new(String::from("Hello"));
-        let message_two = Message::new(0);
-        assert_ne!(message_one.type_id(), message_two.type_id());
-    }
-
-    #[test]
-    fn message_type_id_should_be_same_for_same_type() {
-        let message_one = Message::new(String::from("Hello"));
-        let message_two = Message::new(String::from("Hello"));
-        assert_eq!(message_one.type_id(), message_two.type_id());
+        assert_ne!(Message::<String>::type_id(), Message::<u32>::type_id());
     }
 
     //-------------------- handler tests --------------------//
     //
+    //
+
+    use std::any::Any;
+    use std::future::{ready, Ready};
+    use std::task::{Context, Poll};
+    use tower::{BoxError, Service};
+
+    #[derive(Clone)]
+    struct CreateUserCommandHandler;
+    impl Service<Message<String>> for CreateUserCommandHandler {
+        type Response = Message<String>;
+        type Error = BoxError;
+        type Future = Ready<Result<Self::Response, Self::Error>>;
+
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, req: Message<String>) -> Self::Future {
+            if req.body().is_empty() {
+                return ready(Err(BoxError::from("req is empty".to_string())));
+            }
+
+            ready(Ok(Message::new("user created".to_string())))
+        }
+    }
+
+    trait MessageServiceCheck<M, T, R>
+    where
+        M: MessageService<T, R>,
+        T: Any + Sync + Send,
+        R: Any + Sync + Send,
+    {
+        fn assert_message_service(&self);
+    }
+
+    impl<M, T, R> MessageServiceCheck<M, T, R> for M
+    where
+        M: MessageService<T, R>,
+        T: Any + Send + Sync,
+        R: Any + Send + Sync,
+    {
+        fn assert_message_service(&self) {}
+    }
+
+    #[tokio::test]
+    async fn specific_services_should_be_message_services() {
+        let create_user_command_handler = CreateUserCommandHandler;
+        create_user_command_handler.assert_message_service();
+    }
+
+    //-------------------- Erase concrete types in MessageService--------------------//
+    //
+    use tower::{util::BoxCloneService, ServiceBuilder};
+
+    #[tokio::test]
+    async fn erase_message_service_concrete_type() {
+        let service = ServiceBuilder::new()
+            .map_request(|req| {
+                println!("received request");
+                req
+            })
+            .map_response(|res| {
+                println!("resposne produced");
+                res
+            })
+            .service_fn(|_req: Message<String>| async {
+                Ok::<_, BoxError>(Message::new("Hello".to_string()))
+            });
+
+        let _service = BoxCloneService::new(service);
+    }
 }
 
-// //-------------------- tests --------------------//
-// #[cfg(test)]
-// mod test {
-//     use super::{Message, MessageHandler};
-//     use std::any::TypeId;
-
-//     // TODO: Test blanked impl of message for types which have any, sync and send;
-
-//     #[test]
-//     fn test_message_impl() {
-//         struct TestMessage(String);
-//         impl Message for TestMessage {}
-//         let s = TestMessage("hello".to_string());
-//         assert_eq!(s.type_id(), TypeId::of::<TestMessage>()); // on way to check if Message works.
-//     }
-
-//     //-------------------- tower service test --------------------//
-
-//     use std::future::{ready, Ready};
-//     use std::task::Poll;
-//     use thiserror::Error;
-//     use tower::{BoxError, Service};
-
-//     // mock request
-//     // a service which is also a good candidate for GreetingService.
-//     struct Request(String);
-//     #[derive(Debug, Error, PartialEq)]
-//     #[error("{0}")]
-//     struct GreetingServiceError(String);
-
-//     #[derive(Clone)]
-//     struct GreetingService;
-//     // need a way to convert all ser
-//     impl Service<Request> for GreetingService {
-//         type Response = ();
-//         type Error = BoxError; // this is too generic,
-//         type Future = Ready<Result<Self::Response, Self::Error>>;
-
-//         fn poll_ready(
-//             &mut self,
-//             _cx: &mut std::task::Context<'_>,
-//         ) -> std::task::Poll<Result<(), Self::Error>> {
-//             Poll::Ready(Ok(()))
-//         }
-
-//         fn call(&mut self, req: Request) -> Self::Future {
-//             if req.0.is_empty() {
-//                 return ready(Err(BoxError::from(GreetingServiceError(
-//                     "req is empty".to_string(),
-//                 ))));
-//             }
-//             ready(Ok(()))
-//         }
-//     }
-//     // mock response
-
-//     #[tokio::test]
-//     async fn test_service_handler() {
-//         let mut service = GreetingService;
-//         let request = Request("request".to_string());
-//         let response = service.call(request).await;
-//         assert!(response.is_ok());
-//     }
-
-//     #[tokio::test]
-//     async fn test_service_error() {
-//         let mut service = GreetingService;
-//         let request = Request("".to_string());
-//         let response = service.call(request).await;
-//         assert!(response.is_err());
-//         // TODO: assert the type of error.
-//     }
-
-//     //--------------------message handler tests--------------------//
-//     impl Message for Request {}
-//     trait AssertMessageHandler<M: Message> {
-//         fn assert_in_message_handler(self);
-//     }
-
-//     impl<M, S> AssertMessageHandler<M> for S
-//     where
-//         M: Message,
-//         S: MessageHandler<M>,
-//     {
-//         fn assert_in_message_handler(self) {}
-//     }
-
-//     #[tokio::test]
-//     async fn specific_services_are_message_handlers() {
-//         let service = GreetingService;
-//         service.assert_in_message_handler();
-//     }
-
 //     use tower::util::BoxCloneSyncService;
-
 //     #[tokio::test]
 //     async fn message_handlers_into_box_service() {
 //         let greeting_service = GreetingService;
@@ -265,3 +247,4 @@ mod test {
 //         let greeting_service = GreetingService;
 //     }
 // }
+//
