@@ -5,6 +5,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+// FIXME: Remove ID mechanism, will do everything thorugh type_id
 //-------------------- ID--------------------//
 static ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -26,7 +27,6 @@ impl Deref for Id {
 
 //-------------------- Body--------------------//
 //
-
 pub struct Body<T: Any + Send + Sync>(Box<T>);
 
 //-------------------- Message--------------------//
