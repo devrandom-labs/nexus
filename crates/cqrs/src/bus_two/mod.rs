@@ -29,7 +29,7 @@ impl Deref for Id {
 #[derive(Clone)]
 pub struct Message<T>
 where
-    T: Send + Sync,
+    T: Any + Send + Sync,
 {
     id: Id,
     body: T,
@@ -52,12 +52,25 @@ where
         *self.id
     }
 
+    /// this means that we handle a message based on type
+    /// not based on what the instance is of that type.
+    ///
+    /// all Message<String> would be handled by the same handler.
     pub fn type_id(&self) -> TypeId {
         TypeId::of::<Self>()
     }
 }
 
 //-------------------- handlers --------------------//
+use tower::{BoxError, Service};
+
+pub trait MessageService<T, R>:
+    Service<Message<T>, Response = Message<R>, Error = BoxError>
+where
+    T: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+}
 
 #[cfg(test)]
 mod test {
@@ -102,10 +115,17 @@ mod test {
     }
 
     #[test]
-    fn message_type_id_should_be_different() {
+    fn message_type_id_should_be_different_for_different_types() {
         let message_one = Message::new(String::from("Hello"));
         let message_two = Message::new(0);
         assert_ne!(message_one.type_id(), message_two.type_id());
+    }
+
+    #[test]
+    fn message_type_id_should_be_same_for_same_type() {
+        let message_one = Message::new(String::from("Hello"));
+        let message_two = Message::new(String::from("Hello"));
+        assert_eq!(message_one.type_id(), message_two.type_id());
     }
 }
 
