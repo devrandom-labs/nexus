@@ -29,11 +29,21 @@ impl Deref for Id {
 //
 pub struct Body<T: Any + Send + Sync>(Box<T>);
 
+impl<T> Body<T>
+where
+    T: Any + Send + Sync,
+{
+    pub fn new(body: T) -> Self {
+        Body(Box::new(body))
+    }
+}
+
 //-------------------- Message--------------------//
 
 /// messages should be able to be sent acorss threads and tasks
 /// for messages to be able to send and sync across threads we would need the body to be sent and sync
 /// across threads.
+///
 /// ID inherently is usize, so it can copy/clone and hence its sync + send
 #[derive(Clone)]
 pub struct Message<T>
