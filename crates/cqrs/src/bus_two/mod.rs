@@ -98,6 +98,7 @@ mod test {
     // body should be transferable between threads
     // body should be transferable between tasks
     // get the type from body
-    //
-    //
+
+    #[test]
+    pub fn body_id_should_be_different_for_different_types() {}
 }
