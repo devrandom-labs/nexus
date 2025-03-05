@@ -36,7 +36,7 @@
 - book event
 - set reminder for booked event
 - get booked event info
-- get all booked event
+n- get all booked event
 - cancel booked event
 
 
