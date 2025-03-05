@@ -100,5 +100,13 @@ mod test {
     // get the type from body
 
     #[test]
-    pub fn body_id_should_be_different_for_different_types() {}
+    pub fn body_type_id_should_be_different_for_different_types() {}
+    #[test]
+    pub fn body_type_id_should_be_same_for_same_types() {}
+
+    /// combining both multi threaded and tasks testing in one function
+    #[tokio::test]
+    pub async fn body_should_be_transferable_between_threads_and_tasks() {}
+    #[test]
+    pub fn get_reference_of_type_from_body() {}
 }
