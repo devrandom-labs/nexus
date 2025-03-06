@@ -100,9 +100,13 @@ mod test {
     // get the type from body
 
     #[test]
-    pub fn body_type_id_should_be_different_for_different_types() {}
+    pub fn body_type_id_should_be_different_for_different_types() {
+        unimplemented!()
+    }
     #[test]
-    pub fn body_type_id_should_be_same_for_same_types() {}
+    pub fn body_type_id_should_be_same_for_same_types() {
+        unimplemented!()
+    }
 
     /// combining both multi threaded and tasks testing in one function
     #[tokio::test]
