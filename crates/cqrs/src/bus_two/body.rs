@@ -68,6 +68,45 @@ mod test {
     use super::Body;
 
     // TODO: test out diff types can be used to create a body
-    // TODO: get concrete type from body
+
+    #[test]
+    fn diff_body_types() {
+        let type_one = 10;
+        let type_two = String::from("Hello");
+
+        #[derive(Debug, PartialEq)]
+        struct Person {
+            name: String,
+        }
+
+        let type_three = Person {
+            name: String::from("joel"),
+        };
+
+        let body_one = Body::new(type_one);
+        let body_two = Body::new(type_two);
+        let body_three = Body::new(type_three);
+
+        assert!(body_one.get_as_ref::<i32>().is_some());
+        assert_eq!(body_one.get_as_ref::<i32>().unwrap(), &10);
+
+        assert!(body_two.get_as_ref::<String>().is_some());
+        assert_eq!(
+            body_two.get_as_ref::<String>().unwrap(),
+            &String::from("Hello")
+        );
+
+        assert!(body_three.get_as_ref::<Person>().is_some());
+        assert_eq!(
+            body_three.get_as_ref::<Person>().unwrap(),
+            &Person {
+                name: String::from("joel")
+            }
+        );
+    }
+
+    // #[test]
+    // fn body_type_clash() {}
+
     // TODO: test body between threads and tokio
 }
