@@ -1,29 +1,8 @@
 #![allow(dead_code)]
+pub mod body;
+
+use body::Body;
 use std::any::{Any, TypeId};
-
-//-------------------- Body--------------------//
-//
-pub struct Body {
-    inner: Box<dyn Any + Send + Sync>,
-}
-
-impl Body {
-    pub fn new<T>(data: T) -> Self
-    where
-        T: Any + Send + Sync,
-    {
-        Body {
-            inner: Box::new(data),
-        }
-    }
-
-    /// since the inner is trait object of Any
-    /// it should have type_id to fetch
-    pub fn type_id(&self) -> TypeId {
-        (*self.inner).type_id()
-    }
-}
-
 //-------------------- Message--------------------//
 
 /// messages should be able to be sent acorss threads and tasks
@@ -99,10 +78,6 @@ mod test {
 
     use super::Message;
 
-    // type_id should be different for different types in body
-    // type_id should be same for same types in body
-    // body should be transferable between threads
-    // body should be transferable between tasks
     // get the type from body
 
     #[test]
