@@ -67,8 +67,6 @@ impl Deref for Body {
 mod test {
     use super::Body;
 
-    // TODO: test out diff types can be used to create a body
-
     #[test]
     fn diff_body_types() {
         let type_one = 10;
@@ -105,8 +103,15 @@ mod test {
         );
     }
 
-    // #[test]
-    // fn body_type_clash() {}
+    #[test]
+    #[should_panic]
+    fn body_type_clash() {
+        let type_one = 10;
+
+        let body_one = Body::new(type_one);
+        assert!(body_one.get_as_ref::<String>().is_none());
+        let _ = body_one.get_as_ref::<String>().unwrap();
+    }
 
     // TODO: test body between threads and tokio
 }
