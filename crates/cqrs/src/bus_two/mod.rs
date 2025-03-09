@@ -46,6 +46,10 @@ impl Message {
         let body = Body::new(body);
         Message { body }
     }
+
+    pub fn type_id(&self) -> TypeId {
+        self.body.type_id()
+    }
 }
 
 //-------------------- handlers --------------------//
@@ -93,6 +97,8 @@ impl Route {
 #[cfg(test)]
 mod test {
 
+    use super::Message;
+
     // type_id should be different for different types in body
     // type_id should be same for same types in body
     // body should be transferable between threads
@@ -101,16 +107,26 @@ mod test {
 
     #[test]
     pub fn body_type_id_should_be_different_for_different_types() {
-        unimplemented!()
-    }
-    #[test]
-    pub fn body_type_id_should_be_same_for_same_types() {
-        unimplemented!()
+        let message_one = Message::new(String::from("Hello"));
+        let message_two = Message::new(12);
+        assert_ne!(message_one.type_id(), message_two.type_id());
     }
 
-    /// combining both multi threaded and tasks testing in one function
-    #[tokio::test]
-    pub async fn body_should_be_transferable_between_threads_and_tasks() {}
     #[test]
-    pub fn get_reference_of_type_from_body() {}
+    pub fn body_type_id_should_be_same_for_same_types() {
+        let message_one = Message::new(String::from("Hello"));
+        let message_two = Message::new(String::from("Joel"));
+        assert_eq!(message_one.type_id(), message_two.type_id());
+    }
+
+    #[tokio::test]
+    pub async fn body_should_be_transferable_between_threads_and_tasks() {
+        let message_one = Message::new(String::from("Hello"));
+        let result = tokio::spawn(async move {
+            let message_two = Message::new(String::from("Joel"));
+            assert_eq!(message_one.type_id(), message_two.type_id());
+        })
+        .await;
+        assert!(result.is_ok());
+    }
 }
