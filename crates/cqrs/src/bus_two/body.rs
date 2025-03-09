@@ -5,7 +5,7 @@ use std::{
 use thiserror::Error as Err;
 
 //-------------------- Body--------------------//
-#[derive(Debug, Err)]
+#[derive(Debug, Err, PartialEq)]
 pub enum Error {
     #[error("Could not get Body value")]
     CouldNotGetValue,
@@ -97,7 +97,61 @@ impl Deref for Body {
 
 #[cfg(test)]
 mod test {
-    use super::Body;
+    use super::{Body, Error};
+    use std::any::TypeId;
+
+    #[test]
+    fn get_with_correct_type() {
+        let input_type = 10;
+        let mut input_body = Body::new(input_type);
+
+        let actual_type = input_body.get_as_ref::<i32>();
+        assert!(actual_type.is_ok());
+        assert_eq!(actual_type.unwrap(), &10);
+
+        let actual_type = input_body.get_as_mut::<i32>();
+        assert!(actual_type.is_ok());
+        assert_eq!(actual_type.unwrap(), &mut 10);
+
+        let actual_type = input_body.get::<i32>();
+        assert!(actual_type.is_ok());
+        assert_eq!(*actual_type.unwrap(), 10);
+    }
+
+    #[test]
+    fn get_with_incorrect_type() {
+        let input_type = 10;
+        let mut input_body = Body::new(input_type);
+        let actual_type = input_body.get_as_ref::<u32>();
+        assert!(actual_type.is_err());
+        assert_eq!(
+            actual_type.unwrap_err(),
+            Error::TypeMismatch {
+                expected: TypeId::of::<i32>(),
+                found: TypeId::of::<u32>()
+            }
+        );
+
+        let actual_type = input_body.get_as_mut::<u32>();
+        assert!(actual_type.is_err());
+        assert_eq!(
+            actual_type.unwrap_err(),
+            Error::TypeMismatch {
+                expected: TypeId::of::<i32>(),
+                found: TypeId::of::<u32>()
+            }
+        );
+
+        let actual_type = input_body.get::<u32>();
+        assert!(actual_type.is_err());
+        assert_eq!(
+            actual_type.unwrap_err(),
+            Box::new(Error::TypeMismatch {
+                expected: TypeId::of::<i32>(),
+                found: TypeId::of::<u32>()
+            })
+        );
+    }
 
     #[test]
     fn diff_body_types() {
