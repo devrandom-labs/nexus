@@ -4,6 +4,10 @@ use std::{
 };
 use thiserror::Error as Err;
 
+// TODO: create feature called tracing
+// TODO: tracing add type_name property to Body for tracing feature
+// TODO: add debug tracing to show what type body has and what type is received to get
+
 /// Represents an error that can occur when working with a `Body`.
 #[derive(Debug, Err, PartialEq)]
 pub enum Error {
