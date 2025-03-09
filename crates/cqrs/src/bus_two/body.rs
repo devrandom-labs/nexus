@@ -52,11 +52,22 @@ impl Body {
         }
     }
 
-    pub fn get_as_mut<T>(&mut self) -> Option<&mut T>
+    pub fn get_as_mut<T>(&mut self) -> Result<&mut T, Error>
     where
         T: Any + Send + Sync,
     {
-        self.inner.downcast_mut::<T>()
+        let type_id = TypeId::of::<T>();
+
+        if self.type_id == type_id {
+            self.inner
+                .downcast_mut::<T>()
+                .ok_or(Error::CouldNotGetValue)
+        } else {
+            Err(Error::TypeMismatch {
+                expected: self.type_id,
+                found: type_id,
+            })
+        }
     }
 
     pub fn get<T>(self) -> Result<Box<T>, Box<Error>>
