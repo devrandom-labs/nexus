@@ -4,21 +4,45 @@ use std::{
 };
 use thiserror::Error as Err;
 
-//-------------------- Body--------------------//
+/// Represents an error that can occur when working with a `Body`.
 #[derive(Debug, Err, PartialEq)]
 pub enum Error {
+    /// Indicates that the value could not be retrieved from the `Body`.
     #[error("Could not get Body value")]
     CouldNotGetValue,
+    /// Indicates a type mismatch when attempting to retrieve a value from the `Body`.
     #[error("Type mismatch: expected {expected:?}, found {found:?}")]
     TypeMismatch { expected: TypeId, found: TypeId },
 }
 
+/// A container for storing a value of any type that implements `Any`, `Send`, and `Sync`.
+///
+/// This struct allows you to store and retrieve values of different types while maintaining type safety.
 pub struct Body {
     inner: Box<dyn Any + Send + Sync>,
     type_id: TypeId,
 }
 
 impl Body {
+    /// Creates a new `Body` containing the given data.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T`: The type of the data to store, which must implement `Any`, `Send`, and `Sync`.
+    ///
+    /// # Arguments
+    ///
+    /// * `data`: The data to store in the `Body`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::TypeId;
+    /// use my_module::Body;
+    ///
+    /// let body = Body::new(10);
+    /// assert_eq!(body.type_id(), TypeId::of::<i32>());
+    /// ```
     pub fn new<T>(data: T) -> Self
     where
         T: Any + Send + Sync,
@@ -29,12 +53,42 @@ impl Body {
         }
     }
 
-    /// since the inner is trait object of Any
-    /// it should have type_id to fetch
+    /// Returns the `TypeId` of the value stored in the `Body`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::TypeId;
+    /// use my_module::Body;
+    ///
+    /// let body = Body::new("hello");
+    /// assert_eq!(body.type_id(), TypeId::of::<&str>());
+    /// ```
     pub fn type_id(&self) -> TypeId {
         self.type_id
     }
 
+    /// Attempts to retrieve a shared reference to the value stored in the `Body`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T`: The expected type of the value, which must implement `Any`, `Send`, and `Sync`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(&T)`: If the type matches and the value is successfully retrieved.
+    /// * `Err(Error)`: If the type does not match or the value cannot be retrieved.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use my_module::{Body, Error};
+    /// use std::any::TypeId;
+    ///
+    /// let body = Body::new(42);
+    /// assert_eq!(body.get_as_ref::<i32>().unwrap(), &42);
+    /// assert_eq!(body.get_as_ref::<String>().unwrap_err(), Error::TypeMismatch{expected: TypeId::of::<i32>(), found: TypeId::of::<String>()});
+    /// ```
     pub fn get_as_ref<T>(&self) -> Result<&T, Error>
     where
         T: Any + Send + Sync,
@@ -52,6 +106,28 @@ impl Body {
         }
     }
 
+    /// Attempts to retrieve a mutable reference to the value stored in the `Body`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T`: The expected type of the value, which must implement `Any`, `Send`, and `Sync`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(&mut T)`: If the type matches and the value is successfully retrieved.
+    /// * `Err(Error)`: If the type does not match or the value cannot be retrieved.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use my_module::{Body, Error};
+    /// use std::any::TypeId;
+    ///
+    /// let mut body = Body::new(42);
+    /// *body.get_as_mut::<i32>().unwrap() = 43;
+    /// assert_eq!(body.get_as_ref::<i32>().unwrap(), &43);
+    /// assert_eq!(body.get_as_mut::<String>().unwrap_err(), Error::TypeMismatch{expected: TypeId::of::<i32>(), found: TypeId::of::<String>()});
+    /// ```
     pub fn get_as_mut<T>(&mut self) -> Result<&mut T, Error>
     where
         T: Any + Send + Sync,
@@ -70,6 +146,27 @@ impl Body {
         }
     }
 
+    /// Attempts to retrieve ownership of the value stored in the `Body`.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T`: The expected type of the value, which must implement `Any`, `Send`, and `Sync`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Box<T>)`: If the type matches and the value is successfully retrieved.
+    /// * `Err(Error)`: If the type does not match or the value cannot be retrieved.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use my_module::{Body, Error};
+    /// use std::any::TypeId;
+    ///
+    /// let body = Body::new(42);
+    /// assert_eq!(*body.get::<i32>().unwrap(), 42);
+    /// assert_eq!(body.get::<String>().unwrap_err(), Error::TypeMismatch{expected: TypeId::of::<i32>(), found: TypeId::of::<String>()});
+    /// ```
     pub fn get<T>(self) -> Result<Box<T>, Error>
     where
         T: Any + Send + Sync,
