@@ -70,7 +70,7 @@ impl Body {
         }
     }
 
-    pub fn get<T>(self) -> Result<Box<T>, Box<Error>>
+    pub fn get<T>(self) -> Result<Box<T>, Error>
     where
         T: Any + Send + Sync,
     {
@@ -78,12 +78,12 @@ impl Body {
         if self.type_id == type_id {
             self.inner
                 .downcast::<T>()
-                .map_err(|_| Box::new(Error::CouldNotGetValue))
+                .map_err(|_| Error::CouldNotGetValue)
         } else {
-            Err(Box::new(Error::TypeMismatch {
+            Err(Error::TypeMismatch {
                 expected: self.type_id,
                 found: type_id,
-            }))
+            })
         }
     }
 }
@@ -146,10 +146,10 @@ mod test {
         assert!(actual_type.is_err());
         assert_eq!(
             actual_type.unwrap_err(),
-            Box::new(Error::TypeMismatch {
+            Error::TypeMismatch {
                 expected: TypeId::of::<i32>(),
                 found: TypeId::of::<u32>()
-            })
+            }
         );
     }
 
