@@ -35,11 +35,21 @@ impl Body {
         self.type_id
     }
 
-    pub fn get_as_ref<T>(&self) -> Option<&T>
+    pub fn get_as_ref<T>(&self) -> Result<&T, Error>
     where
         T: Any + Send + Sync,
     {
-        self.inner.downcast_ref::<T>()
+        let type_id = TypeId::of::<T>();
+        if self.type_id == type_id {
+            self.inner
+                .downcast_ref::<T>()
+                .ok_or(Error::CouldNotGetValue)
+        } else {
+            Err(Error::TypeMismatch {
+                expected: self.type_id,
+                found: type_id,
+            })
+        }
     }
 
     pub fn get_as_mut<T>(&mut self) -> Option<&mut T>
@@ -88,16 +98,16 @@ mod test {
         let body_two = Body::new(type_two);
         let body_three = Body::new(type_three);
 
-        assert!(body_one.get_as_ref::<i32>().is_some());
+        assert!(body_one.get_as_ref::<i32>().is_ok());
         assert_eq!(body_one.get_as_ref::<i32>().unwrap(), &10);
 
-        assert!(body_two.get_as_ref::<String>().is_some());
+        assert!(body_two.get_as_ref::<String>().is_ok());
         assert_eq!(
             body_two.get_as_ref::<String>().unwrap(),
             &String::from("Hello")
         );
 
-        assert!(body_three.get_as_ref::<Person>().is_some());
+        assert!(body_three.get_as_ref::<Person>().is_ok());
         assert_eq!(
             body_three.get_as_ref::<Person>().unwrap(),
             &Person {
@@ -112,7 +122,7 @@ mod test {
         let type_one = 10;
 
         let body_one = Body::new(type_one);
-        assert!(body_one.get_as_ref::<String>().is_none());
+        assert!(body_one.get_as_ref::<String>().is_err());
         let _ = body_one.get_as_ref::<String>().unwrap();
     }
 
@@ -122,7 +132,7 @@ mod test {
         let body_one = Body::new(type_one);
         let _ = tokio::spawn(async move {
             let inner_value = body_one.get_as_ref::<i32>();
-            assert!(inner_value.is_some());
+            assert!(inner_value.is_ok());
             assert_eq!(inner_value.unwrap(), &10);
         })
         .await;
