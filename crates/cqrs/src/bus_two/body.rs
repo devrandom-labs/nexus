@@ -5,15 +5,17 @@ use std::{
 use thiserror::Error as Err;
 
 //-------------------- Body--------------------//
-
 #[derive(Debug, Err)]
 pub enum Error {
     #[error("Could not get Body value")]
     CouldNotGetValue,
+    #[error("Type mismatch: expected {expected:?}, found {found:?}")]
+    TypeMismatch { expected: TypeId, found: TypeId },
 }
 
 pub struct Body {
     inner: Box<dyn Any + Send + Sync>,
+    type_id: TypeId,
 }
 
 impl Body {
@@ -23,13 +25,14 @@ impl Body {
     {
         Body {
             inner: Box::new(data),
+            type_id: TypeId::of::<T>(),
         }
     }
 
     /// since the inner is trait object of Any
     /// it should have type_id to fetch
     pub fn type_id(&self) -> TypeId {
-        (*self.inner).type_id()
+        self.type_id
     }
 
     pub fn get_as_ref<T>(&self) -> Option<&T>
@@ -113,5 +116,15 @@ mod test {
         let _ = body_one.get_as_ref::<String>().unwrap();
     }
 
-    // TODO: test body between threads and tokio
+    #[tokio::test]
+    async fn body_should_be_thread_safe() {
+        let type_one = 10;
+        let body_one = Body::new(type_one);
+        let _ = tokio::spawn(async move {
+            let inner_value = body_one.get_as_ref::<i32>();
+            assert!(inner_value.is_some());
+            assert_eq!(inner_value.unwrap(), &10);
+        })
+        .await;
+    }
 }
