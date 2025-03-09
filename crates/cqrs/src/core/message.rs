@@ -1,7 +1,10 @@
 use super::body::Body;
 use std::any::{Any, TypeId};
+use std::collections::HashMap;
 
+// TODO: add hash to messages, since they would use rkyv for this
 pub struct Message {
+    header: HashMap<String, String>,
     body: Body,
 }
 
@@ -11,11 +14,24 @@ impl Message {
         T: Any + Send + Sync,
     {
         let body = Body::new(body);
-        Message { body }
+        let header = HashMap::new();
+        Message { body, header }
     }
 
     pub fn type_id(&self) -> TypeId {
         self.body.type_id()
+    }
+
+    pub fn get_body_ref(&self) -> &Body {
+        &self.body
+    }
+
+    pub fn get_body_mut(&mut self) -> &mut Body {
+        &mut self.body
+    }
+
+    pub fn get_body(self) -> Body {
+        self.body
     }
 }
 
