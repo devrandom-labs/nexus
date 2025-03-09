@@ -74,9 +74,17 @@ impl Body {
     where
         T: Any + Send + Sync,
     {
-        self.inner
-            .downcast::<T>()
-            .map_err(|_| Box::new(Error::CouldNotGetValue))
+        let type_id = TypeId::of::<T>();
+        if self.type_id == type_id {
+            self.inner
+                .downcast::<T>()
+                .map_err(|_| Box::new(Error::CouldNotGetValue))
+        } else {
+            Err(Box::new(Error::TypeMismatch {
+                expected: self.type_id,
+                found: type_id,
+            }))
+        }
     }
 }
 
