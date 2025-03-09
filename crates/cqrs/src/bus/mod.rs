@@ -4,8 +4,6 @@ use std::future::Future;
 use thiserror::Error as Err;
 use tokio::sync::mpsc::channel;
 
-pub mod context;
-pub mod message;
 pub mod message_envelope;
 pub mod message_sender;
 
