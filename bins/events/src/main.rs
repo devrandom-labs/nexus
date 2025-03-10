@@ -5,15 +5,7 @@ use tracing_subscriber::{
     EnvFilter, Layer,
 };
 
-pub mod cache;
 pub mod domain;
-pub mod store;
-
-#[derive(Debug, Clone, Copy)]
-pub enum Command {
-    CreateEvent,
-    DeleteEvent,
-}
 
 #[instrument]
 #[tokio::main]
