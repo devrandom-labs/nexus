@@ -74,8 +74,8 @@
 
       in with pkgs; {
         checks = {
-          events = mkBinaries "events";
           auth = mkBinaries "auth";
+          events = mkBinaries "events";
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
@@ -108,8 +108,9 @@
         };
 
         packages = {
-          events = mkBinaries "events";
           auth = mkBinaries "auth";
+          events = mkBinaries "events";
+
           start-infra = startInfra;
           stop-infra = stopInfra;
           dive = dive;
