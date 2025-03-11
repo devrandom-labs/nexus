@@ -7,12 +7,12 @@ pub mod error;
 
 // TODO: add time_stamp with instant for tracing feature
 pub struct Message {
-    dedup_id: DedupId,
+    dedup_id: Option<DedupId>,
     body: Body,
 }
 
 impl Message {
-    pub fn new<T>(dedup_id: DedupId, body: T) -> Self
+    pub fn new<T>(dedup_id: Option<DedupId>, body: T) -> Self
     where
         T: Any + Send + Sync,
     {
