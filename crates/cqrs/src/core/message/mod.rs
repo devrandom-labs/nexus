@@ -1,13 +1,12 @@
 use super::body::Body;
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
-use std::time::Instant;
 
+pub mod id;
+
+// TODO: add time_stamp with instant for tracing feature
 pub struct Message {
     dedup_id: u32,
-    header: HashMap<String, String>,
     body: Body,
-    time_stamp: Instant,
 }
 
 impl Message {
@@ -16,13 +15,7 @@ impl Message {
         T: Any + Send + Sync,
     {
         let body = Body::new(body);
-        let header = HashMap::new();
-        Message {
-            dedup_id,
-            body,
-            header,
-            time_stamp: Instant::now(),
-        }
+        Message { dedup_id, body }
     }
 
     pub fn type_id(&self) -> TypeId {

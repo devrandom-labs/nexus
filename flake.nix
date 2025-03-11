@@ -74,7 +74,7 @@
 
       in with pkgs; {
         checks = {
-          auth = mkBinaries "auth";
+
           events = mkBinaries "events";
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
@@ -108,9 +108,7 @@
         };
 
         packages = {
-          auth = mkBinaries "auth";
           events = mkBinaries "events";
-
           start-infra = startInfra;
           stop-infra = stopInfra;
           dive = dive;
@@ -131,7 +129,6 @@
             dive # inspect oci images
             podman
             podman-compose
-            kafkactl
             rust-analyzer
             bacon
             sqlx-cli
