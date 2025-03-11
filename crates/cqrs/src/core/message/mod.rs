@@ -1,16 +1,17 @@
 use super::body::Body;
+use message_id::MessageId;
 use std::any::{Any, TypeId};
 
-pub mod id;
+pub mod message_id;
 
 // TODO: add time_stamp with instant for tracing feature
 pub struct Message {
-    dedup_id: u32,
+    dedup_id: MessageId,
     body: Body,
 }
 
 impl Message {
-    pub fn new<T>(dedup_id: u32, body: T) -> Self
+    pub fn new<T>(dedup_id: MessageId, body: T) -> Self
     where
         T: Any + Send + Sync,
     {
