@@ -1,1 +1,3 @@
-pub struct MessageId {}
+pub struct MessageId(u32);
+
+impl MessageId {}

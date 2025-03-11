@@ -2,6 +2,7 @@ use super::body::Body;
 use message_id::MessageId;
 use std::any::{Any, TypeId};
 
+pub mod error;
 pub mod message_id;
 
 // TODO: add time_stamp with instant for tracing feature
