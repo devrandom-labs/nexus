@@ -45,6 +45,8 @@
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
+              (craneLib.fileset.commonCargoSources ./bins/auth)
+              (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
@@ -76,6 +78,7 @@
         checks = {
 
           events = mkBinaries "events";
+          auth = mkBinaries "auth";
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
