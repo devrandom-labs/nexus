@@ -11,9 +11,6 @@ use thiserror::Error as Err;
 /// Represents an error that can occur when working with a `Body`.
 #[derive(Debug, Err, PartialEq)]
 pub enum Error {
-    /// Indicates that the value could not be retrieved from the `Body`.
-    #[error("Could not get Body value")]
-    CouldNotGetValue,
     /// Indicates a type mismatch when attempting to retrieve a value from the `Body`.
     #[error("Type mismatch: expected {expected:?}, found {found:?}")]
     TypeMismatch { expected: TypeId, found: TypeId },
@@ -42,7 +39,7 @@ impl Body {
     ///
     /// ```
     /// use std::any::TypeId;
-    /// use my_module::Body;
+    /// use cqrs::core::body::Body;
     ///
     /// let body = Body::new(10);
     /// assert_eq!(body.type_id(), TypeId::of::<i32>());
@@ -63,7 +60,7 @@ impl Body {
     ///
     /// ```
     /// use std::any::TypeId;
-    /// use my_module::Body;
+    /// use cqrs::core::body::Body;
     ///
     /// let body = Body::new("hello");
     /// assert_eq!(body.type_id(), TypeId::of::<&str>());
@@ -86,7 +83,7 @@ impl Body {
     /// # Examples
     ///
     /// ```
-    /// use my_module::{Body, Error};
+    /// use cqrs::core::body::{Body, Error};
     /// use std::any::TypeId;
     ///
     /// let body = Body::new(42);
@@ -99,9 +96,7 @@ impl Body {
     {
         let type_id = TypeId::of::<T>();
         if self.type_id == type_id {
-            self.inner
-                .downcast_ref::<T>()
-                .ok_or(Error::CouldNotGetValue)
+            Ok(self.inner.downcast_ref::<T>().unwrap())
         } else {
             Err(Error::TypeMismatch {
                 expected: self.type_id,
@@ -124,7 +119,7 @@ impl Body {
     /// # Examples
     ///
     /// ```
-    /// use my_module::{Body, Error};
+    /// use cqrs::core::body::{Body, Error};
     /// use std::any::TypeId;
     ///
     /// let mut body = Body::new(42);
@@ -139,9 +134,7 @@ impl Body {
         let type_id = TypeId::of::<T>();
 
         if self.type_id == type_id {
-            self.inner
-                .downcast_mut::<T>()
-                .ok_or(Error::CouldNotGetValue)
+            Ok(self.inner.downcast_mut::<T>().unwrap())
         } else {
             Err(Error::TypeMismatch {
                 expected: self.type_id,
@@ -164,12 +157,14 @@ impl Body {
     /// # Examples
     ///
     /// ```
-    /// use my_module::{Body, Error};
+    /// use cqrs::core::body::{Body, Error};
     /// use std::any::TypeId;
     ///
     /// let body = Body::new(42);
     /// assert_eq!(*body.get::<i32>().unwrap(), 42);
-    /// assert_eq!(body.get::<String>().unwrap_err(), Error::TypeMismatch{expected: TypeId::of::<i32>(), found: TypeId::of::<String>()});
+    ///
+    /// let body_string = Body::new(42);
+    /// assert_eq!(body_string.get::<String>().unwrap_err(), Error::TypeMismatch{expected: TypeId::of::<i32>(), found: TypeId::of::<String>()});
     /// ```
     pub fn get<T>(self) -> Result<Box<T>, Error>
     where
@@ -177,9 +172,7 @@ impl Body {
     {
         let type_id = TypeId::of::<T>();
         if self.type_id == type_id {
-            self.inner
-                .downcast::<T>()
-                .map_err(|_| Error::CouldNotGetValue)
+            Ok(self.inner.downcast::<T>().unwrap())
         } else {
             Err(Error::TypeMismatch {
                 expected: self.type_id,

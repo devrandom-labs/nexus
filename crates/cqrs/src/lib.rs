@@ -1,2 +1,2 @@
 // mod bus;
-mod core;
+pub mod core;

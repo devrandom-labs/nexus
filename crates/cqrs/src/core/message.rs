@@ -156,31 +156,4 @@ mod test {
         let result = body.get::<String>();
         assert!(matches!(result, Err(Error::TypeMismatch { .. })));
     }
-
-    #[test]
-    fn test_get_body_ref_could_not_get_value() {
-        struct MyType;
-        let message = Message::new(MyType);
-        let body_ref = message.get_body_ref();
-        let result = body_ref.get_as_ref::<MyType>();
-        assert!(matches!(result, Err(Error::CouldNotGetValue)));
-    }
-
-    #[test]
-    fn test_get_body_mut_could_not_get_value() {
-        struct MyType;
-        let mut message = Message::new(MyType);
-        let body_mut = message.get_body_mut();
-        let result = body_mut.get_as_mut::<MyType>();
-        assert!(matches!(result, Err(Error::CouldNotGetValue)));
-    }
-
-    #[test]
-    fn test_get_body_could_not_get_value() {
-        struct MyType;
-        let message = Message::new(MyType);
-        let body = message.get_body();
-        let result = body.get::<MyType>();
-        assert!(matches!(result, Err(Error::CouldNotGetValue)));
-    }
 }
