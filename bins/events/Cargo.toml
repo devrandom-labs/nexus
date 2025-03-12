@@ -6,11 +6,12 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+axum = { workspace = true }
 chrono = { workspace = true }
 cqrs = { path = "../../crates/cqrs" }
 sqlx = { workspace = true, features = ["sqlite", "migrate", "runtime-tokio-rustls"] }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 ulid = { workspace = true }
