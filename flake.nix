@@ -51,6 +51,8 @@
             ];
           };
 
+        ## TODO: get all the projects from bins/* folder
+        ## TODO: add them as packages and build docker images of them.
         mkBinaries = name:
           let
             path = ./bins/${name}/build.nix;
