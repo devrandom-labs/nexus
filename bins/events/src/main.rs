@@ -1,4 +1,6 @@
-use tracing::{info, instrument};
+use axum::{routing::get, Router};
+use tokio::net::TcpListener;
+use tracing::{error, info, instrument};
 use tracing_subscriber::{
     fmt::{self, format::FmtSpan},
     prelude::*,
@@ -24,4 +26,13 @@ async fn main() {
     let name = env!("CARGO_BIN_NAME");
     let version = env!("CARGO_PKG_VERSION");
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
+    let app = Router::new().route("/", get(|| async { "Hello, World!" }));
+    let listener = TcpListener::bind("0.0.0.0:3000")
+        .await
+        .inspect_err(|err| error!(?err))
+        .unwrap();
+    axum::serve(listener, app)
+        .await
+        .inspect_err(|err| error!("🚫{:?}🚫", err))
+        .unwrap();
 }
