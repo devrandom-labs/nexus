@@ -47,6 +47,7 @@
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources ./bins/auth)
               (craneLib.fileset.commonCargoSources ./bins/events)
+              (craneLib.fileset.commonCargoSources ./bins/steersman)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
@@ -76,11 +77,14 @@
           gunzip --stdout result > /tmp/image.tar && dive docker-archive: ///tmp/image.tar
         '';
 
+        events = mkBinaries "events";
+        auth = mkBinaries "auth";
+        steersman = mkBinaries "steersman";
+
       in with pkgs; {
         checks = {
 
-          events = mkBinaries "events";
-          auth = mkBinaries "auth";
+          inherit events auth steersman;
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
@@ -113,7 +117,7 @@
         };
 
         packages = {
-          events = mkBinaries "events";
+          inherit events auth steersman;
           start-infra = startInfra;
           stop-infra = stopInfra;
           dive = dive;
