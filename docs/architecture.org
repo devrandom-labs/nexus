@@ -28,7 +28,7 @@
 - get templates
 *** notification (version: 0.x.x)
 - notify(type, template)
-*** sphynx (version: 0.x.x)
+*** auth (version: 0.x.x)
 - user management
 - authentication
 - authorization
@@ -36,7 +36,7 @@
 - book event
 - set reminder for booked event
 - get booked event info
-n- get all booked event
+- get all booked event
 - cancel booked event
 
 
