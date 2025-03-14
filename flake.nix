@@ -15,7 +15,7 @@
       flake = false;
     };
   };
-  outputs = { self, nixpkgs, utils, crane, fenix, advisory-db, ... }:
+  outputs = { nixpkgs, utils, crane, fenix, advisory-db, ... }:
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -120,39 +120,22 @@
           inherit events auth steersman;
           start-infra = startInfra;
           stop-infra = stopInfra;
-          dive = dive;
 
           ## FIXME: only put this for darwin? maybe
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
-
-        devShells.default = let
-          pkgsWithUnfree = import nixpkgs {
-            inherit system;
-            config = { allowUnfree = true; };
-          };
-        in craneLib.devShell {
-          checks = self.checks.${system};
-          packages = with pkgsWithUnfree; [
-            dive # inspect oci images
-            podman
-            podman-compose
-            rust-analyzer
-            bacon
-            sqlx-cli
-            biscuit-cli
-          ];
-
+        devShells.default = craneLib.devShell {
+          inputsFrom = [ events auth steersman ];
           shellHook = ''
             echo "tixlys development environment"
             echo "<<<<<<<<<<<<<<<<<<<< Available Commands >>>>>>>>>>>>>>>>>>>>"
             echo -e "\n\n\n"
-            echo "nix build .#events-image [Build events OCI Image]"
-            echo "nix build .#events [Build events binary package]"
+            echo "nix build {package-name}"
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
+          packages = [ rust-analyzer bacon biscuit-cli dive ];
         };
       });
 }
