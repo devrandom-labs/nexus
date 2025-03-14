@@ -17,4 +17,3 @@
 ** TODO add ability to take aggregate id, when you execute a function
 
 [[file:~/Code/tixlys/tixlys-core/bins/events/src/main.rs::let result = command_executor.clone().execute(Command::CreateEvent).await;]]
-p
