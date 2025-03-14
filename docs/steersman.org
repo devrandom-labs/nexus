@@ -1,0 +1,121 @@
+#+title: Steersman
+
+Application gatway for tixlys, maybe it can be an opensource application gateway
+
+* Phase 1: Foundation - Core Request Handling and Routing (Essential)
+
+** Feature 1: Basic Request Reception and Handling:
+- [ ] receive http request
+- [ ] receive https request
+- [ ] performance test requests and response.
+*** research points
+- pingora request handling mechanism
+- rust async non blocking io
+- pingora connection management
+- pingora request lifecycle
+*** steps
+Familiarize yourself with Pingora's server setup. Understand how to define an entry point to receive requests. Focus on the simplest "Hello, World!" equivalent to ensure basic request handling works.
+
+** Feature 2: Rule-Based Request Routing (Layer 7):
+Description: The gateway needs to intelligently direct traffic to different backend services based on request attributes (like path, headers, host). This is the heart of an application gateway.
+Rust Principle Focus: Design your routing logic in Rust. Utilize Rust's pattern matching and data structures (like HashMaps or Trie for efficient route lookup). Think about a flexible configuration structure in Rust to define routing rules.
+Step: Define a simple configuration format (e.g., Rust structs, maybe using serde for serialization later) to represent routing rules. These rules will map request attributes to backend service addresses. For now, imagine defining these rules directly in your Rust code.
+** Feature 3: Configuration Management (Rust-Centric):
+
+Description: How will you define and load the gateway's configuration, including routing rules, backend services, and other settings? It must be entirely in Rust for now.
+Rust Principle Focus: Embrace Rust for configuration. Consider defining your configuration using Rust structs. Think about how you'll load this configuration at startup. Explore using libraries like serde for serialization if you plan to load configuration from files later (though for now, focus on in-code configuration).
+Step: Design Rust structs to represent your configuration. Start with structs for routing rules and backend service definitions. For simplicity, initialize this configuration directly in your Rust code.
+
+* Phase 2: Security Layer - Basic Protection (Crucial)
+
+** Feature 4: TLS Termination (HTTPS):
+
+Description: Handling HTTPS is essential for security. Your gateway needs to decrypt incoming HTTPS traffic and potentially re-encrypt traffic to backend services.
+Rust Principle Focus: Pingora likely has built-in TLS capabilities leveraging Rust's robust security ecosystem (like rustls or openssl-rust). Focus on configuring Pingora to handle TLS termination efficiently.
+Step: Investigate Pingora's TLS configuration. Understand how to provide certificates and keys to enable HTTPS. Test with self-signed certificates initially to ensure TLS termination is working.
+** Feature 5: Basic Authentication (e.g., API Key):
+
+Description: A basic layer of security often involves authenticating requests before they are routed. API Key authentication is a simple starting point.
+Rust Principle Focus: Implement authentication logic in Rust as middleware. Leverage Rust's performance to quickly validate API keys. Consider using Rust libraries for secure string handling and comparisons.
+Step: Design a simple API key authentication middleware in Rust. This middleware will check for a valid API key in request headers and reject requests without a valid key. For now, store valid API keys in your Rust configuration.
+* Phase 3: Performance Foundation - Load Balancing and Health Checks (Key for Production)
+
+** Feature 6: Load Balancing:
+
+Description: Distribute traffic across multiple instances of your backend services. This ensures high availability and performance.
+Rust Principle Focus: Implement load balancing algorithms in Rust. Pingora likely offers mechanisms for load balancing; explore and configure them. Consider algorithms like Round Robin, Least Connections, or Hash-based. Rust's performance will be beneficial in making load balancing decisions quickly.
+Step: Define backend service groups in your configuration. Implement a simple load balancing strategy (e.g., Round Robin) in Rust to select a backend instance for each routed request.
+** Feature 7: Backend Health Checks:
+
+Description: Your gateway needs to monitor the health of backend services and stop sending traffic to unhealthy instances.
+Rust Principle Focus: Implement health check probes in Rust. Leverage Rust's concurrency to perform health checks asynchronously without blocking request handling.
+Step: Design health check probes (e.g., HTTP GET requests to backend services) in Rust. Configure your gateway to periodically check backend health and update the load balancing pool accordingly.
+
+* Phase 4: Observability - Monitoring and Logging (Essential for Operations)
+
+** Feature 8: Logging:
+
+Description: Comprehensive logging is vital for debugging, security auditing, and performance analysis.
+Rust Principle Focus: Utilize Rust's logging libraries (like log and tracing) for structured logging. Focus on logging relevant information like request details, routing decisions, errors, and performance metrics.
+Step: Integrate a Rust logging library into your gateway. Configure it to log essential request information, routing decisions, and any errors encountered.
+** Feature 9: Basic Metrics:
+
+Description: Collecting metrics provides insights into the gateway's performance and health over time.
+Rust Principle Focus: Use Rust metrics libraries (like metrics or Prometheus client libraries for Rust) to expose key metrics like request rates, latency, error counts, and backend health status.
+Step: Integrate a Rust metrics library. Define key metrics you want to track and instrument your Rust code to collect these metrics. For now, you might simply log these metrics; later, you'll integrate with a metrics system like Prometheus.
+* Phase 5: Advanced Security - Hardening and Refinement (World-Class)
+
+** Feature 10: Rate Limiting:
+
+Description: Protect backend services from being overwhelmed by excessive requests.
+Rust Principle Focus: Implement rate limiting logic in Rust middleware. Leverage Rust's performance for efficient rate limiting decisions. Consider different rate limiting algorithms and storage mechanisms (in-memory initially).
+Step: Design a rate limiting middleware in Rust. Configure it to limit requests based on criteria like IP address or API key. Start with a simple in-memory rate limiter.
+** Feature 11: Web Application Firewall (WAF) - Basic Protection:
+
+Description: Protect against common web attacks (like SQL injection, XSS). Even a basic WAF layer adds significant security.
+Rust Principle Focus: Explore Rust WAF libraries or design basic WAF rules in Rust. Leverage Rust's pattern matching and string manipulation capabilities for rule processing. Initially, focus on a few key rule sets for common attack patterns.
+Step: Investigate existing Rust WAF libraries or start defining basic WAF rules in Rust to detect common attack patterns in request headers and bodies.
+** Feature 12:  Advanced Authorization (Role-Based Access Control - RBAC):
+
+Description: Move beyond basic authentication to implement more granular authorization, controlling access based on user roles and permissions.
+Rust Principle Focus: Design RBAC logic in Rust middleware. Use Rust's data structures to efficiently manage roles and permissions. Your configuration needs to define roles and map them to resources and actions.
+Step: Design an RBAC middleware in Rust. Define roles and permissions in your configuration. Implement logic to check user roles against required permissions for specific routes or resources.
+* Phase 6: Advanced Performance - Optimization (Utterly Performant)
+
+** Feature 13: Caching:
+
+Description: Cache responses to frequently requested resources to reduce backend load and improve response times.
+Rust Principle Focus: Implement caching layers in Rust. Utilize Rust's efficient data structures (like HashMaps) for caching. Consider different caching strategies (e.g., in-memory, distributed).
+Step: Design a caching middleware in Rust. Implement in-memory caching initially. Configure cache invalidation policies.
+** Feature 14: Request and Response Compression (gzip, Brotli):
+
+Description: Reduce bandwidth usage and improve page load times by compressing request and response bodies.
+Rust Principle Focus: Leverage Rust compression libraries (like flate2 for gzip and brotli) to implement compression middleware. Rust's performance ensures compression/decompression is efficient.
+Step: Implement compression middleware in Rust to handle gzip and Brotli compression for requests and responses.
+* Phase 7: World-Class Polish - Management and Refinement (Production Ready)
+
+** Feature 15: Dynamic Configuration Reload:
+
+Description: Allow configuration changes to be applied without restarting the gateway, minimizing downtime.
+Rust Principle Focus: Design a dynamic configuration reload mechanism in Rust. Explore using techniques like file watching and atomic updates to reload configuration safely and efficiently.
+Step: Implement a mechanism to reload configuration changes from files without restarting the gateway process. Ensure this reload is atomic and doesn't disrupt ongoing requests.
+** Feature 16:  Comprehensive Testing:
+
+Description: Rigorous testing is essential for a production-ready gateway.
+Rust Principle Focus: Utilize Rust's testing framework to write unit tests, integration tests, and performance benchmarks. Focus on testing routing logic, security middleware, and performance under load.
+Step: Write comprehensive unit tests for each component of your gateway. Implement integration tests to verify end-to-end request flow. Conduct performance benchmarks to identify and address bottlenecks.
+** Feature 17:  Security Audits:
+
+Description: Regular security audits are crucial to maintain a secure gateway.
+Rust Principle Focus: Conduct regular security audits, ideally by external security experts, to identify and address potential vulnerabilities. Utilize Rust's memory safety to minimize common vulnerability classes.
+Step: Plan for regular security audits of your gateway's code and configuration. Address any vulnerabilities identified promptly.
+** Feature 18:  Performance Tuning and Optimization:
+
+Description: Continuously monitor and optimize performance to ensure your gateway remains fast and efficient under increasing load.
+Rust Principle Focus: Utilize Rust's performance profiling tools to identify performance bottlenecks. Optimize critical code paths. Leverage Rust's zero-cost abstractions to maintain performance without sacrificing safety.
+Step: Use Rust profiling tools to identify performance bottlenecks. Optimize critical code paths, focusing on algorithms, data structures, and asynchronous operations.
+** Feature 19:  Excellent Documentation:
+
+Description: Clear and comprehensive documentation is vital for usability and maintainability.
+Rust Principle Focus: Document your code thoroughly using Rustdoc. Write user guides, configuration examples, and operational manuals.
+Step: Write detailed documentation for your gateway, covering architecture, configuration, deployment, and operation.

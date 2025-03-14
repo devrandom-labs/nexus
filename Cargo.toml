@@ -1,8 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["bins/events", "crates/cqrs", "crates/errors"]
+members = ["bins/auth", "bins/events", "bins/steersman", "crates/cqrs", "crates/errors"]
 
 [workspace.dependencies]
+axum = "0.8.1"
 chrono = "0.4.39"
 sqlx = { version = "0.8.3", features = ["sqlite", "migrate", "runtime-tokio-rustls"] }
 thiserror = "2.0.7"

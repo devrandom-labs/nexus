@@ -7,8 +7,6 @@ use tracing_subscriber::{
     EnvFilter, Layer,
 };
 
-pub mod domain;
-
 #[instrument]
 #[tokio::main]
 async fn main() {
