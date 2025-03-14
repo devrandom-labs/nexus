@@ -2,6 +2,7 @@
 ignore = [
 "RUSTSEC-2025-0009", ## not using quic
 "RUSTSEC-2023-0071" ## not using sqlx-mysql
+"RUSTSEC-2024-0320" ## windows issue with atty not gonna run gateway in windows
 ]
 
 [yanked]
