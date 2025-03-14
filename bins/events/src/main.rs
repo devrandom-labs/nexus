@@ -26,6 +26,7 @@ async fn main() {
     let name = env!("CARGO_BIN_NAME");
     let version = env!("CARGO_PKG_VERSION");
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
+
     let app = Router::new().route("/", get(|| async { "Hello, World!" }));
     let listener = TcpListener::bind("0.0.0.0:3000")
         .await
@@ -36,3 +37,7 @@ async fn main() {
         .inspect_err(|err| error!("🚫{:?}🚫", err))
         .unwrap();
 }
+
+// Phase 1
+// TODO: enable tracing for axum
+// TODO: build a health check endpoint

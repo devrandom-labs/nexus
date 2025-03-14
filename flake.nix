@@ -64,16 +64,16 @@
 
         ## crates
         ## personal scripts
-        startInfra = pkgs.writeShellScriptBin "start-infra" ''
+        pu = pkgs.writeShellScriptBin "start-infra" ''
           set -euo pipefail
           podman compose up -d
         '';
 
-        stopInfra = pkgs.writeShellScriptBin "stop-infra" ''
+        pd = pkgs.writeShellScriptBin "stop-infra" ''
           exec podman-compose down
         '';
 
-        dive = pkgs.writeShellScriptBin "dive-image" ''
+        i = pkgs.writeShellScriptBin "dive-image" ''
           gunzip --stdout result > /tmp/image.tar && dive docker-archive: ///tmp/image.tar
         '';
 
@@ -117,9 +117,7 @@
         };
 
         packages = {
-          inherit events auth steersman;
-          start-infra = startInfra;
-          stop-infra = stopInfra;
+          inherit events auth steersman pu pd i;
 
           ## FIXME: only put this for darwin? maybe
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov

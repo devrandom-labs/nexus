@@ -34,3 +34,7 @@ async fn main() {
         .inspect_err(|err| error!("🚫{:?}🚫", err))
         .unwrap();
 }
+
+// Phase 1
+// TODO: enable tracing for axum
+// TODO: build a health check endpoint
