@@ -33,6 +33,7 @@ async fn main() {
         .await
         .inspect_err(|err| error!(?err))
         .unwrap();
+
     axum::serve(listener, app)
         .await
         .inspect_err(|err| error!("🚫{:?}🚫", err))
