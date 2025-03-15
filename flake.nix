@@ -15,7 +15,7 @@
       flake = false;
     };
   };
-  outputs = { nixpkgs, utils, crane, fenix, advisory-db, ... }:
+  outputs = { self, nixpkgs, utils, crane, fenix, advisory-db, ... }:
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -123,7 +123,9 @@
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
+
         devShells.default = craneLib.devShell {
+          checks = self.checks.${system};
           inputsFrom = [ events auth steersman ];
           shellHook = ''
             echo "tixlys development environment"
