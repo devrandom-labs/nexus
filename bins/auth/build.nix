@@ -13,7 +13,7 @@ in pkgs.dockerTools.streamLayeredImage {
   created = "now";
   tag = version;
   config = {
-    Env = [ "RUST_LOG=info,tower_http=trace" ];
+    Env = [ "RUST_LOG=info,tower_http=trace" "PORT=3000" ];
     Cmd = [ "${bin}/bin/${pname}" ];
   };
 }

@@ -1,11 +1,11 @@
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, instrument};
 use tracing_subscriber::{
-    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
+    EnvFilter, Layer,
 };
 
 mod application;
@@ -19,7 +19,6 @@ async fn main() -> Result<(), error::Error> {
         .with_level(true)
         .with_span_events(FmtSpan::CLOSE)
         .with_filter(filter);
-
     tracing_subscriber::registry().with(console).init();
 
     let workspace = "tixlys";
