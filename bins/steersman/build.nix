@@ -12,5 +12,8 @@ in pkgs.dockerTools.streamLayeredImage {
   name = "tixlys-core/${pname}";
   created = "now";
   tag = version;
-  config.Cmd = [ "${bin}/bin/${pname}" ];
+  config = {
+    Env = [ "RUST_LOG=info" ];
+    Cmd = [ "${bin}/bin/${pname}" ];
+  };
 }
