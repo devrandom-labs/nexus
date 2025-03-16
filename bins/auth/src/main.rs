@@ -1,11 +1,11 @@
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, instrument};
 use tracing_subscriber::{
-    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
+    EnvFilter, Layer,
 };
 
 mod error;
@@ -41,6 +41,8 @@ async fn main() {
         .inspect_err(|err| error!("🚫{:?}🚫", err))
         .unwrap();
 }
+
+mod application {}
 
 pub async fn health() -> &'static str {
     "ok."
