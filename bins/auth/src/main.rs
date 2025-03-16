@@ -26,7 +26,7 @@ async fn main() {
     info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
 
     let app = Router::new()
-        .route("/health", get(|| async { "Hello, World!" }))
+        .route("/health", get(health))
         .layer(TraceLayer::new_for_http());
 
     let listener = TcpListener::bind("0.0.0.0:3000")
@@ -38,4 +38,8 @@ async fn main() {
         .await
         .inspect_err(|err| error!("🚫{:?}🚫", err))
         .unwrap();
+}
+
+pub async fn health() -> &'static str {
+    "ok."
 }

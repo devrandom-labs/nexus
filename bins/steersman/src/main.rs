@@ -1,13 +1,11 @@
-use pingora::server::configuration::{Opt, ServerConf};
-use tracing::{debug, info, instrument};
+use pingora::server::configuration::Opt;
+use pingora::server::Server;
+use tracing::{debug, error, info, instrument};
 use tracing_subscriber::{
-    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
+    EnvFilter, Layer,
 };
-
-mod config;
-mod error;
 
 #[instrument]
 #[tokio::main]
@@ -35,17 +33,12 @@ async fn main() {
     opt.conf = opt
         .conf
         .or(Some(String::from("/etc/steersman/config.yaml")));
-
     debug!("{:?}", opt.conf);
+    let mut server = Server::new(Some(opt))
+        .inspect_err(|err| error!(?err))
+        .unwrap();
 
-    match ServerConf::load_yaml_with_opt_override(&opt) {
-        Ok(config) => {
-            println!("{:?}", config);
-        }
-        Err(error) => {
-            println!("{:?}", error);
-        }
-    }
+    server.bootstrap();
 }
 
 // Phase 1
