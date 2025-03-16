@@ -6,7 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-pingora = { version = "0.4.0", features = ["proxy"] }
+pingora = { workspace = true, features = ["proxy"] }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
