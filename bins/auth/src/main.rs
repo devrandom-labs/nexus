@@ -1,12 +1,14 @@
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, instrument};
 use tracing_subscriber::{
+    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
-    EnvFilter, Layer,
 };
+
+mod error;
 
 #[instrument]
 #[tokio::main]
