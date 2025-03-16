@@ -1,9 +1,9 @@
 use pingora::server::configuration::{Opt, ServerConf};
 use tracing::{debug, info, instrument};
 use tracing_subscriber::{
-    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
+    EnvFilter, Layer,
 };
 
 mod config;
