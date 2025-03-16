@@ -7,7 +7,6 @@ allow = [
     "Unicode-3.0",  # For Unicode data
     "MPL-2.0", # Mozilla Public License
     "Zlib",
-    "OpenSSL"
 ]
 private = { ignore = true }
 
