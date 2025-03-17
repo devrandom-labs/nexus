@@ -194,3 +194,10 @@ impl<'a> Application<'a> {
         Ok(())
     }
 }
+
+// TODO: add openapi utoipa here.
+// TODO: add tests to see if this will work.
+// TODO: enable prod, default is dev unlesss specified differently.?
+// TODO: add prod tracing setup.
+// TODO: takes a trait traceable which has a method setup which takes env and setups the relevant tracing
+//

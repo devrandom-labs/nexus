@@ -1,10 +1,10 @@
-use pingora::server::configuration::Opt;
 use pingora::server::Server;
+use pingora::server::configuration::Opt;
 use tracing::{debug, error, info, instrument};
 use tracing_subscriber::{
+    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
-    EnvFilter, Layer,
 };
 
 #[instrument]
@@ -28,7 +28,6 @@ async fn main() {
     // -------------------- load config -------------------- //
     // life time of this gateway is based on the config.
     // should I allow to change config on runtime and reload it?
-
     let mut opt = Opt::parse_args();
     opt.conf = opt
         .conf
