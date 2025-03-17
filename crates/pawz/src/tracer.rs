@@ -1,6 +1,6 @@
-use crate::application::Env;
+use crate::Environment;
 use thiserror::Error as TError;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 use tracing_subscriber::{
     EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
@@ -14,9 +14,10 @@ pub enum TracingError {
 }
 
 pub trait EnvironmentTracer {
-    fn setup(self, env: Env) -> Result<(), TracingError>;
+    fn setup(&self, environment: &Environment);
 }
 
+#[derive(Debug)]
 pub struct Tracer;
 
 impl Tracer {
@@ -34,16 +35,15 @@ impl Tracer {
 impl EnvironmentTracer for Tracer {
     #[instrument]
     #[inline]
-    fn setup(self, env: Env) -> Result<(), TracingError> {
-        debug!("setting up tracing for env: {}", env);
-        match env {
-            Env::Development => {
+    fn setup(&self, environment: &Environment) {
+        debug!("setting up tracing for env: {}", environment);
+        match environment {
+            Environment::Development => {
                 Self::setup_dev_tracing();
-                Ok(())
             }
-            _ => Err(TracingError::UnsupportedEnvironment(env.to_string())),
+            _ => {}
         }
     }
 }
 
-// TODO: tracer should contain tracer config which is nothing but open telemetry stuff?
+// TODO: tracer should have  tracer config, for prod.

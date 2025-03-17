@@ -1,32 +1,34 @@
 #![allow(dead_code)]
 use axum::Router;
 use error::ApplicationError;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;
 use tokio::net::TcpListener;
+use tracer::EnvironmentTracer;
 use tracing::{debug, error, info, instrument};
 
 pub mod error;
 pub mod tracer;
 
+/// Represents the environment in which the application is running.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Enviroment {
+pub enum Environment {
     Development,
     Production,
 }
 
-impl Default for Enviroment {
+impl Default for Environment {
     fn default() -> Self {
         Self::Development
     }
 }
 
-impl Display for Enviroment {
+impl Display for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Enviroment::Development => write!(f, "Development"),
-            Enviroment::Production => write!(f, "Production"),
+            Environment::Development => write!(f, "Development"),
+            Environment::Production => write!(f, "Production"),
         }
     }
 }
@@ -46,15 +48,22 @@ impl Display for Enviroment {
 /// The string slices (`&'a str`) must have a `'static` lifetime to ensure they are valid for the entire duration of the application.
 ///
 #[derive(Default, Debug)]
-pub struct Application<'a> {
+pub struct Application<'a, T>
+where
+    T: EnvironmentTracer + Debug,
+{
     project: &'a str,
     name: &'a str,
     version: &'a str,
     port: Option<u16>,
-    env: Enviroment,
+    env: Environment,
+    tracer: Option<T>,
 }
 
-impl<'a> Application<'a> {
+impl<'a, T> Application<'a, T>
+where
+    T: EnvironmentTracer + Debug,
+{
     /// Creates a new `Application` instance.
     ///
     /// # Arguments
@@ -68,9 +77,15 @@ impl<'a> Application<'a> {
             project,
             name,
             version,
-            env: Enviroment::default(),
+            env: Environment::default(),
             port,
+            tracer: None,
         }
+    }
+
+    pub fn with_tracer(mut self, tracer: T) -> Self {
+        self.tracer = Some(tracer);
+        self
     }
 
     /// Attempts to bind a `TcpListener` to the specified port.
@@ -133,16 +148,19 @@ impl<'a> Application<'a> {
     #[instrument]
     pub async fn run(self, routes: fn() -> Router) -> Result<(), ApplicationError> {
         debug!("running {}:{} in {}", &self.name, &self.version, &self.env);
-        match self.env {
-            Enviroment::Production => {
+        if let Some(tracer) = &self.tracer {
+            tracer.setup(&self.env);
+        }
+        let listener = match self.env {
+            Environment::Production => {
                 debug!("prod environment is not setup yet, please run it on local machine");
                 return Err(ApplicationError::InvalidConfiguration(
                     "Production environment is disabled for now".into(),
                 ));
             }
-            Enviroment::Development => {
+            Environment::Development => {
                 debug!("setting up {} tracing functionality", &self.env);
-                let listener = match self.port {
+                match self.port {
                     Some(port) => {
                         info!("starting {} on port: {}", &self.name, &port);
                         Self::get_listener(port)
@@ -152,17 +170,18 @@ impl<'a> Application<'a> {
                     None => Self::try_until_success(3000..=3005)
                         .await
                         .inspect_err(|err| error!(?err))?,
-                };
-                debug!("starting {} on {:?}", &self.name, &listener);
-                info!(
-                    "--------------------🚀🚀🎆{}:{}@{}🎆🚀🚀--------------------\n",
-                    &self.project, &self.name, &self.version
-                );
-                axum::serve(listener, routes())
-                    .await
-                    .inspect_err(|err| error!("{:?}", err))?;
+                }
             }
-        }
+        };
+
+        debug!("starting {} on {:?}", &self.name, &listener);
+        info!(
+            "--------------------🚀🚀🎆{}:{}@{}🎆🚀🚀--------------------\n",
+            &self.project, &self.name, &self.version
+        );
+        axum::serve(listener, routes())
+            .await
+            .inspect_err(|err| error!("{:?}", err))?;
         Ok(())
     }
 }
@@ -171,8 +190,6 @@ impl<'a> Application<'a> {
 // TODO: add tests to see if this will work.
 // TODO: enable prod, default is dev unlesss specified differently.?
 // TODO: add prod tracing setup.
-// TODO: takes a trait traceable which has a method setup which takes env and setups the relevant tracing
-//
 
 #[cfg(test)]
 mod tests {
@@ -181,13 +198,13 @@ mod tests {
 
     #[test]
     fn test_development_display() {
-        let dev_env = Enviroment::Development;
+        let dev_env = Environment::Development;
         assert_eq!(dev_env.to_string(), "Development");
     }
 
     #[test]
     fn test_production_display() {
-        let prod_env = Enviroment::Production;
+        let prod_env = Environment::Production;
         assert_eq!(prod_env.to_string(), "Production");
     }
 }
