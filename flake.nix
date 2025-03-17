@@ -25,7 +25,7 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          nativeBuildInputs = with pkgs; [ cmake ];
+          nativeBuildInputs = with pkgs; [ cmake curl ];
         };
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
@@ -45,6 +45,7 @@
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
+              (craneLib.fileset.commonCargoSources ./crates/pawz)
               (craneLib.fileset.commonCargoSources ./bins/auth)
               (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources ./bins/steersman)
@@ -64,16 +65,16 @@
 
         ## crates
         ## personal scripts
-        startInfra = pkgs.writeShellScriptBin "start-infra" ''
+        pu = pkgs.writeShellScriptBin "start-infra" ''
           set -euo pipefail
           podman compose up -d
         '';
 
-        stopInfra = pkgs.writeShellScriptBin "stop-infra" ''
+        pd = pkgs.writeShellScriptBin "stop-infra" ''
           exec podman-compose down
         '';
 
-        dive = pkgs.writeShellScriptBin "dive-image" ''
+        i = pkgs.writeShellScriptBin "dive-image" ''
           gunzip --stdout result > /tmp/image.tar && dive docker-archive: ///tmp/image.tar
         '';
 
@@ -117,42 +118,25 @@
         };
 
         packages = {
-          inherit events auth steersman;
-          start-infra = startInfra;
-          stop-infra = stopInfra;
-          dive = dive;
+          inherit events auth steersman pu pd i;
 
           ## FIXME: only put this for darwin? maybe
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
 
-        devShells.default = let
-          pkgsWithUnfree = import nixpkgs {
-            inherit system;
-            config = { allowUnfree = true; };
-          };
-        in craneLib.devShell {
+        devShells.default = craneLib.devShell {
           checks = self.checks.${system};
-          packages = with pkgsWithUnfree; [
-            dive # inspect oci images
-            podman
-            podman-compose
-            rust-analyzer
-            bacon
-            sqlx-cli
-            biscuit-cli
-          ];
-
+          inputsFrom = [ events auth steersman ];
           shellHook = ''
             echo "tixlys development environment"
             echo "<<<<<<<<<<<<<<<<<<<< Available Commands >>>>>>>>>>>>>>>>>>>>"
             echo -e "\n\n\n"
-            echo "nix build .#events-image [Build events OCI Image]"
-            echo "nix build .#events [Build events binary package]"
+            echo "nix build {package-name}"
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
+          packages = [ rust-analyzer bacon biscuit-cli dive ];
         };
       });
 }
