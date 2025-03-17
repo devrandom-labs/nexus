@@ -1,15 +1,17 @@
 #![allow(dead_code)]
 use axum::Router;
-use error::ApplicationError;
+use error::Error;
 use std::fmt::{Debug, Display};
 use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;
 use tokio::net::TcpListener;
-use tracer::EnvironmentTracer;
 use tracing::{debug, error, info, instrument};
 
 pub mod error;
 pub mod tracer;
+
+pub use tracer::DefaultTracer;
+pub use tracer::EnvironmentTracer;
 
 /// Represents the environment in which the application is running.
 #[derive(Debug, PartialEq, Eq)]
@@ -99,7 +101,7 @@ where
     /// A `Result` containing the `TcpListener` on success, or an `ApplicationError` on failure.
     #[instrument]
     #[inline]
-    async fn get_listener(port: u16) -> Result<TcpListener, ApplicationError> {
+    async fn get_listener(port: u16) -> Result<TcpListener, Error> {
         TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), port))
             .await
             .inspect_err(|err| error!(?err))
@@ -117,9 +119,7 @@ where
     /// A `Result` containing the `TcpListener` on success, or an `ApplicationError` on failure.
     #[instrument]
     #[inline]
-    async fn try_until_success(
-        ports: RangeInclusive<u16>,
-    ) -> Result<TcpListener, ApplicationError> {
+    async fn try_until_success(ports: RangeInclusive<u16>) -> Result<TcpListener, Error> {
         for port in ports {
             debug!("trying port: {}", port);
             match Self::get_listener(port).await {
@@ -130,7 +130,7 @@ where
                 }
             }
         }
-        Err(ApplicationError::IO(std::io::Error::new(
+        Err(Error::IO(std::io::Error::new(
             std::io::ErrorKind::AddrInUse,
             "No Ports Available to use between 3000..=3005".to_string(),
         )))
@@ -146,7 +146,7 @@ where
     ///
     /// A `Result` indicating success or an `ApplicationError` on failure.
     #[instrument]
-    pub async fn run(self, routes: fn() -> Router) -> Result<(), ApplicationError> {
+    pub async fn run(self, routes: fn() -> Router) -> Result<(), Error> {
         debug!("running {}:{} in {}", &self.name, &self.version, &self.env);
         if let Some(tracer) = &self.tracer {
             tracer.setup(&self.env);
@@ -154,7 +154,7 @@ where
         let listener = match self.env {
             Environment::Production => {
                 debug!("prod environment is not setup yet, please run it on local machine");
-                return Err(ApplicationError::InvalidConfiguration(
+                return Err(Error::InvalidConfiguration(
                     "Production environment is disabled for now".into(),
                 ));
             }

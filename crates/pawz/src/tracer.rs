@@ -1,26 +1,19 @@
 use crate::Environment;
-use thiserror::Error as TError;
-use tracing::{debug, error, instrument};
+use tracing::{debug, instrument};
 use tracing_subscriber::{
     EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
 };
 
-#[derive(Debug, TError)]
-pub enum TracingError {
-    #[error("Environment is not supported: {0}")]
-    UnsupportedEnvironment(String),
-}
-
 pub trait EnvironmentTracer {
     fn setup(&self, environment: &Environment);
 }
 
 #[derive(Debug)]
-pub struct Tracer;
+pub struct DefaultTracer;
 
-impl Tracer {
+impl DefaultTracer {
     #[inline]
     fn setup_dev_tracing() {
         let filter = EnvFilter::from_default_env();
@@ -32,7 +25,7 @@ impl Tracer {
     }
 }
 
-impl EnvironmentTracer for Tracer {
+impl EnvironmentTracer for DefaultTracer {
     #[instrument]
     #[inline]
     fn setup(&self, environment: &Environment) {

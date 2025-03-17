@@ -2,7 +2,7 @@ use thiserror::Error as TError;
 
 /// Represents errors that can occur during application execution.
 #[derive(Debug, TError)]
-pub enum ApplicationError {
+pub enum Error {
     /// Indicates an invalid configuration.
     #[error("Invalid Configuration: {0}")]
     InvalidConfiguration(String),
