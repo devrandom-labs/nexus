@@ -1,8 +1,8 @@
-use crate::error::Error;
 use axum::Router;
 use std::fmt::Display;
 use std::net::Ipv4Addr;
-use thiserror::Error as Err;
+use std::ops::RangeInclusive;
+use thiserror::Error as TError;
 use tokio::net::TcpListener;
 use tracing::{error, info, instrument};
 use tracing_subscriber::{
@@ -34,10 +34,12 @@ impl Display for Env {
     }
 }
 
-#[derive(Debug, Err)]
+#[derive(Debug, TError)]
 pub enum ApplicationError {
     #[error("Invalid Configuration: {0}")]
-    InvalidConfiguration(Into<String>),
+    InvalidConfiguration(impl Into<String>),
+    #[error("{0}")]
+    IO(#[from] std::io::Error),
 }
 
 // FIXME: need this to be static string that would never be removed.
@@ -62,7 +64,7 @@ impl Application<'a> {
     }
 
     #[inline]
-    pub fn setup_dev_tracing() {
+    fn setup_dev_tracing() {
         let filter = EnvFilter::from_default_env();
         let console = fmt::layer()
             .with_level(true)
@@ -72,9 +74,32 @@ impl Application<'a> {
     }
 
     #[instrument]
-    #[inlin]
-    pub async fn get_listener(port: u16) -> Result<TcpListener, ApplicationError> {
-        TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), port)).await
+    #[inline]
+    async fn get_listener(port: u16) -> Result<TcpListener, ApplicationError> {
+        TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), port))
+            .await
+            .map_err(|err| err.into())
+    }
+
+    #[instrument]
+    #[inline]
+    async fn try_until_success(
+        ports: RangeInclusive<u16>,
+    ) -> Result<TcpListener, ApplicationError> {
+        for port in ports {
+            debug!("trying port: {}", port);
+            match Self::get_listener(port).await {
+                Ok(listener) => return Ok(listener),
+                Err(e) => {
+                    error!("port: {} in use", port);
+                    continue;
+                }
+            }
+        }
+        Err(ApplicationError::IO(std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            ports.map(|p| format!("{p}, ")).collect(),
+        )))
     }
 
     #[instrument]
@@ -83,9 +108,9 @@ impl Application<'a> {
         match self.env {
             Env::PROD => {
                 debug!("prod environment is not setup yet, please run it on local machine");
-                Err(ApplicationError::InvalidConfiguration(
+                return Err(ApplicationError::InvalidConfiguration(
                     "Production environment is disabled",
-                ))
+                ));
             }
             Env::LOCAL | Env::DEV => {
                 debug!("setting up {} tracing functionality", &self.env);
@@ -93,20 +118,20 @@ impl Application<'a> {
                 let listener = match self.port {
                     Ok(port) => {
                         info!("starting {} on port: {}", &self.name, &port);
+                        Self::get_listener(port).await?
                     }
-                    None() => {
-                        // run a loop that starts from 3000
-                        // til it finds a listener
-                    }
+                    None() => Self::try_until_success(3000..=3005).await?,
                 };
-
-                // TODO: start axum by passing router inside.
+                debug!("starting {} on {:?}", &self.name, &listener);
+                info!(
+                    "--------------------🚀🚀🎆{}:{}@{}🎆🚀🚀--------------------",
+                    &self.project, &self.name, &self.version
+                );
+                axum::serve(listener, app)
+                    .await
+                    .inspect_err(|err| error!("🚫{:?}🚫", err))?;
             }
         }
-        info!(
-            "🚀🚀🎆{}:{}@{}🎆🚀🚀",
-            &self.project, &self.name, &self.version
-        );
         Ok(())
     }
 }

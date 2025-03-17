@@ -1,4 +1,8 @@
-use thiserror::Error as Err;
+use crate::application::ApplicationError;
+use thiserror::Error as TError;
 
-#[derive(Debug, Error)]
-pub enum Error {}
+#[derive(Debug, TError)]
+pub enum Error {
+    #[error("{0}")]
+    Application(#[from] ApplicationError),
+}
