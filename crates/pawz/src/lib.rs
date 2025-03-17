@@ -7,6 +7,7 @@ use std::ops::RangeInclusive;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, instrument};
 
+pub mod config;
 pub mod error;
 pub mod tracer;
 
@@ -50,7 +51,7 @@ impl Display for Environment {
 /// The string slices (`&'a str`) must have a `'static` lifetime to ensure they are valid for the entire duration of the application.
 ///
 #[derive(Default, Debug)]
-pub struct Application<'a, T>
+pub struct App<'a, T>
 where
     T: EnvironmentTracer + Debug,
 {
@@ -62,11 +63,11 @@ where
     tracer: Option<T>,
 }
 
-impl<'a, T> Application<'a, T>
+impl<'a, T> App<'a, T>
 where
     T: EnvironmentTracer + Debug,
 {
-    /// Creates a new `Application` instance.
+    /// Creates a new `App` instance.
     ///
     /// # Arguments
     ///
@@ -75,7 +76,7 @@ where
     /// * `version`: The application version.
     /// * `port`: The port number to listen on (optional).
     pub fn new(project: &'a str, name: &'a str, version: &'a str, port: Option<u16>) -> Self {
-        Application {
+        App {
             project,
             name,
             version,
@@ -98,7 +99,7 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `TcpListener` on success, or an `ApplicationError` on failure.
+    /// A `Result` containing the `TcpListener` on success, or an `Error` on failure.
     #[instrument]
     #[inline]
     async fn get_listener(port: u16) -> Result<TcpListener, Error> {
@@ -116,7 +117,7 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` containing the `TcpListener` on success, or an `ApplicationError` on failure.
+    /// A `Result` containing the `TcpListener` on success, or an `Error` on failure.
     #[instrument]
     #[inline]
     async fn try_until_success(ports: RangeInclusive<u16>) -> Result<TcpListener, Error> {
@@ -144,7 +145,7 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` indicating success or an `ApplicationError` on failure.
+    /// A `Result` indicating success or an `Error` on failure.
     #[instrument]
     pub async fn run(self, routes: fn() -> Router) -> Result<(), Error> {
         debug!("running {}:{} in {}", &self.name, &self.version, &self.env);
