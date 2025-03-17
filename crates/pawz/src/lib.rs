@@ -1,47 +1,34 @@
 #![allow(dead_code)]
 use axum::Router;
+use error::ApplicationError;
 use std::fmt::Display;
 use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;
-use thiserror::Error as TError;
 use tokio::net::TcpListener;
+use tracing::{debug, error, info, instrument};
 
-// TODO: Env should hold config, should behave like option
-// TODO: this config should be injected and be present throughout the process, maybe lazylock?
+pub mod error;
+pub mod tracer;
 
-/// Represents the environment in which the application is running.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Env {
-    /// Development environment.
+pub enum Enviroment {
     Development,
-    /// Production environment.
     Production,
 }
 
-impl Default for Env {
+impl Default for Enviroment {
     fn default() -> Self {
         Self::Development
     }
 }
 
-impl Display for Env {
+impl Display for Enviroment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Env::Development => write!(f, "Development"),
-            Env::Production => write!(f, "Production"),
+            Enviroment::Development => write!(f, "Development"),
+            Enviroment::Production => write!(f, "Production"),
         }
     }
-}
-
-/// Represents errors that can occur during application execution.
-#[derive(Debug, TError)]
-pub enum ApplicationError {
-    /// Indicates an invalid configuration.
-    #[error("Invalid Configuration: {0}")]
-    InvalidConfiguration(String),
-    /// Represents an I/O error.
-    #[error("{0}")]
-    IO(#[from] std::io::Error),
 }
 
 /// Represents the application configuration.
@@ -64,7 +51,7 @@ pub struct Application<'a> {
     name: &'a str,
     version: &'a str,
     port: Option<u16>,
-    env: Env,
+    env: Enviroment,
 }
 
 impl<'a> Application<'a> {
@@ -81,20 +68,9 @@ impl<'a> Application<'a> {
             project,
             name,
             version,
-            env: Env::Development,
+            env: Enviroment::default(),
             port,
         }
-    }
-
-    /// Sets up tracing for development environment.
-    #[inline]
-    fn setup_dev_tracing() {
-        let filter = EnvFilter::from_default_env();
-        let console = fmt::layer()
-            .with_level(true)
-            .with_span_events(FmtSpan::CLOSE)
-            .with_filter(filter);
-        tracing_subscriber::registry().with(console).init();
     }
 
     /// Attempts to bind a `TcpListener` to the specified port.
@@ -158,15 +134,14 @@ impl<'a> Application<'a> {
     pub async fn run(self, routes: fn() -> Router) -> Result<(), ApplicationError> {
         debug!("running {}:{} in {}", &self.name, &self.version, &self.env);
         match self.env {
-            Env::Production => {
+            Enviroment::Production => {
                 debug!("prod environment is not setup yet, please run it on local machine");
                 return Err(ApplicationError::InvalidConfiguration(
                     "Production environment is disabled for now".into(),
                 ));
             }
-            Env::Development => {
+            Enviroment::Development => {
                 debug!("setting up {} tracing functionality", &self.env);
-                Self::setup_dev_tracing();
                 let listener = match self.port {
                     Some(port) => {
                         info!("starting {} on port: {}", &self.name, &port);
@@ -198,3 +173,21 @@ impl<'a> Application<'a> {
 // TODO: add prod tracing setup.
 // TODO: takes a trait traceable which has a method setup which takes env and setups the relevant tracing
 //
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_development_display() {
+        let dev_env = Enviroment::Development;
+        assert_eq!(dev_env.to_string(), "Development");
+    }
+
+    #[test]
+    fn test_production_display() {
+        let prod_env = Enviroment::Production;
+        assert_eq!(prod_env.to_string(), "Production");
+    }
+}

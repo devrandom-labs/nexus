@@ -45,6 +45,7 @@
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/errors)
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
+              (craneLib.fileset.commonCargoSources ./crates/pawz)
               (craneLib.fileset.commonCargoSources ./bins/auth)
               (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources ./bins/steersman)
