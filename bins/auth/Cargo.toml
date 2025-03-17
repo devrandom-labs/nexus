@@ -13,6 +13,3 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["trace"] }
 tracing = { workspace = true }
-utoipa = { workspace = true, features = ["axum_extras"] }
-utoipa-axum = { workspace = true }
-utoipa-swagger-ui = { workspace = true, features = ["axum"] }

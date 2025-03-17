@@ -1,9 +1,9 @@
 use crate::Environment;
 use tracing::{debug, instrument};
 use tracing_subscriber::{
-    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
+    EnvFilter, Layer,
 };
 
 pub trait EnvironmentTracer {
@@ -30,11 +30,8 @@ impl EnvironmentTracer for DefaultTracer {
     #[inline]
     fn setup(&self, environment: &Environment) {
         debug!("setting up tracing for env: {}", environment);
-        match environment {
-            Environment::Development => {
-                Self::setup_dev_tracing();
-            }
-            _ => {}
+        if environment == &Environment::Development {
+            Self::setup_dev_tracing();
         }
     }
 }

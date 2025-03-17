@@ -25,7 +25,7 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          nativeBuildInputs = with pkgs; [ cmake ];
+          nativeBuildInputs = with pkgs; [ cmake curl ];
         };
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
