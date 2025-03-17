@@ -42,13 +42,5 @@ async fn main() {
 }
 
 // Phase 1
-// TODO: supply config.yaml file and check if you can see
-// TODO: set the config to pingora server successfully.
-// TODO: set tracing in pingora server
-// TODO: clean up the architectrue and maybe impl some design patterns for config or clap.
-// TODO: write tests to ensure config to server capabilities and failure
-// TODO: ensure tracing and metrics
-// TODO: have prometheus or jaeger (depending) and get open telemetry meterics to it.
-
-// steps
-// get pingora::core::configuration::Opt and check if configuration file has been specified.
+// TODO: create a basic gateway and add that gateway service to server
+// TODO: add tracing to that gateway
