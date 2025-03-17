@@ -6,9 +6,9 @@ use thiserror::Error as Err;
 use tokio::net::TcpListener;
 use tracing::{error, info, instrument};
 use tracing_subscriber::{
+    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
-    EnvFilter, Layer,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,7 +73,7 @@ impl Application<'a> {
 
     #[instrument]
     #[inlin]
-    pub async fn get_listener(port: &str) -> Result<TcpListener, ApplicationError> {
+    pub async fn get_listener(port: u16) -> Result<TcpListener, ApplicationError> {
         TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), port)).await
     }
 
@@ -90,8 +90,17 @@ impl Application<'a> {
             Env::LOCAL | Env::DEV => {
                 debug!("setting up {} tracing functionality", &self.env);
                 Self::setup_dev_tracing();
+                let listener = match self.port {
+                    Ok(port) => {
+                        info!("starting {} on port: {}", &self.name, &port);
+                    }
+                    None() => {
+                        // run a loop that starts from 3000
+                        // til it finds a listener
+                    }
+                };
 
-                // start a loop
+                // TODO: start axum by passing router inside.
             }
         }
         info!(
