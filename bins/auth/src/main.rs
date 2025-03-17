@@ -1,5 +1,5 @@
+use application::Application;
 use axum::{Router, routing::get};
-use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::{info, instrument};
 
@@ -12,9 +12,10 @@ async fn main() -> Result<(), error::Error> {
     let workspace = "tixlys";
     let name = env!("CARGO_BIN_NAME");
     let version = env!("CARGO_PKG_VERSION");
-    info!("🚀🚀🎆{}:{}@{}🎆🚀🚀", workspace, name, version);
-
-    Application::run(routes)
+    Application::new(&workspace, name, version, Some(3000))
+        .run(routes)
+        .await
+        .map_err(|err| err.into())
 }
 
 pub async fn health() -> &'static str {
