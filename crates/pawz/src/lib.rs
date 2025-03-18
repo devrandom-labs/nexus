@@ -147,7 +147,7 @@ where
     ///
     /// A `Result` indicating success or an `Error` on failure.
     #[instrument]
-    pub async fn run(self, routes: fn() -> Router) -> Result<(), Error> {
+    pub async fn run(self, routes: Router) -> Result<(), Error> {
         debug!("running {}:{} in {}", &self.name, &self.version, &self.env);
         if let Some(tracer) = &self.tracer {
             tracer.setup(&self.env);
@@ -175,12 +175,16 @@ where
             }
         };
 
-        debug!("starting {} on {:?}", &self.name, &listener);
+        debug!(
+            "starting {} on {}",
+            &self.name,
+            listener.local_addr().unwrap()
+        );
         info!(
             "--------------------🚀🚀🎆{}:{}@{}🎆🚀🚀--------------------\n",
             &self.project, &self.name, &self.version
         );
-        axum::serve(listener, routes())
+        axum::serve(listener, routes)
             .await
             .inspect_err(|err| error!("{:?}", err))?;
         Ok(())
