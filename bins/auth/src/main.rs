@@ -2,15 +2,9 @@ use error::Error;
 use pawz::{App, DefaultTracer};
 use tower_http::trace::TraceLayer;
 use tracing::instrument;
-use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
-use utoipa_swagger_ui::SwaggerUi;
 
 mod error;
-
-#[derive(OpenApi)]
-#[openapi(info(description = "Tixlys Auth Service"))]
-struct ApiDoc;
 
 #[instrument]
 #[tokio::main]
@@ -18,13 +12,6 @@ async fn main() -> Result<(), Error> {
     let workspace = "tixlys";
     let name = env!("CARGO_BIN_NAME");
     let version = env!("CARGO_PKG_VERSION");
-
-    let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .merge(routes())
-        .split_for_parts();
-
-    let routes = router.merge(SwaggerUi::new("/swagger").url("/api-docs/openapi.json", api));
-
     App::new(workspace, name, version, Some(3000))
         .with_tracer(DefaultTracer)
         .run(routes)
@@ -43,7 +30,7 @@ pub fn routes() -> OpenApiRouter {
         .layer(TraceLayer::new_for_http())
 }
 
-// TODO: get openapi/swagger-ui to work
+// TODO: implement versioning
 // TODO: create v1/auth/register
 // TODO: create v1/auth/login
 // TODO: create v1/auth/logout
