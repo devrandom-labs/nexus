@@ -22,12 +22,28 @@
         inherit (pkgs) lib;
         craneLib = crane.mkLib pkgs;
         src = craneLib.cleanCargoSource ./.;
+
+        ## TODO: fetch zip of swagger
+        ##
+
+        SWAGGER_UI_DOWNLOAD_URL = pkgs.fetchzip {
+          url =
+            "https://github.com/swagger-api/swagger-ui/archive/refs/tags/v5.17.14.zip";
+          hash = "sha256-e6U9XuuU/IYYmGtXCICbIRelVeFk5jV7mniwJWlqO2M=";
+        };
+
         commonArgs = {
           inherit src;
           strictDeps = true;
           buildInputs = with pkgs; [ openssl ];
-          nativeBuildInputs = with pkgs; [ cmake pkg-config ];
+          nativeBuildInputs = with pkgs; [
+            cmake
+            pkg-config
+            curl
+            SWAGGER_UI_DOWNLOAD_URL
+          ];
         };
+
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -35,6 +51,10 @@
         individualCrateArgs = commonArgs // {
           inherit cargoArtifacts;
           inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
+
+          # preBuild = ''
+          #   export SWAGGER_UI_DOWNLOAD_URL="${swagger}"
+          # '';
           doCheck = false;
         };
 
@@ -61,7 +81,7 @@
             path = ./bins/${name}/build.nix;
             _ = assert builtins.pathExists path; true;
           in pkgs.callPackage path {
-            inherit craneLib fileSetForCrate individualCrateArgs;
+            inherit craneLib fileSetForCrate individualCrateArgs swagger;
           };
 
         ## crates
@@ -137,7 +157,8 @@
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
-          packages = [ rust-analyzer bacon biscuit-cli dive ];
+          packages =
+            [ rust-analyzer bacon biscuit-cli dive SWAGGER_UI_DOWNLOAD_URL ];
         };
       });
 }

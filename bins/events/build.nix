@@ -1,4 +1,4 @@
-{ pkgs, craneLib, fileSetForCrate, individualCrateArgs }:
+{ pkgs, craneLib, fileSetForCrate, individualCrateArgs, swagger }:
 let
   cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
   pname = cargoToml.package.name;

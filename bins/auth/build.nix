@@ -1,4 +1,4 @@
-{ pkgs, craneLib, fileSetForCrate, individualCrateArgs }:
+{ pkgs, craneLib, fileSetForCrate, individualCrateArgs, swagger }:
 let
   cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
   pname = cargoToml.package.name;
@@ -7,6 +7,7 @@ let
     inherit pname;
     cargoExtraArgs = "-p ${pname}";
     src = (fileSetForCrate ./.);
+
   });
 in pkgs.dockerTools.streamLayeredImage {
   name = "tixlys-core/${pname}";
