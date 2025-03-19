@@ -25,36 +25,44 @@
 
         ## TODO: fetch zip of swagger
         ##
+        ##
 
-        SWAGGER_UI_DOWNLOAD_URL = pkgs.fetchzip {
+        swagger = pkgs.fetchurl {
           url =
             "https://github.com/swagger-api/swagger-ui/archive/refs/tags/v5.17.14.zip";
-          hash = "sha256-e6U9XuuU/IYYmGtXCICbIRelVeFk5jV7mniwJWlqO2M=";
+          hash = "sha256-SBJE0IEgl7Efuu73n3HZQrFxYX+cn5UU5jrL4T5xzNw=";
         };
 
         commonArgs = {
           inherit src;
           strictDeps = true;
           buildInputs = with pkgs; [ openssl ];
-          nativeBuildInputs = with pkgs; [
-            cmake
-            pkg-config
-            curl
-            SWAGGER_UI_DOWNLOAD_URL
-          ];
+          nativeBuildInputs = with pkgs; [ cmake pkg-config ];
         };
 
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
-        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        # cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+        cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+
+          postPatch = ''
+            mkdir -p "$TMPDIR/nix-vendor"
+            cp -Lr "$cargoVendorDir" -T "$TMPDIR/nix-vendor"
+            sed -i "s|$cargoVendorDir|$TMPDIR/nix-vendor/|g" "$TMPDIR/nix-vendor/config.toml"
+            chmod -R +w "$TMPDIR/nix-vendor"
+            cargoVendorDir="$TMPDIR/nix-vendor"
+          '';
+          postConfigure = ''
+            export SWAGGER_UI_DOWNLOAD_URL="file://${swagger}"
+          '';
+
+        });
 
         individualCrateArgs = commonArgs // {
           inherit cargoArtifacts;
           inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
 
-          # preBuild = ''
-          #   export SWAGGER_UI_DOWNLOAD_URL="${swagger}"
-          # '';
           doCheck = false;
         };
 
@@ -81,7 +89,7 @@
             path = ./bins/${name}/build.nix;
             _ = assert builtins.pathExists path; true;
           in pkgs.callPackage path {
-            inherit craneLib fileSetForCrate individualCrateArgs swagger;
+            inherit craneLib fileSetForCrate individualCrateArgs;
           };
 
         ## crates
@@ -157,8 +165,7 @@
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
-          packages =
-            [ rust-analyzer bacon biscuit-cli dive SWAGGER_UI_DOWNLOAD_URL ];
+          packages = [ rust-analyzer bacon biscuit-cli dive ];
         };
       });
 }
