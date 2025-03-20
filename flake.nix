@@ -1,4 +1,5 @@
 {
+  description = "Tixlys Nix Flakes";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
@@ -33,9 +34,7 @@
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
 
-
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
 
         individualCrateArgs = commonArgs // {
           inherit cargoArtifacts;

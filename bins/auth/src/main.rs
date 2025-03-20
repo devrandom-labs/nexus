@@ -4,6 +4,7 @@ use tower_http::trace::TraceLayer;
 use tracing::instrument;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+mod api;
 mod error;
 
 #[instrument]
@@ -35,5 +36,5 @@ pub fn routes() -> OpenApiRouter {
 // TODO: create v1/auth/register
 // TODO: create v1/auth/login
 // TODO: create v1/auth/logout
-// TODO: create v1/auth/refresh
 // TODO: create v1/auth/veriy-email
+// TODO: create v1/auth/refreshYea

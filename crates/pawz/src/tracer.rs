@@ -1,9 +1,9 @@
 use crate::Environment;
 use tracing::{debug, instrument};
 use tracing_subscriber::{
+    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
-    EnvFilter, Layer,
 };
 
 pub trait EnvironmentTracer {

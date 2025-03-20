@@ -154,10 +154,12 @@ name = "auth"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "http-body-util",
  "pawz",
  "serde",
  "thiserror 2.0.12",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "utoipa",
