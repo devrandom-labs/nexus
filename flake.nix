@@ -23,16 +23,6 @@
         craneLib = crane.mkLib pkgs;
         src = craneLib.cleanCargoSource ./.;
 
-        ## TODO: fetch zip of swagger
-        ##
-        ##
-
-        swagger = pkgs.fetchurl {
-          url =
-            "https://github.com/swagger-api/swagger-ui/archive/refs/tags/v5.17.14.zip";
-          hash = "sha256-SBJE0IEgl7Efuu73n3HZQrFxYX+cn5UU5jrL4T5xzNw=";
-        };
-
         commonArgs = {
           inherit src;
           strictDeps = true;
@@ -42,22 +32,10 @@
 
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
-        # cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
 
-          postPatch = ''
-            mkdir -p "$TMPDIR/nix-vendor"
-            cp -Lr "$cargoVendorDir" -T "$TMPDIR/nix-vendor"
-            sed -i "s|$cargoVendorDir|$TMPDIR/nix-vendor/|g" "$TMPDIR/nix-vendor/config.toml"
-            chmod -R +w "$TMPDIR/nix-vendor"
-            cargoVendorDir="$TMPDIR/nix-vendor"
-          '';
-          postConfigure = ''
-            export SWAGGER_UI_DOWNLOAD_URL="file://${swagger}"
-          '';
+        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        });
 
         individualCrateArgs = commonArgs // {
           inherit cargoArtifacts;
