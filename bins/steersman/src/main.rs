@@ -1,10 +1,10 @@
-use pingora::server::configuration::Opt;
 use pingora::server::Server;
+use pingora::server::configuration::Opt;
 use tracing::{debug, error, info, instrument};
 use tracing_subscriber::{
+    EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
-    EnvFilter, Layer,
 };
 
 #[instrument]

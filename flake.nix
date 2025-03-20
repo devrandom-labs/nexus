@@ -1,4 +1,5 @@
 {
+  description = "Tixlys Nix Flakes";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
@@ -22,18 +23,23 @@
         inherit (pkgs) lib;
         craneLib = crane.mkLib pkgs;
         src = craneLib.cleanCargoSource ./.;
+
         commonArgs = {
           inherit src;
           strictDeps = true;
-          nativeBuildInputs = with pkgs; [ cmake curl ];
+          buildInputs = with pkgs; [ openssl ];
+          nativeBuildInputs = with pkgs; [ cmake pkg-config ];
         };
+
         craneLibLLvmTools = craneLib.overrideToolchain
           (fenix.packages.${system}.default.toolchain);
+
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
         individualCrateArgs = commonArgs // {
           inherit cargoArtifacts;
           inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
+
           doCheck = false;
         };
 

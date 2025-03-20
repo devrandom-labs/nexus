@@ -6,6 +6,7 @@ members = ["bins/auth", "bins/events", "bins/steersman", "crates/cqrs", "crates/
 axum = "0.8.1"
 chrono = "0.4.39"
 pingora = { version = "0.4.0", features = ["proxy"] }
+reqwest = "0.12.15"
 serde = { version = "1.0.219", features = ["derive"] }
 sqlx = { version = "0.8.3", features = ["sqlite", "migrate", "runtime-tokio-rustls"] }
 thiserror = "2.0.7"
@@ -16,11 +17,13 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 ulid = { version = "1.1.3", features = ["serde"] }
 utoipa = { version = "5.3.1", features = ["axum_extras"] }
-utoipa-axum = "0.2.0"
+utoipa-axum = { version = "0.2.0", features = ["debug"] }
+utoipa-swagger-ui = { version = "9.0.0", features = ["axum", "vendored"] }
+utoipa-swagger-ui-vendored = "0.1.2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 authors = ["Joel DSouza <joel@tixlys.com>"]
 repository = "https://github.com/tixlys/tixlys-core"
