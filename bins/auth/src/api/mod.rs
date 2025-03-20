@@ -1,9 +1,11 @@
-use axum::RequestPartsExt;
-use axum::extract::{FromRequestParts, Path};
-use axum::http::StatusCode;
-use axum::http::request::Parts;
-use axum::response::{IntoResponse, Response};
+use axum::{
+    RequestPartsExt,
+    extract::{FromRequestParts, Path},
+    http::{StatusCode, request::Parts},
+    response::{IntoResponse, Response},
+};
 use std::collections::HashMap;
+use tracing::{debug, instrument};
 
 #[derive(Debug)]
 enum Version {
@@ -15,13 +17,17 @@ where
     S: Send + Sync,
 {
     type Rejection = Response;
+
+    #[instrument(skip(_state))]
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        debug!("checking routing based on version");
         let params: Path<HashMap<String, String>> =
             parts.extract().await.map_err(IntoResponse::into_response)?;
 
         let version = params
             .get("version")
             .ok_or_else(|| (StatusCode::NOT_FOUND, "version param missing").into_response())?;
+        debug!("version: {}", version);
 
         match version.as_str() {
             "v1" => Ok(Version::V1),

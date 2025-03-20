@@ -11,7 +11,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 sqlx = { version = "0.8.3", features = ["sqlite", "migrate", "runtime-tokio-rustls"] }
 thiserror = "2.0.7"
 tokio = { version = "1.43.0", features = ["full"] }
-tower = { version = "0.5.2", features = ["util"]  }
+tower = { version = "0.5.2", features = ["util"] }
 tower-http = { version = "0.6.2", features = ["trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
@@ -20,7 +20,6 @@ utoipa = { version = "5.3.1", features = ["axum_extras"] }
 utoipa-axum = { version = "0.2.0", features = ["debug"] }
 utoipa-swagger-ui = { version = "9.0.0", features = ["axum", "vendored"] }
 utoipa-swagger-ui-vendored = "0.1.2"
-
 
 [workspace.package]
 version = "0.1.0"

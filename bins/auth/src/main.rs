@@ -13,12 +13,11 @@ async fn main() -> Result<(), Error> {
     let workspace = "tixlys";
     let name = env!("CARGO_BIN_NAME");
     let version = env!("CARGO_PKG_VERSION");
-
     App::new(workspace, name, version, Some(3000))
         .with_tracer(DefaultTracer)
         .run(routes)
-        .await
-        .map_err(|err| err.into())
+        .await?;
+    Ok(())
 }
 
 #[utoipa::path(get, path = "/health", responses((status = OK, body = String, description = "Check Application Health")))]
@@ -32,7 +31,6 @@ pub fn routes() -> OpenApiRouter {
         .layer(TraceLayer::new_for_http())
 }
 
-// TODO: implement versioning
 // TODO: create v1/auth/register
 // TODO: create v1/auth/login
 // TODO: create v1/auth/logout
