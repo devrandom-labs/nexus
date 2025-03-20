@@ -168,12 +168,9 @@ where
             Environment::Development => {
                 debug!("setting up {} tracing functionality", &self.env);
                 match self.port {
-                    Some(port) => {
-                        info!("starting {} on port: {}", &self.name, &port);
-                        Self::get_listener(port)
-                            .await
-                            .inspect_err(|err| error!(?err))?
-                    }
+                    Some(port) => Self::try_until_success(port..=(port + 3))
+                        .await
+                        .inspect_err(|err| error!(?err))?,
                     None => Self::try_until_success(3000..=3005)
                         .await
                         .inspect_err(|err| error!(?err))?,
