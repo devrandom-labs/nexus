@@ -1,5 +1,5 @@
 use error::Error;
-use pawz::{App, DefaultTracer};
+use pawz::{App, AppConfig, DefaultTracer};
 use tracing::instrument;
 
 mod api;
@@ -9,10 +9,8 @@ mod routes;
 #[instrument]
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let workspace = "tixlys";
-    let name = env!("CARGO_BIN_NAME");
-    let version = env!("CARGO_PKG_VERSION");
-    App::new(workspace, name, version, Some(3000))
+    let app_config = AppConfig::build("tixlys");
+    App::new(app_config)
         .with_tracer(DefaultTracer)
         .run(routes::routes)
         .await?;
