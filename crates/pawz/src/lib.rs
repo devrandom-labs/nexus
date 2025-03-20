@@ -1,13 +1,11 @@
 #![allow(dead_code)]
+use axum::Router;
 use error::Error;
 use std::fmt::{Debug, Display};
 use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, instrument};
-use utoipa::OpenApi;
-use utoipa_axum::router::OpenApiRouter;
-use utoipa_swagger_ui::SwaggerUi;
 
 pub mod config;
 pub mod error;
@@ -38,10 +36,6 @@ impl Display for Environment {
         }
     }
 }
-
-#[derive(OpenApi)]
-#[openapi()]
-struct ApiDoc;
 
 /// Represents the application configuration.
 ///
@@ -148,7 +142,7 @@ where
     ///
     /// A `Result` indicating success or an `Error` on failure.
     #[instrument]
-    pub async fn run(self, routes: fn() -> OpenApiRouter) -> Result<(), Error> {
+    pub async fn run(self, app: Router) -> Result<(), Error> {
         let app_config = &self.app_config;
         debug!(
             "running {}:{} in {}",
@@ -178,11 +172,6 @@ where
         };
 
         debug!("creating open api routes");
-        let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-            .merge(routes())
-            .split_for_parts();
-
-        let routes = router.merge(SwaggerUi::new("/swagger").url("/api-docs/openapi.json", api));
 
         debug!(
             "starting {} on {}",
@@ -193,14 +182,14 @@ where
             "--------------------🚀🚀🎆{}:{}@{}🎆🚀🚀--------------------\n",
             app_config.project, app_config.name, app_config.version
         );
-        axum::serve(listener, routes)
+        axum::serve(listener, app)
             .await
             .inspect_err(|err| error!("{:?}", err))?;
         Ok(())
     }
 }
 
-// TODO: take openapi stuff inside app from client
+// TODO: update the docs here
 // TODO: add tests to see if this will work.
 // TODO: enable prod, default is dev unlesss specified differently.?
 // TODO: add prod tracing setup.

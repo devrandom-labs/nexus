@@ -164,6 +164,8 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+ "utoipa-swagger-ui",
+ "utoipa-swagger-ui-vendored",
 ]
 
 [[package]]
