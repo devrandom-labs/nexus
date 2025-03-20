@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["bins/auth", "bins/events", "bins/notifications", "bins/steersman", "crates/cqrs", "crates/errors", "crates/pawz"]
+members = [
+    "bins/auth",
+    "bins/events",
+    "bins/notifications",
+    "bins/steersman",
+    "crates/cqrs",
+    "crates/errors",
+    "crates/pawz",
+]
 
 [workspace.dependencies]
 axum = "0.8.1"
