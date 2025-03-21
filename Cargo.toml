@@ -4,7 +4,7 @@ members = [
     "bins/auth",
     "bins/events",
     "bins/notifications",
-    "bins/steersman",
+    "bins/steersman", "bins/users",
     "crates/cqrs",
     "crates/errors",
     "crates/pawz",

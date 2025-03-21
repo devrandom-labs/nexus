@@ -1,5 +1,5 @@
 {
-  description = "Tixlys";
+  description = "Tixlys Rust";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
@@ -56,6 +56,7 @@
               (craneLib.fileset.commonCargoSources ./bins/events)
               (craneLib.fileset.commonCargoSources ./bins/steersman)
               (craneLib.fileset.commonCargoSources ./bins/notifications)
+              (craneLib.fileset.commonCargoSources ./bins/users)
               (craneLib.fileset.commonCargoSources crates)
             ];
           };
@@ -89,11 +90,12 @@
         auth = mkBinaries "auth";
         steersman = mkBinaries "steersman";
         notifications = mkBinaries "notifications";
+        users = mkBinaries "users";
 
       in with pkgs; {
         checks = {
 
-          inherit events auth steersman notifications;
+          inherit events auth steersman notifications users;
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
@@ -126,7 +128,7 @@
         };
 
         packages = {
-          inherit events auth steersman notifications pu pd i;
+          inherit events auth steersman notifications users pu pd i;
 
           ## FIXME: only put this for darwin? maybe
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
