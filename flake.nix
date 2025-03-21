@@ -52,11 +52,6 @@
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources ./crates/pawz)
               (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
-              # (craneLib.fileset.commonCargoSources ./bins/auth)
-              # (craneLib.fileset.commonCargoSources ./bins/events)
-              # (craneLib.fileset.commonCargoSources ./bins/steersman)
-              # (craneLib.fileset.commonCargoSources ./bins/notifications)
-              # (craneLib.fileset.commonCargoSources ./bins/users)
               (craneLib.fileset.commonCargoSources crate)
             ];
           };
