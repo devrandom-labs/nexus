@@ -21,3 +21,6 @@ pub fn router() -> OpenApiRouter {
     paths(health::route, register::route, login::route)
 )]
 pub struct ApiDoc;
+
+// TODO: improve open api documentation
+// TODO: add security add on for login route
