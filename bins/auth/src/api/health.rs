@@ -34,7 +34,7 @@
                tag = "Infra",
                operation_id = "healthCheck",
                responses(
-                   (status = OK, body = String, description = "Check Application Health")
+                   (status = OK, body = String, description = "Application is healthy")
                )
 )]
 pub async fn route() -> &'static str {
@@ -43,3 +43,8 @@ pub async fn route() -> &'static str {
 
 #[cfg(test)]
 mod tests {}
+
+// TODO: get tracing in route
+// TODO: add debug trace
+// TODO: have proper statuscode in return
+// TODO: test out health failure route
