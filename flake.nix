@@ -49,7 +49,6 @@
             fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
-              (craneLib.fileset.commonCargoSources ./crates/errors)
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources ./crates/pawz)
               (craneLib.fileset.commonCargoSources ./crates/workspace-hack)

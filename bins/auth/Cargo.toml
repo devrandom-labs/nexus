@@ -17,6 +17,7 @@ utoipa = { workspace = true, features = ["axum_extras", "debug"] }
 utoipa-axum = { workspace = true, features = ["debug"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum", "vendored"] }
 utoipa-swagger-ui-vendored = { workspace = true }
+workspace-hack = { version = "0.1.0", path = "../../crates/workspace-hack" }
 
 [dev-dependencies]
 http-body-util = "0.1.3"
