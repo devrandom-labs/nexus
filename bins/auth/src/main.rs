@@ -1,38 +1,29 @@
 use error::Error;
-use pawz::{App, DefaultTracer};
-use tower_http::trace::TraceLayer;
+use pawz::{App, AppConfig, DefaultTracer};
 use tracing::instrument;
-use utoipa_axum::{router::OpenApiRouter, routes};
+use utoipa::OpenApi;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_swagger_ui::SwaggerUi;
 
 mod api;
+mod domain;
 mod error;
 
 #[instrument]
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let workspace = "tixlys";
-    let name = env!("CARGO_BIN_NAME");
-    let version = env!("CARGO_PKG_VERSION");
-    App::new(workspace, name, version, Some(3000))
+    let (router, api) = OpenApiRouter::with_openapi(api::ApiDoc::openapi())
+        .merge(api::router())
+        .split_for_parts();
+
+    let app = router.merge(SwaggerUi::new("/swagger").url("/api-docs/openapi.json", api));
+
+    let app_config = AppConfig::build("tixlys");
+
+    App::new(app_config)
         .with_tracer(DefaultTracer)
-        .run(routes)
+        .run(app)
         .await?;
+
     Ok(())
 }
-
-#[utoipa::path(get, path = "/health", responses((status = OK, body = String, description = "Check Application Health")))]
-pub async fn health() -> &'static str {
-    "ok."
-}
-
-pub fn routes() -> OpenApiRouter {
-    OpenApiRouter::new()
-        .routes(routes!(health))
-        .layer(TraceLayer::new_for_http())
-}
-
-// TODO: create v1/auth/register
-// TODO: create v1/auth/login
-// TODO: create v1/auth/logout
-// TODO: create v1/auth/veriy-email
-// TODO: create v1/auth/refreshYea

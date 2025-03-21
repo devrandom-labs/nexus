@@ -164,6 +164,9 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+ "utoipa-swagger-ui",
+ "utoipa-swagger-ui-vendored",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -454,6 +457,7 @@ dependencies = [
  "tower",
  "tracing",
  "ulid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -609,13 +613,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "errors"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.12",
-]
-
-[[package]]
 name = "etcetera"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -651,6 +648,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1502,6 +1500,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "notifications"
+version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1674,10 +1679,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "utoipa",
- "utoipa-axum",
- "utoipa-swagger-ui",
- "utoipa-swagger-ui-vendored",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2809,6 +2811,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3324,6 +3327,13 @@ dependencies = [
  "form_urlencoded",
  "idna",
  "percent-encoding",
+]
+
+[[package]]
+name = "users"
+version = "0.1.0"
+dependencies = [
+ "workspace-hack",
 ]
 
 [[package]]
@@ -3862,6 +3872,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags 2.9.0",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.9.0",
+ "cc",
+ "chrono",
+ "crypto-common",
+ "digest",
+ "flate2",
+ "futures-channel",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "getrandom 0.2.15",
+ "getrandom 0.3.2",
+ "hashbrown 0.15.2",
+ "hyper",
+ "hyper-util",
+ "indexmap 2.8.0",
+ "libc",
+ "lock_api",
+ "log",
+ "miniz_oxide",
+ "num-traits",
+ "parking_lot",
+ "regex",
+ "regex-automata 0.4.9",
+ "regex-syntax 0.8.5",
+ "serde",
+ "sha2",
+ "smallvec",
+ "sqlx-core",
+ "sqlx-sqlite",
+ "syn 2.0.100",
+ "sync_wrapper",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tracing",
+ "tracing-core",
 ]
 
 [[package]]

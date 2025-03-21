@@ -9,4 +9,6 @@ pub enum Error {
     /// Represents an I/O error.
     #[error("{0}")]
     IO(#[from] std::io::Error),
+    #[error("error building config: {0}")]
+    Config(String),
 }

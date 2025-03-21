@@ -1,18 +1,17 @@
 #![allow(dead_code)]
+use axum::Router;
 use error::Error;
 use std::fmt::{Debug, Display};
 use std::net::Ipv4Addr;
 use std::ops::RangeInclusive;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, instrument};
-use utoipa::OpenApi;
-use utoipa_axum::router::OpenApiRouter;
-use utoipa_swagger_ui::SwaggerUi;
 
 pub mod config;
 pub mod error;
 pub mod tracer;
 
+pub use config::AppConfig;
 pub use tracer::DefaultTracer;
 pub use tracer::EnvironmentTracer;
 
@@ -38,10 +37,6 @@ impl Display for Environment {
     }
 }
 
-#[derive(OpenApi)]
-#[openapi()]
-struct ApiDoc;
-
 /// Represents the application configuration.
 ///
 /// # Fields
@@ -56,20 +51,17 @@ struct ApiDoc;
 ///
 /// The string slices (`&'a str`) must have a `'static` lifetime to ensure they are valid for the entire duration of the application.
 ///
-#[derive(Default, Debug)]
-pub struct App<'a, T>
+#[derive(Debug)]
+pub struct App<T>
 where
     T: EnvironmentTracer + Debug,
 {
-    project: &'a str,
-    name: &'a str,
-    version: &'a str,
-    port: Option<u16>,
+    app_config: AppConfig,
     env: Environment,
     tracer: Option<T>,
 }
 
-impl<'a, T> App<'a, T>
+impl<T> App<T>
 where
     T: EnvironmentTracer + Debug,
 {
@@ -81,13 +73,10 @@ where
     /// * `name`: The application name.
     /// * `version`: The application version.
     /// * `port`: The port number to listen on (optional).
-    pub fn new(project: &'a str, name: &'a str, version: &'a str, port: Option<u16>) -> Self {
+    pub fn new(app_config: AppConfig) -> Self {
         App {
-            project,
-            name,
-            version,
+            app_config,
             env: Environment::default(),
-            port,
             tracer: None,
         }
     }
@@ -153,8 +142,12 @@ where
     ///
     /// A `Result` indicating success or an `Error` on failure.
     #[instrument]
-    pub async fn run(self, routes: fn() -> OpenApiRouter) -> Result<(), Error> {
-        debug!("running {}:{} in {}", &self.name, &self.version, &self.env);
+    pub async fn run(self, app: Router) -> Result<(), Error> {
+        let app_config = &self.app_config;
+        debug!(
+            "running {}:{} in {}",
+            app_config.name, app_config.version, &self.env
+        );
         if let Some(tracer) = &self.tracer {
             tracer.setup(&self.env);
         }
@@ -167,13 +160,10 @@ where
             }
             Environment::Development => {
                 debug!("setting up {} tracing functionality", &self.env);
-                match self.port {
-                    Some(port) => {
-                        info!("starting {} on port: {}", &self.name, &port);
-                        Self::get_listener(port)
-                            .await
-                            .inspect_err(|err| error!(?err))?
-                    }
+                match app_config.port {
+                    Some(port) => Self::try_until_success(port..=(port + 3))
+                        .await
+                        .inspect_err(|err| error!(?err))?,
                     None => Self::try_until_success(3000..=3005)
                         .await
                         .inspect_err(|err| error!(?err))?,
@@ -182,30 +172,24 @@ where
         };
 
         debug!("creating open api routes");
-        let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-            .merge(routes())
-            .split_for_parts();
-
-        let routes = router.merge(SwaggerUi::new("/swagger").url("/api-docs/openapi.json", api));
 
         debug!(
             "starting {} on {}",
-            &self.name,
+            app_config.name,
             listener.local_addr().unwrap()
         );
         info!(
             "--------------------🚀🚀🎆{}:{}@{}🎆🚀🚀--------------------\n",
-            &self.project, &self.name, &self.version
+            app_config.project, app_config.name, app_config.version
         );
-        axum::serve(listener, routes)
+        axum::serve(listener, app)
             .await
             .inspect_err(|err| error!("{:?}", err))?;
         Ok(())
     }
 }
 
-// TODO: updated openapi utoipa description, info and some texts after runtime
-// TODO: divide stuff into tracing_config, openapi_config, general_config
+// TODO: update the docs here
 // TODO: add tests to see if this will work.
 // TODO: enable prod, default is dev unlesss specified differently.?
 // TODO: add prod tracing setup.

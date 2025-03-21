@@ -1,5 +1,5 @@
 {
-  description = "Tixlys Nix Flakes";
+  description = "Tixlys Rust";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
@@ -43,19 +43,16 @@
           doCheck = false;
         };
 
-        fileSetForCrate = crates:
+        fileSetForCrate = crate:
           lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
-              (craneLib.fileset.commonCargoSources ./crates/errors)
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources ./crates/pawz)
-              (craneLib.fileset.commonCargoSources ./bins/auth)
-              (craneLib.fileset.commonCargoSources ./bins/events)
-              (craneLib.fileset.commonCargoSources ./bins/steersman)
-              (craneLib.fileset.commonCargoSources crates)
+              (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
+              (craneLib.fileset.commonCargoSources crate)
             ];
           };
 
@@ -87,11 +84,13 @@
         events = mkBinaries "events";
         auth = mkBinaries "auth";
         steersman = mkBinaries "steersman";
+        notifications = mkBinaries "notifications";
+        users = mkBinaries "users";
 
       in with pkgs; {
         checks = {
 
-          inherit events auth steersman;
+          inherit events auth steersman notifications users;
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
@@ -121,10 +120,26 @@
             partitions = 1;
             partitionType = "count";
           });
+
+          # Ensure that cargo-hakari is up to date
+          tixlys-hakari = craneLib.mkCargoDerivation {
+            inherit src;
+            pname = "tixlys-hakari";
+            cargoArtifacts = null;
+            doInstallCargoArtifacts = false;
+
+            buildPhaseCargoCommand = ''
+              cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
+              cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
+              cargo hakari verify
+            '';
+
+            nativeBuildInputs = [ cargo-hakari ];
+          };
         };
 
         packages = {
-          inherit events auth steersman pu pd i;
+          inherit events auth steersman notifications users pu pd i;
 
           ## FIXME: only put this for darwin? maybe
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
@@ -142,7 +157,7 @@
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
-          packages = [ rust-analyzer bacon biscuit-cli dive ];
+          packages = [ rust-analyzer bacon biscuit-cli dive cargo-hakari ];
         };
       });
 }
