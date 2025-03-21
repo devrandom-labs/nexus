@@ -1,13 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "bins/auth",
-    "bins/events",
-    "bins/notifications",
-    "bins/steersman", "bins/users",
-    "crates/cqrs",
-    "crates/errors",
-    "crates/pawz",
+    "bins/*",
+    "crates/*",
 ]
 
 [workspace.dependencies]

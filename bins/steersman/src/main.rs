@@ -43,3 +43,8 @@ async fn main() {
 // Phase 1
 // TODO: create a basic gateway and add that gateway service to server
 // TODO: add tracing to that gateway
+
+// TODO: api.tixlys.com -> goes to gateway
+// TODO: api.tixlys.com/v1/auth -> goes to auth
+// TODO: api.tixlys.com/v2/auth -> check the version of auth if available route else show error
+// TODO: api.tixlys.com/v1/events -> goes to events

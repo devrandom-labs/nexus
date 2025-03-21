@@ -43,7 +43,7 @@
           doCheck = false;
         };
 
-        fileSetForCrate = crates:
+        fileSetForCrate = crate:
           lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
@@ -52,12 +52,13 @@
               (craneLib.fileset.commonCargoSources ./crates/errors)
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources ./crates/pawz)
-              (craneLib.fileset.commonCargoSources ./bins/auth)
-              (craneLib.fileset.commonCargoSources ./bins/events)
-              (craneLib.fileset.commonCargoSources ./bins/steersman)
-              (craneLib.fileset.commonCargoSources ./bins/notifications)
-              (craneLib.fileset.commonCargoSources ./bins/users)
-              (craneLib.fileset.commonCargoSources crates)
+              (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
+              # (craneLib.fileset.commonCargoSources ./bins/auth)
+              # (craneLib.fileset.commonCargoSources ./bins/events)
+              # (craneLib.fileset.commonCargoSources ./bins/steersman)
+              # (craneLib.fileset.commonCargoSources ./bins/notifications)
+              # (craneLib.fileset.commonCargoSources ./bins/users)
+              (craneLib.fileset.commonCargoSources crate)
             ];
           };
 
@@ -125,6 +126,22 @@
             partitions = 1;
             partitionType = "count";
           });
+
+          # Ensure that cargo-hakari is up to date
+          tixlys-hakari = craneLib.mkCargoDerivation {
+            inherit src;
+            pname = "tixlys-hakari";
+            cargoArtifacts = null;
+            doInstallCargoArtifacts = false;
+
+            buildPhaseCargoCommand = ''
+              cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
+              cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
+              cargo hakari verify
+            '';
+
+            nativeBuildInputs = [ cargo-hakari ];
+          };
         };
 
         packages = {
@@ -146,7 +163,7 @@
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
-          packages = [ rust-analyzer bacon biscuit-cli dive ];
+          packages = [ rust-analyzer bacon biscuit-cli dive cargo-hakari ];
         };
       });
 }
