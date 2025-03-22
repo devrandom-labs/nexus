@@ -24,3 +24,4 @@ pub struct ApiDoc;
 
 // TODO: improve open api documentation
 // TODO: add security add on for login route
+// TODO: test all apis

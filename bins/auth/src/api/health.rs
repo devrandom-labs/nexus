@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// Represents the health status of the application.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Health {
     /// A message describing the health status.
     message: String,
@@ -63,31 +63,18 @@ pub async fn route() -> (StatusCode, Json<Health>) {
 
 #[cfg(test)]
 mod tests {
-    use super::route;
-    use axum::{Router, body::Body, extract::Request, http::StatusCode, routing::get};
-    use http_body_util::BodyExt;
-    use serde_json::{Value, json};
-    use tower::ServiceExt;
-
-    fn app() -> Router {
-        Router::new().route("/health", get(route))
-    }
+    use super::*;
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn health_gives_ok() {
-        let response = app()
-            .oneshot(
-                Request::builder()
-                    .uri("/health")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body, json!({ "message": "ok." }))
+        let (status, body) = route().await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body.0,
+            Health {
+                message: "ok.".into()
+            }
+        );
     }
 }
