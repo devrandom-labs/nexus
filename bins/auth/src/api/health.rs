@@ -1,3 +1,14 @@
+use axum::{Json, http::StatusCode};
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
+
+/// Represents the health status of the application.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Health {
+    /// A message describing the health status.
+    message: String,
+}
+
 /// Health Check Endpoint
 ///
 /// This endpoint performs a basic health check on the application. It verifies that the server is running and responsive.
@@ -9,7 +20,7 @@
 ///
 /// **Response:**
 ///
-/// * On success, returns a 200 OK status with the string "ok." in the response body.
+/// * On success, returns a 200 OK status with a JSON object containing the message "ok.".
 /// * The response indicates that the application is running and healthy.
 ///
 /// **Usage:**
@@ -26,25 +37,57 @@
 ///
 /// ```http
 /// HTTP/1.1 200 OK
-/// Content-Type: text/plain
+/// Content-Type: application/json
 ///
-/// ok.
+/// {
+///     "message": "ok."
+/// }
+/// ```
 #[utoipa::path(get,
                path = "/health",
-               tag = "Infra",
+               tag = "General",
                operation_id = "healthCheck",
                responses(
-                   (status = OK, body = String, description = "Application is healthy")
+                   (status = OK, body = String, description = "Application is Healthy", content_type = "application/json")
                )
 )]
-pub async fn route() -> &'static str {
-    "ok."
+#[instrument(name = "health", target = "auth::api::health")]
+pub async fn route() -> (StatusCode, Json<Health>) {
+    (
+        StatusCode::OK,
+        Json(Health {
+            message: "ok.".into(),
+        }),
+    )
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::route;
+    use axum::{Router, body::Body, extract::Request, http::StatusCode, routing::get};
+    use http_body_util::BodyExt;
+    use serde_json::{Value, json};
+    use tower::ServiceExt;
 
-// TODO: get tracing in route
-// TODO: add debug trace
-// TODO: have proper statuscode in return
-// TODO: test out health failure route
+    fn app() -> Router {
+        Router::new().route("/health", get(route))
+    }
+
+    #[tokio::test]
+    async fn health_gives_ok() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body, json!({ "message": "ok." }))
+    }
+}

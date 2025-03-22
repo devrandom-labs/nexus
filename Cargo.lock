@@ -157,6 +157,7 @@ dependencies = [
  "http-body-util",
  "pawz",
  "serde",
+ "serde_json",
  "thiserror 2.0.12",
  "tokio",
  "tower",
