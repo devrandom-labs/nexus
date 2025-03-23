@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-axum = { workspace = true }
+axum = { workspace = true, features = ["macros"] }
 pawz = { path = "../../crates/pawz" }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }

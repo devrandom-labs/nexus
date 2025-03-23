@@ -1,10 +1,28 @@
-use axum::routing::{get, post};
+use axum::{
+    Json,
+    extract::FromRequest,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 
 mod error;
 mod routes;
+
+#[derive(FromRequest)]
+#[from_request(via(Json), rejection(error::Error))]
+pub struct AppJson<T>(T);
+
+impl<T> IntoResponse for AppJson<T>
+where
+    Json<T>: IntoResponse,
+{
+    fn into_response(self) -> Response {
+        Json(self.0).into_response()
+    }
+}
 
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()

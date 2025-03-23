@@ -1,5 +1,4 @@
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use super::error::Error;
 use tracing::instrument;
 
 pub mod health;
@@ -11,6 +10,6 @@ pub use login::route as login;
 pub use register::route as register;
 
 #[instrument]
-pub async fn not_found() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, "Not Found")
+pub async fn not_found() -> Error {
+    Error::NotFound
 }
