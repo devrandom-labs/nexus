@@ -4,7 +4,7 @@ use tracing::instrument;
 
 /// Represents the health status of the application.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct Health {
+pub struct HealthResponse {
     /// A message describing the health status.
     message: String,
 }
@@ -55,7 +55,7 @@ pub struct Health {
 pub async fn route() -> impl IntoResponse {
     (
         StatusCode::OK,
-        Json(Health {
+        Json(HealthResponse {
             message: "ok.".into(),
         }),
     )
