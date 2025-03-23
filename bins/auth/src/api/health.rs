@@ -1,4 +1,4 @@
-use axum::{Json, http::StatusCode};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -52,7 +52,7 @@ pub struct Health {
                )
 )]
 #[instrument(name = "health", target = "auth::api::health")]
-pub async fn route() -> (StatusCode, Json<Health>) {
+pub async fn route() -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(Health {
@@ -62,19 +62,19 @@ pub async fn route() -> (StatusCode, Json<Health>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod test {
+    use super::route;
+    use crate::api::test::get_response_body;
     use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use serde_json::json;
 
     #[tokio::test]
     async fn health_gives_ok() {
-        let (status, body) = route().await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body.0,
-            Health {
-                message: "ok.".into()
-            }
-        );
+        let response = route().await;
+        let response = response.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = get_response_body(response).await;
+        assert_eq!(body, json!({ "message": "ok." }));
     }
 }

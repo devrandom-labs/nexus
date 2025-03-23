@@ -25,14 +25,14 @@ pub struct ApiDoc;
 // TODO: improve open api documentation
 // TODO: add security add on for login route
 // TODO: test all apis
-//
+
 #[cfg(test)]
-mod tests {
+mod test {
     use super::router;
     use axum::{
         Router,
         body::Body,
-        http::{Request, StatusCode},
+        http::{Request, Response, StatusCode},
     };
     use http_body_util::BodyExt;
     use serde_json::{Value, json};
@@ -42,6 +42,11 @@ mod tests {
         router().split_for_parts().0
     }
 
+    pub async fn get_response_body(response: Response<Body>) -> Value {
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
+    }
+
     #[tokio::test]
     async fn health_check() {
         let router = get_router();
@@ -49,12 +54,9 @@ mod tests {
             .uri("/health")
             .body(Body::empty())
             .unwrap();
-
         let response = router.oneshot(health_request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        let body: Value = serde_json::from_slice(&body).unwrap();
+        let body = get_response_body(response).await;
         assert_eq!(body, json!({"message": "ok."}))
     }
 }
