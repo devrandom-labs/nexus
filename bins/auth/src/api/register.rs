@@ -22,7 +22,7 @@ impl Debug for RegisterRequest {
 
 impl Display for RegisterRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "Email: {}, Password: [REDACTED]", &self.email)
+        write!(f, "Email 📧: {}, Password 🔑: [REDACTED]", &self.email)
     }
 }
 
