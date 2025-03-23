@@ -9,6 +9,7 @@ use tracing::{debug, error, info, instrument};
 
 pub mod config;
 pub mod error;
+pub mod payloads;
 pub mod tracer;
 
 pub use config::AppConfig;

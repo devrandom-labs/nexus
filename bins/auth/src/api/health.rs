@@ -1,9 +1,9 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tracing::instrument;
 
 /// Represents the health status of the application.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 pub struct HealthResponse {
     /// A message describing the health status.
     message: String,

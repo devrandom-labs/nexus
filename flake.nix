@@ -1,5 +1,5 @@
 {
-  description = "Tixlys Rust";
+  description = "Tixlys Core Microservices";
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
