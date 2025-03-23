@@ -194,21 +194,3 @@ where
 // TODO: add tests to see if this will work.
 // TODO: enable prod, default is dev unlesss specified differently.?
 // TODO: add prod tracing setup.
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_development_display() {
-        let dev_env = Environment::Development;
-        assert_eq!(dev_env.to_string(), "Development");
-    }
-
-    #[test]
-    fn test_production_display() {
-        let prod_env = Environment::Production;
-        assert_eq!(prod_env.to_string(), "Production");
-    }
-}
