@@ -8,8 +8,12 @@ authors.workspace = true
 [dependencies]
 axum = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -22,6 +22,7 @@ impl AppConfig {
     }
 
     pub fn build(project: &'static str) -> Self {
+        // FIXME: get application name, it shows PAWZ for all application
         let name = env!("CARGO_PKG_NAME");
         let version = env!("CARGO_PKG_VERSION");
         AppConfig {
