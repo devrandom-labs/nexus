@@ -1,5 +1,10 @@
-use axum::routing::{get, post};
+use axum::{
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+};
 use tower_http::trace::TraceLayer;
+use tracing::instrument;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 
@@ -13,6 +18,12 @@ pub fn router() -> OpenApiRouter {
         .route("/register", post(register::route))
         .route("/login", post(login::route))
         .layer(TraceLayer::new_for_http())
+        .fallback(not_found)
+}
+
+#[instrument]
+async fn not_found() -> impl IntoResponse {
+    (StatusCode::NOT_FOUND, "Not Found")
 }
 
 #[derive(OpenApi)]
@@ -58,5 +69,19 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_response_body(response).await;
         assert_eq!(body, json!({"message": "ok."}))
+    }
+
+    #[tokio::test]
+    async fn test_fallback() {
+        let router = get_router();
+        let non_existing_route = Request::builder()
+            .uri("/fallback")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(non_existing_route).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, String::from_utf8(body.to_vec()).unwrap());
     }
 }
