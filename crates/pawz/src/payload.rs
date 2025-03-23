@@ -13,14 +13,14 @@ use std::fmt::Debug;
 /// # Type Parameters
 ///
 /// * `T`: The type of data associated with success and failure responses. This type
-///        must implement `Debug` and `Serialize`.
+///         must implement `Debug` and `Serialize`.
 ///
 /// # Variants
 ///
 /// * `Success { data: T }`: Represents a successful response containing data of type `T`.
 /// * `Fail { data: T }`: Represents a failed response containing data of type `T`.
-/// * `Error { message: String, code: Option<u16> }`: Represents an error response with a message
-///                                                 and an optional error code.
+/// * `Error { message: String, code: Option<u16>, data: Option<T> }`: Represents an error
+///         response with a message, an optional error code, and optional data.
 ///
 /// # Serialization
 ///
@@ -31,7 +31,7 @@ use std::fmt::Debug;
 ///
 /// ```rust
 /// use serde::Serialize;
-/// use pawz::Response; // Assuming your enum is in a crate named 'pawz'
+/// use pawz::payload::Response;
 ///
 /// #[derive(Debug, Serialize)]
 /// struct User {
@@ -61,6 +61,8 @@ where
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         code: Option<u16>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<T>,
     },
 }
 
@@ -79,7 +81,7 @@ impl Response<String> {
     /// # Examples
     ///
     /// ```rust
-    /// use pawz::Response; // Assuming your enum is in a crate named 'pawz'
+    /// use pawz::payload::Response;
     ///
     /// let error_response: Response<String> = Response::error("Database connection failed", Some(500));
     /// ```
@@ -87,6 +89,7 @@ impl Response<String> {
         Response::Error {
             message: message.into(),
             code,
+            data: None,
         }
     }
 }
@@ -108,7 +111,7 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::Response; // Assuming your enum is in a crate named 'pawz'
+    /// use pawz::payload::Response;
     ///
     /// #[derive(Debug, Serialize)]
     /// struct User {
@@ -138,7 +141,7 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::Response; // Assuming your enum is in a crate named 'pawz'
+    /// use pawz::payload::Response;
     ///
     /// #[derive(Debug, Serialize)]
     /// struct ErrorDetails {
@@ -153,6 +156,45 @@ where
     /// ```
     pub fn fail(data: T) -> Self {
         Response::Fail { data }
+    }
+
+    /// Constructs an `Error` response with a message, optional code, and optional data.
+    ///
+    /// This constructor allows you to create an error response that includes both
+    /// a human-readable message and associated data. This can be useful for providing
+    /// detailed error information to clients.
+    ///
+    /// # Arguments
+    ///
+    /// * `message`: The error message (can be converted to `String`).
+    /// * `code`: An optional error code.
+    /// * `data`: The optional data to include in the error response.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use serde::Serialize;
+    /// use pawz::payload::Response;
+    ///
+    /// #[derive(Debug, Serialize)]
+    /// struct ErrorDetails {
+    ///     details: String,
+    /// }
+    ///
+    /// let error_response: Response<ErrorDetails> = Response::error_with_body(
+    ///     "Invalid input",
+    ///     Some(400),
+    ///     ErrorDetails {
+    ///         details: "Input must be a positive integer".to_string(),
+    ///     },
+    /// );
+    /// ```
+    pub fn error_with_body(message: impl Into<String>, code: Option<u16>, data: T) -> Self {
+        Response::Error {
+            message: message.into(),
+            code,
+            data: Some(data),
+        }
     }
 }
 
@@ -170,6 +212,11 @@ mod tests {
     #[derive(Debug, Serialize)]
     struct FailResponse {
         reason: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ErrorBody {
+        stack: String,
     }
 
     #[test]
@@ -200,12 +247,48 @@ mod tests {
     }
 
     #[test]
-    fn error_response_to_json_no_code() {
+    fn error_response_to_json() {
         let response = Response::error("Some problem", None);
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
             json!({"status": "error", "message": "Some problem"})
+        );
+    }
+
+    #[test]
+    fn error_with_code() {
+        let response = Response::error("Some problem", Some(400));
+        let serialized = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            serialized,
+            json!({"status": "error", "message": "Some problem", "code": 400})
+        );
+    }
+
+    #[test]
+    fn error_with_body() {
+        let body = ErrorBody {
+            stack: "some stack".into(),
+        };
+        let response = Response::error_with_body("Some problem", None, body);
+        let serialized = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            serialized,
+            json!({"status": "error", "message": "Some problem", "data": { "stack": "some stack" }})
+        );
+    }
+
+    #[test]
+    fn all_properties_error() {
+        let body = ErrorBody {
+            stack: "some stack".into(),
+        };
+        let response = Response::error_with_body("Some problem", Some(400), body);
+        let serialized = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            serialized,
+            json!({"status": "error", "message": "Some problem", "data": {"stack": "some stack"}, "code": 400})
         );
     }
 }
