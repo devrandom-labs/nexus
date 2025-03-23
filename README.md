@@ -96,18 +96,3 @@ The following checks are available:
 ## License
 
 This project is closed source and is not available for public use.
-```
-
-**Changes Made:**
-
-* **Explicit Closed Source Notice:** Added a clear statement that the project is closed source.
-* **Nix Integration Details:** Added a dedicated "Development (Nix)" section with instructions on:
-    * Entering the development shell.
-    * Building services.
-    * Running the infrastructure.
-    * Exploring Docker images.
-    * Running development checks.
-* **Nix Command Examples:** Provided concrete examples of Nix commands.
-* **Removed Redundant Information:** Removed redundant information about the services that was already present in the flake.nix file.
-* **Improved Readability:** Improved the overall readability and structure of the document.
-* **Added Prerequisites:** Added a prerequisite section.
