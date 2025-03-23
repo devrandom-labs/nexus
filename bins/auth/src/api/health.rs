@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// Represents the health status of the application.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     /// A message describing the health status.
     message: String,
