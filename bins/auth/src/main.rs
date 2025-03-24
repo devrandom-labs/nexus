@@ -5,9 +5,11 @@ use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
 
+mod adapters;
 mod api;
 mod domain;
 mod error;
+mod services;
 
 #[instrument]
 #[tokio::main]

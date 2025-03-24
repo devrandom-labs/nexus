@@ -40,6 +40,7 @@ pub fn router() -> OpenApiRouter {
 )]
 pub struct ApiDoc;
 
+// TODO: fix return type of all endpoints they should be pawz::response.
 // TODO: improve open api documentation
 // TODO: add security add on for login route
 // TODO: test all apis
