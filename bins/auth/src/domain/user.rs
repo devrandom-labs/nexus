@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use super::email::Email;
 use super::password::Password;
 use super::user_id::UserId;

@@ -1,3 +1,4 @@
+use axum::Json;
 use serde::Serialize;
 use std::fmt::Debug;
 
@@ -195,6 +196,10 @@ where
             code,
             data: Some(data),
         }
+    }
+
+    pub fn into_response(self) -> Json<Self> {
+        Json(self)
     }
 }
 

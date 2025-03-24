@@ -11,6 +11,9 @@ use utoipa_axum::router::OpenApiRouter;
 mod error;
 mod routes;
 
+#[allow(dead_code)]
+pub type AppResult<T> = Result<T, error::Error>;
+
 #[derive(FromRequest)]
 #[from_request(via(Json), rejection(error::Error))]
 pub struct AppJson<T>(T);
