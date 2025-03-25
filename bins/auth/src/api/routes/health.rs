@@ -1,4 +1,6 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
+use crate::api::AppResult;
+use axum::http::StatusCode;
+use pawz::payload::{Reply, ReplyInner};
 use serde::Serialize;
 use tracing::instrument;
 
@@ -52,13 +54,13 @@ pub struct HealthResponse {
                )
 )]
 #[instrument(name = "health", target = "auth::api::health")]
-pub async fn route() -> impl IntoResponse {
-    (
+pub async fn route() -> AppResult<HealthResponse> {
+    Ok(Reply::new(
         StatusCode::OK,
-        Json(HealthResponse {
+        ReplyInner::success(HealthResponse {
             message: "ok.".into(),
         }),
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -75,6 +77,9 @@ mod test {
         let response = response.into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_response_body(response).await;
-        assert_eq!(body, json!({ "message": "ok." }));
+        assert_eq!(
+            body,
+            json!({"data": {"message": "ok."}, "status": "success"})
+        );
     }
 }

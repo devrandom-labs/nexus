@@ -1,4 +1,8 @@
-use axum::Json;
+use axum::{
+    Json,
+    response::{IntoResponse, Response},
+};
+use reqwest::StatusCode;
 use serde::Serialize;
 use std::fmt::Debug;
 
@@ -49,7 +53,7 @@ use std::fmt::Debug;
 /// ```
 #[derive(Debug, Serialize)]
 #[serde(tag = "status")]
-pub enum Response<T>
+pub enum ReplyInner<T>
 where
     T: Debug + Serialize,
 {
@@ -67,7 +71,7 @@ where
     },
 }
 
-impl Response<String> {
+impl ReplyInner<String> {
     /// Constructs an `Error` response with a string message and an optional code,
     /// adhering to the JSend specification.
     ///
@@ -87,7 +91,7 @@ impl Response<String> {
     /// let error_response: Response<String> = Response::error("Database connection failed", Some(500));
     /// ```
     pub fn error(message: impl Into<String>, code: Option<u16>) -> Self {
-        Response::Error {
+        ReplyInner::Error {
             message: message.into(),
             code,
             data: None,
@@ -95,7 +99,7 @@ impl Response<String> {
     }
 }
 
-impl<T> Response<T>
+impl<T> ReplyInner<T>
 where
     T: Debug + Serialize,
 {
@@ -126,7 +130,7 @@ where
     /// });
     /// ```
     pub fn success(data: T) -> Self {
-        Response::Success { data }
+        ReplyInner::Success { data }
     }
 
     /// Constructs a `Fail` response with the provided data.
@@ -156,7 +160,7 @@ where
     /// });
     /// ```
     pub fn fail(data: T) -> Self {
-        Response::Fail { data }
+        ReplyInner::Fail { data }
     }
 
     /// Constructs an `Error` response with a message, optional code, and optional data.
@@ -191,7 +195,7 @@ where
     /// );
     /// ```
     pub fn error_with_body(message: impl Into<String>, code: Option<u16>, data: T) -> Self {
-        Response::Error {
+        ReplyInner::Error {
             message: message.into(),
             code,
             data: Some(data),
@@ -203,9 +207,58 @@ where
     }
 }
 
+impl<T> From<T> for ReplyInner<T>
+where
+    T: Serialize + Debug,
+{
+    fn from(value: T) -> Self {
+        Self::success(value)
+    }
+}
+
+#[derive(Debug)]
+pub struct Reply<T>
+where
+    T: Serialize + Debug,
+{
+    status: StatusCode,
+    response: ReplyInner<T>,
+}
+
+impl<T> Reply<T>
+where
+    T: Serialize + Debug,
+{
+    pub fn new(status: StatusCode, response: ReplyInner<T>) -> Self {
+        Reply { status, response }
+    }
+}
+
+impl<T> IntoResponse for Reply<T>
+where
+    T: Serialize + Debug,
+{
+    fn into_response(self) -> Response {
+        (self.status, self.response.into_response()).into_response()
+    }
+}
+
+impl<T> From<(StatusCode, ReplyInner<T>)> for Reply<T>
+where
+    T: Serialize + Debug,
+{
+    fn from(response: (StatusCode, ReplyInner<T>)) -> Self {
+        Self::new(response.0, response.1)
+    }
+}
+
+// TODO: CHANGE THIS TO TYPE STATE PATTERN
+// TODO: REPLY BUILDER
+// TODO: MAKE API CLEARER
+
 #[cfg(test)]
 mod tests {
-    use super::Response;
+    use super::ReplyInner;
     use serde::Serialize;
     use serde_json::json;
 
@@ -229,7 +282,7 @@ mod tests {
         let data = SuccessResponse {
             id: "some_id".to_string(),
         };
-        let response = Response::success(data);
+        let response = ReplyInner::success(data);
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -243,7 +296,7 @@ mod tests {
             reason: "test reason".to_string(),
         };
 
-        let response = Response::fail(data);
+        let response = ReplyInner::fail(data);
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -253,7 +306,7 @@ mod tests {
 
     #[test]
     fn error_response_to_json() {
-        let response = Response::error("Some problem", None);
+        let response = ReplyInner::error("Some problem", None);
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -263,7 +316,7 @@ mod tests {
 
     #[test]
     fn error_with_code() {
-        let response = Response::error("Some problem", Some(400));
+        let response = ReplyInner::error("Some problem", Some(400));
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -276,7 +329,7 @@ mod tests {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Response::error_with_body("Some problem", None, body);
+        let response = ReplyInner::error_with_body("Some problem", None, body);
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -289,7 +342,7 @@ mod tests {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Response::error_with_body("Some problem", Some(400), body);
+        let response = ReplyInner::error_with_body("Some problem", Some(400), body);
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,

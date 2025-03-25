@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use pawz::payload::Reply;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
@@ -12,7 +13,7 @@ mod error;
 mod routes;
 
 #[allow(dead_code)]
-pub type AppResult<T> = Result<T, error::Error>;
+pub type AppResult<T> = Result<Reply<T>, error::Error>;
 
 #[derive(FromRequest)]
 #[from_request(via(Json), rejection(error::Error))]
@@ -29,9 +30,9 @@ where
 
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
-        .route("/health", get(routes::health))
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
+        .route("/health", get(routes::health))
         .layer(TraceLayer::new_for_http())
         .fallback(routes::not_found)
 }

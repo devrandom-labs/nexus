@@ -3,8 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use pawz::payload::Response as PawzResponse;
-use serde::Serialize;
+use pawz::payload::{ApiReply, Reply};
 use std::fmt::Debug;
 use thiserror::Error as TError;
 
@@ -19,24 +18,19 @@ pub enum Error {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
-            Self::NotFound => get_response(
+            Self::NotFound => ApiReply::new(
                 StatusCode::NOT_FOUND,
-                PawzResponse::error("Resource not found", Some(StatusCode::NOT_FOUND.as_u16())),
-            ),
-            Self::InternalServerError => get_response(
+                Reply::error("Resource not found", Some(StatusCode::NOT_FOUND.as_u16())),
+            )
+            .into_response(),
+            Self::InternalServerError => ApiReply::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                PawzResponse::error(
+                Reply::error(
                     "Internal server error",
                     Some(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
                 ),
-            ),
+            )
+            .into_response(),
         }
     }
-}
-
-pub fn get_response<T>(status: StatusCode, response: PawzResponse<T>) -> Response
-where
-    T: Serialize + Debug,
-{
-    (status, response.into_response()).into_response()
 }
