@@ -1,2 +1,2 @@
-pub(crate) mod body;
+pub mod body;
 pub mod reply;

@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::fmt::Debug;
 
 /// Represents a generic API response, based on the JSend specification.
 ///
@@ -31,26 +30,26 @@ use std::fmt::Debug;
 ///
 /// ```rust
 /// use serde::Serialize;
-/// use pawz::payload::Response;
+/// use pawz::payload::body::Body;
 ///
-/// #[derive(Debug, Serialize)]
+/// #[derive(Serialize)]
 /// struct User {
 ///     id: u32,
 ///     name: String,
 /// }
 ///
-/// let success_response: Response<User> = Response::success(User {
+/// let success_response: Body<User> = Body::success(User {
 ///     id: 123,
 ///     name: "Alice".to_string(),
 /// });
 ///
-/// let error_response: Response<String> = Response::error("User not found", Some(404));
+/// let error_response: Body<String> = Body::error("User not found", Some(404));
 /// ```
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(tag = "status")]
 pub enum Body<T>
 where
-    T: Debug + Serialize,
+    T: Serialize,
 {
     #[serde(rename = "success")]
     Success { data: T },
@@ -81,9 +80,9 @@ impl Body<String> {
     /// # Examples
     ///
     /// ```rust
-    /// use pawz::payload::Response;
+    /// use pawz::payload::body::Body;
     ///
-    /// let error_response: Response<String> = Response::error("Database connection failed", Some(500));
+    /// let error_response: Body<String> = Body::error("Database connection failed", Some(500));
     /// ```
     pub fn error(message: impl Into<String>, code: Option<u16>) -> Self {
         Body::Error {
@@ -96,7 +95,7 @@ impl Body<String> {
 
 impl<T> Body<T>
 where
-    T: Debug + Serialize,
+    T: Serialize,
 {
     /// Constructs a `Success` response with the provided data.
     ///
@@ -111,15 +110,15 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::payload::Response;
+    /// use pawz::payload::body::Body;
     ///
-    /// #[derive(Debug, Serialize)]
+    /// #[derive(Serialize)]
     /// struct User {
     ///     id: u32,
     ///     name: String,
     /// }
     ///
-    /// let success_response: Response<User> = Response::success(User {
+    /// let success_response: Body<User> = Body::success(User {
     ///     id: 123,
     ///     name: "Alice".to_string(),
     /// });
@@ -141,15 +140,15 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::payload::Response;
+    /// use pawz::payload::body::Body;
     ///
-    /// #[derive(Debug, Serialize)]
+    /// #[derive(Serialize)]
     /// struct ErrorDetails {
     ///     reason: String,
     ///     code: u32,
     /// }
     ///
-    /// let fail_response: Response<ErrorDetails> = Response::fail(ErrorDetails {
+    /// let fail_response: Body<ErrorDetails> = Body::fail(ErrorDetails {
     ///     reason: "Invalid input".to_string(),
     ///     code: 400,
     /// });
@@ -174,26 +173,26 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::payload::Response;
+    /// use pawz::payload::body::Body;
     ///
-    /// #[derive(Debug, Serialize)]
+    /// #[derive( Serialize)]
     /// struct ErrorDetails {
     ///     details: String,
     /// }
     ///
-    /// let error_response: Response<ErrorDetails> = Response::error_with_body(
+    /// let error_response: Body<ErrorDetails> = Body::error_with_body(
     ///     "Invalid input",
     ///     Some(400),
-    ///     ErrorDetails {
+    ///     Some(ErrorDetails {
     ///         details: "Input must be a positive integer".to_string(),
-    ///     },
+    ///     }),
     /// );
     /// ```
-    pub fn error_with_body(message: impl Into<String>, code: Option<u16>, data: T) -> Self {
+    pub fn error_with_body(message: impl Into<String>, code: Option<u16>, data: Option<T>) -> Self {
         Body::Error {
             message: message.into(),
             code,
-            data: Some(data),
+            data,
         }
     }
 }
@@ -271,7 +270,7 @@ mod tests {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Body::error_with_body("Some problem", None, body);
+        let response = Body::error_with_body("Some problem", None, Some(body));
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -284,7 +283,7 @@ mod tests {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Body::error_with_body("Some problem", Some(400), body);
+        let response = Body::error_with_body("Some problem", Some(400), Some(body));
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,

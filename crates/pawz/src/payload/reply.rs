@@ -1,3 +1,4 @@
+use super::body::Body;
 use axum::http::StatusCode;
 use serde::Serialize;
 
@@ -139,9 +140,28 @@ impl<T> Reply<Error<T>>
 where
     T: Serialize,
 {
-    fn with_body(mut self, body: T) -> Reply<Error<T>> {
+    pub fn with_body(mut self, body: T) -> Reply<Error<T>> {
         self.r#type.body = Some(body);
         self
+    }
+
+    pub fn with_message(mut self, message: String) -> Reply<Error<T>> {
+        self.r#type.message = message;
+        self
+    }
+
+    pub fn with_code(mut self, code: u16) -> Reply<Error<T>> {
+        self.r#type.code = Some(code);
+        self
+    }
+
+    pub fn build(self) -> Body<T> {
+        let Error {
+            body,
+            message,
+            code,
+        } = self.r#type;
+        Body::error_with_body(message, code, body)
     }
 }
 
@@ -149,9 +169,13 @@ impl<T> Reply<Fail<T>>
 where
     T: Serialize,
 {
-    fn with_body(mut self, body: T) -> Reply<Fail<T>> {
+    pub fn with_body(mut self, body: T) -> Reply<Fail<T>> {
         self.r#type.body = body;
         self
+    }
+
+    pub fn build(self) -> Body<T> {
+        Body::fail(self.r#type.body)
     }
 }
 
@@ -159,8 +183,12 @@ impl<T> Reply<Success<T>>
 where
     T: Serialize,
 {
-    fn with_body(mut self, body: T) -> Reply<Success<T>> {
+    pub fn with_body(mut self, body: T) -> Reply<Success<T>> {
         self.r#type.body = body;
         self
+    }
+
+    pub fn build(self) -> Body<T> {
+        Body::success(self.r#type.body)
     }
 }
