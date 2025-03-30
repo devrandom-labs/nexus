@@ -9,3 +9,5 @@ pub struct User {
     email: Email,
     password: Password,
 }
+
+// TODO: add states to aggregate, pending, active

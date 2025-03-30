@@ -14,6 +14,7 @@ mod services;
 #[instrument]
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // state sqlx with sqlite
     let (router, api) = OpenApiRouter::with_openapi(api::ApiDoc::openapi())
         .merge(api::router())
         .split_for_parts();
@@ -29,3 +30,11 @@ async fn main() -> Result<(), Error> {
 
     Ok(())
 }
+
+// TODO: FINISH CQRS CRATE
+// TODO: FINISH GATEWAY
+// TODO: change user system to account system
+// TODO: total event driven, other services can create accounts/orgs/people/dogs/cats/bots when an account is created
+// TODO: in tixlys 1st user is created automatically or profile?
+// TODO: change ways to create an account on tixlys? right now email/password
+// TODO: futue keriID
