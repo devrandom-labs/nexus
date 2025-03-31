@@ -7,9 +7,9 @@ use std::ops::RangeInclusive;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, instrument};
 
+pub mod body;
 pub mod config;
 pub mod error;
-pub mod payload;
 pub mod tracer;
 
 pub use config::AppConfig;

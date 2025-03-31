@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use pawz::payload::{Reply, ReplyInner};
+use pawz::body::Body as PawzBody;
 use std::fmt::Debug;
 use thiserror::Error as TError;
 
@@ -17,20 +17,16 @@ pub enum Error {
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        let builder = Response::builder();
         match self {
-            Self::NotFound => Reply::new(
-                StatusCode::NOT_FOUND,
-                ReplyInner::error("Resource not found", Some(StatusCode::NOT_FOUND.as_u16())),
-            )
-            .into_response(),
-            Self::InternalServerError => Reply::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ReplyInner::error(
-                    "Internal server error",
-                    Some(StatusCode::INTERNAL_SERVER_ERROR.as_u16()),
-                ),
-            )
-            .into_response(),
+            Self::NotFound => builder
+                .status(StatusCode::NOT_FOUND)
+                .body(PawzBody::error_no_body("Resource not found", None))
+                .unwrap(),
+            Self::InternalServerError => builder
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(PawzBody::error_no_body("Internal server error", None))
+                .unwrap(),
         }
     }
 }
