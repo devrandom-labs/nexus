@@ -1,6 +1,8 @@
-use super::body::Body;
+use super::{body::Body, error::Error as PayloadError};
 use axum::http::StatusCode;
 use serde::Serialize;
+
+type ReplyResult<T> = Result<T, PayloadError>;
 
 pub trait ReplyType: Serialize {
     fn default_status() -> StatusCode;
@@ -66,6 +68,19 @@ where
     code: Option<u16>,
 }
 
+impl<T> Error<T>
+where
+    T: Serialize,
+{
+    pub fn set_message(&mut self, message: String) -> Result<(), PayloadError> {
+        if message.trim().is_empty() {
+            return Err(PayloadError::EmptyMessage);
+        }
+        self.message = message;
+        Ok(())
+    }
+}
+
 impl<T> Default for Error<T>
 where
     T: Serialize,
@@ -92,13 +107,22 @@ pub struct Reply<T>
 where
     T: ReplyType,
 {
-    r#type: T,
+    r#type: Option<T>,
+}
+
+impl<T> Reply<T>
+where
+    T: ReplyType,
+{
+    pub fn new() -> Self {
+        Reply { r#type: None }
+    }
 }
 
 impl Default for Reply<Success<String>> {
     fn default() -> Self {
         Self {
-            r#type: Success::default(),
+            r#type: Some(Success::default()),
         }
     }
 }
@@ -106,7 +130,7 @@ impl Default for Reply<Success<String>> {
 impl Default for Reply<Error<String>> {
     fn default() -> Self {
         Self {
-            r#type: Error::default(),
+            r#type: Some(Error::default()),
         }
     }
 }
@@ -114,49 +138,46 @@ impl Default for Reply<Error<String>> {
 impl Default for Reply<Fail<String>> {
     fn default() -> Self {
         Self {
-            r#type: Fail::default(),
+            r#type: Some(Fail::default()),
         }
     }
-}
-
-pub fn error() -> Reply<Error<String>> {
-    Reply::<Error<String>>::default()
-}
-
-pub fn success() -> Reply<Success<String>> {
-    Reply::<Success<String>>::default()
-}
-
-pub fn fail() -> Reply<Fail<String>> {
-    Reply::<Fail<String>>::default()
 }
 
 impl<T> Reply<Error<T>>
 where
     T: Serialize,
 {
-    pub fn with_body(mut self, body: T) -> Reply<Error<T>> {
-        self.r#type.body = Some(body);
-        self
+    pub fn with_body(mut self, body: T) -> ReplyResult<Reply<Error<T>>> {
+        self.r#type
+            .as_mut()
+            .map(|r_type| r_type.body = Some(body))
+            .ok_or(PayloadError::NoTypeSchema)?;
+        Ok(self)
     }
 
-    pub fn with_message(mut self, message: String) -> Reply<Error<T>> {
-        self.r#type.message = message;
-        self
+    pub fn with_message(mut self, message: String) -> ReplyResult<Reply<Error<T>>> {
+        self.r#type
+            .as_mut()
+            .ok_or(PayloadError::NoTypeSchema)
+            .and_then(|r| r.set_message(message))?;
+        Ok(self)
     }
 
-    pub fn with_code(mut self, code: u16) -> Reply<Error<T>> {
-        self.r#type.code = Some(code);
-        self
+    pub fn with_code(mut self, code: u16) -> ReplyResult<Reply<Error<T>>> {
+        self.r#type
+            .as_mut()
+            .map(|r| r.code = Some(code))
+            .ok_or(PayloadError::NoTypeSchema)?;
+        Ok(self)
     }
 
-    pub fn build(self) -> Body<T> {
+    pub fn build(self) -> ReplyResult<Body<T>> {
         let Error {
             body,
             message,
             code,
-        } = self.r#type;
-        Body::error_with_body(message, code, body)
+        } = self.r#type.ok_or(PayloadError::NoTypeSchema)?;
+        Ok(Body::error_with_body(message, code, body))
     }
 }
 
@@ -164,13 +185,18 @@ impl<T> Reply<Fail<T>>
 where
     T: Serialize,
 {
-    pub fn with_body(mut self, body: T) -> Reply<Fail<T>> {
-        self.r#type.body = body;
-        self
+    pub fn with_body(mut self, body: T) -> ReplyResult<Reply<Fail<T>>> {
+        self.r#type
+            .as_mut()
+            .map(|r_type| r_type.body = body)
+            .ok_or(PayloadError::NoTypeSchema)?;
+        Ok(self)
     }
 
-    pub fn build(self) -> Body<T> {
-        Body::fail(self.r#type.body)
+    pub fn build(self) -> ReplyResult<Body<Fail<T>>> {
+        self.r#type
+            .ok_or(PayloadError::NoTypeSchema)
+            .map(|b| Body::fail(b))
     }
 }
 
@@ -178,13 +204,18 @@ impl<T> Reply<Success<T>>
 where
     T: Serialize,
 {
-    pub fn with_body(mut self, body: T) -> Reply<Success<T>> {
-        self.r#type.body = body;
-        self
+    pub fn with_body(mut self, body: T) -> ReplyResult<Reply<Success<T>>> {
+        self.r#type
+            .as_mut()
+            .map(|r_type| r_type.body = body)
+            .ok_or(PayloadError::NoTypeSchema)?;
+        Ok(self)
     }
 
-    pub fn build(self) -> Body<T> {
-        Body::success(self.r#type.body)
+    pub fn build(self) -> ReplyResult<Body<Success<T>>> {
+        self.r#type
+            .ok_or(PayloadError::NoTypeSchema)
+            .map(|b| Body::success(b))
     }
 }
 
