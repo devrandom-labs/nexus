@@ -12,6 +12,7 @@ pub mod config;
 pub mod error;
 pub mod tracer;
 
+pub use body::Body;
 pub use config::AppConfig;
 pub use tracer::DefaultTracer;
 pub use tracer::EnvironmentTracer;

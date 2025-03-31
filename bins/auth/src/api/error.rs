@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use pawz::body::Body as PawzBody;
+use pawz::Body as PawzBody;
 use std::fmt::Debug;
 use thiserror::Error as TError;
 
