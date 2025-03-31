@@ -1,3 +1,4 @@
+use super::error::Error;
 use serde::Serialize;
 
 /// Represents a generic API response, based on the JSend specification.
@@ -43,7 +44,7 @@ use serde::Serialize;
 ///     name: "Alice".to_string(),
 /// });
 ///
-/// let error_response: Body<String> = Body::error("User not found", Some(404));
+/// let error_response: Body<String> = Body::error("User not found", Some(404), None).unwrap();
 /// ```
 #[derive(Serialize)]
 #[serde(tag = "status")]
@@ -63,34 +64,6 @@ where
         #[serde(skip_serializing_if = "Option::is_none")]
         data: Option<T>,
     },
-}
-
-impl Body<String> {
-    /// Constructs an `Error` response with a string message and an optional code,
-    /// adhering to the JSend specification.
-    ///
-    /// This constructor is specialized for `Response<String>` and is useful for creating
-    /// error responses with human-readable messages.
-    ///
-    /// # Arguments
-    ///
-    /// * `message`: The error message (can be converted to `String`).
-    /// * `code`: An optional error code.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use pawz::payload::body::Body;
-    ///
-    /// let error_response: Body<String> = Body::error("Database connection failed", Some(500));
-    /// ```
-    pub fn error(message: impl Into<String>, code: Option<u16>) -> Self {
-        Body::Error {
-            message: message.into(),
-            code,
-            data: None,
-        }
-    }
 }
 
 impl<T> Body<T>
@@ -180,26 +153,51 @@ where
     ///     details: String,
     /// }
     ///
-    /// let error_response: Body<ErrorDetails> = Body::error_with_body(
+    /// let error_response: Body<ErrorDetails> = Body::error(
     ///     "Invalid input",
     ///     Some(400),
     ///     Some(ErrorDetails {
     ///         details: "Input must be a positive integer".to_string(),
     ///     }),
-    /// );
+    /// ).unwrap();
     /// ```
-    pub fn error_with_body(message: impl Into<String>, code: Option<u16>, data: Option<T>) -> Self {
-        Body::Error {
-            message: message.into(),
+    pub fn error(
+        message: impl Into<String>,
+        code: Option<u16>,
+        data: Option<T>,
+    ) -> Result<Self, Error> {
+        let message: String = message.into();
+        if message.trim().is_empty() {
+            return Err(Error::EmptyMessage);
+        }
+        Ok(Body::Error {
+            message,
             code,
             data,
+        })
+    }
+}
+
+impl Body<()> {
+    /// Creates an error response without a body.
+    pub fn error_no_body(message: impl Into<String>, code: Option<u16>) -> Result<Self, Error> {
+        let message: String = message.into();
+        if message.trim().is_empty() {
+            return Err(Error::EmptyMessage);
         }
+        Ok(Body::Error {
+            message,
+            code,
+            data: None,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Body;
+    use crate::payload::error::Error;
+
     use serde::Serialize;
     use serde_json::json;
 
@@ -247,7 +245,7 @@ mod tests {
 
     #[test]
     fn error_response_to_json() {
-        let response = Body::error("Some problem", None);
+        let response = Body::error_no_body("Some problem", None).unwrap();
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -257,7 +255,7 @@ mod tests {
 
     #[test]
     fn error_with_code() {
-        let response = Body::error("Some problem", Some(400));
+        let response = Body::error_no_body("Some problem", Some(400)).unwrap();
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -270,7 +268,7 @@ mod tests {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Body::error_with_body("Some problem", None, Some(body));
+        let response = Body::error("Some problem", None, Some(body)).unwrap();
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -283,11 +281,22 @@ mod tests {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Body::error_with_body("Some problem", Some(400), Some(body));
+        let response = Body::error("Some problem", Some(400), Some(body)).unwrap();
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
             json!({"status": "error", "message": "Some problem", "data": {"stack": "some stack"}, "code": 400})
         );
+    }
+
+    #[test]
+    fn empty_message_error() {
+        let result = Body::error("   ", None, None::<ErrorBody>);
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap(), Error::EmptyMessage);
+
+        let result = Body::error_no_body("  ", None);
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap(), Error::EmptyMessage);
     }
 }
