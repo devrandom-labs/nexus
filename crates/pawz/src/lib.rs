@@ -7,12 +7,11 @@ use std::ops::RangeInclusive;
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, instrument};
 
-pub mod body;
 pub mod config;
 pub mod error;
+pub mod jsend;
 pub mod tracer;
 
-pub use body::Body;
 pub use config::AppConfig;
 pub use tracer::DefaultTracer;
 pub use tracer::EnvironmentTracer;

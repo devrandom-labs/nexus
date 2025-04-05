@@ -173,17 +173,6 @@ where
     }
 }
 
-impl Body<()> {
-    /// Creates an error response without a body.
-    pub fn error_no_body(message: impl Into<String>, code: Option<u16>) -> Self {
-        Body::Error {
-            message: message.into(),
-            code,
-            data: None,
-        }
-    }
-}
-
 impl<T> IntoResponse for Body<T>
 where
     T: Serialize,
@@ -196,7 +185,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::Body;
-    use crate::payload::error::Error;
 
     use serde::Serialize;
     use serde_json::json;
@@ -244,31 +232,11 @@ mod tests {
     }
 
     #[test]
-    fn error_response_to_json() {
-        let response = Body::error_no_body("Some problem", None).unwrap();
-        let serialized = serde_json::to_value(&response).unwrap();
-        assert_eq!(
-            serialized,
-            json!({"status": "error", "message": "Some problem"})
-        );
-    }
-
-    #[test]
-    fn error_with_code() {
-        let response = Body::error_no_body("Some problem", Some(400)).unwrap();
-        let serialized = serde_json::to_value(&response).unwrap();
-        assert_eq!(
-            serialized,
-            json!({"status": "error", "message": "Some problem", "code": 400})
-        );
-    }
-
-    #[test]
     fn error_with_body() {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Body::error("Some problem", None, Some(body)).unwrap();
+        let response = Body::error("Some problem", None, Some(body));
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
@@ -281,22 +249,11 @@ mod tests {
         let body = ErrorBody {
             stack: "some stack".into(),
         };
-        let response = Body::error("Some problem", Some(400), Some(body)).unwrap();
+        let response = Body::error("Some problem", Some(400), Some(body));
         let serialized = serde_json::to_value(&response).unwrap();
         assert_eq!(
             serialized,
             json!({"status": "error", "message": "Some problem", "data": {"stack": "some stack"}, "code": 400})
         );
-    }
-
-    #[test]
-    fn empty_message_error() {
-        let result = Body::error("   ", None, None::<ErrorBody>);
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap(), Error::EmptyMessage);
-
-        let result = Body::error_no_body("  ", None);
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap(), Error::EmptyMessage);
     }
 }
