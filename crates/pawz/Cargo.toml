@@ -17,3 +17,4 @@ workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tower = { workspace = true, features = ["util"] }

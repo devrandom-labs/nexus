@@ -1,27 +1,38 @@
+#![allow(dead_code)]
 use axum::{
+    extract::rejection::JsonRejection,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use pawz::payload::Response as PawzResponse;
+use pawz::jsend::Body;
+use std::fmt::Debug;
 use thiserror::Error as TError;
-
-use super::AppJson;
 
 #[derive(Debug, TError)]
 pub enum Error {
     #[error("Resource not found")]
     NotFound,
+    #[error("Internal server error")]
+    #[allow(clippy::enum_variant_names)]
+    InternalServerError,
+    #[error("{0}")]
+    JsonRejection(#[from] JsonRejection),
 }
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        let (status, response) = match self {
-            Self::NotFound => (
-                StatusCode::NOT_FOUND,
-                PawzResponse::error("Resource not found", Some(StatusCode::NOT_FOUND.as_u16())),
+        let (status, message) = match self {
+            Self::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_owned()),
+            Self::InternalServerError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_owned(),
             ),
+            Self::JsonRejection(rejection) => (rejection.status(), rejection.body_text()),
         };
-
-        (status, AppJson(response)).into_response()
+        (
+            status,
+            Body::<()>::error(message, Some(status.as_u16()), None),
+        )
+            .into_response()
     }
 }

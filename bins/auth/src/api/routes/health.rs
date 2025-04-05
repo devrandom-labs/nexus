@@ -1,4 +1,8 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
+use crate::api::AppJson;
+
+use super::AppResult;
+use axum::http::StatusCode;
+use pawz::jsend::Body;
 use serde::Serialize;
 use tracing::instrument;
 
@@ -40,7 +44,8 @@ pub struct HealthResponse {
 /// Content-Type: application/json
 ///
 /// {
-///     "message": "ok."
+///  "status": "success",
+///  "data": { "message": "ok." }
 /// }
 /// ```
 #[utoipa::path(get,
@@ -52,13 +57,13 @@ pub struct HealthResponse {
                )
 )]
 #[instrument(name = "health", target = "auth::api::health")]
-pub async fn route() -> impl IntoResponse {
-    (
+pub async fn route() -> AppResult<HealthResponse> {
+    Ok((
         StatusCode::OK,
-        Json(HealthResponse {
-            message: "ok.".into(),
-        }),
-    )
+        AppJson(Body::success(HealthResponse {
+            message: "ok.".to_owned(),
+        })),
+    ))
 }
 
 #[cfg(test)]
@@ -75,6 +80,9 @@ mod test {
         let response = response.into_response();
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_response_body(response).await;
-        assert_eq!(body, json!({ "message": "ok." }));
+        assert_eq!(
+            body,
+            json!({"data": {"message": "ok."}, "status": "success"})
+        );
     }
 }

@@ -26,9 +26,9 @@ where
 
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
-        .route("/health", get(routes::health))
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
+        .route("/health", get(routes::health))
         .layer(TraceLayer::new_for_http())
         .fallback(routes::not_found)
 }
@@ -75,7 +75,10 @@ mod test {
         let response = router.oneshot(health_request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_response_body(response).await;
-        assert_eq!(body, json!({"message": "ok."}))
+        assert_eq!(
+            body,
+            json!({"status": "success", "data": {"message": "ok."}})
+        )
     }
 
     #[tokio::test]
