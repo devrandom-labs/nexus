@@ -1,6 +1,6 @@
-use crate::api::AppResult;
+use super::AppResult;
 use axum::http::StatusCode;
-use pawz::payload::{Reply, ReplyInner};
+use pawz::jsend::Body;
 use serde::Serialize;
 use tracing::instrument;
 
@@ -55,10 +55,10 @@ pub struct HealthResponse {
 )]
 #[instrument(name = "health", target = "auth::api::health")]
 pub async fn route() -> AppResult<HealthResponse> {
-    Ok(Reply::new(
+    Ok((
         StatusCode::OK,
-        ReplyInner::success(HealthResponse {
-            message: "ok.".into(),
+        Body::success(HealthResponse {
+            message: "ok.".to_owned(),
         }),
     ))
 }

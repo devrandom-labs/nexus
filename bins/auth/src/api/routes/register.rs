@@ -1,10 +1,13 @@
-use axum::{http::StatusCode, response::IntoResponse};
+#![allow(dead_code)]
+use super::AppResult;
+use axum::http::StatusCode;
+use pawz::jsend::Body;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter, Result};
 use tracing::instrument;
 use utoipa::ToSchema;
 
-use crate::api::{AppJson, AppResult};
+use crate::api::AppJson;
 
 /// Represents a request to register a new user.
 #[derive(Deserialize, ToSchema)]
@@ -44,7 +47,14 @@ pub struct RegisterResponse {
 
 #[utoipa::path(post, path = "/register", tags = ["User Authentication"], operation_id = "registerUser", responses((status = OK, body = String, description = "Register User")))]
 #[instrument(name = "register", target = "auth::api::register")]
-pub async fn route(AppJson(_input): AppJson<RegisterRequest>) -> AppResult<RegisterResponse> {}
+pub async fn route(AppJson(_input): AppJson<RegisterRequest>) -> AppResult<RegisterResponse> {
+    Ok((
+        StatusCode::ACCEPTED,
+        Body::success(RegisterResponse {
+            message: "verify email".to_string(),
+        }),
+    ))
+}
 
 // TODO: ensure email is valid email. just text based validation
 // TODO: ensure password matches basic password validation

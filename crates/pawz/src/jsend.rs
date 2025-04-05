@@ -34,7 +34,7 @@ use serde::Serialize;
 ///
 /// ```rust
 /// use serde::Serialize;
-/// use pawz::payload::body::Body;
+/// use pawz::jsend::Body;
 ///
 /// #[derive(Serialize)]
 /// struct User {
@@ -47,7 +47,7 @@ use serde::Serialize;
 ///     name: "Alice".to_string(),
 /// });
 ///
-/// let error_response: Body<String> = Body::error("User not found", Some(404), None).unwrap();
+/// let error_response: Body<String> = Body::error("User not found", Some(404), None);
 /// ```
 #[derive(Serialize)]
 #[serde(tag = "status")]
@@ -86,7 +86,7 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::payload::body::Body;
+    /// use pawz::jsend::Body;
     ///
     /// #[derive(Serialize)]
     /// struct User {
@@ -116,7 +116,7 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::payload::body::Body;
+    /// use pawz::jsend::Body;
     ///
     /// #[derive(Serialize)]
     /// struct ErrorDetails {
@@ -149,7 +149,7 @@ where
     ///
     /// ```rust
     /// use serde::Serialize;
-    /// use pawz::payload::body::Body;
+    /// use pawz::jsend::Body;
     ///
     /// #[derive( Serialize)]
     /// struct ErrorDetails {
@@ -162,7 +162,7 @@ where
     ///     Some(ErrorDetails {
     ///         details: "Input must be a positive integer".to_string(),
     ///     }),
-    /// ).unwrap();
+    /// );
     /// ```
     pub fn error(message: impl Into<String>, code: Option<u16>, data: Option<T>) -> Self {
         Body::Error {

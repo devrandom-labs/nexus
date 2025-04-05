@@ -4,16 +4,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use pawz::payload::Reply;
+
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 
 mod error;
 mod routes;
-
-#[allow(dead_code)]
-pub type AppResult<T> = Result<Reply<T>, error::Error>;
 
 #[derive(FromRequest)]
 #[from_request(via(Json), rejection(error::Error))]
@@ -80,7 +77,10 @@ mod test {
         let response = router.oneshot(health_request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_response_body(response).await;
-        assert_eq!(body, json!({"message": "ok."}))
+        assert_eq!(
+            body,
+            json!({"status": "success", "data": {"message": "ok."}})
+        )
     }
 
     #[tokio::test]
