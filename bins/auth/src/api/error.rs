@@ -13,6 +13,7 @@ pub enum Error {
     #[error("Resource not found")]
     NotFound,
     #[error("Internal server error")]
+    #[allow(clippy::enum_variant_names)]
     InternalServerError,
     #[error("{0}")]
     JsonRejection(#[from] JsonRejection),
