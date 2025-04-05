@@ -94,5 +94,4 @@ mod tests {
         assert!(display_output.contains("[REDACTED]"));
         assert!(!display_output.contains("secret_password"))
     }
-    // TODO: test validation works
 }

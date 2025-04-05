@@ -7,6 +7,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 mod adapters;
 mod api;
+mod commons;
 mod domain;
 mod error;
 mod services;
