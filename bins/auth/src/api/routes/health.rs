@@ -1,3 +1,5 @@
+use crate::api::AppJson;
+
 use super::AppResult;
 use axum::http::StatusCode;
 use pawz::jsend::Body;
@@ -58,9 +60,9 @@ pub struct HealthResponse {
 pub async fn route() -> AppResult<HealthResponse> {
     Ok((
         StatusCode::OK,
-        Body::success(HealthResponse {
+        AppJson(Body::success(HealthResponse {
             message: "ok.".to_owned(),
-        }),
+        })),
     ))
 }
 

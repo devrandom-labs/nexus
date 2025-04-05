@@ -50,9 +50,9 @@ pub struct RegisterResponse {
 pub async fn route(AppJson(_input): AppJson<RegisterRequest>) -> AppResult<RegisterResponse> {
     Ok((
         StatusCode::ACCEPTED,
-        Body::success(RegisterResponse {
+        AppJson(Body::success(RegisterResponse {
             message: "verify email".to_string(),
-        }),
+        })),
     ))
 }
 
