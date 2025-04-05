@@ -6,16 +6,20 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter, Result};
 use tracing::instrument;
 use utoipa::ToSchema;
+use validator::Validate;
 
 use crate::api::AppJson;
 
 /// Represents a request to register a new user.
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, Validate, ToSchema)]
 pub struct RegisterRequest {
     /// The user's email address.
     #[schema(example = "joel@tixlys.com")]
+    #[validate(email(message = "Invalid email format"))]
     email: String,
     /// the user's password
+    #[schema(example = "P@ssw0rd123!")]
+    #[validate(length(min = 8, message = "password should have at least 8 characters"))]
     password: String,
 }
 
