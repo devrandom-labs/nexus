@@ -42,7 +42,8 @@ pub struct HealthResponse {
 /// Content-Type: application/json
 ///
 /// {
-///     "message": "ok."
+///  "status": "success",
+///  "data": { "message": "ok." }
 /// }
 /// ```
 #[utoipa::path(get,

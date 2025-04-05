@@ -28,7 +28,7 @@ idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 lock_api = { version = "0.4", features = ["arc_lock"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
-num-traits = { version = "0.2", default-features = false, features = ["i128", "std"] }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
@@ -62,7 +62,7 @@ idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 lock_api = { version = "0.4", features = ["arc_lock"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
-num-traits = { version = "0.2", default-features = false, features = ["i128", "std"] }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }

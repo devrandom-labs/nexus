@@ -28,7 +28,6 @@ impl IntoResponse for Error {
             ),
             Self::JsonRejection(rejection) => (rejection.status(), rejection.body_text()),
         };
-
         (
             status,
             Body::<()>::error(message, Some(status.as_u16()), None),
