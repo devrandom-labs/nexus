@@ -5,8 +5,10 @@ use pawz::jsend::Body;
 use tracing::instrument;
 
 pub mod health;
+pub mod initiate_register;
 pub mod login;
 pub mod register;
+pub mod verify_email;
 
 pub use health::route as health;
 pub use login::route as login;

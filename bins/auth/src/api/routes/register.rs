@@ -21,6 +21,7 @@ pub struct RegisterRequest {
     #[schema(example = "P@ssw0rd123!")]
     #[validate(length(min = 8, message = "password should have at least 8 characters"))]
     password: String,
+    agree_to_terms_and_conditions: bool,
 }
 
 impl Debug for RegisterRequest {
@@ -72,6 +73,7 @@ mod tests {
         let request = RegisterRequest {
             email: "test@example.com".to_string(),
             password: "secret_password".to_string(),
+            agree_to_terms_and_conditions: false,
         };
 
         let debug_output = format!("{:?}", request);
@@ -86,6 +88,7 @@ mod tests {
         let request = RegisterRequest {
             email: "test@example.com".to_string(),
             password: "secret_password".to_string(),
+            agree_to_terms_and_conditions: false,
         };
 
         let display_output = format!("{}", request);
