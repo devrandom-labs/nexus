@@ -141,6 +141,9 @@
           inherit events auth notifications users pu pd i;
 
           ## FIXME: only put this for darwin? maybe
+          # tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
+          #   (commonArgs // { inherit cargoArtifacts; });
+        } // lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
           tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
             (commonArgs // { inherit cargoArtifacts; });
         };
