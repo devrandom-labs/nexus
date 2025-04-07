@@ -226,3 +226,6 @@ mod test {
         assert_eq!(validate("NoValidSymb`1"), Err(expected_err));
     }
 }
+
+// TODO: move this to password creation
+// TODO: password should not be created without this validation
