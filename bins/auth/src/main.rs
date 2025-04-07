@@ -8,6 +8,7 @@ use utoipa_swagger_ui::SwaggerUi;
 mod api;
 mod domain;
 mod error;
+mod handlers;
 mod services;
 
 #[instrument]
