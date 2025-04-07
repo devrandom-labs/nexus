@@ -6,9 +6,10 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-argon2 = { workspace = true, features = ["password-hash"] }
+argon2 = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
 cqrs = { path = "../../crates/cqrs" }
+password-hash = { workspace = true, fetures = ["rand_core", "getrandom"] }
 pawz = { path = "../../crates/pawz" }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
