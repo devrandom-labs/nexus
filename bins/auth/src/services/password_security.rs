@@ -9,7 +9,6 @@ impl PasswordSecurity {
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
         let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
-
         Ok(password_hash)
     }
     pub fn verify_password(password: &str, password_hash: &PasswordHash) -> Result<(), Error> {

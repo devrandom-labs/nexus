@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use super::email::Email;
-use super::hashed_password::HashedPassword;
 use super::user_id::UserId;
+use password_hash::PasswordHashString;
 
 #[derive(Debug)]
 pub enum User {
@@ -14,6 +14,6 @@ pub enum User {
     Active {
         id: UserId,
         email: Email,
-        hashed_password: HashedPassword,
+        password_hash: PasswordHashString,
     },
 }
