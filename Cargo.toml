@@ -6,6 +6,7 @@ members = [
 ]
 
 [workspace.dependencies]
+argon2 = "0.5.3"
 axum = { version = "0.8.1", features = ["macros"] }
 chrono = "0.4.39"
 reqwest = "0.12.15"
