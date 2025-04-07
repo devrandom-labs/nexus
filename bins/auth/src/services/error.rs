@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use super::password_validator::PasswordValidationErrors;
 use thiserror::Error as TError;
 

@@ -1,8 +1,9 @@
+#![allow(dead_code)]
 use super::error::Error;
 use std::fmt::{Display, Formatter};
 
 static MIN_PASSWORD_LENGTH: u8 = 8;
-static REQUIRED_SYMBOL: &'static str = "!@#$%^&*()_+-=[]{};':\"\\|,.<>/?~";
+static REQUIRED_SYMBOL: &str = "!@#$%^&*()_+-=[]{};':\"\\|,.<>/?~";
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum PasswordRule {
