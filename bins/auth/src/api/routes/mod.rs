@@ -7,6 +7,7 @@ use tracing::instrument;
 pub mod health;
 pub mod initiate_register;
 pub mod login;
+pub mod logout;
 pub mod register;
 pub mod verify_email;
 
