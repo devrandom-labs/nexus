@@ -114,7 +114,7 @@ where
     /// # Returns
     ///
     /// A `Result` containing the `TcpListener` on success, or an `Error` on failure.
-    #[instrument]
+    #[instrument(target = "find_listener")]
     #[inline]
     async fn try_until_success(ports: RangeInclusive<u16>) -> Result<TcpListener, Error> {
         for port in ports {
@@ -172,8 +172,13 @@ where
             }
         };
 
+        let port = listener.local_addr().unwrap().port();
+        info!("swagger ui hosted on: http://localhost:{}/swagger", port);
+        info!(
+            "openapi spec hosted on: http://localhost:{}/api-docs/openapi.json",
+            port
+        );
         debug!("creating open api routes");
-
         debug!(
             "starting {} on {}",
             app_config.name,
@@ -193,4 +198,5 @@ where
 // TODO: update the docs here
 // TODO: add tests to see if this will work.
 // TODO: enable prod, default is dev unlesss specified differently.?
+// TODO: add prod tracing setup.
 // TODO: add prod tracing setup.

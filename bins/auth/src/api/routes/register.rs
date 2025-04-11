@@ -32,6 +32,10 @@ impl Debug for RegisterRequest {
         f.debug_struct("RegisterRequest")
             .field("email", &self.email)
             .field("password", &"[REDACTED]")
+            .field(
+                "agree_to_terms_and_conditions",
+                &self.agree_to_terms_and_conditions,
+            )
             .finish()
     }
 }
@@ -41,7 +45,11 @@ impl Display for RegisterRequest {
     ///
     /// This implementation ensures that the password is not exposed in display output.
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        write!(f, "Email 📧: {}, Password 🔑: [REDACTED]", &self.email)
+        write!(
+            f,
+            "Email 📧: {}, Password 🔑: [REDACTED], Agree to terms and conditions?: {}",
+            &self.email, &self.agree_to_terms_and_conditions
+        )
     }
 }
 
@@ -83,6 +91,7 @@ mod tests {
         assert!(debug_output.contains("email: \"test@example.com\""));
         assert!(debug_output.contains("password: \"[REDACTED]\""));
         assert!(!debug_output.contains("password: \"secret_password\""));
+        assert!(debug_output.contains("agree_to_terms_and_conditions"));
     }
 
     #[test]
@@ -97,6 +106,7 @@ mod tests {
 
         assert!(display_output.contains("test@example.com"));
         assert!(display_output.contains("[REDACTED]"));
-        assert!(!display_output.contains("secret_password"))
+        assert!(!display_output.contains("secret_password"));
+        assert!(display_output.contains("Agree to terms and conditions?"));
     }
 }
