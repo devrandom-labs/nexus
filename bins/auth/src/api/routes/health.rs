@@ -57,7 +57,7 @@ pub struct HealthResponse {
                )
 )]
 #[instrument(name = "health", target = "auth::api::health")]
-pub async fn route() -> AppResult<HealthResponse> {
+pub async fn route() -> AppResult<(StatusCode, AppJson<Body<HealthResponse>>)> {
     Ok((
         StatusCode::OK,
         AppJson(Body::success(HealthResponse {

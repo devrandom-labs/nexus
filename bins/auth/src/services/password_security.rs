@@ -1,22 +1,49 @@
+#![allow(dead_code)]
 use super::error::Error;
-use argon2::Argon2;
-use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng};
+use argon2::{Algorithm, Argon2, Params, Version};
+use tracing::{error, instrument};
 
-pub struct PasswordSecurity;
+use password_hash::{
+    PasswordHashString, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
+};
 
-impl PasswordSecurity {
-    pub fn hash_password(password: &str) -> Result<PasswordHash, Error> {
+#[derive(Debug)]
+pub struct PasswordSecurity<'a> {
+    hasher: Argon2<'a>,
+}
+
+impl PasswordSecurity<'_> {
+    pub fn new() -> Self {
+        Self {
+            hasher: Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default()),
+        }
+    }
+
+    #[instrument]
+    pub fn hash_password(&self, password: &str) -> Result<PasswordHashString, Error> {
         let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        let password_hash = argon2.hash_password(password.as_bytes(), &salt)?;
+        let password_hash = self
+            .hasher
+            .hash_password(password.as_bytes(), &salt)
+            .inspect_err(|err| error!(?err))
+            .map_err(Error::PasswordHash)?
+            .serialize();
         Ok(password_hash)
     }
-    pub fn verify_password(password: &str, password_hash: &PasswordHash) -> Result<(), Error> {
-        Argon2::default()
-            .verify_password(password.as_bytes(), password_hash)
-            .map_err(|err| Error::PasswordHash(err))
+
+    #[instrument]
+    pub fn verify_password(
+        &self,
+        password: &str,
+        password_hash: &PasswordHashString,
+    ) -> Result<(), Error> {
+        let password_hash = password_hash.password_hash();
+        self.hasher
+            .verify_password(password.as_bytes(), &password_hash)
+            .inspect_err(|err| error!(?err))
+            .map_err(Error::PasswordHash)
     }
 }
 
-// TODO: change to password security
 // TODO: create a trait to impl securities with argon2
+// TODO: prettify the error logs here.

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use super::password_validator::PasswordValidationErrors;
-use password_hash::Error as PasswordHashError;
+use password_hash::errors::Error as PasswordHashError;
 use thiserror::Error as TError;
 
 #[derive(Debug, Clone, TError, PartialEq)]
