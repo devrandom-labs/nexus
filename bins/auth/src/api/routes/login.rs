@@ -37,7 +37,14 @@ pub struct LoginResponse {
     email: String,
 }
 
-#[utoipa::path(post, path = "/login", tags = ["User Authentication"], operation_id = "loginUser", request_body = LoginRequest, responses((status = OK, body = Body<LoginResponse>, description = "User has logged in successfully")))]
+#[utoipa::path(post,
+               path = "/login",
+               tags = ["User Authentication"],
+               operation_id = "loginUser",
+               request_body = LoginRequest,
+               responses(
+                   (status = OK, body = Body<LoginResponse>, description = "User has logged in successfully")
+               ))]
 #[instrument(name = "login", target = "auth::api::login")]
 pub async fn route(
     AppJson(request): AppJson<LoginRequest>,

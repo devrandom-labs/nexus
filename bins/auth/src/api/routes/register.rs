@@ -58,7 +58,14 @@ pub struct RegisterResponse {
     message: String,
 }
 
-#[utoipa::path(post, path = "/register", tags = ["User Authentication"], operation_id = "registerUser", request_body = RegisterRequest, responses((status = OK, body = Body<RegisterResponse>, description = "User registered successfully")))]
+#[utoipa::path(post,
+               path = "/register",
+               tags = ["User Authentication"],
+               operation_id = "registerUser",
+               request_body = RegisterRequest,
+               responses(
+                   (status = OK, body = Body<RegisterResponse>, description = "User registered successfully")
+               ))]
 #[instrument(name = "register", target = "auth::api::register")]
 pub async fn route(
     AppJson(request): AppJson<RegisterRequest>,
@@ -73,6 +80,7 @@ pub async fn route(
 
 // TODO: ensure email is valid email. just text based validation
 // TODO: ensure password matches basic password validation
+// TODO: add error responses
 
 #[cfg(test)]
 mod tests {
