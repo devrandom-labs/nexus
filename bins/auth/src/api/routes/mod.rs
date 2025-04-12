@@ -12,6 +12,7 @@ pub use health::route as health;
 pub use initiate_register::route as initiate_register;
 pub use login::route as login;
 pub use register::route as register;
+pub use verify_email::route as verify_email;
 
 #[allow(dead_code)]
 pub type AppResult<T> = Result<T, Error>;

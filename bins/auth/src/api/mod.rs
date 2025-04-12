@@ -29,6 +29,7 @@ pub fn router() -> OpenApiRouter {
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
         .route("/initiate_register", post(routes::initiate_register))
+        .route("/verify_email", post(routes::verify_email))
         .route("/health", get(routes::health))
         .layer(TraceLayer::new_for_http())
         .fallback(routes::not_found)
@@ -41,7 +42,8 @@ pub fn router() -> OpenApiRouter {
         routes::health::route,
         routes::register::route,
         routes::login::route,
-        routes::initiate_register::route
+        routes::initiate_register::route,
+        routes::verify_email::route
     )
 )]
 pub struct ApiDoc;

@@ -60,7 +60,7 @@ pub struct RegisterResponse {
 
 #[utoipa::path(post,
                path = "/register",
-               tags = ["User Authentication"],
+               tags = ["Onboarding"],
                operation_id = "registerUser",
                request_body = RegisterRequest,
                responses(
@@ -77,9 +77,8 @@ pub async fn route(
         })),
     ))
 }
-
-// TODO: ensure email is valid email. just text based validation
-// TODO: ensure password matches basic password validation
+// TODO: plug in password validation function here
+// TODO: test validation failure response.
 // TODO: add error responses
 
 #[cfg(test)]
