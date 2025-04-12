@@ -1455,6 +1455,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "utoipa",
  "workspace-hack",
 ]
 
@@ -3293,6 +3294,7 @@ dependencies = [
  "idna",
  "indexmap",
  "log",
+ "memchr",
  "num-traits",
  "regex",
  "regex-automata 0.4.9",

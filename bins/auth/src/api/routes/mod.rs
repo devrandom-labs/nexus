@@ -9,6 +9,7 @@ pub mod register;
 pub mod verify_email;
 
 pub use health::route as health;
+pub use initiate_register::route as initiate_register;
 pub use login::route as login;
 pub use register::route as register;
 

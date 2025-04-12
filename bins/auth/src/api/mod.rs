@@ -28,6 +28,7 @@ pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
+        .route("/initiate_register", post(routes::initiate_register))
         .route("/health", get(routes::health))
         .layer(TraceLayer::new_for_http())
         .fallback(routes::not_found)
@@ -36,7 +37,12 @@ pub fn router() -> OpenApiRouter {
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Auth", description = "Tixlys Auth Service",),
-    paths(routes::health::route, routes::register::route, routes::login::route)
+    paths(
+        routes::health::route,
+        routes::register::route,
+        routes::login::route,
+        routes::initiate_register::route
+    )
 )]
 pub struct ApiDoc;
 

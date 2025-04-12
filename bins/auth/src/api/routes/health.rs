@@ -5,9 +5,10 @@ use axum::http::StatusCode;
 use pawz::jsend::Body;
 use serde::Serialize;
 use tracing::instrument;
+use utoipa::ToSchema;
 
 /// Represents the health status of the application.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     /// A message describing the health status.
     message: String,
@@ -53,7 +54,7 @@ pub struct HealthResponse {
                tag = "General",
                operation_id = "healthCheck",
                responses(
-                   (status = OK, body = String, description = "Application is Healthy", content_type = "application/json")
+                   (status = OK, body = Body<HealthResponse>, description = "Application is Healthy", content_type = "application/json")
                )
 )]
 #[instrument(name = "health", target = "auth::api::health")]

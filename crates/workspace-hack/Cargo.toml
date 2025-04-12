@@ -22,6 +22,7 @@ hashbrown = { version = "0.15" }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
+memchr = { version = "2" }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
@@ -48,6 +49,7 @@ hashbrown = { version = "0.15" }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
+memchr = { version = "2" }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }

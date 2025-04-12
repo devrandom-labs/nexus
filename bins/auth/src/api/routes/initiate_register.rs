@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-
 use super::AppResult;
 use axum::http::StatusCode;
 use serde::Deserialize;
+use tracing::instrument;
 use utoipa::ToSchema;
 use validator::Validate;
 
@@ -16,6 +16,16 @@ pub struct InitiateRegisterRequest {
     email: String,
 }
 
+#[utoipa::path(post,
+               path = "/initiate_register",
+               tags = ["User Authentication"],
+               operation_id = "initiateRegister",
+               request_body = InitiateRegisterRequest,
+               responses(
+                   (status = ACCEPTED, description = "Verification link/otp has been sent to the email address", content_type = "application/json")
+               )
+)]
+#[instrument(name = "initiate_register", target = "auth::api::initiate_register")]
 pub async fn route(AppJson(_request): AppJson<InitiateRegisterRequest>) -> AppResult<StatusCode> {
     Ok(StatusCode::ACCEPTED)
 }

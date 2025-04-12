@@ -58,7 +58,7 @@ pub struct RegisterResponse {
     message: String,
 }
 
-#[utoipa::path(post, path = "/register", tags = ["User Authentication"], operation_id = "registerUser", responses((status = OK, body = String, description = "Register User")))]
+#[utoipa::path(post, path = "/register", tags = ["User Authentication"], operation_id = "registerUser", request_body = RegisterRequest, responses((status = OK, body = Body<RegisterResponse>, description = "User registered successfully")))]
 #[instrument(name = "register", target = "auth::api::register")]
 pub async fn route(
     AppJson(request): AppJson<RegisterRequest>,
