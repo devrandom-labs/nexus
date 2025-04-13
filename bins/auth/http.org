@@ -29,10 +29,49 @@ POST http://localhost:3000/initiate-register
 // date: Sun, 13 Apr 2025 19:14:13 GMT
 // Request duration: 0.057308s
 #+END_SRC
-***  content type and proper email
+*** invalid json
 #+begin_src restclient
 POST http://localhost:3000/initiate-register
 Content-Type: application/json
 
 { 'email': 'joel@tixlys.com' }
+#+end_src
+
+#+RESULTS:
+#+BEGIN_SRC js
+{
+  "status": "error",
+  "message": "Failed to parse the request body as JSON: key must be a string at line 1 column 3",
+  "code": 400
+}
+// POST http://localhost:3000/initiate-register
+// HTTP/1.1 400 Bad Request
+// content-type: application/json
+// content-length: 123
+// date: Sun, 13 Apr 2025 19:43:11 GMT
+// Request duration: 0.004165s
+#+END_SRC
+
+*** invalid email add
+#+begin_src restclient
+POST http://localhost:3000/initiate-register
+Content-Type: application/json
+
+{ "email": "joeltixlys.com" }
+#+end_src
+
+#+RESULTS:
+#+BEGIN_SRC js
+// POST http://localhost:3000/initiate-register
+// HTTP/1.1 202 Accepted
+// content-length: 0
+// date: Sun, 13 Apr 2025 19:44:34 GMT
+// Request duration: 0.001064s
+#+END_SRC
+*** valid email address
+#+begin_src restclient
+POST http://localhost:3000/initiate-register
+Content-Type: application/json
+
+{ "email": "joeltixlys.com" }
 #+end_src
