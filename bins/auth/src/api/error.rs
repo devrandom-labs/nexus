@@ -7,6 +7,7 @@ use axum::{
 use pawz::jsend::Body;
 use std::fmt::Debug;
 use thiserror::Error as TError;
+use validator::ValidationErrors;
 
 #[derive(Debug, TError)]
 pub enum Error {
@@ -15,8 +16,10 @@ pub enum Error {
     #[error("Internal server error")]
     #[allow(clippy::enum_variant_names)]
     InternalServerError,
-    #[error("{0}")]
+    #[error("Invalid Json Request: {0}")]
     JsonRejection(#[from] JsonRejection),
+    #[error("Validation Error: {0}")]
+    Validation(#[from] ValidationErrors),
 }
 
 impl IntoResponse for Error {
@@ -28,6 +31,7 @@ impl IntoResponse for Error {
                 "Internal server error".to_owned(),
             ),
             Self::JsonRejection(rejection) => (rejection.status(), rejection.body_text()),
+            Self::Validation(err) => (StatusCode::BAD_REQUEST, err.to_string()),
         };
         (
             status,

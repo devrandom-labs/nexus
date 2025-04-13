@@ -1,29 +1,18 @@
 use axum::{
     Json,
-    extract::FromRequest,
+    extract::{FromRequest, Request, rejection::JsonRejection},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use serde::{Serialize, de::DeserializeOwned};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
+use validator::Validate;
 
 mod error;
 mod routes;
 mod validations;
-
-#[derive(FromRequest)]
-#[from_request(via(Json), rejection(error::Error))]
-pub struct AppJson<T>(T);
-
-impl<T> IntoResponse for AppJson<T>
-where
-    Json<T>: IntoResponse,
-{
-    fn into_response(self) -> Response {
-        Json(self.0).into_response()
-    }
-}
 
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
@@ -54,6 +43,34 @@ pub struct ApiDoc;
 // TODO: improve open api documentation
 // TODO: add security add on for login route
 // TODO: test all apis
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AppJson<T>(T);
+
+impl<T> IntoResponse for AppJson<T>
+where
+    T: Serialize,
+    Json<T>: IntoResponse,
+{
+    fn into_response(self) -> Response {
+        Json(self.0).into_response()
+    }
+}
+
+impl<S, T> FromRequest<S> for AppJson<T>
+where
+    T: DeserializeOwned + Validate,
+    S: Send + Sync,
+    Json<T>: FromRequest<S, Rejection = JsonRejection>,
+{
+    type Rejection = error::Error;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(value) = Json::<T>::from_request(req, state).await?;
+        value.validate()?;
+        Ok(AppJson(value))
+    }
+}
 
 #[cfg(test)]
 mod test {
