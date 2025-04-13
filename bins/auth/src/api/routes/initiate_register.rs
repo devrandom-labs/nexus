@@ -16,7 +16,7 @@ pub struct InitiateRegisterRequest {
 }
 
 #[utoipa::path(post,
-               path = "/initiate_register",
+               path = "/initiate-register",
                tags = ["Onboarding"],
                operation_id = "initiateRegister",
                request_body = InitiateRegisterRequest,
