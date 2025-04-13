@@ -28,11 +28,12 @@ pub struct InitiateRegisterRequest {
 pub async fn route(
     ValidJson(request): ValidJson<InitiateRegisterRequest>,
 ) -> AppResult<StatusCode> {
-    debug!(?request);
+    debug!(email = %request.email, "Processing initiate registration request");
+    // TODO: pass the command bus here so route can emit command to command bus
+    // TODO: convert request to command and emit to command handler
     Ok(StatusCode::ACCEPTED)
 }
 
-// TODO: add validation to AppJson
 // TODO: sends a command to aggregate to initiate_verification
 
 #[cfg(test)]
