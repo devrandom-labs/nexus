@@ -30,6 +30,7 @@ pub async fn route(AppJson(request): AppJson<InitiateRegisterRequest>) -> AppRes
     Ok(StatusCode::ACCEPTED)
 }
 
+// TODO: add validation to AppJson
 // TODO: sends a command to aggregate to initiate_verification
 
 #[cfg(test)]
