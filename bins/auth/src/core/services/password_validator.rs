@@ -103,7 +103,7 @@ pub fn validate(password: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::services::password_validator::PasswordRule;
+    use crate::core::services::password_validator::PasswordRule;
 
     use super::{Error, PasswordValidationErrors, validate};
 
