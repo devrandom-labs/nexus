@@ -10,6 +10,7 @@ use utoipa_axum::router::OpenApiRouter;
 
 mod error;
 mod routes;
+mod validations;
 
 #[derive(FromRequest)]
 #[from_request(via(Json), rejection(error::Error))]

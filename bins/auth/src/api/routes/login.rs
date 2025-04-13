@@ -9,10 +9,15 @@ use utoipa::ToSchema;
 use validator::Validate;
 
 use super::AppResult;
+use crate::api::validations::validate_password;
 
 #[derive(Deserialize, Validate, ToSchema)]
 pub struct LoginRequest {
+    /// The user's email address.
+    #[schema(example = "joel@tixlys.com")]
+    #[validate(email(message = "Invalid email format"))]
     email: String,
+    #[validate(custom(function = "validate_password"))]
     password: String,
 }
 

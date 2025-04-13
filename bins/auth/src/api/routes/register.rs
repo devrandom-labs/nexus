@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use super::AppResult;
+
 use axum::http::StatusCode;
 use pawz::jsend::Body;
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,7 @@ use utoipa::ToSchema;
 use validator::Validate;
 
 use crate::api::AppJson;
+use crate::api::validations::validate_password;
 
 /// Represents a request to register a new user.
 #[derive(Deserialize, Validate, ToSchema)]
@@ -19,7 +21,7 @@ pub struct RegisterRequest {
     email: String,
     /// the user's password
     #[schema(example = "P@ssw0rd123!")]
-    #[validate(length(min = 8, message = "password should have at least 8 characters"))]
+    #[validate(custom(function = "validate_password"))]
     password: String,
     agree_to_terms_and_conditions: bool,
 }
