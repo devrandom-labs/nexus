@@ -9,4 +9,22 @@ impl Password {
         let password = validate(&password).map(|_| Password(password))?;
         Ok(password)
     }
+
+    pub fn secret(&self) -> &str {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::Password;
+
+    #[test]
+    fn valid_password_should_be_created() {
+        let input = "ValidP@ss1".to_string();
+        let password = Password::new(input.clone());
+        assert!(password.is_ok());
+        let password = password.unwrap();
+        assert_eq!(&input, &password.secret());
+    }
 }
