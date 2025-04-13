@@ -26,6 +26,7 @@ where
 
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
+        .route("/logout", post(routes::logout))
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
         .route("/initiate_register", post(routes::initiate_register))
@@ -43,7 +44,8 @@ pub fn router() -> OpenApiRouter {
         routes::register::route,
         routes::login::route,
         routes::initiate_register::route,
-        routes::verify_email::route
+        routes::verify_email::route,
+        routes::logout::route,
     )
 )]
 pub struct ApiDoc;

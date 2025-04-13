@@ -11,6 +11,7 @@ pub mod verify_email;
 pub use health::route as health;
 pub use initiate_register::route as initiate_register;
 pub use login::route as login;
+pub use logout::route as logout;
 pub use register::route as register;
 pub use verify_email::route as verify_email;
 

@@ -66,7 +66,7 @@ pub struct RegisterResponse {
                responses(
                    (status = OK, body = Body<RegisterResponse>, description = "User registered successfully")
                ))]
-#[instrument(name = "register", target = "auth::api::register")]
+#[instrument(name = "register", target = "api::auth::register")]
 pub async fn route(
     AppJson(request): AppJson<RegisterRequest>,
 ) -> AppResult<(StatusCode, AppJson<Body<RegisterResponse>>)> {

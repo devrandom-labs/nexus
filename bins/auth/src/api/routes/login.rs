@@ -45,7 +45,7 @@ pub struct LoginResponse {
                responses(
                    (status = OK, body = Body<LoginResponse>, description = "User has logged in successfully")
                ))]
-#[instrument(name = "login", target = "auth::api::login")]
+#[instrument(name = "login", target = "api::auth::login")]
 pub async fn route(
     AppJson(request): AppJson<LoginRequest>,
 ) -> AppResult<(StatusCode, AppJson<Body<LoginResponse>>)> {

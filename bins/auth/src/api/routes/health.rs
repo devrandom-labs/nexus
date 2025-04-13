@@ -51,13 +51,13 @@ pub struct HealthResponse {
 /// ```
 #[utoipa::path(get,
                path = "/health",
-               tag = "General",
+               tags = ["Internal", "Operations"],
                operation_id = "healthCheck",
                responses(
                    (status = OK, body = Body<HealthResponse>, description = "Application is Healthy", content_type = "application/json")
                )
 )]
-#[instrument(name = "health", target = "auth::api::health")]
+#[instrument(name = "health", target = "api::auth::health")]
 pub async fn route() -> AppResult<(StatusCode, AppJson<Body<HealthResponse>>)> {
     Ok((
         StatusCode::OK,

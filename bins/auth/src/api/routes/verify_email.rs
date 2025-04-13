@@ -34,7 +34,7 @@ pub struct VerifyEmailResponse {
                    (status = OK, body = Body<VerifyEmailResponse> ,description = "Email has been successfully verified", content_type = "application/json")
                )
 )]
-#[instrument(name = "verify_email", target = "auth::api::verify_email")]
+#[instrument(name = "verify_email", target = "api::auth::verify_email")]
 pub async fn route(
     AppJson(_request): AppJson<VerifyEmailRequest>,
 ) -> AppResult<(StatusCode, AppJson<Body<VerifyEmailResponse>>)> {

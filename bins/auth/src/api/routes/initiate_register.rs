@@ -25,7 +25,7 @@ pub struct InitiateRegisterRequest {
                    (status = ACCEPTED, description = "Verification link/otp has been sent to the email address", content_type = "application/json")
                )
 )]
-#[instrument(name = "initiate_register", target = "auth::api::initiate_register")]
+#[instrument(name = "initiate_register", target = "api::auth::initiate_register")]
 pub async fn route(AppJson(_request): AppJson<InitiateRegisterRequest>) -> AppResult<StatusCode> {
     Ok(StatusCode::ACCEPTED)
 }
