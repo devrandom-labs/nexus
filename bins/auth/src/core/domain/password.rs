@@ -1,5 +1,6 @@
+#![allow(dead_code)]
 use super::Error;
-use crate::commons::validate;
+use crate::commons::password_validation::validate;
 
 pub struct Password(String);
 

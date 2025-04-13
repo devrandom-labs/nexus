@@ -1,4 +1,4 @@
-use crate::commons::PasswordValidationErrors;
+use crate::commons::password_validation::PasswordValidationErrors;
 use thiserror::Error as TError;
 
 pub(crate) mod email;
