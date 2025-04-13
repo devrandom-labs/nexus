@@ -6,6 +6,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
 
 mod api;
+mod commons;
 mod core;
 mod error;
 

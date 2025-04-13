@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use super::error::Error;
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 static MIN_PASSWORD_LENGTH: u8 = 8;
@@ -32,6 +32,8 @@ impl Display for PasswordRule {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PasswordValidationErrors(pub Vec<PasswordRule>);
 
+impl Error for PasswordValidationErrors {}
+
 impl Display for PasswordValidationErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let message: Vec<String> = self.0.iter().map(|r| r.to_string()).collect();
@@ -50,11 +52,11 @@ impl PasswordValidationErrors {
 }
 
 #[inline]
-pub fn validate(password: &str) -> Result<(), Error> {
+pub fn validate(password: &str) -> Result<(), PasswordValidationErrors> {
     if password.len() < MIN_PASSWORD_LENGTH.into() {
-        return Err(Error::PasswordValidation(PasswordValidationErrors(vec![
-            PasswordRule::TooShort(MIN_PASSWORD_LENGTH),
-        ])));
+        return Err(PasswordValidationErrors(vec![PasswordRule::TooShort(
+            MIN_PASSWORD_LENGTH,
+        )]));
     }
     let mut found_lower_case = false;
     let mut found_upper_case = false;
@@ -97,15 +99,13 @@ pub fn validate(password: &str) -> Result<(), Error> {
             errors.add(PasswordRule::MissingSymbol);
         };
 
-        Err(Error::PasswordValidation(errors))
+        Err(errors)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::core::services::password_validator::PasswordRule;
-
-    use super::{Error, PasswordValidationErrors, validate};
+    use super::{PasswordRule, PasswordValidationErrors, validate};
 
     #[test]
     fn test_valid_password() {
@@ -117,8 +117,7 @@ mod test {
 
     #[test]
     fn test_short_password() {
-        let expected_err =
-            Error::PasswordValidation(PasswordValidationErrors(vec![PasswordRule::TooShort(8)]));
+        let expected_err = PasswordValidationErrors(vec![PasswordRule::TooShort(8)]);
         assert_eq!(validate("Short1!"), Err(expected_err.clone()));
         assert_eq!(validate("V@lid7"), Err(expected_err.clone()));
         // Test empty string
@@ -127,75 +126,69 @@ mod test {
 
     #[test]
     fn test_no_lower_case_password() {
-        let expected_err = Error::PasswordValidation(PasswordValidationErrors(vec![
-            PasswordRule::MissingLowercase,
-        ]));
+        let expected_err = PasswordValidationErrors(vec![PasswordRule::MissingLowercase]);
         assert_eq!(validate("NOLOWER!1"), Err(expected_err.clone()));
         assert_eq!(validate("ALLUPPER&7"), Err(expected_err));
     }
 
     #[test]
     fn test_no_upper_case_password() {
-        let expected_err = Error::PasswordValidation(PasswordValidationErrors(vec![
-            PasswordRule::MissingUppercase,
-        ]));
+        let expected_err = PasswordValidationErrors(vec![PasswordRule::MissingUppercase]);
         assert_eq!(validate("noupper!1"), Err(expected_err.clone()));
         assert_eq!(validate("alllower&7"), Err(expected_err));
     }
 
     #[test]
     fn test_no_digit_password() {
-        let expected_err =
-            Error::PasswordValidation(PasswordValidationErrors(vec![PasswordRule::MissingDigit]));
+        let expected_err = PasswordValidationErrors(vec![PasswordRule::MissingDigit]);
         assert_eq!(validate("NoDigit!Pwd"), Err(expected_err.clone()));
         assert_eq!(validate("NoDigit@Too"), Err(expected_err));
     }
 
     #[test]
     fn test_no_symbol_password() {
-        let expected_err =
-            Error::PasswordValidation(PasswordValidationErrors(vec![PasswordRule::MissingSymbol]));
+        let expected_err = PasswordValidationErrors(vec![PasswordRule::MissingSymbol]);
         assert_eq!(validate("NoSymbol123"), Err(expected_err.clone()));
         assert_eq!(
             validate("NoSymbolToo"),
-            Err(Error::PasswordValidation(PasswordValidationErrors(vec![
+            Err(PasswordValidationErrors(vec![
                 PasswordRule::MissingDigit,
                 PasswordRule::MissingSymbol,
-            ])))
+            ]))
         );
     }
 
     #[test]
     fn test_multiple_missing_requirements() {
         // Missing uppercase, digit, symbol
-        let expected_err_1 = Error::PasswordValidation(PasswordValidationErrors(vec![
+        let expected_err_1 = PasswordValidationErrors(vec![
             PasswordRule::MissingUppercase,
             PasswordRule::MissingDigit,
             PasswordRule::MissingSymbol,
-        ]));
+        ]);
         assert_eq!(validate("onlylower"), Err(expected_err_1));
 
         // Missing lowercase, symbol
-        let expected_err_2 = Error::PasswordValidation(PasswordValidationErrors(vec![
+        let expected_err_2 = PasswordValidationErrors(vec![
             PasswordRule::MissingLowercase,
             PasswordRule::MissingSymbol,
-        ]));
+        ]);
         assert_eq!(validate("ONLYUPPER123"), Err(expected_err_2));
 
         // Missing only digit and symbol
-        let expected_err_3 = Error::PasswordValidation(PasswordValidationErrors(vec![
+        let expected_err_3 = PasswordValidationErrors(vec![
             PasswordRule::MissingDigit,
             PasswordRule::MissingSymbol,
-        ]));
+        ]);
         assert_eq!(validate("LowerAndUpper"), Err(expected_err_3));
     }
 
     #[test]
     fn test_min_length_but_invalid() {
-        let expected_err = Error::PasswordValidation(PasswordValidationErrors(vec![
+        let expected_err = PasswordValidationErrors(vec![
             PasswordRule::MissingUppercase,
             PasswordRule::MissingDigit,
-        ]));
+        ]);
         assert_eq!(validate("lower!aa"), Err(expected_err));
     }
 
@@ -221,8 +214,7 @@ mod test {
         assert!(validate("Val`dP~ss1").is_ok()); // Backtick isn't in the list, this should fail! Let's fix the assertion
         // assert!(validate("Val`dP~ss1").is_ok()); // Fails as ` is not in REQUIRED_SYMBOLS
         assert_eq!(validate("Val`dP~ss1"), Ok(()));
-        let expected_err =
-            Error::PasswordValidation(PasswordValidationErrors(vec![PasswordRule::MissingSymbol]));
+        let expected_err = PasswordValidationErrors(vec![PasswordRule::MissingSymbol]);
         assert_eq!(validate("NoValidSymb`1"), Err(expected_err));
     }
 }
