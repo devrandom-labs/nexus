@@ -1,12 +1,11 @@
 #![allow(dead_code)]
 use super::AppResult;
+use crate::api::AppJson;
 use axum::http::StatusCode;
 use serde::Deserialize;
-use tracing::instrument;
+use tracing::{debug, instrument};
 use utoipa::ToSchema;
 use validator::Validate;
-
-use crate::api::AppJson;
 
 #[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct InitiateRegisterRequest {
@@ -22,12 +21,20 @@ pub struct InitiateRegisterRequest {
                operation_id = "initiateRegister",
                request_body = InitiateRegisterRequest,
                responses(
-                   (status = ACCEPTED, description = "Verification link/otp has been sent to the email address", content_type = "application/json")
+                   (status = ACCEPTED, description = "Verification link/otp has been sent to the email address", content_type = "application/json"),
                )
 )]
 #[instrument(name = "initiate_register", target = "api::auth::initiate_register")]
-pub async fn route(AppJson(_request): AppJson<InitiateRegisterRequest>) -> AppResult<StatusCode> {
+pub async fn route(AppJson(request): AppJson<InitiateRegisterRequest>) -> AppResult<StatusCode> {
+    debug!(?request);
     Ok(StatusCode::ACCEPTED)
 }
 
 // TODO: sends a command to aggregate to initiate_verification
+
+#[cfg(test)]
+mod test {
+
+    // send valid body -> should return status::accepted
+    // send invalid body -> should return someting (lets find out)
+}

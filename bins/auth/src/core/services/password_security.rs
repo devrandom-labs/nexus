@@ -45,5 +45,5 @@ impl PasswordSecurity<'_> {
     }
 }
 
-// TODO: create a trait to impl securities with argon2
-// TODO: prettify the error logs here.
+// TODO: hasher service
+// TODO: verifier service.
