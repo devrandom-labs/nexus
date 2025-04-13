@@ -45,9 +45,9 @@ pub struct ApiDoc;
 // TODO: test all apis
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct AppJson<T>(T);
+pub struct ValidJson<T>(T);
 
-impl<T> IntoResponse for AppJson<T>
+impl<T> IntoResponse for ValidJson<T>
 where
     T: Serialize,
     Json<T>: IntoResponse,
@@ -57,7 +57,7 @@ where
     }
 }
 
-impl<S, T> FromRequest<S> for AppJson<T>
+impl<S, T> FromRequest<S> for ValidJson<T>
 where
     T: DeserializeOwned + Validate,
     S: Send + Sync,
@@ -68,7 +68,7 @@ where
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let Json(value) = Json::<T>::from_request(req, state).await?;
         value.validate()?;
-        Ok(AppJson(value))
+        Ok(ValidJson(value))
     }
 }
 

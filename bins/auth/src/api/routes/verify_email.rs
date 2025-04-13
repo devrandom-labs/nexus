@@ -7,7 +7,7 @@ use tracing::instrument;
 use utoipa::ToSchema;
 use validator::Validate;
 
-use crate::api::AppJson;
+use crate::api::ValidJson;
 
 #[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct VerifyEmailRequest {
@@ -36,11 +36,11 @@ pub struct VerifyEmailResponse {
 )]
 #[instrument(name = "verify_email", target = "api::auth::verify_email")]
 pub async fn route(
-    AppJson(_request): AppJson<VerifyEmailRequest>,
-) -> AppResult<(StatusCode, AppJson<Body<VerifyEmailResponse>>)> {
+    ValidJson(_request): ValidJson<VerifyEmailRequest>,
+) -> AppResult<(StatusCode, ValidJson<Body<VerifyEmailResponse>>)> {
     Ok((
         StatusCode::OK,
-        AppJson(Body::success(VerifyEmailResponse {
+        ValidJson(Body::success(VerifyEmailResponse {
             token: "Some token".to_string(),
         })),
     ))

@@ -1,6 +1,5 @@
-use crate::api::AppJson;
-
 use super::AppResult;
+use crate::api::ValidJson;
 use axum::http::StatusCode;
 use pawz::jsend::Body;
 use serde::Serialize;
@@ -58,10 +57,10 @@ pub struct HealthResponse {
                )
 )]
 #[instrument(name = "health", target = "api::auth::health")]
-pub async fn route() -> AppResult<(StatusCode, AppJson<Body<HealthResponse>>)> {
+pub async fn route() -> AppResult<(StatusCode, ValidJson<Body<HealthResponse>>)> {
     Ok((
         StatusCode::OK,
-        AppJson(Body::success(HealthResponse {
+        ValidJson(Body::success(HealthResponse {
             message: "ok.".to_owned(),
         })),
     ))

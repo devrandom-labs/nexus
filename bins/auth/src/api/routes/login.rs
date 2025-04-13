@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::api::AppJson;
+use crate::api::ValidJson;
 use axum::http::StatusCode;
 use pawz::jsend::Body;
 use serde::{Deserialize, Serialize};
@@ -52,11 +52,11 @@ pub struct LoginResponse {
                ))]
 #[instrument(name = "login", target = "api::auth::login")]
 pub async fn route(
-    AppJson(request): AppJson<LoginRequest>,
-) -> AppResult<(StatusCode, AppJson<Body<LoginResponse>>)> {
+    ValidJson(request): ValidJson<LoginRequest>,
+) -> AppResult<(StatusCode, ValidJson<Body<LoginResponse>>)> {
     Ok((
         StatusCode::ACCEPTED,
-        AppJson(Body::success(LoginResponse {
+        ValidJson(Body::success(LoginResponse {
             id: "some id".to_string(),
             email: "some_email".to_string(),
         })),

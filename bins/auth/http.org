@@ -8,6 +8,27 @@
 this document contains all http endpoints specified in auth server, for testing purposes.
 
 ** initiate register
+*** with nobody
+#+begin_src restclient no content type
+POST http://localhost:3000/initiate-register
+Content-Type: application/json
+#+end_src
+
+#+RESULTS:
+#+BEGIN_SRC js
+{
+  "status": "error",
+  "message": "Failed to parse the request body as JSON: EOF while parsing a value at line 1 column 0",
+  "code": 400
+}
+// POST http://localhost:3000/initiate-register
+// HTTP/1.1 400 Bad Request
+// content-type: application/json
+// content-length: 128
+// date: Sun, 13 Apr 2025 20:37:28 GMT
+// Request duration: 0.004139s
+#+END_SRC
+
 *** with no content-type
 #+begin_src restclient no content type
 POST http://localhost:3000/initiate-register
@@ -48,8 +69,8 @@ Content-Type: application/json
 // HTTP/1.1 400 Bad Request
 // content-type: application/json
 // content-length: 123
-// date: Sun, 13 Apr 2025 19:43:11 GMT
-// Request duration: 0.004165s
+// date: Sun, 13 Apr 2025 20:37:35 GMT
+// Request duration: 0.004261s
 #+END_SRC
 
 *** invalid email add
@@ -62,16 +83,33 @@ Content-Type: application/json
 
 #+RESULTS:
 #+BEGIN_SRC js
+{
+  "status": "error",
+  "message": "email: Invalid format",
+  "code": 400
+}
 // POST http://localhost:3000/initiate-register
-// HTTP/1.1 202 Accepted
-// content-length: 0
-// date: Sun, 13 Apr 2025 19:44:34 GMT
-// Request duration: 0.001064s
+// HTTP/1.1 400 Bad Request
+// content-type: application/json
+// content-length: 63
+// date: Sun, 13 Apr 2025 20:36:23 GMT
+// Request duration: 0.001420s
 #+END_SRC
 *** valid email address
 #+begin_src restclient
 POST http://localhost:3000/initiate-register
 Content-Type: application/json
 
-{ "email": "joeltixlys.com" }
+{ "email": "joel@tixlys.com" }
 #+end_src
+
+#+RESULTS:
+#+BEGIN_SRC js
+// POST http://localhost:3000/initiate-register
+// HTTP/1.1 202 Accepted
+// content-length: 0
+// date: Sun, 13 Apr 2025 20:36:31 GMT
+// Request duration: 0.010569s
+#+END_SRC
+
+#+RESULTS:

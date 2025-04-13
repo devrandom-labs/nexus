@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use super::AppResult;
-use crate::api::AppJson;
+use crate::api::ValidJson;
 use axum::http::StatusCode;
 use serde::Deserialize;
 use tracing::{debug, instrument};
@@ -11,7 +11,7 @@ use validator::Validate;
 pub struct InitiateRegisterRequest {
     /// The user's email address.
     #[schema(example = "joel@tixlys.com")]
-    #[validate(email(message = "Invalid email format"))]
+    #[validate(email(message = "Invalid format"))]
     email: String,
 }
 
@@ -25,7 +25,9 @@ pub struct InitiateRegisterRequest {
                )
 )]
 #[instrument(name = "initiate_register", target = "api::auth::initiate_register")]
-pub async fn route(AppJson(request): AppJson<InitiateRegisterRequest>) -> AppResult<StatusCode> {
+pub async fn route(
+    ValidJson(request): ValidJson<InitiateRegisterRequest>,
+) -> AppResult<StatusCode> {
     debug!(?request);
     Ok(StatusCode::ACCEPTED)
 }

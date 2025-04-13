@@ -9,7 +9,7 @@ use tracing::instrument;
 use utoipa::ToSchema;
 use validator::Validate;
 
-use crate::api::AppJson;
+use crate::api::ValidJson;
 use crate::api::validations::validate_password;
 
 /// Represents a request to register a new user.
@@ -70,11 +70,11 @@ pub struct RegisterResponse {
                ))]
 #[instrument(name = "register", target = "api::auth::register")]
 pub async fn route(
-    AppJson(request): AppJson<RegisterRequest>,
-) -> AppResult<(StatusCode, AppJson<Body<RegisterResponse>>)> {
+    ValidJson(request): ValidJson<RegisterRequest>,
+) -> AppResult<(StatusCode, ValidJson<Body<RegisterResponse>>)> {
     Ok((
         StatusCode::ACCEPTED,
-        AppJson(Body::success(RegisterResponse {
+        ValidJson(Body::success(RegisterResponse {
             message: "you are registered!!".to_string(),
         })),
     ))
