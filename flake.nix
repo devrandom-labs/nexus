@@ -66,6 +66,7 @@
               ./Cargo.lock
               (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources ./crates/pawz)
+              (craneLib.fileset.commonCargoSources ./crates/meow_diator)
               (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
               (craneLib.fileset.commonCargoSources crate)
             ];

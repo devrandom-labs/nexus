@@ -12,6 +12,7 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+base64 = { version = "0.22" }
 crypto-common = { version = "0.1", default-features = false, features = ["std"] }
 digest = { version = "0.10", features = ["mac", "std"] }
 futures-channel = { version = "0.3", features = ["sink"] }
@@ -39,6 +40,7 @@ tracing = { version = "0.1", features = ["log"] }
 tracing-core = { version = "0.1" }
 
 [build-dependencies]
+base64 = { version = "0.22" }
 crypto-common = { version = "0.1", default-features = false, features = ["std"] }
 digest = { version = "0.10", features = ["mac", "std"] }
 futures-channel = { version = "0.3", features = ["sink"] }
