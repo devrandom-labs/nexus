@@ -6,4 +6,5 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+thiserror = { workspace = true }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
