@@ -46,6 +46,7 @@ impl Mediator {
 
 #[cfg(test)]
 mod test {
+
     use crate::Mediator;
 
     mod setup {
@@ -91,8 +92,21 @@ mod test {
         }
     }
 
+    use setup::{GetPing, handle_get_ping};
+
     #[test]
     fn mediator_builder_returns_builder() {
         let _builder = Mediator::builder();
+    }
+
+    #[tokio::test]
+    async fn test_successful_ping_request() {
+        let req = GetPing {
+            message: "test".to_string(),
+        };
+        let reply = handle_get_ping(req).await;
+        assert!(reply.is_ok());
+        let message = reply.unwrap().reply;
+        assert_eq!(message, "pong: test".to_string());
     }
 }
