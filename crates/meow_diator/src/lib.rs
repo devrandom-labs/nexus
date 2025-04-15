@@ -106,6 +106,25 @@ impl Mediator {
     pub fn builder() -> MediatorBuilder {
         MediatorBuilder::new()
     }
+
+    pub async fn send<R>(&self, request: R) -> Result<R::Response, Error>
+    where
+        R: Request + Any + Send,
+    {
+        let type_id = TypeId::of::<R>();
+        let handler = self
+            .handlers
+            .get(&type_id)
+            .ok_or_else(|| Error::HandlerNotFound(format!("{:?}", std::any::type_name::<R>())))?;
+
+        let boxed_request: Box<dyn Any + Send> = Box::new(request);
+        let result_any: Box<dyn Any + Send> = handler(boxed_request).await?;
+
+        match result_any.downcast::<R::Response>() {
+            Ok(boxed_response) => Ok(*boxed_response),
+            Err(_) => Err(Error::ResponseDowncastError),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -191,10 +210,18 @@ mod test {
         assert_eq!(message, GetPingError::InternalFailure);
     }
 
-    #[test]
-    fn able_to_register_async_handlers() {
+    #[tokio::test]
+    async fn able_to_register_and_execute_async_handlers() {
         let mut mediator_builder = Mediator::builder();
         mediator_builder.register(handle_get_ping);
-        let _mediator = mediator_builder.build();
+        let mediator = mediator_builder.build();
+
+        let req = GetPing {
+            message: "test".to_string(),
+        };
+        let reply = mediator.send(req).await;
+        assert!(reply.is_ok());
+        let message = reply.unwrap().reply;
+        assert_eq!(message, "pong: test".to_string());
     }
 }
