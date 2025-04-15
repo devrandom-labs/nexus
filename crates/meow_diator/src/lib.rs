@@ -66,7 +66,7 @@ mod test {
             pub reply: String,
         }
 
-        #[derive(Debug, Error)]
+        #[derive(Debug, Error, PartialEq)]
         pub enum GetPingError {
             #[error("Invalid ping message: {0}")]
             InvalidMessage(String),
@@ -92,7 +92,7 @@ mod test {
         }
     }
 
-    use setup::{GetPing, handle_get_ping};
+    use setup::{GetPing, GetPingError, handle_get_ping};
 
     #[test]
     fn mediator_builder_returns_builder() {
@@ -108,5 +108,27 @@ mod test {
         assert!(reply.is_ok());
         let message = reply.unwrap().reply;
         assert_eq!(message, "pong: test".to_string());
+    }
+
+    #[tokio::test]
+    async fn test_empty_ping_request() {
+        let req = GetPing {
+            message: "".to_string(),
+        };
+        let reply = handle_get_ping(req).await;
+        assert!(reply.is_err());
+        let message = reply.unwrap_err();
+        assert_eq!(message, GetPingError::InvalidMessage("empty".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_failed_ping_request() {
+        let req = GetPing {
+            message: "failme".to_string(),
+        };
+        let reply = handle_get_ping(req).await;
+        assert!(reply.is_err());
+        let message = reply.unwrap_err();
+        assert_eq!(message, GetPingError::InternalFailure);
     }
 }
