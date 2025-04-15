@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+use std::any::Any;
 use std::error::Error as StdError;
 use std::fmt::Debug;
 use thiserror::Error as ThisError;
