@@ -1219,6 +1219,7 @@ name = "meow_diator"
 version = "0.1.0"
 dependencies = [
  "thiserror",
+ "tokio",
  "workspace-hack",
 ]
 
