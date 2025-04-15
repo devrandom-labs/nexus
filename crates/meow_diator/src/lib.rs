@@ -1,6 +1,7 @@
 use std::error::Error as StdError;
 use std::fmt::Debug;
 use thiserror::Error as ThisError;
+use tower::BoxError;
 
 /// Marker trait for requests handled by the Mediator.
 /// Defines the expected Response and Error types for the handler Service.
@@ -10,6 +11,8 @@ pub trait Request: Debug + Send + 'static {
     /// The type of error returned by the handler if processing fails.
     type Error: StdError + Send + Sync + 'static;
 }
+
+type ErasedResult = Result<Box<dyn Any + Send>, BoxError>;
 
 /// Errors thatcan occur during Mediator operation.
 #[derive(Debug, ThisError)]
@@ -42,6 +45,9 @@ impl Mediator {
     pub fn builder() -> MediatorBuilder {
         MediatorBuilder::new()
     }
+
+    // TODO: register method
+    // TODO: any async method that requires the signature to be Fn(Request) -> Future<Output = Result<Response, Error>;
 }
 
 #[cfg(test)]
