@@ -1,9 +1,15 @@
 #![allow(dead_code)]
-use std::any::Any;
-use std::error::Error as StdError;
-use std::fmt::Debug;
+use std::{
+    any::{Any, TypeId},
+    collections::HashMap,
+    error::Error as StdError,
+    fmt::Debug,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 use thiserror::Error as ThisError;
-use tower::BoxError;
+use tower::{BoxError, Service, ServiceExt, service_fn};
 
 /// Marker trait for requests handled by the Mediator.
 /// Defines the expected Response and Error types for the handler Service.
@@ -14,7 +20,10 @@ pub trait Request: Debug + Send + 'static {
     type Error: StdError + Send + Sync + 'static;
 }
 
+//-------------------- Erased Type Aliases --------------------//
 type ErasedResult = Result<Box<dyn Any + Send>, BoxError>;
+type BoxFuture = Pin<Box<dyn Future<Output = ErasedResult> + Send>>;
+type AnyRequestHandler = Box<dyn Fn(Box<dyn Any + Send>) -> BoxFuture + Send + Sync>;
 
 /// Errors thatcan occur during Mediator operation.
 #[derive(Debug, ThisError)]
@@ -23,22 +32,72 @@ pub enum Error {
     HandlerNotFound(String),
     #[error("An unexpected error occurred: {0}")]
     InternalError(String),
+    #[error("Handler execution failed")]
+    HandlerError(#[from] BoxError),
+    #[error("Response type mismatch (downcast failed)")]
+    ResponseDowncastError,
+    #[error("Request type mismatch (downcast failed)")]
+    RequestDowncastError,
 }
 
 #[derive(Clone, Default)]
-pub struct Mediator {}
+pub struct Mediator {
+    handlers: Arc<HashMap<TypeId, AnyRequestHandler>>,
+}
 
 #[derive(Default)]
-pub struct MediatorBuilder {}
+pub struct MediatorBuilder {
+    handlers: HashMap<TypeId, AnyRequestHandler>,
+}
 
 impl MediatorBuilder {
     /// Creates a new, empty builder.
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn register<R, Fut, F>(&mut self, handler: F) -> &mut Self
+    where
+        R: Request + Any + Sync,
+        F: Fn(R) -> Fut + Send + Sync + Clone + 'static,
+        Fut: Future<Output = Result<R::Response, R::Error>> + Send + 'static,
+    {
+        let type_id = TypeId::of::<R>();
+        let service = service_fn(handler);
+        let invoker: AnyRequestHandler = Box::new(move |boxed_request: Box<dyn Any + Send>| {
+            let mut service_clone = service.clone();
+
+            Box::pin(async move {
+                let request = match boxed_request.downcast::<R>() {
+                    Ok(req) => *req,
+                    Err(_) => {
+                        let err = BoxError::from(Error::RequestDowncastError);
+                        return Err(err);
+                    }
+                };
+
+                match service_clone.ready().await {
+                    Ok(read_service) => match read_service.call(request).await {
+                        Ok(response) => {
+                            let response_any: Box<dyn Any + Send> = Box::new(response);
+                            Ok(response_any)
+                        }
+                        Err(e) => Err(BoxError::from(e)),
+                    },
+                    Err(e) => Err(BoxError::from(e)),
+                }
+            })
+        });
+
+        self.handlers.insert(type_id, invoker);
+        self
+    }
+
     /// Consumes the builder and returns the configured Mediator.
     pub fn build(self) -> Mediator {
-        Mediator::default()
+        Mediator {
+            handlers: Arc::new(self.handlers),
+        }
     }
 }
 
@@ -47,9 +106,6 @@ impl Mediator {
     pub fn builder() -> MediatorBuilder {
         MediatorBuilder::new()
     }
-
-    // TODO: register method
-    // TODO: any async method that requires the signature to be Fn(Request) -> Future<Output = Result<Response, Error>;
 }
 
 #[cfg(test)]
@@ -102,11 +158,6 @@ mod test {
 
     use setup::{GetPing, GetPingError, handle_get_ping};
 
-    #[test]
-    fn mediator_builder_returns_builder() {
-        let _builder = Mediator::builder();
-    }
-
     #[tokio::test]
     async fn test_successful_ping_request() {
         let req = GetPing {
@@ -138,5 +189,12 @@ mod test {
         assert!(reply.is_err());
         let message = reply.unwrap_err();
         assert_eq!(message, GetPingError::InternalFailure);
+    }
+
+    #[test]
+    fn able_to_register_async_handlers() {
+        let mut mediator_builder = Mediator::builder();
+        mediator_builder.register(handle_get_ping);
+        let _mediator = mediator_builder.build();
     }
 }
