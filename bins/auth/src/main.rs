@@ -9,6 +9,7 @@ mod api;
 mod commons;
 mod core;
 mod error;
+mod infra;
 
 #[instrument]
 #[tokio::main]
