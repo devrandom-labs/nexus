@@ -12,8 +12,9 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+base64 = { version = "0.22" }
 crypto-common = { version = "0.1", default-features = false, features = ["std"] }
-digest = { version = "0.10", features = ["std"] }
+digest = { version = "0.10", features = ["mac", "std"] }
 futures-channel = { version = "0.3", features = ["sink"] }
 futures-core = { version = "0.3" }
 futures-task = { version = "0.3", default-features = false, features = ["std"] }
@@ -22,6 +23,7 @@ hashbrown = { version = "0.15" }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
+memchr = { version = "2" }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
@@ -38,8 +40,9 @@ tracing = { version = "0.1", features = ["log"] }
 tracing-core = { version = "0.1" }
 
 [build-dependencies]
+base64 = { version = "0.22" }
 crypto-common = { version = "0.1", default-features = false, features = ["std"] }
-digest = { version = "0.10", features = ["std"] }
+digest = { version = "0.10", features = ["mac", "std"] }
 futures-channel = { version = "0.3", features = ["sink"] }
 futures-core = { version = "0.3" }
 futures-task = { version = "0.3", default-features = false, features = ["std"] }
@@ -48,6 +51,7 @@ hashbrown = { version = "0.15" }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
+memchr = { version = "2" }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }

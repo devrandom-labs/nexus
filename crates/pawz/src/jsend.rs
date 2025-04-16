@@ -3,6 +3,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use utoipa::ToSchema;
 
 /// Represents a generic API response, based on the JSend specification.
 ///
@@ -49,11 +50,11 @@ use serde::Serialize;
 ///
 /// let error_response: Body<String> = Body::error("User not found", Some(404), None);
 /// ```
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(tag = "status")]
 pub enum Body<T>
 where
-    T: Serialize,
+    T: Serialize + ToSchema,
 {
     #[serde(rename = "success")]
     Success { data: T },
@@ -71,7 +72,7 @@ where
 
 impl<T> Body<T>
 where
-    T: Serialize,
+    T: Serialize + ToSchema,
 {
     /// Constructs a `Success` response with the provided data.
     ///
@@ -175,7 +176,7 @@ where
 
 impl<T> IntoResponse for Body<T>
 where
-    T: Serialize,
+    T: Serialize + ToSchema,
 {
     fn into_response(self) -> Response {
         Json(self).into_response()
@@ -185,21 +186,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::Body;
-
     use serde::Serialize;
     use serde_json::json;
+    use utoipa::ToSchema;
 
-    #[derive(Debug, Serialize)]
+    #[derive(Debug, Serialize, ToSchema)]
     struct SuccessResponse {
         id: String,
     }
 
-    #[derive(Debug, Serialize)]
+    #[derive(Debug, Serialize, ToSchema)]
     struct FailResponse {
         reason: String,
     }
 
-    #[derive(Debug, Serialize)]
+    #[derive(Debug, Serialize, ToSchema)]
     struct ErrorBody {
         stack: String,
     }
@@ -257,3 +258,5 @@ mod tests {
         );
     }
 }
+
+// TODO: change these to 3 diff structs, that is easier to maintain

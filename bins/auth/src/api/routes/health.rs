@@ -1,13 +1,13 @@
-use crate::api::AppJson;
-
 use super::AppResult;
+use crate::api::ValidJson;
 use axum::http::StatusCode;
 use pawz::jsend::Body;
 use serde::Serialize;
 use tracing::instrument;
+use utoipa::ToSchema;
 
 /// Represents the health status of the application.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     /// A message describing the health status.
     message: String,
@@ -50,17 +50,17 @@ pub struct HealthResponse {
 /// ```
 #[utoipa::path(get,
                path = "/health",
-               tag = "General",
+               tags = ["Internal", "Operations"],
                operation_id = "healthCheck",
                responses(
-                   (status = OK, body = String, description = "Application is Healthy", content_type = "application/json")
+                   (status = OK, body = Body<HealthResponse>, description = "Application is Healthy", content_type = "application/json")
                )
 )]
-#[instrument(name = "health", target = "auth::api::health")]
-pub async fn route() -> AppResult<HealthResponse> {
+#[instrument(name = "health", target = "api::auth::health")]
+pub async fn route() -> AppResult<(StatusCode, ValidJson<Body<HealthResponse>>)> {
     Ok((
         StatusCode::OK,
-        AppJson(Body::success(HealthResponse {
+        ValidJson(Body::success(HealthResponse {
             message: "ok.".to_owned(),
         })),
     ))

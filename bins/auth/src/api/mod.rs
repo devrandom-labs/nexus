@@ -1,33 +1,26 @@
 use axum::{
     Json,
-    extract::FromRequest,
+    extract::{FromRequest, Request, rejection::JsonRejection},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use serde::{Serialize, de::DeserializeOwned};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
+use validator::Validate;
 
 mod error;
 mod routes;
-
-#[derive(FromRequest)]
-#[from_request(via(Json), rejection(error::Error))]
-pub struct AppJson<T>(T);
-
-impl<T> IntoResponse for AppJson<T>
-where
-    Json<T>: IntoResponse,
-{
-    fn into_response(self) -> Response {
-        Json(self.0).into_response()
-    }
-}
+mod validations;
 
 pub fn router() -> OpenApiRouter {
     OpenApiRouter::new()
+        .route("/logout", post(routes::logout))
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
+        .route("/initiate-register", post(routes::initiate_register))
+        .route("/verify-email", post(routes::verify_email))
         .route("/health", get(routes::health))
         .layer(TraceLayer::new_for_http())
         .fallback(routes::not_found)
@@ -36,13 +29,48 @@ pub fn router() -> OpenApiRouter {
 #[derive(OpenApi)]
 #[openapi(
     info(title = "Auth", description = "Tixlys Auth Service",),
-    paths(routes::health::route, routes::register::route, routes::login::route)
+    paths(
+        routes::health::route,
+        routes::register::route,
+        routes::login::route,
+        routes::initiate_register::route,
+        routes::verify_email::route,
+        routes::logout::route,
+    )
 )]
 pub struct ApiDoc;
 
 // TODO: improve open api documentation
 // TODO: add security add on for login route
 // TODO: test all apis
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValidJson<T>(T);
+
+impl<T> IntoResponse for ValidJson<T>
+where
+    T: Serialize,
+    Json<T>: IntoResponse,
+{
+    fn into_response(self) -> Response {
+        Json(self.0).into_response()
+    }
+}
+
+impl<S, T> FromRequest<S> for ValidJson<T>
+where
+    T: DeserializeOwned + Validate,
+    S: Send + Sync,
+    Json<T>: FromRequest<S, Rejection = JsonRejection>,
+{
+    type Rejection = error::Error;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(value) = Json::<T>::from_request(req, state).await?;
+        value.validate()?;
+        Ok(ValidJson(value))
+    }
+}
 
 #[cfg(test)]
 mod test {
