@@ -9,6 +9,7 @@ authors.workspace = true
 argon2 = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
 cqrs = { path = "../../crates/cqrs" }
+meow_diator = { path = "../../crates/meow_diator" }
 password-hash = { workspace = true, features = ["rand_core", "getrandom", "alloc"] }
 pawz = { path = "../../crates/pawz" }
 serde = { workspace = true, features = ["derive"] }

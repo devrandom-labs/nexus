@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use std::{
-    any::{Any, TypeId},
+    any::{Any, TypeId, type_name},
     collections::HashMap,
     error::Error as StdError,
     fmt::Debug,
@@ -28,16 +28,21 @@ type AnyRequestHandler = Box<dyn Fn(Box<dyn Any + Send>) -> BoxFuture + Send + S
 /// Errors thatcan occur during Mediator operation.
 #[derive(Debug, ThisError)]
 pub enum Error {
-    #[error("Handler not found for request type: {0}")]
-    HandlerNotFound(String),
+    #[error("Handler not found for request type: {request_type}")]
+    HandlerNotFound { request_type: String },
+
+    #[error("Handler execution failed for request type: {request_type}")]
+    HandlerExecutionFailed {
+        request_type: String,
+        #[source]
+        source: BoxError,
+    },
+
+    #[error("Response type mismatch for request type: {request_type} (downcast failed)")]
+    ResponseDowncastFailed { request_type: String },
+
     #[error("An unexpected error occurred: {0}")]
     InternalError(String),
-    #[error("Handler execution failed")]
-    HandlerError(#[from] BoxError),
-    #[error("Response type mismatch (downcast failed)")]
-    ResponseDowncastError,
-    #[error("Request type mismatch (downcast failed)")]
-    RequestDowncastError,
 }
 
 #[derive(Clone, Default)]
@@ -63,15 +68,19 @@ impl MediatorBuilder {
         Fut: Future<Output = Result<R::Response, R::Error>> + Send + 'static,
     {
         let type_id = TypeId::of::<R>();
+        let type_name = type_name::<R>();
         let service = service_fn(handler);
         let invoker: AnyRequestHandler = Box::new(move |boxed_request: Box<dyn Any + Send>| {
             let mut service_clone = service.clone();
-
             Box::pin(async move {
                 let request = match boxed_request.downcast::<R>() {
                     Ok(req) => *req,
                     Err(_) => {
-                        let err = BoxError::from(Error::RequestDowncastError);
+                        let err_msg = format!(
+                            "Internal Mediator Error: Request Downcast Failed for type {}",
+                            type_name
+                        );
+                        let err: BoxError = err_msg.into();
                         return Err(err);
                     }
                 };
@@ -112,17 +121,28 @@ impl Mediator {
         R: Request + Any + Send,
     {
         let type_id = TypeId::of::<R>();
+        let request_type = type_name::<R>().to_string();
         let handler = self
             .handlers
             .get(&type_id)
-            .ok_or_else(|| Error::HandlerNotFound(format!("{:?}", std::any::type_name::<R>())))?;
+            .ok_or_else(|| Error::HandlerNotFound {
+                request_type: request_type.clone(),
+            })?;
 
         let boxed_request: Box<dyn Any + Send> = Box::new(request);
-        let result_any: Box<dyn Any + Send> = handler(boxed_request).await?;
+        let result_any: Box<dyn Any + Send> =
+            handler(boxed_request)
+                .await
+                .map_err(|source| Error::HandlerExecutionFailed {
+                    request_type: request_type.clone(),
+                    source,
+                })?;
 
         match result_any.downcast::<R::Response>() {
             Ok(boxed_response) => Ok(*boxed_response),
-            Err(_) => Err(Error::ResponseDowncastError),
+            Err(_) => Err(Error::ResponseDowncastFailed {
+                request_type: request_type.clone(),
+            }),
         }
     }
 }
@@ -130,7 +150,9 @@ impl Mediator {
 #[cfg(test)]
 mod test {
 
-    use crate::Mediator;
+    use crate::{Error, Mediator};
+    use setup::{GetPing, GetPingError, NoHandlerRequest, handle_get_ping};
+    use std::any::type_name;
 
     mod setup {
         #![allow(dead_code)]
@@ -173,45 +195,23 @@ mod test {
                 reply: format!("pong: {}", req.message),
             })
         }
-    }
 
-    use setup::{GetPing, GetPingError, handle_get_ping};
+        //-------------------- no handler requests --------------------//
 
-    #[tokio::test]
-    async fn test_successful_ping_request() {
-        let req = GetPing {
-            message: "test".to_string(),
-        };
-        let reply = handle_get_ping(req).await;
-        assert!(reply.is_ok());
-        let message = reply.unwrap().reply;
-        assert_eq!(message, "pong: test".to_string());
-    }
+        #[derive(Debug)]
+        pub struct NoHandlerRequest {}
 
-    #[tokio::test]
-    async fn test_empty_ping_request() {
-        let req = GetPing {
-            message: "".to_string(),
-        };
-        let reply = handle_get_ping(req).await;
-        assert!(reply.is_err());
-        let message = reply.unwrap_err();
-        assert_eq!(message, GetPingError::InvalidMessage("empty".to_string()));
+        #[derive(Debug)]
+        pub struct NoHandlerResponse {}
+
+        impl Request for NoHandlerRequest {
+            type Response = NoHandlerResponse;
+            type Error = GetPingError;
+        }
     }
 
     #[tokio::test]
-    async fn test_failed_ping_request() {
-        let req = GetPing {
-            message: "failme".to_string(),
-        };
-        let reply = handle_get_ping(req).await;
-        assert!(reply.is_err());
-        let message = reply.unwrap_err();
-        assert_eq!(message, GetPingError::InternalFailure);
-    }
-
-    #[tokio::test]
-    async fn able_to_register_and_execute_async_handlers() {
+    async fn successful_request_handler_execution() {
         let mut mediator_builder = Mediator::builder();
         mediator_builder.register(handle_get_ping);
         let mediator = mediator_builder.build();
@@ -224,4 +224,89 @@ mod test {
         let message = reply.unwrap().reply;
         assert_eq!(message, "pong: test".to_string());
     }
+
+    #[tokio::test]
+    async fn business_logic_error_empty() {
+        let mut mediator_builder = Mediator::builder();
+        mediator_builder.register(handle_get_ping);
+        let mediator = mediator_builder.build();
+        let req = GetPing {
+            message: "".to_string(),
+        };
+        let reply = mediator.send(req).await;
+        assert!(reply.is_err());
+        let error = reply.unwrap_err();
+
+        if let Error::HandlerExecutionFailed {
+            request_type,
+            source,
+        } = error
+        {
+            assert_eq!(request_type, type_name::<GetPing>());
+            assert!(
+                source.is::<GetPingError>(),
+                "Expected source error to be GetPingError"
+            );
+
+            if let Some(specific_error) = source.downcast_ref::<GetPingError>() {
+                assert!(matches!(specific_error, GetPingError::InvalidMessage(_)));
+            } else {
+                panic!("Downcast to GetPingError failed");
+            }
+        } else {
+            panic!("Expected Error::HandlerExecutionFailed, got {:?}", error);
+        }
+    }
+
+    #[tokio::test]
+    async fn business_logic_error_fail() {
+        let mut mediator_builder = Mediator::builder();
+        mediator_builder.register(handle_get_ping);
+        let mediator = mediator_builder.build();
+        let req = GetPing {
+            message: "failme".to_string(),
+        };
+        let reply = mediator.send(req).await;
+        assert!(reply.is_err());
+        let error = reply.unwrap_err();
+
+        if let Error::HandlerExecutionFailed {
+            request_type,
+            source,
+        } = error
+        {
+            assert_eq!(request_type, type_name::<GetPing>());
+            assert!(
+                source.is::<GetPingError>(),
+                "Expected source error to be GetPingError"
+            );
+
+            if let Some(specific_error) = source.downcast_ref::<GetPingError>() {
+                assert!(matches!(specific_error, GetPingError::InternalFailure));
+            } else {
+                panic!("Downcast to GetPingError failed");
+            }
+        } else {
+            panic!("Expected Error::HandlerExecutionFailed, got {:?}", error);
+        }
+    }
+
+    #[tokio::test]
+    async fn no_handler_error() {
+        let mut mediator_builder = Mediator::builder();
+        mediator_builder.register(handle_get_ping);
+        let mediator = mediator_builder.build();
+        let req = NoHandlerRequest {};
+        let reply = mediator.send(req).await;
+        assert!(reply.is_err());
+        let error = reply.unwrap_err();
+
+        if let Error::HandlerNotFound { ref request_type } = error {
+            assert_eq!(request_type, type_name::<NoHandlerRequest>());
+        } else {
+            panic!("Expected Error::HandlerNotFound, got {:?}", error);
+        }
+    }
 }
+
+// TODO: try to test response downcast and request downcast invariants

@@ -91,6 +91,7 @@ dependencies = [
  "axum",
  "cqrs",
  "http-body-util",
+ "meow_diator",
  "password-hash",
  "pawz",
  "serde",
