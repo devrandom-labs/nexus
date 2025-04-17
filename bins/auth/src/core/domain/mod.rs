@@ -6,6 +6,8 @@ pub(crate) mod password;
 pub(crate) mod user;
 pub(crate) mod user_id;
 
+pub use email::Email;
+
 #[derive(Debug, TError)]
 pub enum Error {
     #[error("{0}")]
