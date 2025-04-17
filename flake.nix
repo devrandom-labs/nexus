@@ -104,7 +104,7 @@
       in with pkgs; {
         checks = {
 
-          inherit events auth notifications users;
+          inherit auth;
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
@@ -153,7 +153,7 @@
         };
 
         packages = {
-          inherit events auth notifications users pu pd i;
+          inherit auth pu pd i;
 
           ## FIXME: only put this for darwin? maybe
           # tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
@@ -165,7 +165,7 @@
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
-          inputsFrom = [ events auth notifications users ];
+          inputsFrom = [ auth ];
           shellHook = ''
             echo "tixlys development environment"
             echo "<<<<<<<<<<<<<<<<<<<< Available Commands >>>>>>>>>>>>>>>>>>>>"
