@@ -5,7 +5,7 @@ use std::{
 };
 use ulid::Ulid;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommandId(Ulid);
 
 impl CommandId {
@@ -54,7 +54,7 @@ where
 {
     pub fn new(payload: P) -> Self {
         Self {
-            id: CommandId::new(),
+            id: CommandId::default(),
             created_at: Utc::now(),
             payload,
         }
