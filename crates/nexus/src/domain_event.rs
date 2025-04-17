@@ -1,5 +1,3 @@
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
-pub trait DomainEvent: Debug + Display {
-    fn get_version() -> &'static str;
-}
+pub trait DomainEvent: Debug + Send + Sync + 'static {}
