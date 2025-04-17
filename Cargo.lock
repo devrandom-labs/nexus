@@ -89,9 +89,8 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "axum",
- "cqrs",
  "http-body-util",
- "meow_diator",
+ "nexus",
  "password-hash",
  "pawz",
  "serde",
@@ -324,19 +323,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cqrs"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "thiserror",
- "tokio",
- "tower",
- "tracing",
- "ulid",
- "workspace-hack",
-]
-
-[[package]]
 name = "crc"
 version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -533,7 +519,6 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
- "cqrs",
  "sqlx",
  "thiserror",
  "tokio",
@@ -1216,16 +1201,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
-name = "meow_diator"
-version = "0.1.0"
-dependencies = [
- "thiserror",
- "tokio",
- "tower",
- "workspace-hack",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1282,6 +1257,12 @@ dependencies = [
 name = "nexus"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "ulid",
  "workspace-hack",
 ]
 
@@ -3312,6 +3293,7 @@ dependencies = [
  "hyper-util",
  "idna",
  "indexmap",
+ "libc",
  "log",
  "memchr",
  "num-traits",

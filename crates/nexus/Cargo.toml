@@ -6,4 +6,12 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+tracing = { workspace = true }
+ulid = { workspace = true }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

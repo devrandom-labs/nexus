@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use crate::core::Error;
 use crate::core::domain::Email;
-use cqrs::command::Command;
+use nexus::Command;
 use tracing::{debug, instrument};
 
 #[derive(Debug)]
