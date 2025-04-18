@@ -20,6 +20,7 @@ pub type CommandHandlerResult<State, C> = Result<
 pub type CommandHandlerFuture<'a, State, C> =
     Pin<Box<dyn Future<Output = CommandHandlerResult<State, C>> + Send + 'a>>;
 
+/// Each AggregateCommand Handler is tied to a state
 pub trait AggregateCommandHandler<C, Services>: Send + Sync
 where
     C: Command,

@@ -99,3 +99,45 @@ where
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AggregateRoot, AggregateType};
+    use crate::{DomainEvent, Message, aggregate::AggregateState};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    enum UserEvents {
+        UserCreated { name: String },
+    }
+    // TODO: make it a derive trait? if we derive DomainEvent, it automatically derives Message
+    impl Message for UserEvents {}
+    impl DomainEvent for UserEvents {}
+
+    #[derive(Debug, Default)]
+    struct UserState {
+        name: String,
+    }
+
+    impl AggregateState for UserState {
+        type Event = UserEvents;
+        fn apply(&mut self, event: &Self::Event) {
+            match event {
+                UserEvents::UserCreated { name } => self.name = name.to_string(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct User;
+    impl AggregateType for User {
+        type Id = String;
+        type Event = UserEvents;
+        type State = UserState;
+    }
+
+    #[test]
+    fn create_an_aggregate() {
+        let _root = AggregateRoot::<User>::new(String::from("id"));
+    }
+}
