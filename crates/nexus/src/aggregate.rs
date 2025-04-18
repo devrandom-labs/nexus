@@ -1,5 +1,5 @@
 use super::{Command, DomainEvent};
-use std::{fmt::Debug, hash::Hash};
+use std::{boxed::Box, fmt::Debug, hash::Hash, pin::Pin};
 
 /// Represents the actual state data of an aggregate.
 /// It's rebuilt by applying events and must know how to apply them.
@@ -42,7 +42,7 @@ pub trait Aggregate: Send + Sync + 'static {
 
 /// Encapsulates the pure domain logic for a specific command/state combination.
 /// Implement this for each command that modifies an aggregate.
-pub trait AggregateCommandHandler<State, C, Services>
+pub trait AggregateCommandHandler<State, C, Services>: Send + Sync
 where
     State: AggregateState,
     C: Command,
@@ -50,12 +50,12 @@ where
 {
     /// Processes the command against the current state using optional services.
     /// Returns a list of events if successful, or the command-specific domain error.
-    fn handle(
-        &self,
-        state: &State,
+    fn handle<'a>(
+        &'a self,
+        state: &'a State,
         command: C,
-        services: &Services,
-    ) -> Result<Vec<State::Event>, C::Error>;
+        services: &'a Services,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<State::Event>, C::Error>> + Send + 'a>>;
 
     /// Determines the result (`C::Result`) to return upon successful handling.
     fn derive_result(&self) -> C::Result;
@@ -136,7 +136,7 @@ where
         self.version + self.uncommitted_events.len() as u64
     }
 
-    pub fn execute<C, Handler, Services>(
+    pub async fn execute<C, Handler, Services>(
         &mut self,
         command: C,
         handler: &Handler,
@@ -147,7 +147,7 @@ where
         Handler: AggregateCommandHandler<AT::State, C, Services>,
         Services: Send + Sync + ?Sized,
     {
-        let generated_events = handler.handle(&self.state, command, services)?;
+        let generated_events = handler.handle(&self.state, command, services).await?;
         for event in &generated_events {
             self.state.apply(event);
         }
