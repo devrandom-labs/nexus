@@ -101,9 +101,12 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::{AggregateRoot, AggregateType};
-    use crate::{DomainEvent, Message, aggregate::AggregateState};
+    use crate::{
+        DomainEvent, Message,
+        aggregate::{Aggregate, AggregateState},
+    };
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,7 +117,7 @@ mod tests {
     impl Message for UserEvents {}
     impl DomainEvent for UserEvents {}
 
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, PartialEq)]
     struct UserState {
         name: String,
     }
@@ -137,7 +140,26 @@ mod tests {
     }
 
     #[test]
-    fn create_an_aggregate() {
-        let _root = AggregateRoot::<User>::new(String::from("id"));
+    fn aggregate_root_new() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        assert_eq!(root.id(), "id");
+        assert_eq!(root.version(), 0);
+        assert_eq!(
+            root.state(),
+            &UserState {
+                name: String::default()
+            }
+        );
+        assert_eq!(root.current_version(), 0);
+        assert_eq!(root.take_uncommitted_events(), Vec::new());
     }
+
+    #[test]
+    fn aggregate_root_load_from_history() {}
+
+    #[test]
+    fn aggregate_root_execute_success() {}
+
+    #[test]
+    fn aggregate_root_domain_error() {}
 }

@@ -45,3 +45,33 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     /// Takes ownership of newly generated events for saving.
     fn take_uncommitted_events(&mut self) -> Vec<Self::Event>;
 }
+
+#[cfg(test)]
+mod test {
+
+    #[test]
+    fn user_state_default() {
+        // TODO: verify Default.
+    }
+
+    #[test]
+    fn user_state_apply_created() {
+        // TODO: apply event and check state change.
+    }
+
+    #[test]
+    fn user_state_apply_activated() {
+        // TODO: apply event and check state change
+    }
+
+    #[test]
+    fn user_state_apply_order() {
+        // TODO: check invalid event application
+        // TODO: ensure state change is valid.
+    }
+
+    #[test]
+    fn user_state_apply_idempotency() {
+        // TODO: ensure same event apply reflects only once.
+    }
+}

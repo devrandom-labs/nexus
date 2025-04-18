@@ -35,3 +35,13 @@ where
         services: &'a Services,
     ) -> CommandHandlerFuture<'a, Self::State, C>;
 }
+
+#[cfg(test)]
+mod test {
+
+    #[test]
+    fn handler_logic_success() {}
+
+    #[test]
+    fn handler_logic_failure() {}
+}
