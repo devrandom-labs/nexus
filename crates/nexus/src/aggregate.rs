@@ -40,6 +40,12 @@ pub trait Aggregate: Send + Sync + 'static {
     fn take_uncommitted_events(&mut self) -> Vec<Self::Event>;
 }
 
+pub type CommandHandlerResult<State, C> =
+    Result<Vec<<State as AggregateState>::Event>, <C as Command>::Error>;
+
+pub type CommandHandlerFuture<'a, State, C> =
+    Pin<Box<dyn Future<Output = CommandHandlerResult<State, C>> + Send + 'a>>;
+
 /// Encapsulates the pure domain logic for a specific command/state combination.
 /// Implement this for each command that modifies an aggregate.
 pub trait AggregateCommandHandler<State, C, Services>: Send + Sync
@@ -55,7 +61,7 @@ where
         state: &'a State,
         command: C,
         services: &'a Services,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<State::Event>, C::Error>> + Send + 'a>>;
+    ) -> CommandHandlerFuture<'a, State, C>;
 
     /// Determines the result (`C::Result`) to return upon successful handling.
     fn derive_result(&self) -> C::Result;
