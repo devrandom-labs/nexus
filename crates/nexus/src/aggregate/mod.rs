@@ -89,6 +89,32 @@ pub mod test {
         }
     }
 
+    pub enum EventOrderType {
+        Ordered,
+        UnOrdered,
+    }
+
+    pub fn get_user_events(
+        timestamp: Option<DateTime<Utc>>,
+        order: EventOrderType,
+    ) -> Vec<UserDomainEvents> {
+        let user_created = timestamp.map_or_else(
+            || UserDomainEvents::UserCreated {
+                email: String::from("joel@tixlys.com"),
+                timestamp: Utc::now(),
+            },
+            |t| UserDomainEvents::UserCreated {
+                email: String::from("joel@tixlys.com"),
+                timestamp: t,
+            },
+        );
+        let user_activated = UserDomainEvents::UserActivated;
+        match order {
+            EventOrderType::Ordered => vec![user_created, user_activated],
+            EventOrderType::UnOrdered => vec![user_activated, user_created],
+        }
+    }
+
     #[test]
     fn user_state_default() {
         let user_state = UserState::default();
@@ -105,7 +131,9 @@ pub mod test {
             email: String::from("joel@tixlys.com"),
             timestamp,
         };
+
         user_state.apply(&user_created);
+
         assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
         assert_eq!(user_state.created_at, Some(timestamp));
     }
@@ -114,13 +142,9 @@ pub mod test {
     fn user_state_apply_activated() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
-        let user_created = UserDomainEvents::UserCreated {
-            email: String::from("joel@tixlys.com"),
-            timestamp,
-        };
-        let user_activated = UserDomainEvents::UserActivated;
-        user_state.apply(&user_created);
-        user_state.apply(&user_activated);
+        for events in get_user_events(Some(timestamp), EventOrderType::Ordered) {
+            user_state.apply(&events);
+        }
         assert!(user_state.is_active);
     }
 
@@ -128,13 +152,9 @@ pub mod test {
     fn user_state_apply_order() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
-        let user_created = UserDomainEvents::UserCreated {
-            email: String::from("joel@tixlys.com"),
-            timestamp,
-        };
-        let user_activated = UserDomainEvents::UserActivated;
-        user_state.apply(&user_activated);
-        user_state.apply(&user_created);
+        for events in get_user_events(Some(timestamp), EventOrderType::UnOrdered) {
+            user_state.apply(&events);
+        }
         assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
         assert_eq!(user_state.created_at, Some(timestamp));
         assert!(!user_state.is_active);
