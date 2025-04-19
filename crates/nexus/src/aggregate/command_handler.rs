@@ -64,8 +64,8 @@ pub mod test {
 
     #[derive(Debug)]
     pub struct CreateUser {
-        user_id: String,
-        email: String,
+        pub user_id: String,
+        pub email: String,
     }
     impl Message for CreateUser {}
     impl Command for CreateUser {

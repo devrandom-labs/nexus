@@ -135,8 +135,10 @@ pub mod test {
     use super::{Aggregate, AggregateRoot, AggregateType};
     use crate::aggregate::{
         aggregate_root::AggregateLoadError,
+        command_handler::test::{CreateUser, CreateUserHandler, UserError},
         test::{EventOrderType, UserDomainEvents, UserState, get_user_events},
     };
+
     use chrono::Utc;
 
     #[derive(Debug, Clone, Copy)]
@@ -192,9 +194,32 @@ pub mod test {
         );
     }
 
-    #[test]
-    fn aggregate_root_execute_success() {}
+    #[tokio::test]
+    async fn aggregate_root_execute_success() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
 
-    #[test]
-    fn aggregate_root_domain_error() {}
+        let result = result.unwrap();
+        assert_eq!(result, "id");
+    }
+
+    #[tokio::test]
+    async fn aggregate_root_domain_error() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "error@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_err());
+        let result = result.unwrap_err();
+        assert_eq!(result, UserError::FailedToCreateUser);
+    }
 }
