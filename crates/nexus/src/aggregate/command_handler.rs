@@ -1,4 +1,4 @@
-use super::AggregateState;
+use super::AggregateType;
 use crate::{Command, DomainEvent};
 use std::{boxed::Box, fmt::Debug, future::Future, pin::Pin};
 
@@ -12,13 +12,13 @@ where
     pub result: R,
 }
 
-pub type CommandHandlerResult<State, C> = Result<
-    CommandHandlerResponse<<State as AggregateState>::Event, <C as Command>::Result>,
+pub type CommandHandlerResult<AT, C> = Result<
+    CommandHandlerResponse<<AT as AggregateType>::Event, <C as Command>::Result>,
     <C as Command>::Error,
 >;
 
-pub type CommandHandlerFuture<'a, State, C> =
-    Pin<Box<dyn Future<Output = CommandHandlerResult<State, C>> + Send + 'a>>;
+pub type CommandHandlerFuture<'a, AT, C> =
+    Pin<Box<dyn Future<Output = CommandHandlerResult<AT, C>> + Send + 'a>>;
 
 /// Each AggregateCommand Handler is tied to a state
 pub trait AggregateCommandHandler<C, Services>: Send + Sync
@@ -26,14 +26,14 @@ where
     C: Command,
     Services: Send + Sync + ?Sized,
 {
-    type State: AggregateState;
+    type AT: AggregateType;
 
     fn handle<'a>(
         &'a self,
-        state: &'a Self::State,
+        state: &'a <Self::AT as AggregateType>::State,
         command: C,
         services: &'a Services,
-    ) -> CommandHandlerFuture<'a, Self::State, C>;
+    ) -> CommandHandlerFuture<'a, Self::AT, C>;
 }
 
 #[cfg(test)]

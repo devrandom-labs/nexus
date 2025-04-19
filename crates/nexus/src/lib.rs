@@ -1,6 +1,5 @@
 use serde::{Serialize, de::DeserializeOwned};
-use std::error::Error;
-use std::fmt::Debug;
+use std::{error::Error, fmt::Debug, hash::Hash};
 
 pub mod aggregate;
 
@@ -30,4 +29,7 @@ pub trait Query: Message {
 
 /// Represents a significant occurrence in the domain that has already happened.
 /// Events are immutable facts.
-pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned {}
+pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned {
+    type Id: Clone + Send + Sync + Debug + Hash + Eq + 'static;
+    fn aggregate_id(&self) -> &Self::Id;
+}

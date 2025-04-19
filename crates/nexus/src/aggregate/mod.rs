@@ -1,4 +1,5 @@
-use crate::DomainEvent;
+use crate::{DomainEvent, Message};
+use serde::{Serialize, de::DeserializeOwned};
 use std::{fmt::Debug, hash::Hash};
 
 pub mod aggregate_root;
@@ -11,7 +12,7 @@ pub use command_handler::AggregateCommandHandler;
 /// It's rebuilt by applying events and must know how to apply them.
 pub trait AggregateState: Default + Send + Sync + Debug + 'static {
     /// Specific type of Domain Event this state reacts to.
-    type Event: DomainEvent;
+    type Event: Message + Clone + Serialize + DeserializeOwned;
 
     /// Mutates the state based on a receieved event.
     /// This is the core of state reconstruction in Event Sourcing.
@@ -23,9 +24,9 @@ pub trait AggregateState: Default + Send + Sync + Debug + 'static {
 /// Implement this on a distinct type (often a unit struct) for each aggregate.
 pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
     /// The type used to uniquely identify this aggregate instance.
-    type Id: Send + Sync + Debug + Eq + Hash + Clone + 'static;
+    type Id: Send + Sync + Debug + Hash + Eq + 'static + Clone;
     /// The specific type of Domain Event associated with this aggregate.
-    type Event: DomainEvent + PartialEq;
+    type Event: DomainEvent<Id = Self::Id> + PartialEq;
     /// The specific type representing the internal state data.
     /// Crucially links the State's Event type to the AggregateType's Event type.
     type State: AggregateState<Event = Self::Event>;
@@ -34,8 +35,8 @@ pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
 /// Provides a standard interface for accessing aggregate properties.
 /// Implemented by `AggregateRoot`.
 pub trait Aggregate: Debug + Send + Sync + 'static {
-    type Id: Send + Sync + Debug + Eq + Hash + Clone + 'static;
-    type Event: DomainEvent + PartialEq;
+    type Id: Send + Sync + Debug + Hash + Eq + 'static + Clone;
+    type Event: DomainEvent<Id = Self::Id> + PartialEq;
     type State: AggregateState<Event = Self::Event>;
 
     fn id(&self) -> &Self::Id;
@@ -77,25 +78,39 @@ pub mod test {
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub enum UserDomainEvents {
         UserCreated {
+            id: String,
             email: String,
             timestamp: DateTime<Utc>,
         },
-        UserActivated,
+        UserActivated {
+            id: String,
+        },
     }
 
     impl Message for UserDomainEvents {}
-    impl DomainEvent for UserDomainEvents {}
+
+    impl DomainEvent for UserDomainEvents {
+        type Id = String;
+        fn aggregate_id(&self) -> &Self::Id {
+            match self {
+                Self::UserActivated { id } => id,
+                Self::UserCreated { id, .. } => id,
+            }
+        }
+    }
 
     impl AggregateState for UserState {
         type Event = UserDomainEvents;
 
         fn apply(&mut self, event: &Self::Event) {
             match event {
-                UserDomainEvents::UserCreated { email, timestamp } => {
+                UserDomainEvents::UserCreated {
+                    email, timestamp, ..
+                } => {
                     self.email = Some(email.to_string());
                     self.created_at = Some(*timestamp);
                 }
-                UserDomainEvents::UserActivated => {
+                UserDomainEvents::UserActivated { .. } => {
                     if self.created_at.is_some() {
                         self.is_active = true;
                     }
@@ -115,15 +130,19 @@ pub mod test {
     ) -> Vec<UserDomainEvents> {
         let user_created = timestamp.map_or_else(
             || UserDomainEvents::UserCreated {
+                id: "id".to_string(),
                 email: String::from("joel@tixlys.com"),
                 timestamp: Utc::now(),
             },
             |t| UserDomainEvents::UserCreated {
+                id: "id".to_string(),
                 email: String::from("joel@tixlys.com"),
                 timestamp: t,
             },
         );
-        let user_activated = UserDomainEvents::UserActivated;
+        let user_activated = UserDomainEvents::UserActivated {
+            id: "id".to_string(),
+        };
         match order {
             EventOrderType::Ordered => vec![user_created, user_activated],
             EventOrderType::UnOrdered => vec![user_activated, user_created],
@@ -143,6 +162,7 @@ pub mod test {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         let user_created = UserDomainEvents::UserCreated {
+            id: "id".to_string(),
             email: String::from("joel@tixlys.com"),
             timestamp,
         };
@@ -180,6 +200,7 @@ pub mod test {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         let user_created = UserDomainEvents::UserCreated {
+            id: "id".to_string(),
             email: String::from("joel@tixlys.com"),
             timestamp,
         };
