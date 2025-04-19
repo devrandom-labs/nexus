@@ -48,10 +48,42 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
 
 #[cfg(test)]
 mod test {
+    use super::AggregateState;
+    use crate::{DomainEvent, Message};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Default)]
+    struct UserState {
+        email: String,
+        is_active: bool,
+    }
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    enum UserDomainEvents {
+        UserCreated { email: String },
+        UserActivated,
+    }
+
+    impl Message for UserDomainEvents {}
+    impl DomainEvent for UserDomainEvents {}
+
+    impl AggregateState for UserState {
+        type Event = UserDomainEvents;
+
+        fn apply(&mut self, event: &Self::Event) {
+            match event {
+                UserDomainEvents::UserCreated { email } => self.email = email.to_string(),
+                UserDomainEvents::UserActivated => {
+                    self.is_active = true;
+                }
+            }
+        }
+    }
 
     #[test]
     fn user_state_default() {
-        // TODO: verify Default.
+        let user_state = UserState::default();
+        assert_eq!(user_state.email, String::from(""));
+        assert_eq!(user_state.is_active, false);
     }
 
     #[test]
