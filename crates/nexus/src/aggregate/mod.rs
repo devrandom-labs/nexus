@@ -81,7 +81,7 @@ mod test {
                     self.created_at = Some(*timestamp);
                 }
                 UserDomainEvents::UserActivated => {
-                    if let Some(_) = self.created_at {
+                    if self.created_at.is_some() {
                         self.is_active = true;
                     }
                 }
