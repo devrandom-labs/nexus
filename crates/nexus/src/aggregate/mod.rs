@@ -142,6 +142,18 @@ mod test {
 
     #[test]
     fn user_state_apply_idempotency() {
-        // TODO: ensure same event apply reflects only once.
+        let mut user_state = UserState::default();
+        let timestamp = Utc::now();
+        let user_created = UserDomainEvents::UserCreated {
+            email: String::from("joel@tixlys.com"),
+            timestamp,
+        };
+        user_state.apply(&user_created);
+        user_state.apply(&user_created);
+        user_state.apply(&user_created);
+        user_state.apply(&user_created);
+        assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
+        assert_eq!(user_state.created_at, Some(timestamp));
+        assert!(!user_state.is_active);
     }
 }
