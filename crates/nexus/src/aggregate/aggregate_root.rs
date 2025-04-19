@@ -2,7 +2,23 @@ use super::{
     Aggregate, AggregateCommandHandler, AggregateState, AggregateType,
     command_handler::CommandHandlerResponse,
 };
-use crate::Command;
+use crate::{Command, DomainEvent};
+use std::fmt::Debug;
+use thiserror::Error as ThisError;
+
+#[derive(Debug, ThisError, PartialEq)]
+pub enum AggregateLoadError<Id>
+where
+    Id: Debug,
+{
+    #[error(
+        "Event integrity error: Loaded event with mismatched aggregate ID. Expected '{expected_id:?}', found in event: '{event_aggregate_id:?}'."
+    )]
+    MismatchedAggregateId {
+        expected_id: Id,
+        event_aggregate_id: Id,
+    },
+}
 
 /// Concrete implementation managing an aggregate's state based on events.
 /// Generic over the aggregate definition provided by `AT: AggregateType`.
@@ -56,21 +72,35 @@ where
     }
 
     /// Rehydrates aggregate state by applying historical events.
-    pub fn load_from_history(id: AT::Id, history: impl IntoIterator<Item = AT::Event>) -> Self {
+    pub fn load_from_history(
+        id: AT::Id,
+        history: impl IntoIterator<Item = AT::Event>,
+    ) -> Result<Self, AggregateLoadError<AT::Id>>
+    where
+        AT::Id: ToString,
+    {
         let mut state = AT::State::default();
         let mut version = 0u64;
 
         for event in history {
+            let event_id = event.aggregate_id();
+            if event_id != &id {
+                return Err(AggregateLoadError::MismatchedAggregateId {
+                    expected_id: id,
+                    event_aggregate_id: event_id.clone(),
+                });
+            }
+
             state.apply(&event);
             version += 1;
         }
 
-        Self {
+        Ok(Self {
             id,
             state,
             version,
             uncommitted_events: Vec::new(),
-        }
+        })
     }
 
     /// Gets the effective current version, including uncommitted events.
@@ -102,11 +132,12 @@ where
 
 #[cfg(test)]
 mod test {
+    use super::{Aggregate, AggregateRoot, AggregateType};
+    use crate::aggregate::{
+        aggregate_root::AggregateLoadError,
+        test::{EventOrderType, UserDomainEvents, UserState, get_user_events},
+    };
     use chrono::Utc;
-
-    use super::{AggregateRoot, AggregateType};
-    use crate::aggregate::Aggregate;
-    use crate::aggregate::test::{EventOrderType, UserDomainEvents, UserState, get_user_events};
 
     #[derive(Debug, Clone, Copy)]
     struct User;
@@ -130,9 +161,9 @@ mod test {
     fn aggregate_root_load_from_history() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventOrderType::Ordered);
-        let mut aggregate_root =
-            AggregateRoot::<User>::load_from_history(String::from("id"), history);
-
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut aggregate_root = aggregate_root.unwrap();
         assert_eq!(aggregate_root.id(), "id");
         assert_eq!(aggregate_root.version(), 2);
         assert_eq!(
@@ -141,6 +172,24 @@ mod test {
         );
         assert_eq!(aggregate_root.current_version(), 2);
         assert_eq!(aggregate_root.take_uncommitted_events(), Vec::new());
+    }
+
+    #[test]
+    fn aggregate_root_load_fail() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventOrderType::Ordered);
+        let aggregate_root =
+            AggregateRoot::<User>::load_from_history(String::from("wrong_id"), history);
+        assert!(aggregate_root.is_err());
+        let error = aggregate_root.unwrap_err();
+
+        assert_eq!(
+            error,
+            AggregateLoadError::MismatchedAggregateId {
+                expected_id: "wrong_id".to_string(),
+                event_aggregate_id: "id".to_string()
+            }
+        );
     }
 
     #[test]
