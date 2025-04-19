@@ -48,8 +48,9 @@ pub mod test {
         aggregate::{AggregateType, aggregate_root::test::User, test::UserDomainEvents},
     };
     use chrono::Utc;
-    use std::pin::Pin;
+    use std::{pin::Pin, time::Duration};
     use thiserror::Error as ThisError;
+    use tokio::time::sleep;
 
     #[derive(Debug, ThisError)]
     pub enum UserError {
@@ -94,23 +95,37 @@ pub mod test {
         > {
             Box::pin(async move {
                 let timestamp = Utc::now();
+                sleep(Duration::from_secs(2)).await;
+                if command.email.contains("error") {
+                    return Err(UserError::FailedToCreateUser);
+                }
+
                 let create_user = UserDomainEvents::UserCreated {
-                    id: command.user_id,
+                    id: command.user_id.clone(),
                     email: command.email,
                     timestamp,
                 };
                 let events = vec![create_user];
                 Ok(CommandHandlerResponse {
                     events,
-                    result: String::from("User Created"),
+                    result: command.user_id,
                 })
             })
         }
     }
 
-    #[test]
-    fn handler_logic_success() {}
+    #[tokio::test]
+    async fn handler_logic_success() {
+        // TODO: set up default state
+        // TODO: call the handler
+        // TODO: verify that hancler gave the proper event and user_id
+    }
 
-    #[test]
-    fn handler_logic_failure() {}
+    #[tokio::test]
+    async fn handler_logic_failure() {
+        // TODO: setup default state
+        // TODO: create command with error
+        // TODO: call the handler
+        // TODO: verify you got the correct error
+    }
 }
