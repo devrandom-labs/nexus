@@ -25,5 +25,5 @@ jobs:
           purge-prefixes: cache-${{ runner.os }}-
           purge-created: 0
           purge-primary-key: never
-      - name: Build events image
+      - name: Build auth image
         run: nix build .#auth

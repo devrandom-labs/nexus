@@ -204,7 +204,6 @@ pub mod test {
         let handler = CreateUserHandler;
         let result = root.execute(create_user, &handler, &()).await;
         assert!(result.is_ok());
-
         let result = result.unwrap();
         assert_eq!(result, "id");
     }

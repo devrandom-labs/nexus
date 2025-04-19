@@ -1,4 +1,4 @@
-use crate::aggregate::{AggregateRoot, AggregateType, aggregate_root::AggregateLoadError};
+use crate::aggregate::{AggregateRoot, AggregateType as AT, aggregate_root::AggregateLoadError};
 use std::{error::Error as StdError, fmt::Debug, future::Future, hash::Hash, pin::Pin};
 use thiserror::Error as ThisError;
 use tower::BoxError;
@@ -18,6 +18,12 @@ where
         source: BoxError,
     },
 
+    #[error("Failed to serialize event data for store")] // Added for save
+    SerializationError {
+        #[source]
+        source: BoxError,
+    },
+
     #[error("Failed to read from event store")]
     StoreError {
         #[source]
@@ -30,23 +36,43 @@ where
         #[source]
         source: AggregateLoadError<Id>,
     },
+
+    #[error(
+        "Concurrency conflict for aggregate '{aggregate_id:?}'. Expected version {expected_version}."
+    )]
+    Conflict {
+        aggregate_id: Id,
+        expected_version: u64,
+    },
 }
 
 pub trait EventSourceRepository: Send + Sync + Clone {
-    type AggregateType: AggregateType;
+    type AggregateType: AT;
 
     #[allow(clippy::type_complexity)]
     fn load<'a>(
         &'a self,
-        id: &'a <Self::AggregateType as AggregateType>::Id,
+        id: &'a <Self::AggregateType as AT>::Id,
     ) -> Pin<
         Box<
             dyn Future<
                     Output = Result<
                         AggregateRoot<Self::AggregateType>,
-                        RepositoryError<<Self::AggregateType as AggregateType>::Id>,
+                        RepositoryError<<Self::AggregateType as AT>::Id>,
                     >,
                 > + Send
+                + 'a,
+        >,
+    >;
+
+    #[allow(clippy::type_complexity)]
+    fn save<'a>(
+        &'a self,
+        aggregate: AggregateRoot<Self::AggregateType>,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<(), RepositoryError<<Self::AggregateType as AT>::Id>>>
+                + Send
                 + 'a,
         >,
     >;
