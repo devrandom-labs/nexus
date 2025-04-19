@@ -50,16 +50,21 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
 mod test {
     use super::AggregateState;
     use crate::{DomainEvent, Message};
+    use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Default)]
     struct UserState {
-        email: String,
+        email: Option<String>,
         is_active: bool,
+        created_at: Option<DateTime<Utc>>,
     }
     #[derive(Debug, Clone, Serialize, Deserialize)]
     enum UserDomainEvents {
-        UserCreated { email: String },
+        UserCreated {
+            email: String,
+            timestamp: DateTime<Utc>,
+        },
         UserActivated,
     }
 
@@ -71,9 +76,14 @@ mod test {
 
         fn apply(&mut self, event: &Self::Event) {
             match event {
-                UserDomainEvents::UserCreated { email } => self.email = email.to_string(),
+                UserDomainEvents::UserCreated { email, timestamp } => {
+                    self.email = Some(email.to_string());
+                    self.created_at = Some(*timestamp);
+                }
                 UserDomainEvents::UserActivated => {
-                    self.is_active = true;
+                    if let Some(_) = self.created_at {
+                        self.is_active = true;
+                    }
                 }
             }
         }
@@ -82,24 +92,52 @@ mod test {
     #[test]
     fn user_state_default() {
         let user_state = UserState::default();
-        assert_eq!(user_state.email, String::from(""));
-        assert_eq!(user_state.is_active, false);
+        assert_eq!(user_state.email, None);
+        assert_eq!(user_state.created_at, None);
+        assert!(!user_state.is_active);
     }
 
     #[test]
     fn user_state_apply_created() {
-        // TODO: apply event and check state change.
+        let mut user_state = UserState::default();
+        let timestamp = Utc::now();
+        let user_created = UserDomainEvents::UserCreated {
+            email: String::from("joel@tixlys.com"),
+            timestamp,
+        };
+        user_state.apply(&user_created);
+        assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
+        assert_eq!(user_state.created_at, Some(timestamp));
     }
 
     #[test]
     fn user_state_apply_activated() {
-        // TODO: apply event and check state change
+        let mut user_state = UserState::default();
+        let timestamp = Utc::now();
+        let user_created = UserDomainEvents::UserCreated {
+            email: String::from("joel@tixlys.com"),
+            timestamp,
+        };
+        let user_activated = UserDomainEvents::UserActivated;
+        user_state.apply(&user_created);
+        user_state.apply(&user_activated);
+        assert!(user_state.is_active);
     }
 
     #[test]
     fn user_state_apply_order() {
-        // TODO: check invalid event application
-        // TODO: ensure state change is valid.
+        let mut user_state = UserState::default();
+        let timestamp = Utc::now();
+        let user_created = UserDomainEvents::UserCreated {
+            email: String::from("joel@tixlys.com"),
+            timestamp,
+        };
+        let user_activated = UserDomainEvents::UserActivated;
+        user_state.apply(&user_activated);
+        user_state.apply(&user_created);
+        assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
+        assert_eq!(user_state.created_at, Some(timestamp));
+        assert!(!user_state.is_active);
     }
 
     #[test]
