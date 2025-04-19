@@ -64,9 +64,8 @@
             fileset = lib.fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
-              (craneLib.fileset.commonCargoSources ./crates/cqrs)
               (craneLib.fileset.commonCargoSources ./crates/pawz)
-              (craneLib.fileset.commonCargoSources ./crates/meow_diator)
+              (craneLib.fileset.commonCargoSources ./crates/nexus)
               (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
               (craneLib.fileset.commonCargoSources crate)
             ];
@@ -105,7 +104,7 @@
       in with pkgs; {
         checks = {
 
-          inherit events auth notifications users;
+          inherit auth;
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
@@ -154,7 +153,7 @@
         };
 
         packages = {
-          inherit events auth notifications users pu pd i;
+          inherit auth pu pd i;
 
           ## FIXME: only put this for darwin? maybe
           # tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
@@ -166,7 +165,7 @@
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
-          inputsFrom = [ events auth notifications users ];
+          inputsFrom = [ auth ];
           shellHook = ''
             echo "tixlys development environment"
             echo "<<<<<<<<<<<<<<<<<<<< Available Commands >>>>>>>>>>>>>>>>>>>>"
@@ -175,7 +174,8 @@
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
-          packages = [ rust-analyzer bacon biscuit-cli dive cargo-hakari ];
+          packages =
+            [ rust-analyzer bacon biscuit-cli dive cargo-hakari tree cloc ];
         };
       });
 }

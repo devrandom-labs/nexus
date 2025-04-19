@@ -27,7 +27,7 @@ type AnyRequestHandler = Box<dyn Fn(Box<dyn Any + Send>) -> BoxFuture + Send + S
 
 /// Errors thatcan occur during Mediator operation.
 #[derive(Debug, ThisError)]
-pub enum Error {
+pub enum DispatcherError {
     #[error("Handler not found for request type: {request_type}")]
     HandlerNotFound { request_type: String },
 
@@ -46,16 +46,16 @@ pub enum Error {
 }
 
 #[derive(Clone, Default)]
-pub struct Mediator {
+pub struct Dispatcher {
     handlers: Arc<HashMap<TypeId, AnyRequestHandler>>,
 }
 
 #[derive(Default)]
-pub struct MediatorBuilder {
+pub struct DispatcherBuilder {
     handlers: HashMap<TypeId, AnyRequestHandler>,
 }
 
-impl MediatorBuilder {
+impl DispatcherBuilder {
     /// Creates a new, empty builder.
     pub fn new() -> Self {
         Self::default()
@@ -103,44 +103,43 @@ impl MediatorBuilder {
     }
 
     /// Consumes the builder and returns the configured Mediator.
-    pub fn build(self) -> Mediator {
-        Mediator {
+    pub fn build(self) -> Dispatcher {
+        Dispatcher {
             handlers: Arc::new(self.handlers),
         }
     }
 }
 
-impl Mediator {
+impl Dispatcher {
     /// Creates a builder to construct a Mediator instance.
-    pub fn builder() -> MediatorBuilder {
-        MediatorBuilder::new()
+    pub fn builder() -> DispatcherBuilder {
+        DispatcherBuilder::new()
     }
 
-    pub async fn send<R>(&self, request: R) -> Result<R::Response, Error>
+    pub async fn send<R>(&self, request: R) -> Result<R::Response, DispatcherError>
     where
         R: Request + Any + Send,
     {
         let type_id = TypeId::of::<R>();
         let request_type = type_name::<R>().to_string();
-        let handler = self
-            .handlers
-            .get(&type_id)
-            .ok_or_else(|| Error::HandlerNotFound {
-                request_type: request_type.clone(),
-            })?;
+        let handler =
+            self.handlers
+                .get(&type_id)
+                .ok_or_else(|| DispatcherError::HandlerNotFound {
+                    request_type: request_type.clone(),
+                })?;
 
         let boxed_request: Box<dyn Any + Send> = Box::new(request);
-        let result_any: Box<dyn Any + Send> =
-            handler(boxed_request)
-                .await
-                .map_err(|source| Error::HandlerExecutionFailed {
-                    request_type: request_type.clone(),
-                    source,
-                })?;
+        let result_any: Box<dyn Any + Send> = handler(boxed_request).await.map_err(|source| {
+            DispatcherError::HandlerExecutionFailed {
+                request_type: request_type.clone(),
+                source,
+            }
+        })?;
 
         match result_any.downcast::<R::Response>() {
             Ok(boxed_response) => Ok(*boxed_response),
-            Err(_) => Err(Error::ResponseDowncastFailed {
+            Err(_) => Err(DispatcherError::ResponseDowncastFailed {
                 request_type: request_type.clone(),
             }),
         }
@@ -150,7 +149,7 @@ impl Mediator {
 #[cfg(test)]
 mod test {
 
-    use crate::{Error, Mediator};
+    use super::{Dispatcher, DispatcherError};
     use setup::{GetPing, GetPingError, NoHandlerRequest, handle_get_ping};
     use std::any::type_name;
 
@@ -212,7 +211,7 @@ mod test {
 
     #[tokio::test]
     async fn successful_request_handler_execution() {
-        let mut mediator_builder = Mediator::builder();
+        let mut mediator_builder = Dispatcher::builder();
         mediator_builder.register(handle_get_ping);
         let mediator = mediator_builder.build();
 
@@ -227,7 +226,7 @@ mod test {
 
     #[tokio::test]
     async fn business_logic_error_empty() {
-        let mut mediator_builder = Mediator::builder();
+        let mut mediator_builder = Dispatcher::builder();
         mediator_builder.register(handle_get_ping);
         let mediator = mediator_builder.build();
         let req = GetPing {
@@ -237,7 +236,7 @@ mod test {
         assert!(reply.is_err());
         let error = reply.unwrap_err();
 
-        if let Error::HandlerExecutionFailed {
+        if let DispatcherError::HandlerExecutionFailed {
             request_type,
             source,
         } = error
@@ -260,7 +259,7 @@ mod test {
 
     #[tokio::test]
     async fn business_logic_error_fail() {
-        let mut mediator_builder = Mediator::builder();
+        let mut mediator_builder = Dispatcher::builder();
         mediator_builder.register(handle_get_ping);
         let mediator = mediator_builder.build();
         let req = GetPing {
@@ -270,7 +269,7 @@ mod test {
         assert!(reply.is_err());
         let error = reply.unwrap_err();
 
-        if let Error::HandlerExecutionFailed {
+        if let DispatcherError::HandlerExecutionFailed {
             request_type,
             source,
         } = error
@@ -293,7 +292,7 @@ mod test {
 
     #[tokio::test]
     async fn no_handler_error() {
-        let mut mediator_builder = Mediator::builder();
+        let mut mediator_builder = Dispatcher::builder();
         mediator_builder.register(handle_get_ping);
         let mediator = mediator_builder.build();
         let req = NoHandlerRequest {};
@@ -301,7 +300,7 @@ mod test {
         assert!(reply.is_err());
         let error = reply.unwrap_err();
 
-        if let Error::HandlerNotFound { ref request_type } = error {
+        if let DispatcherError::HandlerNotFound { ref request_type } = error {
             assert_eq!(request_type, type_name::<NoHandlerRequest>());
         } else {
             panic!("Expected Error::HandlerNotFound, got {:?}", error);
