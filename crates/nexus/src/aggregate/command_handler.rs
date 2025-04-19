@@ -40,25 +40,73 @@ where
 }
 
 #[cfg(test)]
-mod test {
-    // use super::{AggregateCommandHandler, CommandHandlerFuture};
-    // use crate::aggregate::aggregate_root::test::User;
-    // pub struct CreateUser {
-    //     email: String,
-    // }
-    // pub struct CreateUserHandler;
+pub mod test {
 
-    // impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
-    //     type AT = User;
+    use super::{AggregateCommandHandler, CommandHandlerResponse};
+    use crate::{
+        Command, Message,
+        aggregate::{AggregateType, aggregate_root::test::User, test::UserDomainEvents},
+    };
+    use chrono::Utc;
+    use std::pin::Pin;
+    use thiserror::Error as ThisError;
 
-    //     fn handle<'a>(
-    //         &'a self,
-    //         state: &'a <Self::AT as crate::aggregate::AggregateType>::State,
-    //         command: CreateUser,
-    //         services: &'a (),
-    //     ) -> CommandHandlerFuture<'a, Self::AT, CreateUser> {
-    //     }
-    // }
+    #[derive(Debug, ThisError)]
+    pub enum UserError {
+        #[error("Failed to create user")]
+        FailedToCreateUser,
+    }
+
+    #[derive(Debug)]
+    pub struct CreateUser {
+        user_id: String,
+        email: String,
+    }
+    impl Message for CreateUser {}
+    impl Command for CreateUser {
+        type Result = String;
+        type Error = UserError;
+    }
+
+    pub struct CreateUserHandler;
+
+    impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
+        type AT = User;
+
+        fn handle<'a>(
+            &'a self,
+            _state: &'a <Self::AT as crate::aggregate::AggregateType>::State,
+            command: CreateUser,
+            _services: &'a (),
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            super::CommandHandlerResponse<
+                                <Self::AT as AggregateType>::Event,
+                                <CreateUser as Command>::Result,
+                            >,
+                            <CreateUser as Command>::Error,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let timestamp = Utc::now();
+                let create_user = UserDomainEvents::UserCreated {
+                    id: command.user_id,
+                    email: command.email,
+                    timestamp,
+                };
+                let events = vec![create_user];
+                Ok(CommandHandlerResponse {
+                    events,
+                    result: String::from("User Created"),
+                })
+            })
+        }
+    }
 
     #[test]
     fn handler_logic_success() {}
