@@ -59,6 +59,21 @@ pub mod test {
         is_active: bool,
         created_at: Option<DateTime<Utc>>,
     }
+
+    impl UserState {
+        pub fn new(
+            email: Option<String>,
+            is_active: bool,
+            created_at: Option<DateTime<Utc>>,
+        ) -> Self {
+            Self {
+                email,
+                is_active,
+                created_at,
+            }
+        }
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub enum UserDomainEvents {
         UserCreated {

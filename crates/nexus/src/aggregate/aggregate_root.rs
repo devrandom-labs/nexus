@@ -102,9 +102,11 @@ where
 
 #[cfg(test)]
 mod test {
+    use chrono::Utc;
+
     use super::{AggregateRoot, AggregateType};
     use crate::aggregate::Aggregate;
-    use crate::aggregate::test::{UserDomainEvents, UserState};
+    use crate::aggregate::test::{EventOrderType, UserDomainEvents, UserState, get_user_events};
 
     #[derive(Debug, Clone, Copy)]
     struct User;
@@ -125,7 +127,21 @@ mod test {
     }
 
     #[test]
-    fn aggregate_root_load_from_history() {}
+    fn aggregate_root_load_from_history() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventOrderType::Ordered);
+        let mut aggregate_root =
+            AggregateRoot::<User>::load_from_history(String::from("id"), history);
+
+        assert_eq!(aggregate_root.id(), "id");
+        assert_eq!(aggregate_root.version(), 2);
+        assert_eq!(
+            aggregate_root.state(),
+            &UserState::new(Some(String::from("joel@tixlys.com")), true, Some(timestamp))
+        );
+        assert_eq!(aggregate_root.current_version(), 2);
+        assert_eq!(aggregate_root.take_uncommitted_events(), Vec::new());
+    }
 
     #[test]
     fn aggregate_root_execute_success() {}
