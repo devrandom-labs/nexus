@@ -174,7 +174,8 @@
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
-          packages = [ rust-analyzer bacon biscuit-cli dive cargo-hakari tree ];
+          packages =
+            [ rust-analyzer bacon biscuit-cli dive cargo-hakari tree cloc ];
         };
       });
 }

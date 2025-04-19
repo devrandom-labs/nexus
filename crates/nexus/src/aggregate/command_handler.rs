@@ -45,14 +45,18 @@ pub mod test {
     use super::{AggregateCommandHandler, CommandHandlerResponse};
     use crate::{
         Command, Message,
-        aggregate::{AggregateType, aggregate_root::test::User, test::UserDomainEvents},
+        aggregate::{
+            AggregateType,
+            aggregate_root::test::User,
+            test::{UserDomainEvents, UserState},
+        },
     };
     use chrono::Utc;
     use std::{pin::Pin, time::Duration};
     use thiserror::Error as ThisError;
     use tokio::time::sleep;
 
-    #[derive(Debug, ThisError)]
+    #[derive(Debug, ThisError, PartialEq)]
     pub enum UserError {
         #[error("Failed to create user")]
         FailedToCreateUser,
@@ -116,16 +120,37 @@ pub mod test {
 
     #[tokio::test]
     async fn handler_logic_success() {
-        // TODO: set up default state
-        // TODO: call the handler
-        // TODO: verify that hancler gave the proper event and user_id
+        let state = UserState::default();
+
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+
+        let handler = CreateUserHandler;
+        let result = handler.handle(&state, create_user, &()).await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        assert!(matches!(
+            result.events.as_slice(),
+            [UserDomainEvents::UserCreated { .. }]
+        ));
+        assert_eq!(result.result, "id");
     }
 
     #[tokio::test]
     async fn handler_logic_failure() {
-        // TODO: setup default state
-        // TODO: create command with error
-        // TODO: call the handler
-        // TODO: verify you got the correct error
+        let state = UserState::default();
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "error@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = handler.handle(&state, create_user, &()).await;
+        assert!(result.is_err());
+        let result = result.unwrap_err();
+        assert_eq!(result, UserError::FailedToCreateUser);
     }
 }
