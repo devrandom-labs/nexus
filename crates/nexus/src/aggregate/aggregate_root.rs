@@ -131,7 +131,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::{Aggregate, AggregateRoot, AggregateType};
     use crate::aggregate::{
         aggregate_root::AggregateLoadError,
@@ -140,7 +140,7 @@ mod test {
     use chrono::Utc;
 
     #[derive(Debug, Clone, Copy)]
-    struct User;
+    pub struct User;
     impl AggregateType for User {
         type Id = String;
         type Event = UserDomainEvents;

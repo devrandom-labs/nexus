@@ -12,14 +12,6 @@ where
     pub result: R,
 }
 
-pub type CommandHandlerResult<AT, C> = Result<
-    CommandHandlerResponse<<AT as AggregateType>::Event, <C as Command>::Result>,
-    <C as Command>::Error,
->;
-
-pub type CommandHandlerFuture<'a, AT, C> =
-    Pin<Box<dyn Future<Output = CommandHandlerResult<AT, C>> + Send + 'a>>;
-
 /// Each AggregateCommand Handler is tied to a state
 pub trait AggregateCommandHandler<C, Services>: Send + Sync
 where
@@ -28,16 +20,45 @@ where
 {
     type AT: AggregateType;
 
+    #[allow(clippy::type_complexity)]
     fn handle<'a>(
         &'a self,
         state: &'a <Self::AT as AggregateType>::State,
         command: C,
         services: &'a Services,
-    ) -> CommandHandlerFuture<'a, Self::AT, C>;
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        CommandHandlerResponse<<Self::AT as AggregateType>::Event, C::Result>,
+                        C::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
 }
 
 #[cfg(test)]
 mod test {
+    // use super::{AggregateCommandHandler, CommandHandlerFuture};
+    // use crate::aggregate::aggregate_root::test::User;
+    // pub struct CreateUser {
+    //     email: String,
+    // }
+    // pub struct CreateUserHandler;
+
+    // impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
+    //     type AT = User;
+
+    //     fn handle<'a>(
+    //         &'a self,
+    //         state: &'a <Self::AT as crate::aggregate::AggregateType>::State,
+    //         command: CreateUser,
+    //         services: &'a (),
+    //     ) -> CommandHandlerFuture<'a, Self::AT, CreateUser> {
+    //     }
+    // }
 
     #[test]
     fn handler_logic_success() {}
