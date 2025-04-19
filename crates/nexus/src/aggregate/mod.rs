@@ -47,20 +47,20 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::AggregateState;
     use crate::{DomainEvent, Message};
     use chrono::{DateTime, Utc};
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Default)]
-    struct UserState {
+    #[derive(Debug, Default, PartialEq)]
+    pub struct UserState {
         email: Option<String>,
         is_active: bool,
         created_at: Option<DateTime<Utc>>,
     }
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    enum UserDomainEvents {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub enum UserDomainEvents {
         UserCreated {
             email: String,
             timestamp: DateTime<Utc>,

@@ -103,39 +103,14 @@ where
 #[cfg(test)]
 mod test {
     use super::{AggregateRoot, AggregateType};
-    use crate::{
-        DomainEvent, Message,
-        aggregate::{Aggregate, AggregateState},
-    };
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-    enum UserEvents {
-        UserCreated { name: String },
-    }
-    // TODO: make it a derive trait? if we derive DomainEvent, it automatically derives Message
-    impl Message for UserEvents {}
-    impl DomainEvent for UserEvents {}
-
-    #[derive(Debug, Default, PartialEq)]
-    struct UserState {
-        name: String,
-    }
-
-    impl AggregateState for UserState {
-        type Event = UserEvents;
-        fn apply(&mut self, event: &Self::Event) {
-            match event {
-                UserEvents::UserCreated { name } => self.name = name.to_string(),
-            }
-        }
-    }
+    use crate::aggregate::Aggregate;
+    use crate::aggregate::test::{UserDomainEvents, UserState};
 
     #[derive(Debug, Clone, Copy)]
     struct User;
     impl AggregateType for User {
         type Id = String;
-        type Event = UserEvents;
+        type Event = UserDomainEvents;
         type State = UserState;
     }
 
@@ -144,12 +119,7 @@ mod test {
         let mut root = AggregateRoot::<User>::new(String::from("id"));
         assert_eq!(root.id(), "id");
         assert_eq!(root.version(), 0);
-        assert_eq!(
-            root.state(),
-            &UserState {
-                name: String::default()
-            }
-        );
+        assert_eq!(root.state(), &UserState::default());
         assert_eq!(root.current_version(), 0);
         assert_eq!(root.take_uncommitted_events(), Vec::new());
     }
