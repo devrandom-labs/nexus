@@ -143,4 +143,25 @@ mod test {
             "Newly created aggregate should have version 0"
         );
     }
+
+    #[tokio::test]
+    async fn aggregate_not_found() {
+        let mock_repo = MockRepository {
+            should_return_not_found: true,
+        };
+        let mut service = LoadService::new(mock_repo);
+        let aggregate_id = "test-user-123".to_string();
+        let ready_service = service.ready().await.expect("LoadService should be ready");
+        let result = ready_service.call(aggregate_id.clone()).await;
+        assert!(result.is_err());
+        let result = result.unwrap_err();
+        if let RepositoryError::AggregateNotFound(id) = result {
+            assert_eq!(id, aggregate_id);
+        } else {
+            panic!(
+                "expected error: RepositoryError::AggregateNotFound, but got: {}",
+                result
+            );
+        };
+    }
 }
