@@ -117,7 +117,7 @@ where
     ) -> Result<C::Result, C::Error>
     where
         C: Command,
-        Handler: AggregateCommandHandler<C, Services, AT = AT>,
+        Handler: AggregateCommandHandler<C, Services, AggregateType = AT>,
         Services: Send + Sync + ?Sized,
     {
         let CommandHandlerResponse { events, result } =
@@ -204,7 +204,6 @@ pub mod test {
         let handler = CreateUserHandler;
         let result = root.execute(create_user, &handler, &()).await;
         assert!(result.is_ok());
-
         let result = result.unwrap();
         assert_eq!(result, "id");
     }

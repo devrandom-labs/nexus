@@ -1,4 +1,4 @@
-use super::AggregateType;
+use super::AggregateType as AT;
 use crate::{Command, DomainEvent};
 use std::{boxed::Box, fmt::Debug, future::Future, pin::Pin};
 
@@ -18,19 +18,19 @@ where
     C: Command,
     Services: Send + Sync + ?Sized,
 {
-    type AT: AggregateType;
+    type AggregateType: AT;
 
     #[allow(clippy::type_complexity)]
     fn handle<'a>(
         &'a self,
-        state: &'a <Self::AT as AggregateType>::State,
+        state: &'a <Self::AggregateType as AT>::State,
         command: C,
         services: &'a Services,
     ) -> Pin<
         Box<
             dyn Future<
                     Output = Result<
-                        CommandHandlerResponse<<Self::AT as AggregateType>::Event, C::Result>,
+                        CommandHandlerResponse<<Self::AggregateType as AT>::Event, C::Result>,
                         C::Error,
                     >,
                 > + Send
@@ -76,11 +76,11 @@ pub mod test {
     pub struct CreateUserHandler;
 
     impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
-        type AT = User;
+        type AggregateType = User;
 
         fn handle<'a>(
             &'a self,
-            _state: &'a <Self::AT as crate::aggregate::AggregateType>::State,
+            _state: &'a <Self::AggregateType as crate::aggregate::AggregateType>::State,
             command: CreateUser,
             _services: &'a (),
         ) -> Pin<
@@ -88,7 +88,7 @@ pub mod test {
                 dyn Future<
                         Output = Result<
                             super::CommandHandlerResponse<
-                                <Self::AT as AggregateType>::Event,
+                                <Self::AggregateType as AggregateType>::Event,
                                 <CreateUser as Command>::Result,
                             >,
                             <CreateUser as Command>::Error,

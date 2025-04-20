@@ -1,0 +1,47 @@
+#+Title: Nexus architecture
+
+#+begin_src mermaid
+sequenceDiagram
+    participant Dispatcher
+    participant ValidationLayer
+    participant LoadService
+    participant ExecuteService
+    participant PersistenceService
+    participant Repository
+    participant Handler
+
+    Dispatcher->>+ValidationLayer: Command C
+    ValidationLayer-->>-Dispatcher: Command C (or ValidationError)
+
+    Note over Dispatcher, PersistenceService: Dispatcher now invokes the main L-E-P sequence...
+
+    Dispatcher->>+LoadService: Command C (contains Target ID)
+    LoadService->>+Repository: load(Target ID)
+    Repository-->>-LoadService: Result<AggregateRoot<AT>, RepoError>
+    alt Success
+        LoadService-->> ExecuteService: AggregateRoot<AT> + Command C
+    else Error
+        LoadService-->>Dispatcher: PipelineError::Load(RepoError)
+    end
+
+    Note over LoadService, ExecuteService: LoadService passes loaded state + original command
+
+    ExecuteService->>+Handler: handle(State, Command C, Services)
+    Handler-->>-ExecuteService: Result<Response{Events, CmdResult}, CmdError>
+    alt Success
+        ExecuteService->>ExecuteService: Apply Events to AggregateRoot state
+        ExecuteService-->> PersistenceService: Updated AggregateRoot<AT> + CmdResult
+    else Domain Error
+        ExecuteService-->>Dispatcher: PipelineError::Execution(CmdError)
+    end
+
+    Note over ExecuteService, PersistenceService: ExecuteService passes mutated state + command result
+
+    PersistenceService->>+Repository: save(Updated AggregateRoot<AT>)
+    Repository-->>-PersistenceService: Result<(), RepoError>
+    alt Success
+        PersistenceService-->>Dispatcher: CmdResult (Final Success)
+    else Error (e.g., Conflict)
+        PersistenceService-->>Dispatcher: PipelineError::Persistence(RepoError)
+    end
+#+end_src
