@@ -2,6 +2,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::{error::Error, fmt::Debug, hash::Hash};
 
 pub mod aggregate;
+pub mod pipeline;
 pub mod repository;
 
 // Common marker trait for all message types in our system.
