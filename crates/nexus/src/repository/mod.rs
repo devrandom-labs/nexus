@@ -46,7 +46,7 @@ where
     },
 }
 
-pub trait EventSourceRepository: Send + Sync + Clone {
+pub trait EventSourceRepository: Send + Sync + Clone + Debug {
     type AggregateType: AT;
 
     #[allow(clippy::type_complexity)]

@@ -24,7 +24,7 @@ use utoipa::ToSchema;
 /// * `Success { data: T }`: Represents a successful response containing data of type `T`.
 /// * `Fail { data: T }`: Represents a failed response containing data of type `T`.
 /// * `Error { message: String, code: Option<u16>, data: Option<T> }`: Represents an error
-///   response with a message, an optional error code, and optional data.
+///   sresponse with a message, an optional error code, and optional data.
 ///
 /// # Serialization
 ///

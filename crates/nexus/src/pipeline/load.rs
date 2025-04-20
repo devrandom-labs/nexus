@@ -25,14 +25,15 @@ where
 impl<AT, Repository> Service<AT::Id> for LoadService<AT, Repository>
 where
     AT: AggregateType,
-    Repository: EventSourceRepository<AggregateType = AT>,
+    Repository: EventSourceRepository<AggregateType = AT> + 'static,
 {
     type Response = AggregateRoot<AT>;
     type Error = RepositoryError<AT::Id>;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
-    fn call(&mut self, _req: AT::Id) -> Self::Future {
-        todo!()
+    fn call(&mut self, req: AT::Id) -> Self::Future {
+        let repo = self.repository.clone();
+        Box::pin(async move { repo.load(&req).await })
     }
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
