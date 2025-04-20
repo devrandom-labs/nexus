@@ -155,13 +155,6 @@ mod test {
         let result = ready_service.call(aggregate_id.clone()).await;
         assert!(result.is_err());
         let result = result.unwrap_err();
-        if let RepositoryError::AggregateNotFound(id) = result {
-            assert_eq!(id, aggregate_id);
-        } else {
-            panic!(
-                "expected error: RepositoryError::AggregateNotFound, but got: {}",
-                result
-            );
-        };
+        assert!(matches!(result, RepositoryError::AggregateNotFound(id) if id == aggregate_id));
     }
 }
