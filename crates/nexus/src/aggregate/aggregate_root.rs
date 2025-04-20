@@ -117,7 +117,7 @@ where
     ) -> Result<C::Result, C::Error>
     where
         C: Command,
-        Handler: AggregateCommandHandler<C, Services, AT = AT>,
+        Handler: AggregateCommandHandler<C, Services, AggregateType = AT>,
         Services: Send + Sync + ?Sized,
     {
         let CommandHandlerResponse { events, result } =
