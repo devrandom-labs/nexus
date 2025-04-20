@@ -17,14 +17,14 @@ use utoipa::ToSchema;
 /// # Type Parameters
 ///
 /// * `T`: The type of data associated with success and failure responses. This type
-///         must implement `Debug` and `Serialize`.
+///   must implement `Debug` and `Serialize`.
 ///
 /// # Variants
 ///
 /// * `Success { data: T }`: Represents a successful response containing data of type `T`.
 /// * `Fail { data: T }`: Represents a failed response containing data of type `T`.
 /// * `Error { message: String, code: Option<u16>, data: Option<T> }`: Represents an error
-///         response with a message, an optional error code, and optional data.
+///   response with a message, an optional error code, and optional data.
 ///
 /// # Serialization
 ///
