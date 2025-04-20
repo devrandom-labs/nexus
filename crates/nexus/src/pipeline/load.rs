@@ -36,6 +36,6 @@ where
     }
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        todo!()
+        Poll::Ready(Ok(()))
     }
 }
