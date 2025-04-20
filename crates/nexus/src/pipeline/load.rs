@@ -22,6 +22,19 @@ where
     repository: Repository,
 }
 
+impl<AT, Repository> LoadService<AT, Repository>
+where
+    AT: AggregateType,
+    Repository: EventSourceRepository<AggregateType = AT>,
+{
+    pub fn new(repository: Repository) -> Self {
+        LoadService {
+            _aggregate_type: PhantomData,
+            repository,
+        }
+    }
+}
+
 impl<AT, Repository> Service<AT::Id> for LoadService<AT, Repository>
 where
     AT: AggregateType,
@@ -43,10 +56,12 @@ where
 
 #[cfg(test)]
 mod test {
+    use super::LoadService;
     use crate::{
-        aggregate::{AggregateRoot, aggregate_root::test::User},
+        aggregate::{Aggregate, AggregateRoot, aggregate_root::test::User},
         repository::{EventSourceRepository, RepositoryError},
     };
+    use tower::{Service, ServiceExt};
 
     // TODO: test success case
     // TODO: aggregate not found case
@@ -110,6 +125,22 @@ mod test {
 
     #[tokio::test]
     async fn load_service_success() {
-        todo!()
+        let mock_repo = MockRepository {
+            should_return_not_found: false,
+        };
+        let mut service = LoadService::new(mock_repo);
+        let aggregate_id = "test-user-123".to_string();
+
+        let ready_service = service.ready().await.expect("LoadServce should be ready");
+        let result = ready_service.call(aggregate_id.clone()).await;
+
+        assert!(result.is_ok(), "Expected Ok result, got Err: {:?}", result);
+        let aggregate_root = result.unwrap();
+        assert_eq!(aggregate_root.id(), &aggregate_id);
+        assert_eq!(
+            aggregate_root.version(),
+            0,
+            "Newly created aggregate should have version 0"
+        );
     }
 }
