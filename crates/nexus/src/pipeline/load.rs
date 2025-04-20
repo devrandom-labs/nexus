@@ -40,3 +40,76 @@ where
         Poll::Ready(Ok(()))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        aggregate::{AggregateRoot, aggregate_root::test::User},
+        repository::{EventSourceRepository, RepositoryError},
+    };
+
+    // TODO: test success case
+    // TODO: aggregate not found case
+    // TODO: other repository error
+
+    #[derive(Debug, Clone)]
+    struct MockRepository {
+        should_return_not_found: bool,
+    }
+
+    impl EventSourceRepository for MockRepository {
+        type AggregateType = User;
+
+        fn load<'a>(
+            &'a self,
+            id: &'a <Self::AggregateType as crate::aggregate::AggregateType>::Id,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            AggregateRoot<Self::AggregateType>,
+                            RepositoryError<
+                                <Self::AggregateType as crate::aggregate::AggregateType>::Id,
+                            >,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let id = id.clone();
+
+            if self.should_return_not_found {
+                return Box::pin(async move { Err(RepositoryError::AggregateNotFound(id)) });
+            }
+
+            Box::pin(async move {
+                let aggregate = AggregateRoot::<User>::new(id);
+                Ok(aggregate)
+            })
+        }
+
+        fn save<'a>(
+            &'a self,
+            _aggregate: AggregateRoot<Self::AggregateType>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            (),
+                            RepositoryError<
+                                <Self::AggregateType as crate::aggregate::AggregateType>::Id,
+                            >,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            todo!()
+        }
+    }
+
+    #[tokio::test]
+    async fn load_service_success() {
+        todo!()
+    }
+}
