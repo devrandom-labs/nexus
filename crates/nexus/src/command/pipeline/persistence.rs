@@ -1,5 +1,5 @@
 use super::invoke_handler::InvokeResponse;
-use crate::{
+use crate::command::{
     aggregate::AggregateType,
     repository::{EventSourceRepository, RepositoryError},
 };

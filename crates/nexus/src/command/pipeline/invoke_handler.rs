@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 use crate::{
     Command,
-    aggregate::{AggregateRoot, AggregateType, command_handler::AggregateCommandHandler},
+    command::{
+        aggregate::{AggregateRoot, AggregateType},
+        handler::AggregateCommandHandler,
+    },
 };
 use std::{fmt::Debug, marker::PhantomData, pin::Pin, task::Context, task::Poll};
 use tower::Service;

@@ -1,4 +1,4 @@
-use super::AggregateType as AT;
+use super::aggregate::AggregateType as AT;
 use crate::{Command, DomainEvent};
 use std::{boxed::Box, fmt::Debug, future::Future, pin::Pin};
 
@@ -45,10 +45,9 @@ pub mod test {
     use super::{AggregateCommandHandler, CommandHandlerResponse};
     use crate::{
         Command, Message,
-        aggregate::{
+        command::aggregate::{
             AggregateType,
-            aggregate_root::test::User,
-            test::{UserDomainEvents, UserState},
+            test::{User, UserDomainEvents, UserState},
         },
     };
     use chrono::Utc;
@@ -80,7 +79,7 @@ pub mod test {
 
         fn handle<'a>(
             &'a self,
-            _state: &'a <Self::AggregateType as crate::aggregate::AggregateType>::State,
+            _state: &'a <Self::AggregateType as AggregateType>::State,
             command: CreateUser,
             _services: &'a (),
         ) -> Pin<
