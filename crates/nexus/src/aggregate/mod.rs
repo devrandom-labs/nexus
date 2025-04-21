@@ -47,6 +47,8 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     fn take_uncommitted_events(&mut self) -> Vec<Self::Event>;
 }
 
+pub trait Service: Debug + Sync + Send {}
+
 #[cfg(test)]
 pub mod test {
     use super::AggregateState;
