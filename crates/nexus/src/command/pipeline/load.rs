@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::{
+use crate::command::{
     aggregate::{AggregateRoot, AggregateType},
     repository::{EventSourceRepository, RepositoryError},
 };
@@ -57,8 +57,8 @@ where
 #[cfg(test)]
 mod test {
     use super::LoadService;
-    use crate::{
-        aggregate::{Aggregate, AggregateRoot, aggregate_root::test::User},
+    use crate::command::{
+        aggregate::{Aggregate, AggregateRoot, AggregateType, test::User},
         repository::{EventSourceRepository, RepositoryError},
     };
     use tower::{Service, ServiceExt};
@@ -77,15 +77,13 @@ mod test {
 
         fn load<'a>(
             &'a self,
-            id: &'a <Self::AggregateType as crate::aggregate::AggregateType>::Id,
+            id: &'a <Self::AggregateType as AggregateType>::Id,
         ) -> std::pin::Pin<
             Box<
                 dyn Future<
                         Output = Result<
                             AggregateRoot<Self::AggregateType>,
-                            RepositoryError<
-                                <Self::AggregateType as crate::aggregate::AggregateType>::Id,
-                            >,
+                            RepositoryError<<Self::AggregateType as AggregateType>::Id>,
                         >,
                     > + Send
                     + 'a,
@@ -111,9 +109,7 @@ mod test {
                 dyn Future<
                         Output = Result<
                             (),
-                            RepositoryError<
-                                <Self::AggregateType as crate::aggregate::AggregateType>::Id,
-                            >,
+                            RepositoryError<<Self::AggregateType as AggregateType>::Id>,
                         >,
                     > + Send
                     + 'a,

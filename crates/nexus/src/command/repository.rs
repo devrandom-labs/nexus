@@ -1,4 +1,4 @@
-use crate::aggregate::{AggregateRoot, AggregateType as AT, aggregate_root::AggregateLoadError};
+use super::aggregate::{AggregateLoadError, AggregateRoot, AggregateType as AT};
 use std::{error::Error as StdError, fmt::Debug, future::Future, hash::Hash, pin::Pin};
 use thiserror::Error as ThisError;
 use tower::BoxError;
