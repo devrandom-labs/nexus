@@ -1,12 +1,16 @@
 use super::repository::ReadModelRepository;
 use crate::Query;
-use std::{boxed::Box, marker::PhantomData, pin::Pin, task::Context, task::Poll};
+use std::{
+    boxed::Box, error::Error as StdError, marker::PhantomData, pin::Pin, task::Context, task::Poll,
+};
 use tower::Service;
 
 #[derive(Clone)]
-pub struct QueryHandlerFn<F, Q, R, S>
+pub struct QueryHandlerFn<F, Q, R, S, Fut>
 where
-    F: Clone,
+    F: Fn(Q, R, S) -> Fut,
+    Fut: Future<Output = Result<Q::Result, Q::Error>>,
+    Q: Query,
     R: Clone,
     S: Clone,
 {
@@ -16,9 +20,11 @@ where
     services: S,
 }
 
-impl<F, Q, R, S> QueryHandlerFn<F, Q, R, S>
+impl<F, Q, R, S, Fut> QueryHandlerFn<F, Q, R, S, Fut>
 where
-    F: Clone,
+    F: Fn(Q, R, S) -> Fut,
+    Fut: Future<Output = Result<Q::Result, Q::Error>>,
+    Q: Query,
     R: Clone,
     S: Clone,
 {
@@ -32,16 +38,20 @@ where
     }
 }
 
-impl<F, Q, R, S> Service<Q> for QueryHandlerFn<F, Q, R, S>
+impl<F, Q, R, S, Fut> Service<Q> for QueryHandlerFn<F, Q, R, S, Fut>
 where
-    F: Clone,
-    Q: Query,
+    F: Fn(Q, R, S) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<Q::Result, Q::Error>> + Send + 'static,
+    Q: Query + Send + 'static,
+    Q::Result: Send + Sync + 'static,
+    Q::Error: StdError + Send + Sync + 'static,
     R: ReadModelRepository + 'static,
     S: Send + Sync + Clone + 'static,
 {
     type Response = Q::Result;
     type Error = Q::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
