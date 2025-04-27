@@ -45,7 +45,7 @@ where
     Q: Query + Send + 'static,
     Q::Result: Send + Sync + 'static,
     Q::Error: StdError + Send + Sync + 'static,
-    R: ReadModelRepository + 'static,
+    R: ReadModelRepository + 'static, // READ MODELS can be diff than what query result
     S: Send + Sync + Clone + 'static,
 {
     type Response = Q::Result;
