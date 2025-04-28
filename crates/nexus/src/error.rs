@@ -1,4 +1,4 @@
-use std::{any::TypeId, error::Error as StdError};
+use std::error::Error as StdError;
 use thiserror::Error as ThisError;
 use tower::BoxError;
 
@@ -7,8 +7,8 @@ pub enum Error<H>
 where
     H: StdError + Send + Sync + 'static,
 {
-    #[error("Handler not found for type ID {0:?}")]
-    HandlerNotFound(TypeId),
+    #[error("Handler not found for message: {0:?}")]
+    HandlerNotFound(String),
 
     #[error("Internal dispater error")]
     InternalError(#[source] BoxError),

@@ -1,18 +1,9 @@
 use super::repository::ReadModelRepository;
 use crate::Query;
 use std::{
-    any::Any, boxed::Box, error::Error as StdError, marker::PhantomData, pin::Pin, task::Context,
-    task::Poll,
+    boxed::Box, error::Error as StdError, marker::PhantomData, pin::Pin, task::Context, task::Poll,
 };
-use tower::{BoxError, Service};
-
-pub type BoxMessage = Box<dyn Any + Send>; // FIXME: if commands are also erased move any to message
-pub type ErasedResult = Result<BoxMessage, BoxError>;
-pub type ErasedFuture = Pin<Box<dyn Future<Output = ErasedResult> + Send>>;
-
-pub trait ErasedQueryHandlerFn: Send + Sync {
-    fn call(&self, query: BoxMessage) -> ErasedFuture;
-}
+use tower::Service;
 
 #[derive(Clone)]
 pub struct QueryHandlerFn<F, Q, R, S, Fut>
@@ -47,6 +38,7 @@ where
     }
 }
 
+// so we can use query handler fn in service builders and in tower world.
 impl<F, Q, R, S, Fut> Service<Q> for QueryHandlerFn<F, Q, R, S, Fut>
 where
     F: Fn(Q, R, S) -> Fut + Clone + Send + Sync + 'static,
