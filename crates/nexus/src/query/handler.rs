@@ -38,6 +38,7 @@ where
     }
 }
 
+// so we can use query handler fn in service builders and in tower world.
 impl<F, Q, R, S, Fut> Service<Q> for QueryHandlerFn<F, Q, R, S, Fut>
 where
     F: Fn(Q, R, S) -> Fut + Clone + Send + Sync + 'static,
