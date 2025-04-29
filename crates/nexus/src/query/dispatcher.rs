@@ -9,6 +9,7 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
+use thiserror::Error as ThisError;
 use tower::{BoxError, Service, ServiceExt};
 
 pub type BoxMessage = Box<dyn Any + Send>;
@@ -69,7 +70,10 @@ where
     }
 }
 
-// should query dispatcher builder have Arc<dyn ErasedQueryHandlerFn> ??
+#[derive(Debug, ThisError)]
+#[error("Could not register service")]
+pub struct RegistrationFailed;
+
 pub struct QueryDispatcherBuilder {
     services: HashMap<TypeId, Arc<dyn ErasedQueryHandlerFn>>,
 }
@@ -87,9 +91,9 @@ impl QueryDispatcherBuilder {
         Self::default()
     }
 
-    pub fn register<Q, S>(mut self, service: S) -> Result<Self, Error<Q::Error>>
+    pub fn register<Q, S>(mut self, service: S) -> Result<Self, RegistrationFailed>
     where
-        Q: Query,
+        Q: Query + Any,
         S: Service<Q, Response = Q::Result, Error = Q::Error> + Clone + Send + Sync + 'static,
         S::Future: Send + Sync,
     {
@@ -99,7 +103,7 @@ impl QueryDispatcherBuilder {
             Arc::new(DispatcherQueryHandler::<Q, S>::new(service));
         self.services
             .insert(query_type_id, dispatcher_services)
-            .ok_or(Error::<Q::Error>::RegistrationFailed(query_name.to_owned()))?;
+            .ok_or(RegistrationFailed)?;
         Ok(self)
     }
 
@@ -118,7 +122,7 @@ pub struct QueryDispatcher {
 impl QueryDispatcher {
     pub async fn query<Q>(&self, query: Q) -> Result<Q::Result, Error<Q::Error>>
     where
-        Q: Query,
+        Q: Query + Any,
     {
         let query_type_id = TypeId::of::<Q>();
         let type_name_str = std::any::type_name::<Q>();
