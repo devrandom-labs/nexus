@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::Query;
+use crate::{Query, error::Error};
 use std::{any::Any, boxed::Box, marker::PhantomData, pin::Pin};
 use tower::{BoxError, Service, ServiceExt};
 
@@ -31,22 +31,19 @@ where
         Box::pin(async move {
             let query = query.downcast::<Q>().map_err(|_| {
                 let type_name_str = std::any::type_name::<Q>();
-                let err: BoxError =
-                    format!("Input downcast failed for query type {}", type_name_str).into();
-                err
+                BoxError::from(Error::<Q::Error>::InternalError(
+                    format!("downcast failed for query: {}", type_name_str).into(),
+                ))
             })?;
-
-            let ready_service = match service.ready().await {
-                Ok(s) => s,
-                Err(e) => {
-                    return Err(Box::new(e) as BoxError);
-                }
-            };
-            let result: Result<Q::Result, Q::Error> = ready_service.call(*query).await;
-            match result {
-                Ok(concrete_result) => Ok(Box::new(concrete_result) as BoxMessage),
-                Err(concrete_error) => Err(Box::new(concrete_error) as BoxError),
-            }
+            let ready_service = service
+                .ready()
+                .await
+                .map_err(|e| BoxError::from(Error::<Q::Error>::InternalError(e.into())))?;
+            let result: Q::Result = ready_service
+                .call(*query)
+                .await
+                .map_err(|e| BoxError::from(Error::<Q::Error>::HandlerFailed(e.into())))?;
+            Ok(Box::new(result) as BoxMessage)
         })
     }
 }
