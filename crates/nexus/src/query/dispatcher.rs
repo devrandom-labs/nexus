@@ -164,3 +164,5 @@ impl QueryDispatcher {
 }
 
 // TODO: curtail everyone from adding more methdos to query dispatcher.
+// TODO: add debug and tracing to dispatchers
+// TODO: test every thing!!!
