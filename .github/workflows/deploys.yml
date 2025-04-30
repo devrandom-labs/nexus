@@ -25,5 +25,11 @@ jobs:
           purge-prefixes: cache-${{ runner.os }}-
           purge-created: 0
           purge-primary-key: never
-      - name: Build auth image
-        run: nix build .#auth
+      - name: Build and Push Image using Nix and Skopeo
+        env:
+          REGISTRY_URL: ghcr.io
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ github.repository_owner }}/${{ github.event.repository.name}}/auth
+          IMAGE_TAG: ${{ github.sha }}
+        run: nix build .#auth --out-link auth-stream
