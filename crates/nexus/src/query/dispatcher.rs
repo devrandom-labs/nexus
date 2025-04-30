@@ -1,5 +1,8 @@
 #![allow(dead_code)]
-use crate::{BoxMessage, ErasedFuture, Query, error::Error};
+use crate::{
+    BoxMessage, ErasedFuture, Query,
+    error::{Error, RegistrationFailed},
+};
 use std::{
     any::{Any, TypeId},
     boxed::Box,
@@ -7,7 +10,6 @@ use std::{
     marker::PhantomData,
     sync::Arc,
 };
-use thiserror::Error as ThisError;
 use tower::{BoxError, Service, ServiceExt};
 
 pub trait ErasedQueryHandlerFn: Send + Sync {
@@ -63,10 +65,6 @@ where
         })
     }
 }
-
-#[derive(Debug, ThisError)]
-#[error("Registration Failed: {0}")]
-pub struct RegistrationFailed(String);
 
 #[derive(Default)]
 pub struct QueryDispatcherBuilder {
