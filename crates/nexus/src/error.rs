@@ -16,3 +16,7 @@ where
     #[error("Handler execution failed")]
     HandlerFailed(#[from] H),
 }
+
+#[derive(Debug, ThisError)]
+#[error("Registration Failed: {0}")]
+pub struct RegistrationFailed(pub String);

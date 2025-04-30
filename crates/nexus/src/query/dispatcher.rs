@@ -1,19 +1,16 @@
 #![allow(dead_code)]
-use crate::{Query, error::Error};
+use crate::{
+    BoxMessage, ErasedFuture, Query,
+    error::{Error, RegistrationFailed},
+};
 use std::{
     any::{Any, TypeId},
     boxed::Box,
     collections::{HashMap, hash_map::Entry},
     marker::PhantomData,
-    pin::Pin,
     sync::Arc,
 };
-use thiserror::Error as ThisError;
 use tower::{BoxError, Service, ServiceExt};
-
-pub type BoxMessage = Box<dyn Any + Send>;
-pub type ErasedResult = Result<BoxMessage, BoxError>;
-pub type ErasedFuture = Pin<Box<dyn Future<Output = ErasedResult> + Send + 'static>>;
 
 pub trait ErasedQueryHandlerFn: Send + Sync {
     fn call(&self, query: BoxMessage) -> ErasedFuture;
@@ -68,10 +65,6 @@ where
         })
     }
 }
-
-#[derive(Debug, ThisError)]
-#[error("Registration Failed: {0}")]
-pub struct RegistrationFailed(String);
 
 #[derive(Default)]
 pub struct QueryDispatcherBuilder {
