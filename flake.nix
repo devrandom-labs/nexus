@@ -224,7 +224,7 @@
             (commonArgs // { inherit cargoArtifacts; });
         };
 
-        apps = { push-auth = mkApp "auth"; };
+        apps = { auth = mkApp "auth"; };
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};

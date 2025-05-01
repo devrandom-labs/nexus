@@ -44,4 +44,4 @@ jobs:
           PUSH_LATEST_TAG: ${{ github.ref == 'refs/heads/main' }}
         run: |
           echo "Attempting to push image for commit ${{ github.sha }}..."
-          nix -L run .#push-auth
+          nix -L run .#auth
