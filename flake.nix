@@ -28,21 +28,15 @@
           inherit src;
           strictDeps = true;
           buildInputs = with pkgs;
-            [ openssl ] # Add macOS specific runtime dependencies
-            ++ lib.optionals pkgs.stdenv.isDarwin [
+            [ openssl ] ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
               pkgs.darwin.apple_sdk.frameworks.Security
-              # Add other frameworks if needed by your crates (e.g., CoreFoundation)
-              pkgs.libiconv # Often needed for character encoding issues
+              pkgs.libiconv
             ];
           nativeBuildInputs = with pkgs;
-            [
-              cmake
-              pkg-config
-            ] # Add macOS specific build-time dependencies (like Libsystem for linking)
-            ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.darwin.apple_sdk.frameworks.Security # Sometimes needed here too for build scripts
-              pkgs.darwin.Libsystem # Often needed for linking
+            [ cmake pkg-config ] ++ lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.darwin.apple_sdk.frameworks.Security
+              pkgs.darwin.Libsystem
             ];
         };
 
@@ -85,7 +79,6 @@
             version = cargoToml.package.version;
             bin = craneLib.buildPackage (individualCrateArgs // {
               inherit pname version;
-              cargoExtraArgs = "-p ${pname}";
               src = (fileSetForCrate cratePath);
             });
 
