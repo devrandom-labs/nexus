@@ -116,10 +116,9 @@
         ### deploying apps
 
         mkApp = name:
-          let imageStream = mkPackage name;
-          in {
-            type = "app";
-            program = pkgs.writeShellScriptBin "push-${name}-image" ''
+          let
+            imageStream = mkPackage name;
+            pushScriptDrv = pkgs.writeShellScriptBin "push-${name}-image" ''
               #!${pkgs.bash}/bin/bash
               set -euo pipefail
 
@@ -154,6 +153,13 @@
 
               echo "--- Push complete for ${name} ---"
             '';
+          in {
+            type = "app";
+            program = "${pushScriptDrv}/bin/push-${name}-image";
+            meta = {
+              description =
+                "Pushes the ${name} OCI image stream to a configured registry using Skopeo";
+            };
           };
 
       in with pkgs; {
@@ -217,7 +223,7 @@
             (commonArgs // { inherit cargoArtifacts; });
         };
 
-        apps = { push-auth = mkPushApp "auth"; };
+        apps = { push-auth = mkApp "auth"; };
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
