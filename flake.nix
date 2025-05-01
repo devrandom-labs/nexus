@@ -90,7 +90,7 @@
               config = {
                 Env = [ "RUST_LOG=info,tower_http=trace" "PORT=3000" ];
                 Cmd = [ "${bin}/bin/${pname}" ];
-                ExposedPorts = { "3001/tcp" = { }; };
+                ExposedPorts = { "3000/tcp" = { }; };
                 WorkingDir = "/";
               };
             };
@@ -112,6 +112,50 @@
         '';
 
         auth = mkPackage "auth";
+
+        ### deploying apps
+
+        mkApp = name:
+          let imageStream = mkPackage name;
+          in {
+            type = "app";
+            program = pkgs.writeShellScriptBin "push-${name}-image" ''
+              #!${pkgs.bash}/bin/bash
+              set -euo pipefail
+
+              PUSH_LATEST_TAG="''${PUSH_LATEST_TAG:-false}"
+              SKOPEO_CMD="${pkgs.skopeo}/bin/skopeo"
+              GZIP_CMD="${pkgs.gzip}/bin/gzip"
+              IMAGE_STREAM_SCRIPT="${imageStream}"
+
+              DESTINATION="docker://''${REGISTRY_URL,,}/''${IMAGE_NAME,,}:''${IMAGE_TAG}"
+              DESTINATION_LATEST="docker://''${REGISTRY_URL,,}/''${IMAGE_NAME,,}:latest"
+              CREDENTIALS="''${REGISTRY_USER}:''${REGISTRY_PASSWORD}"
+
+              echo "--- Pushing ${name} Service Image ---"
+              echo "Executing stream script: $IMAGE_STREAM_SCRIPT"
+              echo "Piping stream via gzip to Skopeo..."
+              echo "Source: docker-archive:/dev/stdin"
+              echo "Destination: $DESTINATION"
+              echo "User: $REGISTRY_USER"
+
+              "$IMAGE_STREAM_SCRIPT" | "$GZIP_CMD" --fast | "$SKOPEO_CMD" copy \
+                --dest-creds "$CREDENTIALS" \
+                docker-archive:/dev/stdin \
+                "$DESTINATION"
+
+              if [[ "$PUSH_LATEST_TAG" == "true" ]]; then
+                echo "Pushing latest tag to $DESTINATION_LATEST"
+                "$IMAGE_STREAM_SCRIPT" | "$GZIP_CMD" --fast | "$SKOPEO_CMD" copy \
+                  --dest-creds "$CREDENTIALS" \
+                  docker-archive:/dev/stdin \
+                  "$DESTINATION_LATEST"
+              fi
+
+              echo "--- Push complete for ${name} ---"
+            '';
+          };
+
       in with pkgs; {
         checks = {
           inherit auth;
@@ -173,6 +217,8 @@
             (commonArgs // { inherit cargoArtifacts; });
         };
 
+        apps = { push-auth = mkPushApp "auth"; };
+
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
           inputsFrom = [ auth ];
@@ -193,6 +239,7 @@
             tree
             cloc
             skopeo
+            gzip
           ];
         };
       });
