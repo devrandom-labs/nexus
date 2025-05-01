@@ -39,6 +39,7 @@ jobs:
           REGISTRY_URL: ghcr.io
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ github.repository_owner }}/${{ github.event.repository.name }}/auth
           IMAGE_TAG: ${{ github.sha }}
           PUSH_LATEST_TAG: ${{ github.ref == 'refs/heads/main' }}
         run: |
