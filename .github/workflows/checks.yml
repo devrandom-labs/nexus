@@ -15,8 +15,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-dept: 0
       - name: Install Nix
         uses: nixbuild/nix-quick-install-action@v29
+        with:
+          nix_conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
       - name: Restore and save Nix store
         uses: nix-community/cache-nix-action@v5
         with:
