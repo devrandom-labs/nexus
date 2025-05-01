@@ -71,15 +71,37 @@
             ];
           };
 
-        ## TODO: get all the projects from bins/* folder
-        ## TODO: add them as packages and build docker images of them.
-        mkBinaries = name:
+        ### packaging derivation to build oci image.
+        mkPackage = name:
           let
-            path = ./bins/${name}/build.nix;
-            _ = assert builtins.pathExists path; true;
-          in pkgs.callPackage path {
-            inherit craneLib fileSetForCrate individualCrateArgs;
-          };
+            cratePath = ./bins/${name};
+            cargoTomlPath = ./bins/${name}/Cargo.toml;
+            _ = assert builtins.pathExists cratePath;
+              throw "Path does nopt exist: ${cratePath}";
+            _c = assert builtins.pathExists cargoTomlPath;
+              throw "Cargo file does not exist: ${cargoTomlPath}";
+            cargoToml = builtins.fromTOML (builtins.readFile cargoTomlPath);
+            pname = cargoToml.package.name;
+            version = cargoToml.package.version;
+            bin = craneLib.buildPackage (individualCrateArgs // {
+              inherit pname version;
+              cargoExtraArgs = "-p ${pname}";
+              src = (fileSetForCrate cratePath);
+            });
+
+            image = pkgs.dockerTools.streamLayeredImage {
+              name = "tixlys-core/${pname}";
+              created = "now";
+              tag = version;
+              contents = [ bin ];
+              config = {
+                Env = [ "RUST_LOG=info,tower_http=trace" "PORT=3000" ];
+                Cmd = [ "${bin}/bin/${pname}" ];
+                ExposedPorts = { "3001/tcp" = { }; };
+                WorkingDir = "/";
+              };
+            };
+          in image;
 
         ## crates
         ## personal scripts
@@ -96,14 +118,9 @@
           gunzip --stdout result > /tmp/image.tar && dive docker-archive: ///tmp/image.tar
         '';
 
-        events = mkBinaries "events";
-        auth = mkBinaries "auth";
-        notifications = mkBinaries "notifications";
-        users = mkBinaries "users";
-
+        auth = mkPackage "auth";
       in with pkgs; {
         checks = {
-
           inherit auth;
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
