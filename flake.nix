@@ -79,6 +79,7 @@
             version = cargoToml.package.version;
             bin = craneLib.buildPackage (individualCrateArgs // {
               inherit pname version;
+              cargoExtraArgs = "-p ${pname}";
               src = (fileSetForCrate cratePath);
             });
 
