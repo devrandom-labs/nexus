@@ -28,21 +28,15 @@
           inherit src;
           strictDeps = true;
           buildInputs = with pkgs;
-            [ openssl ] # Add macOS specific runtime dependencies
-            ++ lib.optionals pkgs.stdenv.isDarwin [
+            [ openssl ] ++ lib.optionals pkgs.stdenv.isDarwin [
               pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
               pkgs.darwin.apple_sdk.frameworks.Security
-              # Add other frameworks if needed by your crates (e.g., CoreFoundation)
-              pkgs.libiconv # Often needed for character encoding issues
+              pkgs.libiconv
             ];
           nativeBuildInputs = with pkgs;
-            [
-              cmake
-              pkg-config
-            ] # Add macOS specific build-time dependencies (like Libsystem for linking)
-            ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.darwin.apple_sdk.frameworks.Security # Sometimes needed here too for build scripts
-              pkgs.darwin.Libsystem # Often needed for linking
+            [ cmake pkg-config ] ++ lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.darwin.apple_sdk.frameworks.Security
+              pkgs.darwin.Libsystem
             ];
         };
 
@@ -71,15 +65,37 @@
             ];
           };
 
-        ## TODO: get all the projects from bins/* folder
-        ## TODO: add them as packages and build docker images of them.
-        mkBinaries = name:
+        ### packaging derivation to build oci image.
+        mkPackage = name:
           let
-            path = ./bins/${name}/build.nix;
-            _ = assert builtins.pathExists path; true;
-          in pkgs.callPackage path {
-            inherit craneLib fileSetForCrate individualCrateArgs;
-          };
+            cratePath = ./bins/${name};
+            cargoTomlPath = ./bins/${name}/Cargo.toml;
+            _ = assert builtins.pathExists cratePath;
+              throw "Path does nopt exist: ${cratePath}";
+            _c = assert builtins.pathExists cargoTomlPath;
+              throw "Cargo file does not exist: ${cargoTomlPath}";
+            cargoToml = builtins.fromTOML (builtins.readFile cargoTomlPath);
+            pname = cargoToml.package.name;
+            version = cargoToml.package.version;
+            bin = craneLib.buildPackage (individualCrateArgs // {
+              inherit pname version;
+              cargoExtraArgs = "-p ${pname}";
+              src = (fileSetForCrate cratePath);
+            });
+
+            image = pkgs.dockerTools.streamLayeredImage {
+              name = "tixlys-core/${pname}";
+              created = "now";
+              tag = version;
+              contents = [ bin ];
+              config = {
+                Env = [ "RUST_LOG=info,tower_http=trace" "PORT=3000" ];
+                Cmd = [ "${bin}/bin/${pname}" ];
+                ExposedPorts = { "3000/tcp" = { }; };
+                WorkingDir = "/";
+              };
+            };
+          in image;
 
         ## crates
         ## personal scripts
@@ -96,14 +112,59 @@
           gunzip --stdout result > /tmp/image.tar && dive docker-archive: ///tmp/image.tar
         '';
 
-        events = mkBinaries "events";
-        auth = mkBinaries "auth";
-        notifications = mkBinaries "notifications";
-        users = mkBinaries "users";
+        auth = mkPackage "auth";
+
+        ### deploying apps
+
+        mkApp = name:
+          let
+            imageStream = mkPackage name;
+            pushScriptDrv = pkgs.writeShellScriptBin "push-${name}-image" ''
+              #!${pkgs.bash}/bin/bash
+              set -euo pipefail
+
+              PUSH_LATEST_TAG="''${PUSH_LATEST_TAG:-false}"
+              SKOPEO_CMD="${pkgs.skopeo}/bin/skopeo"
+              GZIP_CMD="${pkgs.gzip}/bin/gzip"
+              IMAGE_STREAM_SCRIPT="${imageStream}"
+
+              DESTINATION="docker://''${REGISTRY_URL,,}/''${IMAGE_NAME,,}:''${IMAGE_TAG}"
+              DESTINATION_LATEST="docker://''${REGISTRY_URL,,}/''${IMAGE_NAME,,}:latest"
+              CREDENTIALS="''${REGISTRY_USER}:''${REGISTRY_PASSWORD}"
+
+              echo "--- Pushing ${name} Service Image ---"
+              echo "Executing stream script: $IMAGE_STREAM_SCRIPT"
+              echo "Piping stream via gzip to Skopeo..."
+              echo "Source: docker-archive:/dev/stdin"
+              echo "Destination: $DESTINATION"
+              echo "User: $REGISTRY_USER"
+
+              "$IMAGE_STREAM_SCRIPT" | "$GZIP_CMD" --fast | "$SKOPEO_CMD" copy \
+                --dest-creds "$CREDENTIALS" \
+                docker-archive:/dev/stdin \
+                "$DESTINATION"
+
+              if [[ "$PUSH_LATEST_TAG" == "true" ]]; then
+                echo "Pushing latest tag to $DESTINATION_LATEST"
+                "$IMAGE_STREAM_SCRIPT" | "$GZIP_CMD" --fast | "$SKOPEO_CMD" copy \
+                  --dest-creds "$CREDENTIALS" \
+                  docker-archive:/dev/stdin \
+                  "$DESTINATION_LATEST"
+              fi
+
+              echo "--- Push complete for ${name} ---"
+            '';
+          in {
+            type = "app";
+            program = "${pushScriptDrv}/bin/push-${name}-image";
+            meta = {
+              description =
+                "Pushes the ${name} OCI image stream to a configured registry using Skopeo";
+            };
+          };
 
       in with pkgs; {
         checks = {
-
           inherit auth;
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
@@ -163,6 +224,8 @@
             (commonArgs // { inherit cargoArtifacts; });
         };
 
+        apps = { push-auth = mkApp "auth"; };
+
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
           inputsFrom = [ auth ];
@@ -174,8 +237,17 @@
             echo "nix run .#dive [Run dive on built image]"
             echo -e "\n\n\n"
           '';
-          packages =
-            [ rust-analyzer bacon biscuit-cli dive cargo-hakari tree cloc ];
+          packages = [
+            rust-analyzer
+            bacon
+            biscuit-cli
+            dive
+            cargo-hakari
+            tree
+            cloc
+            skopeo
+            gzip
+          ];
         };
       });
 }
