@@ -247,6 +247,7 @@
             cloc
             skopeo
             gzip
+            flyctl
           ];
         };
       });
