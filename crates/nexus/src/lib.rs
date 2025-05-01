@@ -1,12 +1,13 @@
 use serde::{Serialize, de::DeserializeOwned};
-use std::{error::Error, fmt::Debug, hash::Hash};
+use std::{any::Any, error::Error, fmt::Debug, hash::Hash, pin::Pin};
+use tower::BoxError;
 
 pub mod command;
 pub mod error;
 pub mod query;
 
 // Common marker trait for all message types in our system.
-pub trait Message: Debug + Send + Sync + 'static {}
+pub trait Message: Any + Debug + Send + Sync + 'static {}
 
 /// Represents an intention to change the system state
 /// It is linked to specific Result and Error types
@@ -35,3 +36,7 @@ pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned {
     type Id: Clone + Send + Sync + Debug + Hash + Eq + 'static;
     fn aggregate_id(&self) -> &Self::Id;
 }
+
+pub type BoxMessage = Box<dyn Any + Send>;
+pub type ErasedResult = Result<BoxMessage, BoxError>;
+pub type ErasedFuture = Pin<Box<dyn Future<Output = ErasedResult> + Send + 'static>>;
