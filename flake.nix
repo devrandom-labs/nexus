@@ -89,7 +89,7 @@
               tag = version;
               contents = [ bin ];
               config = {
-                Env = [ "RUST_LOG=info,tower_http=trace" "PORT=3000" ];
+                Env = [ "RUST_LOG=info,tower_http=trace" ];
                 Cmd = [ "${bin}/bin/${pname}" ];
                 ExposedPorts = { "3000/tcp" = { }; };
                 WorkingDir = "/";
@@ -224,7 +224,7 @@
             (commonArgs // { inherit cargoArtifacts; });
         };
 
-        apps = { push-auth = mkApp "auth"; };
+        apps = { auth = mkApp "auth"; };
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
@@ -247,6 +247,7 @@
             cloc
             skopeo
             gzip
+            flyctl
           ];
         };
       });
