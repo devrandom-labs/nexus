@@ -89,7 +89,7 @@
               tag = version;
               contents = [ bin ];
               config = {
-                Env = [ "RUST_LOG=info,tower_http=trace" "PORT=3000" ];
+                Env = [ "RUST_LOG=info,tower_http=trace" ];
                 Cmd = [ "${bin}/bin/${pname}" ];
                 ExposedPorts = { "3000/tcp" = { }; };
                 WorkingDir = "/";
