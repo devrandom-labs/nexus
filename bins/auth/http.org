@@ -25,9 +25,11 @@ Content-Type: application/json
 // HTTP/1.1 400 Bad Request
 // content-type: application/json
 // content-length: 128
-// date: Sun, 13 Apr 2025 20:37:28 GMT
-// Request duration: 0.004139s
+// date: Sun, 04 May 2025 12:34:48 GMT
+// Request duration: 0.001304s
 #+END_SRC
+
+#+RESULTS:
 
 *** with no content-type
 #+begin_src restclient no content type
@@ -47,9 +49,12 @@ POST http://localhost:3000/initiate-register
 // HTTP/1.1 415 Unsupported Media Type
 // content-type: application/json
 // content-length: 96
-// date: Sun, 13 Apr 2025 19:14:13 GMT
-// Request duration: 0.057308s
+// date: Sun, 04 May 2025 12:34:48 GMT
+// Request duration: 0.002057s
 #+END_SRC
+
+#+RESULTS:
+
 *** invalid json
 #+begin_src restclient
 POST http://localhost:3000/initiate-register
@@ -69,9 +74,11 @@ Content-Type: application/json
 // HTTP/1.1 400 Bad Request
 // content-type: application/json
 // content-length: 123
-// date: Sun, 13 Apr 2025 20:37:35 GMT
-// Request duration: 0.004261s
+// date: Sun, 04 May 2025 12:34:48 GMT
+// Request duration: 0.001129s
 #+END_SRC
+
+#+RESULTS:
 
 *** invalid email add
 #+begin_src restclient
@@ -92,9 +99,12 @@ Content-Type: application/json
 // HTTP/1.1 400 Bad Request
 // content-type: application/json
 // content-length: 63
-// date: Sun, 13 Apr 2025 20:36:23 GMT
-// Request duration: 0.001420s
+// date: Sun, 04 May 2025 12:34:48 GMT
+// Request duration: 0.000924s
 #+END_SRC
+
+#+RESULTS:
+
 *** valid email address
 #+begin_src restclient
 POST http://localhost:3000/initiate-register
@@ -108,8 +118,9 @@ Content-Type: application/json
 // POST http://localhost:3000/initiate-register
 // HTTP/1.1 202 Accepted
 // content-length: 0
-// date: Sun, 13 Apr 2025 20:36:31 GMT
-// Request duration: 0.010569s
+// date: Sun, 04 May 2025 12:34:50 GMT
+// Request duration: 0.002678s
 #+END_SRC
 
 #+RESULTS:
+: undefined
