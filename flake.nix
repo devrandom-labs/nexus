@@ -248,6 +248,8 @@
             skopeo
             gzip
             flyctl
+            sops
+            age
           ];
         };
       });

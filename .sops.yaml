@@ -1,0 +1,5 @@
+creation_rules:
+  - path_regex: \.config/secrets\.yaml$
+    ## joel uses gmail for dev
+    age: >-
+      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuNMvZ7mBPTbASlv7Dg4By/07XW+fs9i+KkYh5xUDWQ joeldsouzax@gmail.com
