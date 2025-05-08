@@ -2,4 +2,4 @@ creation_rules:
   - path_regex: \.dev\.yaml$
     ## joel uses gmail for dev
     age: >-
-      ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuNMvZ7mBPTbASlv7Dg4By/07XW+fs9i+KkYh5xUDWQ joeldsouzax@gmail.com
+      age1przc5apvvpwlhkn7xryxhueydeue06ckqgnv3waxnqqvw0ngpd9qj528fr

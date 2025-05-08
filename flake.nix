@@ -230,12 +230,7 @@
           checks = self.checks.${system};
           inputsFrom = [ auth ];
           shellHook = ''
-            echo "tixlys development environment"
-            echo "<<<<<<<<<<<<<<<<<<<< Available Commands >>>>>>>>>>>>>>>>>>>>"
-            echo -e "\n\n\n"
-            echo "nix build {package-name}"
-            echo "nix run .#dive [Run dive on built image]"
-            echo -e "\n\n\n"
+            # echo -e "\n\n\033[0;32mTixlys Dev Shell Active! SOPS is configured to use your SSH key for age.\n\n\n"
           '';
           packages = [
             rust-analyzer
