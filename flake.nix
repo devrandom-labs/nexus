@@ -230,7 +230,7 @@
           checks = self.checks.${system};
           inputsFrom = [ auth ];
           shellHook = ''
-            # echo -e "\n\n\033[0;32mTixlys Dev Shell Active! SOPS is configured to use your SSH key for age.\n\n\n"
+            echo -e "\n\n\033[0;32mTixlys Dev Shell ready!\n\n\n"
           '';
           packages = [
             rust-analyzer
