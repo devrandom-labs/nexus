@@ -1,8 +1,7 @@
 { config, lib, pkgs }: {
 
-  imports = [ <nixpkgs/nixos/modules/profiles/qemu-guest.nix> ];
-  system.stateVersion = "24.11";
-  time.timeZone = "Etc/UTC";
+  imports =
+    [ <nixpkgs/nixos/modules/profiles/qemu-guest.nix> ../common/base.nix ];
 
   # --- Cloud VM Specifics ---
   boot.loader.grub.enable = true;
@@ -13,6 +12,9 @@
     device = "/dev/vda1";
     fsType = "ext4";
   };
+
+  # Optional: Define swap on a second partition if you create one
+  # swapDevices = [ { device = "/dev/vda2"; } ];
 
   # --- Networking Configuration ---
   networking.useDHCP = true;
