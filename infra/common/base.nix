@@ -24,4 +24,10 @@
     enable = true;
     allowedTCPPorts = [ 22 80 443 ];
   };
+
+  documentation.enable = false;
+  documentation.nixos.enable = false;
+  documentation.man.enable = false;
+  powerManagement.enable = false;
+  nix.settings.auto-optimise-store = true;
 }

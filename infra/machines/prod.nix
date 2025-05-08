@@ -1,7 +1,10 @@
 { config, lib, pkgs }: {
 
-  imports =
-    [ <nixpkgs/nixos/modules/profiles/qemu-guest.nix> ../common/base.nix ];
+  imports = [
+    <nixpkgs/nixos/modules/profiles/qemu-guest.nix>
+    ../common/base.nix
+    ../common/containers.nix
+  ];
 
   # --- Cloud VM Specifics ---
   boot.loader.grub.enable = true;
