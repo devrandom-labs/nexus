@@ -1,8 +1,8 @@
 creation_rules:
-  - path_regex: 'infra/secrets/secrets\.dev\.yaml$'
+  - path_regex: 'infra/secrets/\.dev\.yaml$'
     age: >-
       age1przc5apvvpwlhkn7xryxhueydeue06ckqgnv3waxnqqvw0ngpd9qj528fr
 
-  - path_regex: 'infra/secrets/secrets\.prod\.yaml$'
+  - path_regex: 'infra/secrets/\.prod\.yaml$'
     age: >-
       age1przc5apvvpwlhkn7xryxhueydeue06ckqgnv3waxnqqvw0ngpd9qj528fr
