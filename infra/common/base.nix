@@ -1,5 +1,5 @@
-{ config, lib, pkgs, ... }: {
-  system.stateVersion = "24.11";
+{ ... }: {
+  system.stateVersion = "24.05";
   time.timeZone = "Etc/UTC";
   users.users.tixlys = {
     isNormalUser = true;

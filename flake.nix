@@ -1,7 +1,7 @@
 {
   description = "Tixlys Core Microservices";
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
     fenix = {
@@ -242,7 +242,6 @@
             cloc
             skopeo
             gzip
-            flyctl
             sops
             age
           ];
