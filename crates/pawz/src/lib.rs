@@ -154,6 +154,7 @@ where
         }
         let listener = match self.env {
             Environment::Production => {
+                // FIXME: have prod setup
                 debug!("prod environment is not setup yet, please run it on local machine");
                 return Err(Error::InvalidConfiguration(
                     "Production environment is disabled for now".into(),

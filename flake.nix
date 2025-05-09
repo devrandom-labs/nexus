@@ -1,7 +1,8 @@
 {
   description = "Tixlys Core Microservices";
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs-stable.url = "github:nixos/nixpkgs/nixos-24.11";
     utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";
     fenix = {
@@ -15,8 +16,13 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
   };
-  outputs = { self, nixpkgs, utils, crane, fenix, advisory-db, ... }:
+  outputs = { self, nixpkgs, nixpkgs-stable, utils, crane, fenix, advisory-db
+    , sops-nix, ... }@inputs:
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -164,6 +170,7 @@
           };
 
       in with pkgs; {
+
         checks = {
           inherit auth;
 
@@ -228,14 +235,8 @@
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
-          inputsFrom = [ auth ];
           shellHook = ''
-            echo "tixlys development environment"
-            echo "<<<<<<<<<<<<<<<<<<<< Available Commands >>>>>>>>>>>>>>>>>>>>"
-            echo -e "\n\n\n"
-            echo "nix build {package-name}"
-            echo "nix run .#dive [Run dive on built image]"
-            echo -e "\n\n\n"
+            echo -e "\n\n\033[0;32mTixlys Dev Shell ready!\n\n\n"
           '';
           packages = [
             rust-analyzer
@@ -247,8 +248,23 @@
             cloc
             skopeo
             gzip
-            flyctl
+            sops
+            age
           ];
         };
-      });
+      }) // {
+        nixosConfigurations = {
+          local = inputs.nixpkgs-stable.lib.nixosSystem {
+            system = "x86_64-linux";
+            specialArgs = {
+              inherit inputs;
+              pkgs = inputs.nixpkgs-stable.legacyPackages."x86_64-linux";
+            };
+            modules =
+              [ ./infra/machines/prod.nix inputs.sops-nix.nixosModules.sops ];
+          };
+          # You can add other NixOS configurations here later
+          # ociProd = inputs.nixpkgs-stable.lib.nixosSystem { ... };
+        };
+      };
 }
