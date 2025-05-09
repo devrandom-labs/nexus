@@ -1,7 +1,7 @@
-{ config, lib, pkgs }: {
+{ config, lib, pkgs, inputs, ... }: {
 
   imports = [
-    <nixpkgs/nixos/modules/profiles/qemu-guest.nix>
+    "${pkgs.path}/nixos/modules/profiles/qemu-guest.nix"
     ../common/base.nix
     ../common/containers.nix
   ];
@@ -21,5 +21,5 @@
 
   # --- Networking Configuration ---
   networking.useDHCP = true;
-  networking.hostName = "tixlys-local-test";
+  networking.hostName = "tixlys-local";
 }

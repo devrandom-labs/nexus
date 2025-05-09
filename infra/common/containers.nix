@@ -18,6 +18,5 @@
     # a separate file-based age private key for the server itself.
     # Explicitly unsetting these can prevent sops-nix from looking for them if not intended.
     age.keyFile = lib.mkForce null;
-    age.identityPaths = lib.mkForce [ ];
   };
 }
