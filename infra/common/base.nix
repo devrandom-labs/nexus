@@ -1,11 +1,13 @@
 { ... }: {
-  system.stateVersion = "24.05";
+  system.stateVersion = "24.11";
   time.timeZone = "Etc/UTC";
   users.users.tixlys = {
     isNormalUser = true;
+    createHome = true;
+    home = "/home/tixlys";
+    initialPassword = "tixlys";
     description = "Admin user for tixlys servers";
     extraGroups = [ "wheel" "podman" ];
-
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuNMvZ7mBPTbASlv7Dg4By/07XW+fs9i+KkYh5xUDWQ joeldsouzax@gmail.com"
     ];
@@ -14,7 +16,7 @@
   services.openssh = {
     enable = true;
     settings = {
-      PermitRootLogin = "no";
+      PermitRootLogin = "prohibit-password";
       PasswordAuthentication = false;
     };
   };
