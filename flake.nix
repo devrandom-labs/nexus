@@ -260,11 +260,8 @@
               inherit inputs;
               pkgs = inputs.nixpkgs-stable.legacyPackages."x86_64-linux";
             };
-            modules =
-              [ ./infra/machines/prod.nix inputs.sops-nix.nixosModules.sops ];
+            modules = [ ./infra/machines/local.nix ];
           };
-          # You can add other NixOS configurations here later
-          # ociProd = inputs.nixpkgs-stable.lib.nixosSystem { ... };
         };
       };
 }
