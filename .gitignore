@@ -16,3 +16,4 @@ secrets.*.dec.env
 **/*.dec.*
 .env
 .envrc.local
+tixlys-local.*

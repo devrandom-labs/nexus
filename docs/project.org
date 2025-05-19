@@ -1,0 +1,188 @@
+#+TITLE: Tixlys (Open Resale API) - Project Plan (keriox Enhanced)
+#+AUTHOR: Startup Idea Project Manager (Gemini)
+#+DATE: 2025-05-19
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil H:5
+
+:PROPERTIES:
+:PROJECT_NAME: Tixlys (Open Resale API)
+:VERSION: 0.2.0
+:PRIMARY_TECHNOLOGY: Rust
+:KERI_LIBRARY: keriox
+:PROJECT_STATUS: Planning
+:END:
+
+* Project Overview
+  The Tixlys (Open Resale API) project aims to provide event organizers with robust control over the entire lifecycle and resale terms of their tickets. This is achieved through a secure API that acts as the central "transfer agent" and source of truth for ticket ownership and validity, leveraging KERI (Key Event Receipt Infrastructure) via the `keriox` Rust library for verifiable data. Tickets can be discovered and negotiated on any third-party platform, but the actual transfer *must* be processed and validated by the Tixlys API according to organizer-defined rules.
+
+  **Core Goal:** Enable organizers to define and enforce resale rules (e.g., price caps, revenue shares) for their tickets, regardless of where the sale is negotiated, making Tixlys the authoritative system for ticket validity and ownership transfer, underpinned by KERI.
+
+  **Target Users:**
+  1. Event Organizers (B2B)
+  2. Developers & Third-Party Marketplaces (B2D - API Consumers)
+  3. (Indirectly) Fans
+
+* Technology Stack
+  - Backend Language: Rust
+  - API Framework: Actix Web / Axum (to be decided based on developer preference and ecosystem maturity)
+  - Database: PostgreSQL (for application state, rule definitions, caching KERI-related data for performance)
+  - **KERI Implementation: `keriox` (Rust library)**
+  - Serialization: `serde`
+  - Async Runtime: `tokio`
+  - Containerization (for deployment): Docker
+  - API Documentation: OpenAPI (Swagger) - generated from code comments if possible.
+
+* Kanban Workflow (Conceptual Columns)
+  - *Backlog*: All identified features, user stories, tasks.
+  - *To Do (Current Iteration)*: Features selected for the current development cycle (e.g., 1-2 weeks).
+  - *In Progress*: The task currently being worked on by the developer.
+  - *In Review/Testing*: Feature complete, undergoing internal checks, automated tests, and potentially manual validation.
+  - *Done (Deployable)*: Feature is complete, tested, and part of a deployable increment.
+
+* Phases & Iterations (Focus on Value Delivery)
+
+
+**Phase 0: Foundation - `keriox` Integration & ACDC-based Tickets (Core Verifiability - ~3-5 Iterations)**
+  *Goal: Establish the KERI-based foundation using `keriox`, with tickets modeled as ACDCs, incorporating expert KERI/ACDC best practices.*
+  - [-] TODO **Setup and Integrate `keriox` Library**
+    - Add `keriox` as a dependency.
+    - Familiarize with `keriox` core concepts: AIDs, KELs, Registries, Signatures, Event Messages, and specifically **ACDC issuance, chaining, and status management capabilities.**
+    - Configure a `keriox` environment (its database/storage, and a **wallet for Tixlys-managed keys** for the custodial model).
+  - [-] TODO **Define KERI Identifier & ACDC Strategy for Tickets**
+    - **Organizers:** Each organizer will have their own KERI AID, managed custodially by Tixlys.
+    - **Fans/Ticket Holders:** Represented by KERI AIDs, managed custodially by Tixlys initially.
+    - **Tickets as ACDCs:**
+      - A ticket is an ACDC. Payload fields: `event_id`, `seat_info`, `face_value`, `current_owner_aid` (explicitly makes ownership claim verifiable within ACDC), `rules_snapshot_said` (SAID of applicable ResaleRule ACDC/data for provenance), `issuer_aid` (Organizer's AID).
+      - The ACDC is issued and signed by the Organizer's AID.
+      - The **`TicketIdentifier` will be the SAID of the Ticket ACDC.**
+      - **ACDC State Management (Resale, Redemption):**
+        - *Primary Method:* **Chaining ACDCs** for state changes like transfers. A new ACDC is issued to the new owner, cryptographically linked to the previous ACDC (e.g., via `p.s`, `o.s` in envelope, or custom `replaces_said` field). The old ACDC's state is effectively "superseded."
+        - *Status Marking (Redeemed, Revoked, Explicitly Transferred):* The issuer (Organizer AID) publishes an event to their KEL (or a dedicated status KEL/registry if supported by `keriox`) that includes the SAID of the ticket ACDC and its new status (e.g., "redeemed," "revoked").
+  - [-] TODO **Core Data Structures (Rust structs) with KERI/ACDC focus**
+    - `OrganizerProfile` (links to Organizer KERI AID, API keys)
+    - `EventDetails` (links to Organizer AID, metadata)
+    - `TicketACDC` (Rust struct for ACDC payload as defined above)
+    - `TicketState` (In app DB: `acdc_said` (primary key), `last_known_keri_event_sn_or_said`, `current_owner_aid_cache`, `status_cache`. *Crucial: Validation must always re-verify with `keriox` against KERI source of truth, not rely solely on this cache for security decisions.*)
+    - `ResaleRule` (Can be an ACDC itself, its SAID referenced in Ticket ACDC).
+  - [-] TODO **Database Schema v0.4 (for application data & `keriox` ACDC support)**
+    - App DB (PostgreSQL): Tables for Organizers, Events, Tickets (indexed by `acdc_said`, caching issuer AID, event ID, `current_owner_aid_cache`), ResaleRules. *Tixlys app DB is responsible for maintaining its own index for efficient application-level queries.*
+    - When a ticket ACDC is issued, Tixlys records its SAID and relevant indexed fields in the app DB.
+    - `keriox` DB: `keriox` manages its KELs/registries. All KERI validation and fetching of specific ACDCs by SAID occurs via `keriox` library calls.
+  - [-] TODO **Develop `keriox`-backed services for:**
+    - Creating and managing Organizer AIDs & Fan AIDs (custodial).
+    - **Issuing a Ticket ACDC:**
+      - Organizer's AID (via Tixlys/`keriox`) creates the ACDC payload.
+      - `keriox` computes the ACDC's SAID.
+      - Organizer's AID signs and issues a KERI event (e.g., `ixn` or specific ACDC issuance event, including ACDC SAID and possibly content hash) anchored in the Organizer's KEL (preferred for simplicity over many event-specific KELs initially).
+    - **Transferring a Ticket ACDC:**
+      - *Initiation:* Current Owner's AID (custodially via Tixlys) provides a **signed authorization message** for transfer (e.g., JSON with `ticket_acdc_said`, `new_owner_aid`, signed by current owner's key).
+      - *Execution (by Organizer/Tixlys acting on verified authorization):*
+        - The Organizer's AID issues a **new, chained ACDC** to the new owner, linking to the old ACDC.
+        - The Organizer's AID may also issue an event to a status KEL/registry explicitly marking the old ACDC's SAID as "transferred."
+        - New owner implicitly accepts via Tixlys recording them as owner of the new ACDC.
+    - **Validating a Ticket ACDC:**
+      - Given an `acdc_said`, use `keriox` to:
+        - Retrieve the ACDC.
+        - Verify its schema and issuer's signature against the issuer's KEL state.
+        - Check any relevant status information from KERI-based status registries (e.g., for "redeemed," "revoked" status).
+  - [-] TODO **Internal CLI or Test Suite using `keriox` (Enhanced)**
+    - (As before, ensuring tests cover ACDC chaining, status updates, and validation against status registries).
+  - [-] TODO **Key `keriox` Investigations (Crucial for ACDC Lifecycle Management)**
+    - **ACDC Chaining Support:** How does `keriox` facilitate creating a new ACDC that explicitly replaces/chains from a previous one (linkage fields like `p.s`, `o.s`, or custom data fields)?
+    - **ACDC Status Management/Revocation:**
+      - How does `keriox` recommend an issuer marks an ACDC (by SAID) as "redeemed," "transferred," or "revoked"?
+      - Does `keriox` have built-in support for KERI-based credential status registries (similar to `keripy`'s Verifiable Credential Registry KEL concept)? Or will Tixlys need to implement this using generic KERI events?
+    - **Event Anchoring for ACDCs:** Confirm default behavior in `keriox` (issuer's KEL vs. dedicated KELs) and choose the most practical approach (likely issuer's KEL).
+    - **Transfer Authorization Message Structure:** Define the precise JSON (or other format) payload for the current owner's signed authorization for transfer.
+
+**Phase 1: MVP - Verifiable Tickets & Basic Organizer Control (Deployable - ~3-4 Iterations)**
+  *Goal: Organizers can create events & KERI-backed tickets; tickets are verifiable via `keriox`; basic non-transferability can be enforced.*
+  - [-] TODO **Organizer Account Management (API Endpoints)**
+    - `POST /organizers` (Create Organizer profile in app DB, generate KERI AID using `keriox`, store AID securely, return Tixlys API key).
+    - `GET /organizers/me` (Requires API key Auth, returns profile including public part of Organizer AID).
+  - [-] TODO **Event Creation & Management (API Endpoints)**
+    - (As before, but ensure events are cryptographically linked or attributable to the Organizer's AID).
+  - [-] TODO **Ticket Issuance (API Endpoint using `keriox`)**
+    - `POST /events/{event_id}/tickets/issue` (Body: quantity, ticket_type, initial_price)
+      - For each ticket:
+        - Create a KERI event under the Organizer's KEL (or a dedicated Event KEL) signifying issuance. This event would contain ticket metadata.
+        - Store a reference to this KERI event and a TicketIdentifier in the Tixlys app DB.
+      - Initial KERI-verified owner: Organizer's AID.
+  - [-] TODO **Initial Ticket Assignment by Organizer (API using `keriox`)**
+    - `POST /tickets/{ticket_identifier}/assign` (Body: `new_owner_fan_aid` (or identifier Tixlys can resolve to a Fan AID), purchase_price)
+      - Create a KERI interaction event (e.g., a transfer receipt) signed by the Organizer's AID (and ideally acknowledged by the Fan's AID if possible) to update ownership.
+      - This event is added to the relevant KEL.
+      - Tixlys app DB reflects the new owner AID.
+  - [-] TODO **Basic Ticket Validation Endpoint (using `keriox`)**
+    - `GET /tickets/{ticket_identifier}/validate`
+      - Retrieves the ticket's KEL (or relevant event log) using `keriox`.
+      - Verifies the chain of events to confirm current valid owner (Fan AID) and status.
+      - Returns: event_name, current_status, current_owner_public_identifier.
+  - [-] TODO **Simple Rule Engine v0.1 (Internal Logic)**
+    - Support basic "resale_allowed = false" rule. This could be an event attribute in KERI.
+    - API for transfer will reject if this rule is active (verified via KEL state).
+  - [-] TODO **API Authentication (Bearer Tokens/API Keys)** (as before)
+  - [-] TODO **Basic Admin Interface (Internal Tool)** (as before, but with visibility into KERI AIDs and event logs for debugging).
+  - [-] TODO **Deployment Setup (Docker, basic CI/CD pipeline)** (as before)
+
+**Phase 2: Enabling Controlled Resale via API (Core Value - ~4-6 Iterations)**
+  *Goal: Implement API for rule-checked, KERI-verified ticket transfers.*
+  - [-] TODO **Organizer Rule Definition (API Endpoints & extend Admin UI)**
+    - (As before. Consider if rules can be anchored as KERI events for verifiability).
+  - [-] TODO **Resale Initiation API Endpoint (Seller/Marketplace Initiated, `keriox` based)**
+    - `POST /transfers/initiate`
+      - Body: `ticket_identifier`, `current_owner_keri_signed_message` (a message signed by the current owner's AID private key, authorizing transfer initiation), `proposed_new_owner_aid`, `resale_price`.
+      - Logic:
+        - Verify `current_owner_keri_signed_message` using `keriox` against the ticket's current owner AID.
+        - Check event's `ResaleRule`s (from app DB, potentially anchored in KERI).
+        - Calculate fees.
+        - If checks pass: Create `PendingTransfer` record.
+        - Return: `transfer_id`, fees, etc.
+  - [-] TODO **Payment Pre-condition Handling** (as before)
+  - [-] TODO **Transfer Finalization API Endpoint (KERI Event Creation)**
+    - `POST /transfers/{transfer_id}/finalize`
+      - Body: `payment_confirmation_details`, (optional) `buyer_keri_signed_acknowledgement`.
+      - Logic:
+        - Verify payment.
+        - If confirmed:
+          - Create KERI interaction events to signify the transfer:
+            - Seller's AID signs event transferring ownership.
+            - Buyer's AID (if involved in signing) acknowledges receipt.
+            - These events are added to the relevant KEL.
+          - Tixlys app DB updates its cache/state.
+          - Invalidate old representations.
+        - Return: Success or failure.
+  - [-] TODO **API Documentation v1 (OpenAPI Spec)** (as before, highlight KERI aspects).
+  - [-] TODO **QR Code strategy with KERI**
+    - QR codes could contain the `TicketIdentifier` and maybe a recent KERI event sequence number or hash for quick client-side pre-validation, with full validation always against the API (which uses `keriox`).
+
+**Phase 3: Monetization & Developer/Marketplace Support (~3-4 Iterations)**
+  *Goal: Implement Tixlys revenue and support early integrators working with KERI-backed tickets.*
+  - (Tasks remain largely the same as before, but the "product" being supported now has a strong KERI foundation).
+  - [-] TODO Developer Portal needs to explain how to interact with KERI AIDs (or Tixlys-managed identifiers that map to AIDs) and how to create/verify signatures if necessary for API calls like `current_owner_keri_signed_message`.
+
+**Phase 4: Enhancements, Scalability & Ecosystem Growth (Ongoing)**
+  *Goal: Add more sophisticated features, improve robustness, and encourage adoption.*
+  - [-] TODO More complex Rule Engine Features (potentially as KERI attestations or event metadata).
+  - [-] TODO Direct Fan interaction with their KERI AIDs for ticket management (requires wallet/agent integration).
+  - [-] TODO Explore `keriox` features for witnesses, watchers, and multi-sig for enhanced security and decentralization if applicable.
+  - (Other tasks like Webhooks, Security, Performance, SDKs remain relevant).
+
+* Key Challenges & Considerations
+  - **`keriox` Learning Curve & Integration:** While `keriox` provides the tools, understanding and correctly implementing KERI flows for ticketing will take effort. Thoroughly test KERI event creation and validation.
+  - **User Experience with KERI:** If fans are expected to manage their own AIDs directly, this adds complexity. MVP might abstract this away by Tixlys managing AIDs for users initially. `current_owner_keri_signed_message` implies the owner has key management capabilities. This needs a clear strategy:
+      - Tixlys manages keys/AIDs for users (custodial).
+      - Integration with KERI agent/wallet software used by fans (non-custodial).
+      - Start with custodial or developer-managed (for marketplace integrations) AIDs.
+  - **State Management:** Balancing KERI's verifiable data with the application's operational database (PostgreSQL). The app DB might cache KERI state for performance, with KERI KELs being the ultimate source of truth.
+  - **Scalability of KERI Operations:** Ensure `keriox` and its backend can handle the transaction volume for popular events.
+  - (Payment Collection, API as Sole Point of Transfer, Ecosystem Bootstrapping, Legal/Regulatory remain as challenges).
+
+* Potential Clients / Integration Targets (Initial Thoughts)
+  - (Same as before, but the pitch now includes "KERI-verifiable tickets" which is a stronger technical differentiator).
+
+* Future Considerations (Post-MVP / Long Term)
+  - [-] TODO Full non-custodial KERI identity for fans.
+  - [-] TODO Interoperability with other KERI-based systems.
+  - [-] TODO Using KERI for verifiable attestations about tickets (e.g., "verified fan purchase," "attended event").
+  - (Other considerations remain relevant).

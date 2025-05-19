@@ -218,10 +218,17 @@
 
             nativeBuildInputs = [ cargo-hakari ];
           };
+
         };
 
         packages = {
           inherit auth pu pd i;
+          ## integration test for auth
+          integration = pkgs.testers.runNixOSTest ({
+            name = "tixlys-auth-integration-test";
+            nodes = { };
+            testScript = { nodes, ... }: "\n";
+          });
 
           ## FIXME: only put this for darwin? maybe
           # tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
@@ -260,11 +267,8 @@
               inherit inputs;
               pkgs = inputs.nixpkgs-stable.legacyPackages."x86_64-linux";
             };
-            modules =
-              [ ./infra/machines/prod.nix inputs.sops-nix.nixosModules.sops ];
+            modules = [ ./infra/machines/local.nix ];
           };
-          # You can add other NixOS configurations here later
-          # ociProd = inputs.nixpkgs-stable.lib.nixosSystem { ... };
         };
       };
 }
