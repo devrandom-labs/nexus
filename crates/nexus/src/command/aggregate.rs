@@ -169,6 +169,7 @@ where
 
 #[cfg(test)]
 pub mod test {
+
     use super::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState, AggregateType};
     use crate::command::handler::test::{CreateUser, CreateUserHandler, UserError};
     use crate::{DomainEvent, Message};
