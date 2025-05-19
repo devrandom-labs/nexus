@@ -218,10 +218,17 @@
 
             nativeBuildInputs = [ cargo-hakari ];
           };
+
         };
 
         packages = {
           inherit auth pu pd i;
+          ## integration test for auth
+          integration = pkgs.testers.runNixOSTest ({
+            name = "tixlys-auth-integration-test";
+            nodes = { };
+            testScript = { nodes, ... }: "\n";
+          });
 
           ## FIXME: only put this for darwin? maybe
           # tixlys-coverage = craneLibLLvmTools.cargoLlvmCov

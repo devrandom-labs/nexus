@@ -2,55 +2,30 @@
 # your system. Help is available in the configuration.nix(5) man page, on
 # https://search.nixos.org/options and in the NixOS manual (`nixos-help`).
 
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, inputs, ... }:
 
 {
-  imports = [ ../common/base.nix ];
+  imports = [
+    ../common/base.nix
+    # Corrected import using the 'inputs' specialArg
+    (inputs.nixpkgs-stable + "/nixos/modules/virtualisation/qemu-vm.nix")
+    # # Also include qemu-guest.nix
+    # (inputs.nixpkgs-stable + "/nixos/modules/profiles/qemu-guest.nix")
+  ];
   # Use the systemd-boot EFI boot loader.
+
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
 
+  networking.useDHCP = true;
   networking.hostName = "tixlys-local";
 
-  # Configure network proxy if necessary
-  # networking.proxy.default = "http://user:password@proxy:port/";
-  # networking.proxy.noProxy = "127.0.0.1,localhost,internal.domain";
+  virtualisation.qemu.options = [
+    "-m 2048" # Allocate 2GB of RAM (up from a small default)
+    "-smp 2" # Allocate 2 CPU cores
+  ];
 
-  # Select internationalisation properties.
-  # i18n.defaultLocale = "en_US.UTF-8";
-  # console = {
-  #   font = "Lat2-Terminus16";
-  #   keyMap = "us";
-  #   useXkbConfig = true; # use xkb.options in tty.
-  # };
-
-  # Enable CUPS to print documents.
-  # services.printing.enable = true;
-
-
-
-  # Some programs need SUID wrappers, can be configured further or are
-  # started in user sessions.
-  # programs.mtr.enable = true;
-  # programs.gnupg.agent = {
-  #   enable = true;
-  #   enableSSHSupport = true;
-  # };
-
-  # List services that you want to enable:
-
-  # Enable the OpenSSH daemon.
-  # services.openssh.enable = true;
-
-  # Open ports in the firewall.
-  # networking.firewall.allowedTCPPorts = [ ... ];
-  # networking.firewall.allowedUDPPorts = [ ... ];
-  # Or disable the firewall altogether.
-
-
-  # Copy the NixOS configuration file and link it from the resulting system
-  # (/run/current-system/configuration.nix). This is useful in case you
-  # accidentally delete configuration.nix.
-  # system.copySystemConfiguration = true;
+  virtualisation.qemu.networkingOptions =
+    [ "-net user,hostfwd=tcp::2222-:22" "-net nic" ];
 
 }
