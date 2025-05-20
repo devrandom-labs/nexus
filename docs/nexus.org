@@ -26,7 +26,7 @@
 ** Phase 1: Core Testability, In-Memory Implementation & Foundational Documentation (~3-4 Iterations)
    *Goal: Ensure the existing CQRS/ES framework is robust through comprehensive testing, provide functional in-memory repositories, and establish baseline Rustdoc documentation for all existing public APIs.*
 
-*** TODO Document `lib.rs` (Core Crate and Traits)
+*** STRT Document `lib.rs` (Core Crate and Traits)
     SCHEDULED: <2025-05-21 Wed>
     :PROPERTIES:
     :CATEGORY: Documentation
