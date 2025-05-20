@@ -279,12 +279,12 @@ where
     /// ## Type Parameters:
     /// * `C`: The type of the command, which must implement [`Command`].
     /// * `Handler`: The type of the command handler, which must implement
-    ///     [`AggregateCommandHandler<C, Services, AggregateType = AT>`]. This ensures the handler
-    ///     is specific to this command type, this aggregate type, and can use the provided `Services`.
+    ///   [`AggregateCommandHandler<C, Services, AggregateType = AT>`]. This ensures the handler
+    ///   is specific to this command type, this aggregate type, and can use the provided `Services`.
     /// * `Services`: A type (often a trait object or a struct of services) that provides
-    ///     any external dependencies the `handler` might need to process the command
-    ///     (e.g., a validation service, a service to fetch external data, etc.).
-    ///     It must be `Send + Sync + ?Sized`.
+    ///   any external dependencies the `handler` might need to process the command
+    ///   (e.g., a validation service, a service to fetch external data, etc.).
+    ///   It must be `Send + Sync + ?Sized`.
     ///
     /// ## Process:
     /// 1.  The `command` is passed to the `handler.handle()` method along with the
@@ -297,7 +297,7 @@ where
     ///
     /// ## Returns:
     /// * `Ok(C::Result)` if the command is processed successfully by the handler and all
-    ///     resulting events are applied.
+    ///   resulting events are applied.
     /// * `Err(C::Error)` if the command handler returns an error.
     pub async fn execute<C, Handler, Services>(
         &mut self,
