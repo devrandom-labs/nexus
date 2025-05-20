@@ -142,36 +142,150 @@ use std::{any::Any, error::Error, fmt::Debug, hash::Hash};
 pub mod command;
 pub mod query;
 
+/// # `Message`
+///
+/// A common marker trait for all message types within the `nexus` system,
+/// including commands, queries, and domain events.
+///
+/// This trait establishes a baseline for messages, requiring them to be:
+/// * `Any`: Can be downcast to a concrete type.
+/// * `Debug`: Can be formatted for debugging.
+/// * `Send`: Can be sent safely across threads.
+/// * `Sync`: Can be shared safely across threads (`&T` is `Send`).
+/// * `'static`: Contains no non-static references.
+///
+/// Its primary role is to provide a common ancestor for different kinds of
+/// messages, facilitating generic processing or type-erasure scenarios if needed,
+/// though `nexus` primarily relies on strong typing via generics.
 pub trait Message: Any + Debug + Send + Sync + 'static {}
 
-/// Represents an intention to change the system state
-/// It is linked to specific Result and Error types
+/// # `Command`
+///
+/// Represents an intention to change the system state. Commands are imperative
+/// messages that instruct the system to perform an action.
+///
+/// In a CQRS architecture, commands are distinct from queries. They are handled
+/// by command handlers (often associated with aggregates in DDD) and typically
+/// result in state changes, which are often captured as domain events in an
+/// Event Sourcing model.
+///
+/// This trait requires `Message` and associates specific `Result` and `Error`
+/// types with each command, providing a clear contract for command execution.
 pub trait Command: Message {
-    /// The type returned upon successful processing of the command.
+    /// ## Associated Type: `Result`
+    /// The type returned upon successful processing of the command by its handler.
+    ///
+    /// This could be a simple acknowledgment (e.g., `()`), an identifier (e.g., the ID
+    /// of a newly created aggregate), or any other data relevant to the outcome of
+    /// the command.
+    ///
+    /// It must be `Send + Sync + Debug + 'static`.
     type Result: Send + Sync + Debug + 'static;
 
+    /// ## Associated Type: `Error`
     /// The specific error type returned if the command's *domain logic* fails.
-    /// This is distinct  from infrastructure errors (like database connection issues).
+    ///
+    /// This error type should represent failures related to business rules, invariants,
+    /// or other conditions within the domain that prevent the command from being
+    /// successfully processed. It is distinct from infrastructure errors (like
+    /// database connection issues or network failures), which would typically be
+    /// handled at a different layer (e.g., by the repository or dispatcher).
+    ///
+    /// It must implement `std::error::Error` and be `Send + Sync + Debug + 'static`.
     type Error: Error + Send + Sync + Debug + 'static;
 }
 
-/// Represents an intention to retreive data from the system without changing state.
-/// It is linked to specific Result (the data requested) and Error types.
+/// # `Query`
+///
+/// Represents an intention to retrieve data from the system without changing its state.
+/// Queries are messages that ask the system for information.
+///
+/// In a CQRS architecture, queries are handled separately from commands, often
+/// accessing specialized read models that are optimized for data retrieval.
+///
+/// This trait requires `Message` and associates specific `Result` (the data being
+/// requested) and `Error` types with each query, defining a clear contract for
+/// query execution.
 pub trait Query: Message {
+    /// ## Associated Type: `Result`
     /// The type of data returned upon successful execution of the query.
-    /// This is typically a specific struct or enum representing the read model data.
+    ///
+    /// This is typically a specific struct or enum representing the read model data
+    /// requested by the query (e.g., `UserDetailsView`, `OrderSummaryDto`).
+    ///
+    /// It must be `Send + Sync + Debug + 'static`.
     type Result: Send + Sync + Debug + 'static;
-    /// The specific error type returned if the query fails (e.g., data not found, access denied).
+    /// ## Associated Type: `Error`
+    /// The specific error type returned if the query fails.
+    ///
+    /// This could be due to various reasons such as the requested data not being
+    /// found, the requester lacking necessary permissions, or issues with the
+    /// underlying read model store.
+    ///
+    /// It must implement `std::error::Error` and be `Send + Sync + Debug + 'static`.
     type Error: Error + Send + Sync + Debug + 'static;
 }
 
-/// Represents a significant occurrence in the domain that has already happened.
-/// Events are immutable facts.
+/// # `DomainEvent`
+///
+/// Represents a significant occurrence or fact within the domain that has already
+/// happened. Events are immutable and capture a specific state change or
+/// noteworthy moment in the lifecycle of an aggregate or the system.
+///
+/// In an Event Sourcing system, domain events are the primary source of truth.
+/// The state of an aggregate is derived by applying a sequence of its domain events.
+///
+/// ## Trait Bounds:
+/// * Requires [`Message`] as a base.
+/// * `Clone`: Events must be cloneable.
+/// * `Serialize` and `DeserializeOwned` (from `serde`): Events must be serializable
+///   and deserializable, as they are intended to be persisted in an event store.
+/// * `PartialEq`: Events must be comparable for equality, primarily for testing purposes
+///   (e.g., asserting that expected events were generated).
+///
+/// ## Associated Types:
+/// * `Id`: The type of the identifier for the aggregate instance to which this event pertains.
+///   This `Id` type must itself implement the [`Id`] marker trait.
 pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned + PartialEq {
+    /// ## Associated Type: `Id`
+    /// The type of the identifier for the aggregate instance this event is associated with.
+    ///
+    /// This `Id` must conform to the [`Id`] trait, ensuring it has common
+    /// properties like being cloneable, hashable, equatable, etc.
     type Id: Id;
+
+    /// ## Method: `aggregate_id`
+    /// Returns a reference to the unique identifier of the aggregate instance
+    /// to which this event belongs.
+    ///
+    /// This is crucial for routing events, rehydrating aggregates, and ensuring
+    /// that events are applied to the correct aggregate instance.
     fn aggregate_id(&self) -> &Self::Id;
 }
 
+/// # `Id`
+///
+/// A marker trait that groups common trait bounds required for types used as
+/// unique identifiers within the `nexus` framework (e.g., for aggregates,
+/// domain events).
+///
+/// This trait simplifies other trait definitions (like [`DomainEvent`] and
+/// [`AggregateType`]) by providing a single name for a common set of constraints.
+///
+/// ## Required Bounds:
+/// * `Clone`: Identifiers must be cloneable.
+/// * `Send`: Identifiers must be sendable across threads.
+/// * `Sync`: Identifiers must be safely shareable across threads.
+/// * `Debug`: Identifiers must be debug-printable.
+/// * `Hash`: Identifiers must be hashable (e.g., for use in `HashMap` keys).
+/// * `Eq`: Identifiers must support equality comparison.
+/// * `'static`: Identifiers must not contain any non-static references.
 pub trait Id: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
 
+/// Blanket implementation of `Id`.
+///
+/// This implementation ensures that any type `T` which already satisfies all the
+/// necessary bounds (`Clone + Send + Sync + Debug + Hash + Eq + 'static`)
+/// automatically implements the `Id` marker trait. This avoids the need for
+/// manual `impl Id for ...` for common types like `String`, `Uuid`, integers, etc.
 impl<T> Id for T where T: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
