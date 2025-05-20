@@ -1,6 +1,6 @@
 use super::handler::{AggregateCommandHandler, CommandHandlerResponse};
-use crate::{Command, DomainEvent};
-use std::{fmt::Debug, hash::Hash};
+use crate::{Command, DomainEvent, Id};
+use std::fmt::Debug;
 use thiserror::Error as ThisError;
 
 /// # `AggregateState<E>`
@@ -49,7 +49,7 @@ pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
     /// ## Associated Type: `Id`
     /// The type used to uniquely identify an instance of this aggregate.
     /// Must be cloneable, debuggable, hashable, equatable, and representable as a string.
-    type Id: Send + Sync + Debug + Hash + Eq + 'static + Clone;
+    type Id: Id;
 
     // ## Associated Type: `Event`
     /// The specific type of [`DomainEvent`] associated with this aggregate.
@@ -65,11 +65,23 @@ pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
     type State: AggregateState<Event = Self::Event>;
 }
 
-/// Provides a standard interface for accessing aggregate properties.
-/// Implemented by `AggregateRoot`.
+/// # `Aggregate`
+///
+/// Provides a standard interface for accessing common properties of an aggregate instance.
+/// This trait is primarily implemented by [`AggregateRoot`] to expose its core characteristics.
+///
+/// This allows generic code to interact with different aggregate roots in a uniform way
+/// for read-only purposes like accessing ID, version, and current state, or for taking
+/// ownership of uncommitted events.
 pub trait Aggregate: Debug + Send + Sync + 'static {
-    type Id: Send + Sync + Debug + Hash + Eq + 'static + Clone;
+    /// ## Associated Type: `Id`
+    /// The type used to uniquely identify this aggregate instance, inherited from `AggregateType::Id`.
+    type Id: Id;
+
+    /// ## Associated Type: `Event`
+    /// The specific type of [`DomainEvent`] associated with this aggregate, inherited from `AggregateType::Event`.
     type Event: DomainEvent<Id = Self::Id> + PartialEq;
+
     type State: AggregateState<Event = Self::Event>;
 
     fn id(&self) -> &Self::Id;

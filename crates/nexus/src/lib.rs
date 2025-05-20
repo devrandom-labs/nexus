@@ -168,6 +168,10 @@ pub trait Query: Message {
 /// Represents a significant occurrence in the domain that has already happened.
 /// Events are immutable facts.
 pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned {
-    type Id: Clone + Send + Sync + Debug + Hash + Eq + 'static;
+    type Id: Id;
     fn aggregate_id(&self) -> &Self::Id;
 }
+
+pub trait Id: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
+
+impl<T> Id for T where T: Clone + Send + Sync + Debug + Hash + Eq + 'static {}

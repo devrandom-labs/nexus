@@ -1,12 +1,13 @@
 use super::aggregate::{AggregateLoadError, AggregateRoot, AggregateType as AT};
-use std::{error::Error as StdError, fmt::Debug, future::Future, hash::Hash, pin::Pin};
+use crate::Id as AggregateId;
+use std::{error::Error as StdError, fmt::Debug, future::Future, pin::Pin};
 use thiserror::Error as ThisError;
 use tower::BoxError;
 
 #[derive(Debug, ThisError)]
 pub enum RepositoryError<Id>
 where
-    Id: Debug + Send + Sync + Hash + Eq + Clone + 'static,
+    Id: AggregateId,
     AggregateLoadError<Id>: StdError + Send + Sync + 'static,
 {
     #[error("Aggregate with ID '{0:?}' not found")]
