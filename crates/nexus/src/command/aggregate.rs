@@ -54,8 +54,8 @@ pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
     // ## Associated Type: `Event`
     /// The specific type of [`DomainEvent`] associated with this aggregate.
     /// This event type must itself implement [`DomainEvent`] with its `Id` associated
-    /// type matching `Self::Id`, and also be `PartialEq` for testing and comparison.
-    type Event: DomainEvent<Id = Self::Id> + PartialEq;
+    /// type matching `Self::Id`.
+    type Event: DomainEvent<Id = Self::Id>;
 
     /// ## Associated Type: `State`
     /// The specific type representing the internal state data of this aggregate.
@@ -80,7 +80,7 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
 
     /// ## Associated Type: `Event`
     /// The specific type of [`DomainEvent`] associated with this aggregate, inherited from `AggregateType::Event`.
-    type Event: DomainEvent<Id = Self::Id> + PartialEq;
+    type Event: DomainEvent<Id = Self::Id>;
 
     type State: AggregateState<Event = Self::Event>;
 

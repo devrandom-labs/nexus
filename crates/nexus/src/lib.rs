@@ -167,7 +167,7 @@ pub trait Query: Message {
 
 /// Represents a significant occurrence in the domain that has already happened.
 /// Events are immutable facts.
-pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned {
+pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned + PartialEq {
     type Id: Id;
     fn aggregate_id(&self) -> &Self::Id;
 }
