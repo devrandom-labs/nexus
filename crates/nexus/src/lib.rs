@@ -25,18 +25,18 @@
 //! handle state changes (Commands) from the parts that retrieve data (Queries).
 //!
 //! * **What it is:** At its heart, CQRS means that operations that write data
-//!     (Commands) use a different model and processing path than operations that
-//!     read data (Queries). You might have a rich, behavior-driven domain model for
-//!     handling commands, and a separate, optimized model (or multiple) for servicing queries.
+//!   (Commands) use a different model and processing path than operations that
+//!   read data (Queries). You might have a rich, behavior-driven domain model for
+//!   handling commands, and a separate, optimized model (or multiple) for servicing queries.
 //! * **Key Benefits:**
 //!     * **Optimized Data Models:** Design write models focused on consistency and
-//!         domain logic, and read models tailored for specific query needs, leading to
-//!         simpler and more performant data retrieval.
+//!       domain logic, and read models tailored for specific query needs, leading to
+//!       simpler and more performant data retrieval.
 //!     * **Scalability:** Scale the read and write sides of your application independently.
-//!         For example, you can have many read replicas if your application is read-heavy.
+//!       For example, you can have many read replicas if your application is read-heavy.
 //!     * **Focused Logic:** Simplifies the domain logic by separating concerns. Command
-//!         handlers focus solely on executing actions and ensuring invariants, while query
-//!         handlers focus on efficient data fetching.
+//!       handlers focus solely on executing actions and ensuring invariants, while query
+//!       handlers focus on efficient data fetching.
 //!
 //! ### Event Sourcing (ES)
 //!
@@ -45,20 +45,20 @@
 //! state of an entity, you store the history of events that led to that state.
 //!
 //! * **What it is:** Every time a significant action occurs in your domain (e.g.,
-//!     `UserRegistered`, `OrderPlaced`, `ItemAddedToCart`), an event is generated and
-//!     persisted. The current state of an aggregate is derived by replaying these
-//!     events in order.
+//!   `UserRegistered`, `OrderPlaced`, `ItemAddedToCart`), an event is generated and
+//!   persisted. The current state of an aggregate is derived by replaying these
+//!   events in order.
 //! * **Key Benefits:**
-//!     * **Complete Audit Trail:** Provides a reliable and detailed history of all
-//!         changes, crucial for auditing, debugging, and business intelligence.
-//!     * **Temporal Queries:** Allows you to reconstruct the state of your system
-//!         at any point in time.
-//!     * **State Reconstruction & Resilience:** If a read model becomes corrupted, it
-//!         can be entirely rebuilt from the event store.
-//!     * **Debugging and Diagnostics:** Understanding how state evolved over time becomes
-//!         much simpler.
-//!     * **Decoupling:** Components can react to events, enabling a more decoupled and
-//!         evolvable architecture.
+//!   * **Complete Audit Trail:** Provides a reliable and detailed history of all
+//!     changes, crucial for auditing, debugging, and business intelligence.
+//!   * **Temporal Queries:** Allows you to reconstruct the state of your system
+//!     at any point in time.
+//!   * **State Reconstruction & Resilience:** If a read model becomes corrupted, it
+//!     can be entirely rebuilt from the event store.
+//!   * **Debugging and Diagnostics:** Understanding how state evolved over time becomes
+//!     much simpler.
+//!   * **Decoupling:** Components can react to events, enabling a more decoupled and
+//!     evolvable architecture.
 //!
 //! ### Domain-Driven Design (DDD)
 //!
@@ -68,19 +68,19 @@
 //! of the business logic.
 //!
 //! * **What it is:** DDD involves collaborating closely with domain experts to
-//!     develop a "Ubiquitous Language" spoken by both technical and non-technical
-//!     team members. This language is used to build a domain model, often
-//!     consisting of entities, value objects, aggregates, domain events, and services,
-//!     organized within "Bounded Contexts."
+//!   develop a "Ubiquitous Language" spoken by both technical and non-technical
+//!   team members. This language is used to build a domain model, often
+//!   consisting of entities, value objects, aggregates, domain events, and services,
+//!   organized within "Bounded Contexts."
 //! * **Key Benefits:**
-//!     * **Clearer Communication:** A shared language reduces ambiguity and
-//!         misunderstandings between developers and domain experts.
-//!     * **Business Alignment:** Software directly reflects the business domain,
-//!         making it more intuitive and fit for purpose.
-//!     * **Maintainability & Evolvability:** Well-defined models and boundaries
-//!         make the system easier to understand, maintain, and evolve over time.
-//!     * **Reduced Complexity:** By focusing on the core domain and isolating it,
-//!         complexity is managed more effectively.
+//!   * **Clearer Communication:** A shared language reduces ambiguity and
+//!     misunderstandings between developers and domain experts.
+//!   * **Business Alignment:** Software directly reflects the business domain,
+//!     making it more intuitive and fit for purpose.
+//!   * **Maintainability & Evolvability:** Well-defined models and boundaries
+//!     make the system easier to understand, maintain, and evolve over time.
+//!   * **Reduced Complexity:** By focusing on the core domain and isolating it,
+//!     complexity is managed more effectively.
 //!
 //! ### Hexagonal Architecture (Ports and Adapters)
 //!
@@ -89,19 +89,19 @@
 //! the core application logic from external concerns and infrastructure.
 //!
 //! * **What it is:** The core application logic (the "hexagon") defines "Ports"
-//!     which are interfaces specifying how it interacts with the outside world
-//!     (e.g., for data persistence, message queues, UI interactions). External
-//!     components, or "Adapters," implement these ports to connect specific
-//!     technologies (e.g., a PostgreSQL adapter for a repository port, an HTTP
-//!     adapter for user interactions).
+//!   which are interfaces specifying how it interacts with the outside world
+//!   (e.g., for data persistence, message queues, UI interactions). External
+//!   components, or "Adapters," implement these ports to connect specific
+//!   technologies (e.g., a PostgreSQL adapter for a repository port, an HTTP
+//!   adapter for user interactions).
 //! * **Key Benefits:**
-//!     * **Testability:** The application core can be tested in isolation from
-//!         infrastructure, using mock or in-memory adapters.
-//!     * **Flexibility & Maintainability:** Infrastructure choices can be changed
-//!         or updated without impacting the core application logic (e.g., swapping
-//!         one database for another).
-//!     * **Technology Agnostic Core:** The core business logic remains pure and
-//!         uncluttered by specific technology details.
+//!   * **Testability:** The application core can be tested in isolation from
+//!     infrastructure, using mock or in-memory adapters.
+//!   * **Flexibility & Maintainability:** Infrastructure choices can be changed
+//!     or updated without impacting the core application logic (e.g., swapping
+//!     one database for another).
+//!   * **Technology Agnostic Core:** The core business logic remains pure and
+//!     uncluttered by specific technology details.
 //!
 //! ## How Nexus Empowers You
 //!
@@ -109,29 +109,29 @@
 //! implement CQRS, ES, DDD, and Hexagonal Architecture effectively in Rust:
 //!
 //! * **Strongly-Typed Messages & Domain Primitives:** `Command`, `Query`, and
-//!     `DomainEvent` traits ensure clear contracts. `AggregateRoot`, `AggregateState`,
-//!     and `AggregateType` offer a structured way to model your DDD aggregates
-//!     that evolve through events, forming the heart of your domain model.
+//!   `DomainEvent` traits ensure clear contracts. `AggregateRoot`, `AggregateState`,
+//!   and `AggregateType` offer a structured way to model your DDD aggregates
+//!   that evolve through events, forming the heart of your domain model.
 //! * **Clear Boundaries for Hexagonal Architecture:** The `EventSourceRepository`
-//!     and `ReadModelRepository` traits act as explicit Ports. Your application's
-//!     core logic, built with Nexus, depends on these abstract interfaces. You then
-//!     provide the Adapters (concrete implementations) for your chosen infrastructure,
-//!     keeping the core decoupled and testable.
+//!   and `ReadModelRepository` traits act as explicit Ports. Your application's
+//!   core logic, built with Nexus, depends on these abstract interfaces. You then
+//!   provide the Adapters (concrete implementations) for your chosen infrastructure,
+//!   keeping the core decoupled and testable.
 //! * **Performance by Design:** ... (existing text)
 //! * **Flexibility with Architectural Purity:** While providing strong foundations for
-//!     these architectures, Nexus remains unopinionated about ... (existing text)
+//!   these architectures, Nexus remains unopinionated about ... (existing text)
 //! * **`tower` Ecosystem Integration:** ... (existing text)
 //!
 //! ## Core Modules
 //!
 //! * **`command`:** This module contains all the necessary components for the write-side
-//!     of your CQRS system. This includes traits and structs for defining commands,
-//!     aggregates (`AggregateRoot`, `AggregateState`, `AggregateType`), command handlers
-//!     (`AggregateCommandHandler`), and the event sourcing repository port
-//!     (`EventSourceRepository`).
+//!   of your CQRS system. This includes traits and structs for defining commands,
+//!   aggregates (`AggregateRoot`, `AggregateState`, `AggregateType`), command handlers
+//!   (`AggregateCommandHandler`), and the event sourcing repository port
+//!   (`EventSourceRepository`).
 //! * **`query`:** This module provides components for the read-side. It includes
-//!     traits for defining queries (`Query`), read models (`ReadModel`), query handlers
-//!     (`QueryHandlerFn`), and the read model repository port (`ReadModelRepository`).
+//!   traits for defining queries (`Query`), read models (`ReadModel`), query handlers
+//!   (`QueryHandlerFn`), and the read model repository port (`ReadModelRepository`).
 //!
 //! By leveraging Nexus, you are choosing a path towards building systems that are
 //! robust, maintainable, scalable, and grounded in proven architectural excellence.

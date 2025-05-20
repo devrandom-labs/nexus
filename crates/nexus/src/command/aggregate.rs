@@ -1,6 +1,5 @@
 use super::handler::{AggregateCommandHandler, CommandHandlerResponse};
-use crate::{Command, DomainEvent, Message};
-use serde::{Serialize, de::DeserializeOwned};
+use crate::{Command, DomainEvent};
 use std::{fmt::Debug, hash::Hash};
 use thiserror::Error as ThisError;
 
