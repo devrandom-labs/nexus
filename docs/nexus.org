@@ -1,5 +1,273 @@
-#+Title: Nexus architecture
+#+TITLE: Nexus Crate - Feature Development & Documentation Plan
+#+AUTHOR: Product Manager (Gemini)
+#+DATE: 2025-05-20
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil H:4
 
+:PROPERTIES:
+:PROJECT_NAME: Nexus Crate Enhancements
+:VERSION: (Next Version)
+:PRIMARY_TECHNOLOGY: Rust
+:PROJECT_STATUS: Planning
+:END:
+
+* Project Overview
+  The Nexus crate provides foundational types and traits for building CQRS (Command Query Responsibility Segregation) and Event Sourcing applications in Rust. This plan outlines the next phases of development to enhance its testability, provide practical in-memory implementations, demonstrate its usage through an example, establish clear documentation, and lay considerations for authentication integration.
+
+* Kanban Workflow (Conceptual Columns)
+  - *Backlog*: All identified features, user stories, tasks.
+  - *To Do (Current Iteration)*: Features selected for the current development cycle.
+  - *In Progress*: The task currently being worked on.
+  - *In Review/Testing*: Feature complete, undergoing internal checks, automated tests.
+  - *Done (Deployable)*: Feature is complete and part of a deployable increment.
+
+* Phases & Iterations (Focus on Value Delivery)
+
+** Phase 1: Core Testability, In-Memory Implementation & Foundational Documentation (~3-4 Iterations)
+   *Goal: Ensure the existing CQRS/ES framework is robust through comprehensive testing, provide functional in-memory repositories, and establish baseline Rustdoc documentation for all existing public APIs.*
+
+*** TODO Document `lib.rs` (Core Crate and Traits)
+    SCHEDULED: <2025-05-21 Wed>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 1.5d
+    :END:
+    - [-] TODO Add crate-level documentation (`//!`) to `lib.rs`:
+      - Explain the purpose of the `nexus` crate.
+      - Briefly introduce CQRS and Event Sourcing concepts.
+      - Describe the main modules (`command`, `query`) and their roles.
+    - [-] TODO Add Rustdoc comments (`///`) for all public items in `lib.rs`:
+      - [ ] `Message` trait
+      - [ ] `Command` trait (including its associated types `Result`, `Error`)
+      - [ ] `Query` trait (including its associated types `Result`, `Error`)
+      - [ ] `DomainEvent` trait (including its associated type `Id` and method `aggregate_id`)
+
+*** TODO Document `command` Module and its Components
+    SCHEDULED: <2025-05-22 Thu>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 2d
+    :END:
+    - [-] TODO Add module-level documentation (`//!`) to `command/mod.rs`.
+    - [-] TODO Add Rustdoc comments (`///`) for public items in `command/aggregate.rs`:
+      - [ ] `AggregateState` trait (and its associated type `Event`, method `apply`)
+      - [ ] `AggregateType` trait (and its associated types `Id`, `Event`, `State`)
+      - [ ] `Aggregate` trait (and its associated types `Id`, `Event`, `State`, methods `id`, `version`, `state`, `take_uncommitted_events`)
+      - [ ] `AggregateLoadError` enum (and its variants)
+      - [ ] `AggregateRoot<AT>` struct (overall purpose, generics)
+      - [ ] `AggregateRoot::new`
+      - [ ] `AggregateRoot::load_from_history`
+      - [ ] `AggregateRoot::current_version`
+      - [ ] `AggregateRoot::execute`
+    - [-] TODO Add Rustdoc comments (`///`) for public items in `command/handler.rs`:
+      - [ ] `CommandHandlerResponse<E, R>` struct (and its public fields `events`, `result`)
+      - [ ] `AggregateCommandHandler<C, Services>` trait (and its associated type `AggregateType`, method `handle`)
+    - [-] TODO Add Rustdoc comments (`///`) for public items in `command/repository.rs`:
+      - [ ] `RepositoryError<Id>` enum (and its variants)
+      - [ ] `EventSourceRepository` trait (and its associated type `AggregateType`, methods `load`, `save`)
+
+*** TODO Document `query` Module and its Components
+    SCHEDULED: <2025-05-23 Fri>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 1.5d
+    :END:
+    - [-] TODO Add module-level documentation (`//!`) to `query/mod.rs`.
+    - [-] TODO Add Rustdoc comments (`///`) for public items in `query/model.rs`:
+      - [ ] `ReadModel` trait (and its associated type `Id`)
+    - [-] TODO Add Rustdoc comments (`///`) for public items in `query/repository.rs`:
+      - [ ] `ReadModelRepository` trait (and its associated types `Error`, `Model`, method `get`)
+    - [-] TODO Add Rustdoc comments (`///`) for public items in `query/handler.rs`:
+      - [ ] `QueryHandlerFn<F, Q, R, S, Fut>` struct (overall purpose, generics)
+      - [ ] `QueryHandlerFn::new`
+      - [ ] Document its `tower::Service` implementation (purpose and usage).
+
+*** TODO Expand Test Coverage for Existing `command` Module
+    SCHEDULED: <2025-05-26 Mon>
+    :PROPERTIES:
+    :CATEGORY: Testing
+    :EFFORT: 3d
+    :END:
+    - [-] TODO Test `command::aggregate::AggregateRoot::new` thoroughly.
+    - [-] TODO Test `command::aggregate::AggregateRoot::load_from_history` with various event sequences.
+    - [-] TODO Test `command::aggregate::AggregateRoot::current_version` behavior.
+    - [-] TODO Test `command::aggregate::AggregateRoot::execute` with success and error cases.
+    - [-] TODO Test `command::aggregate::AggregateState::apply` logic in test implementations.
+    - [-] TODO Test `command::handler::AggregateCommandHandler` trait implementation (mock services if needed).
+    - [-] TODO Test `command::repository::RepositoryError` variants (e.g. in mock repository tests).
+    - [-] TODO Define a mock implementation for `command::repository::EventSourceRepository` if not covered by in-memory repo tests.
+
+*** TODO Expand Test Coverage for Existing `query` Module
+    SCHEDULED: <2025-05-28 Wed>
+    :PROPERTIES:
+    :CATEGORY: Testing
+    :EFFORT: 2d
+    :END:
+    - [-] TODO Test `query::handler::QueryHandlerFn::new`.
+    - [-] TODO Test `query::handler::QueryHandlerFn` as a `tower::Service` (call, poll_ready) with success and error cases.
+    - [-] TODO Test `query::model::ReadModel` trait usage with a sample implementation.
+    - [-] TODO Define a mock implementation for `query::repository::ReadModelRepository` if not covered by in-memory repo tests.
+
+*** TODO Expand Test Coverage for `lib.rs` (Core Traits)
+    SCHEDULED: <2025-05-29 Thu>
+    :PROPERTIES:
+    :CATEGORY: Testing
+    :EFFORT: 1d
+    :END:
+    - [-] TODO Test `Message` trait usage.
+    - [-] TODO Test `Command` trait usage with sample implementations.
+    - [-] TODO Test `Query` trait usage with sample implementations.
+    - [-] TODO Test `DomainEvent` trait usage with sample implementations.
+
+*** TODO Implement In-Memory `EventSourceRepository`
+    SCHEDULED: <2025-05-30 Fri>
+    :PROPERTIES:
+    :CATEGORY: Feature
+    :EFFORT: 3d
+    :END:
+    - [-] TODO Define `InMemoryEventSourceRepository` struct.
+    - [-] TODO Implement `EventSourceRepository::load` method.
+    - [-] TODO Implement `EventSourceRepository::save` method (with optimistic concurrency).
+    - [-] TODO Add unit tests for `InMemoryEventSourceRepository`.
+    - [-] TODO Add Rustdoc comments (`///`) for `InMemoryEventSourceRepository` and its public methods.
+
+*** TODO Implement In-Memory `ReadModelRepository`
+    SCHEDULED: <2025-06-03 Tue>
+    :PROPERTIES:
+    :CATEGORY: Feature
+    :EFFORT: 2d
+    :END:
+    - [-] TODO Define `InMemoryReadModelRepository` struct.
+    - [-] TODO Implement `ReadModelRepository::get` method.
+    - [-] TODO Implement a method to populate/update the in-memory read model store (e.g., `fn upsert`).
+    - [-] TODO Add unit tests for `InMemoryReadModelRepository`.
+    - [-] TODO Add Rustdoc comments (`///`) for `InMemoryReadModelRepository` and its public methods.
+
+** Phase 2: Demonstrating Usage - CLI Example & README (~2-3 Iterations)
+   *Goal: Create a simple command-line application to demonstrate `nexus` usage, validate its usability, provide a clear example for users, and create the main crate README.*
+
+*** TODO Define a Simple Domain for the Example (e.g., "Todo Item")
+    SCHEDULED: <2025-06-05 Thu>
+    :PROPERTIES:
+    :CATEGORY: Example
+    :EFFORT: 1d
+    :END:
+    - [-] TODO Create `examples/todo_cli` directory.
+    - [-] TODO Define `TodoId`, `TodoState`, `TodoEvent` (with `Message`, `DomainEvent` impls).
+    - [-] TODO Implement `AggregateState` for `TodoState`.
+    - [-] TODO Define `TodoAggregate` marker struct implementing `AggregateType`.
+    - [-] TODO Add Rustdoc comments for all public items in the example's domain definition.
+
+*** TODO Implement Commands & Command Handlers for the Todo Domain
+    SCHEDULED: <2025-06-06 Fri>
+    :PROPERTIES:
+    :CATEGORY: Example
+    :EFFORT: 2d
+    :END:
+    - [-] TODO Define `CreateTodoCommand`, `CompleteTodoCommand`, `UpdateTodoDescriptionCommand` (with `Message`, `Command` impls).
+    - [-] TODO Implement corresponding `AggregateCommandHandler` for each command.
+    - [-] TODO Define `TodoCommandError` enum.
+    - [-] TODO Add Rustdoc comments for these commands, handlers, and error types.
+
+*** TODO Implement Queries & Query Handlers for the Todo Domain
+    SCHEDULED: <2025-06-09 Mon>
+    :PROPERTIES:
+    :CATEGORY: Example
+    :EFFORT: 1.5d
+    :END:
+    - [-] TODO Define `TodoReadModel` (with `ReadModel` impl).
+    - [-] TODO Define `GetTodoByIdQuery`, `ListTodosQuery` (with `Message`, `Query` impls).
+    - [-] TODO Implement corresponding `QueryHandlerFn` for each query.
+    - [-] TODO Define `TodoQueryError` enum.
+    - [-] TODO Add Rustdoc comments for these read models, queries, handlers, and error types.
+
+*** TODO Develop CLI Application Logic & Simple Projector
+    SCHEDULED: <2025-06-10 Tue>
+    :PROPERTIES:
+    :CATEGORY: Example
+    :EFFORT: 2.5d
+    :END:
+    - [-] TODO Add `clap` for CLI argument parsing.
+    - [-] TODO Implement CLI subcommands (`todo add`, `todo complete`, etc.).
+    - [-] TODO Wire up command and query execution using in-memory repositories.
+    - [-] TODO Implement a simple synchronous event projector to update `InMemoryReadModelRepository`.
+    - [-] TODO Add basic error handling and user feedback.
+
+*** TODO Document the CLI Example
+    SCHEDULED: <2025-06-12 Thu>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 0.5d
+    :END:
+    - [-] TODO Create a `README.md` within the `examples/todo_cli` directory.
+    - [-] TODO Explain the domain, commands, queries, and how the example uses `nexus`.
+    - [-] TODO Provide instructions on how to build and run the CLI example.
+
+*** TODO Create Main `nexus` Crate `README.md`
+    SCHEDULED: <2025-06-13 Fri>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 1d
+    :END:
+    - [-] TODO Create/Update the `README.md` file in the root of the `nexus` crate.
+    - [-] TODO Include:
+        - Crate purpose and overview of CQRS/ES benefits.
+        - Installation instructions (`Cargo.toml` setup).
+        - A minimal, compelling usage example (perhaps a snippet from the Todo CLI).
+        - Links to `rustdoc` API documentation.
+        - Link to the full CLI example.
+        - Contribution guidelines (optional for now).
+        - License information.
+
+** Phase 3: Authentication Considerations & Further Documentation (~1-2 Iterations)
+   *Goal: Provide guidance on integrating authentication/authorization and finalize overall documentation.*
+
+*** TODO Research and Document Authentication/Authorization Patterns with CQRS/ES
+    SCHEDULED: <2025-06-16 Mon>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 1.5d
+    :END:
+    - [-] TODO Review common patterns for securing CQRS/ES systems.
+    - [-] TODO Consider how to pass authenticated user identity into command handlers.
+    - [-] TODO Think about how command handlers can use this identity for authorization logic.
+
+*** TODO Create Documentation for Integrating Authentication
+    SCHEDULED: <2025-06-17 Tue>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 1d
+    :END:
+    - [-] TODO Add a new section to the `nexus` crate's main documentation (e.g., in `README.md` or a separate `GUIDE.md` / book chapter).
+    - [-] TODO Explain that authentication is typically an application-level concern.
+    - [-] TODO Provide conceptual examples:
+      - Showing `Command` structs with `user_id`.
+      - Showing `AggregateCommandHandler` using `user_id` for checks.
+    - [-] TODO Emphasize `nexus`'s unopinionated stance on specific auth mechanisms.
+
+*** TODO Review and Refine All Documentation
+    SCHEDULED: <2025-06-18 Wed>
+    :PROPERTIES:
+    :CATEGORY: Documentation
+    :EFFORT: 2d
+    :END:
+    - [-] TODO Read through all Rustdoc comments for clarity, correctness, and completeness.
+    - [-] TODO Ensure all public APIs are documented.
+    - [-] TODO Check for typos and grammatical errors.
+    - [-] TODO Verify that examples in documentation compile and are easy to understand.
+    - [-] TODO Review the main `README.md` and the CLI example's `README.md` for coherence and accuracy.
+    - [-] TODO Generate `cargo doc --open` locally and review the output.
+
+* Future Considerations (Post these Phases)
+  - [-] Asynchronous event projectors/handlers.
+  - [-] Support for different event store backends (e.g., PostgreSQL, EventStoreDB) via traits and separate adapter crates.
+  - [-] Snapshotting for aggregates.
+  - [-] More sophisticated error handling and classification.
+  - [-] Distributed tracing and observability hooks.
+
+
+
+* Future
 #+begin_src mermaid
 sequenceDiagram
     participant Dispatcher
