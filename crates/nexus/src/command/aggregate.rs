@@ -3,14 +3,33 @@ use crate::{Command, DomainEvent};
 use std::{fmt::Debug, hash::Hash};
 use thiserror::Error as ThisError;
 
-/// # `AggregateState`
+/// # `AggregateState<E>`
+///
+/// Represents the actual state data of an aggregate.
+///
+/// In an Event Sourcing model, the state of an aggregate is rebuilt by applying a
+/// sequence of domain events. This trait ensures that the state knows how to
+/// evolve itself in response to these events. The state should be simple data
+/// and should not contain complex business logic beyond direct state mutation.
+///
+/// Implementors should be `Default` to represent the initial state of an aggregate
+/// before any events have been applied.
 pub trait AggregateState: Default + Send + Sync + Debug + 'static {
-    /// Specific type of Domain Event this state reacts to.
+    /// ## Associated Type: `Event`
+    /// The specific type of [`DomainEvent`] this aggregate state reacts to.
     type Event: DomainEvent;
 
-    /// Mutates the state based on a receieved event.
-    /// This is the core of state reconstruction in Event Sourcing.
-    /// It should *NOT* contain complex logic or validation. just state mutation.
+    /// ## Method: `apply`
+    /// Mutates the state based on a received domain event.
+    ///
+    /// This method is the core of state reconstruction in Event Sourcing. It is called
+    /// both when rehydrating an aggregate from its history and when applying newly
+    /// generated events from a command execution.
+    ///
+    /// **Important:** This method should *not* contain complex business logic, validation,
+    /// or decision-making. Its sole responsibility is to change the state fields based
+    /// on the data within the event. All decisions and validations should occur within
+    /// the command handler *before* events are generated.
     fn apply(&mut self, event: &Self::Event);
 }
 
