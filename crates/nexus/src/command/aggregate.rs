@@ -33,15 +33,35 @@ pub trait AggregateState: Default + Send + Sync + Debug + 'static {
     fn apply(&mut self, event: &Self::Event);
 }
 
-/// Marker trait to define the component types of a specific Aggregate kind.
-/// Implement this on a distinct type (often a unit struct) for each aggregate.
+/// # `AggregateType`
+///
+/// A marker trait used to define the specific component types associated with a
+/// particular kind of aggregate (e.g., `UserAggregate`, `OrderAggregate`).
+///
+/// This trait acts as a central point of configuration for an aggregate, linking
+/// together its unique identifier type, its specific domain event type, and its
+/// state representation. It is typically implemented on a distinct, often empty,
+/// type (like a unit struct) for each kind of aggregate in your domain.
+///
+/// This compile-time linkage ensures type safety and consistency across the
+/// different parts of the aggregate's lifecycle (loading, command execution, saving).
 pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
-    /// The type used to uniquely identify this aggregate instance.
+    /// ## Associated Type: `Id`
+    /// The type used to uniquely identify an instance of this aggregate.
+    /// Must be cloneable, debuggable, hashable, equatable, and representable as a string.
     type Id: Send + Sync + Debug + Hash + Eq + 'static + Clone;
-    /// The specific type of Domain Event associated with this aggregate.
+
+    // ## Associated Type: `Event`
+    /// The specific type of [`DomainEvent`] associated with this aggregate.
+    /// This event type must itself implement [`DomainEvent`] with its `Id` associated
+    /// type matching `Self::Id`, and also be `PartialEq` for testing and comparison.
     type Event: DomainEvent<Id = Self::Id> + PartialEq;
-    /// The specific type representing the internal state data.
-    /// Crucially links the State's Event type to the AggregateType's Event type.
+
+    /// ## Associated Type: `State`
+    /// The specific type representing the internal state data of this aggregate.
+    /// This state type must implement [`AggregateState`], and crucially, its
+    /// `Event` associated type must match `Self::Event`. This ensures that the
+    /// aggregate's state can only be mutated by its own defined event type.
     type State: AggregateState<Event = Self::Event>;
 }
 
@@ -432,3 +452,4 @@ pub mod test {
         assert_eq!(result, UserError::FailedToCreateUser);
     }
 }
+ 
