@@ -452,4 +452,3 @@ pub mod test {
         assert_eq!(result, UserError::FailedToCreateUser);
     }
 }
- 
