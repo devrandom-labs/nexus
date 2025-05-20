@@ -1,4 +1,6 @@
-use std::{fmt::Debug, hash::Hash};
+use std::fmt::Debug;
+
+use crate::Id;
 
 /// # `ReadModel`
 ///
@@ -17,5 +19,5 @@ pub trait ReadModel: Send + Sync + Debug + 'static {
     /// ## Associated Type: `Id`
     /// The type used to uniquely identify an instance of this read model.
     /// It must be `Send + Sync + Debug + Clone + Eq + Hash + 'static`.
-    type Id: Send + Sync + Debug + Clone + Eq + Hash + 'static;
+    type Id: Id;
 }
