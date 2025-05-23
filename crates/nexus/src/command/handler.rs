@@ -101,81 +101,10 @@ where
 
 #[cfg(test)]
 pub mod test {
-
-    use super::{AggregateCommandHandler, CommandHandlerResponse};
-    use crate::{
-        Command, Message,
-        command::aggregate::{
-            AggregateType,
-            test::{User, UserDomainEvents, UserState},
-        },
+    use super::super::test::{
+        CreateUser, CreateUserHandler, UserDomainEvents, UserError, UserState,
     };
-    use chrono::Utc;
-    use std::{pin::Pin, time::Duration};
-    use thiserror::Error as ThisError;
-    use tokio::time::sleep;
-
-    #[derive(Debug, ThisError, PartialEq)]
-    pub enum UserError {
-        #[error("Failed to create user")]
-        FailedToCreateUser,
-    }
-
-    #[derive(Debug)]
-    pub struct CreateUser {
-        pub user_id: String,
-        pub email: String,
-    }
-    impl Message for CreateUser {}
-    impl Command for CreateUser {
-        type Result = String;
-        type Error = UserError;
-    }
-
-    pub struct CreateUserHandler;
-
-    impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
-        type AggregateType = User;
-
-        fn handle<'a>(
-            &'a self,
-            _state: &'a <Self::AggregateType as AggregateType>::State,
-            command: CreateUser,
-            _services: &'a (),
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<
-                            super::CommandHandlerResponse<
-                                <Self::AggregateType as AggregateType>::Event,
-                                <CreateUser as Command>::Result,
-                            >,
-                            <CreateUser as Command>::Error,
-                        >,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async move {
-                let timestamp = Utc::now();
-                sleep(Duration::from_secs(2)).await;
-                if command.email.contains("error") {
-                    return Err(UserError::FailedToCreateUser);
-                }
-
-                let create_user = UserDomainEvents::UserCreated {
-                    id: command.user_id.clone(),
-                    email: command.email,
-                    timestamp,
-                };
-                let events = vec![create_user];
-                Ok(CommandHandlerResponse {
-                    events,
-                    result: command.user_id,
-                })
-            })
-        }
-    }
+    use super::AggregateCommandHandler;
 
     #[tokio::test]
     async fn handler_logic_success() {

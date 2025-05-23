@@ -26,3 +26,6 @@
 pub mod aggregate;
 pub mod handler;
 pub mod repository;
+
+#[cfg(test)]
+pub mod test;
