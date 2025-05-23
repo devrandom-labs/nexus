@@ -322,106 +322,12 @@ where
 
 #[cfg(test)]
 pub mod test {
-    use super::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState, AggregateType};
-    use crate::command::handler::test::{CreateUser, CreateUserHandler, UserError};
-    use crate::{DomainEvent, Message};
-    use chrono::{DateTime, Utc};
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Debug, Default, PartialEq)]
-    pub struct UserState {
-        email: Option<String>,
-        is_active: bool,
-        created_at: Option<DateTime<Utc>>,
-    }
-
-    impl UserState {
-        pub fn new(
-            email: Option<String>,
-            is_active: bool,
-            created_at: Option<DateTime<Utc>>,
-        ) -> Self {
-            Self {
-                email,
-                is_active,
-                created_at,
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-    pub enum UserDomainEvents {
-        UserCreated {
-            id: String,
-            email: String,
-            timestamp: DateTime<Utc>,
-        },
-        UserActivated {
-            id: String,
-        },
-    }
-
-    impl Message for UserDomainEvents {}
-
-    impl DomainEvent for UserDomainEvents {
-        type Id = String;
-        fn aggregate_id(&self) -> &Self::Id {
-            match self {
-                Self::UserActivated { id } => id,
-                Self::UserCreated { id, .. } => id,
-            }
-        }
-    }
-
-    impl AggregateState for UserState {
-        type Event = UserDomainEvents;
-
-        fn apply(&mut self, event: &Self::Event) {
-            match event {
-                UserDomainEvents::UserCreated {
-                    email, timestamp, ..
-                } => {
-                    self.email = Some(email.to_string());
-                    self.created_at = Some(*timestamp);
-                }
-                UserDomainEvents::UserActivated { .. } => {
-                    if self.created_at.is_some() {
-                        self.is_active = true;
-                    }
-                }
-            }
-        }
-    }
-
-    pub enum EventOrderType {
-        Ordered,
-        UnOrdered,
-    }
-
-    pub fn get_user_events(
-        timestamp: Option<DateTime<Utc>>,
-        order: EventOrderType,
-    ) -> Vec<UserDomainEvents> {
-        let user_created = timestamp.map_or_else(
-            || UserDomainEvents::UserCreated {
-                id: "id".to_string(),
-                email: String::from("joel@tixlys.com"),
-                timestamp: Utc::now(),
-            },
-            |t| UserDomainEvents::UserCreated {
-                id: "id".to_string(),
-                email: String::from("joel@tixlys.com"),
-                timestamp: t,
-            },
-        );
-        let user_activated = UserDomainEvents::UserActivated {
-            id: "id".to_string(),
-        };
-        match order {
-            EventOrderType::Ordered => vec![user_created, user_activated],
-            EventOrderType::UnOrdered => vec![user_activated, user_created],
-        }
-    }
+    use super::super::test::{
+        CreateUser, CreateUserHandler, User, UserDomainEvents, UserError, UserState,
+        utils::{EventType, get_user_events},
+    };
+    use super::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState};
+    use chrono::Utc;
 
     #[test]
     fn user_state_default() {
@@ -451,7 +357,7 @@ pub mod test {
     fn user_state_apply_activated() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
-        for events in get_user_events(Some(timestamp), EventOrderType::Ordered) {
+        for events in get_user_events(Some(timestamp), EventType::Ordered) {
             user_state.apply(&events);
         }
         assert!(user_state.is_active);
@@ -461,7 +367,7 @@ pub mod test {
     fn user_state_apply_order() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
-        for events in get_user_events(Some(timestamp), EventOrderType::UnOrdered) {
+        for events in get_user_events(Some(timestamp), EventType::UnOrdered) {
             user_state.apply(&events);
         }
         assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
@@ -487,14 +393,6 @@ pub mod test {
         assert!(!user_state.is_active);
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct User;
-    impl AggregateType for User {
-        type Id = String;
-        type Event = UserDomainEvents;
-        type State = UserState;
-    }
-
     #[test]
     fn aggregate_root_new() {
         let mut root = AggregateRoot::<User>::new(String::from("id"));
@@ -508,7 +406,7 @@ pub mod test {
     #[test]
     fn aggregate_root_load_from_history() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventOrderType::Ordered);
+        let history = get_user_events(Some(timestamp), EventType::Ordered);
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
         assert!(aggregate_root.is_ok());
         let mut aggregate_root = aggregate_root.unwrap();
@@ -525,7 +423,7 @@ pub mod test {
     #[test]
     fn aggregate_root_load_fail() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventOrderType::Ordered);
+        let history = get_user_events(Some(timestamp), EventType::Ordered);
         let aggregate_root =
             AggregateRoot::<User>::load_from_history(String::from("wrong_id"), history);
         assert!(aggregate_root.is_err());
