@@ -346,9 +346,7 @@ pub mod test {
             email: String::from("joel@tixlys.com"),
             timestamp,
         };
-
         user_state.apply(&user_created);
-
         assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
         assert_eq!(user_state.created_at, Some(timestamp));
     }
@@ -373,6 +371,18 @@ pub mod test {
         assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
         assert_eq!(user_state.created_at, Some(timestamp));
         assert!(!user_state.is_active);
+    }
+
+    #[test]
+    fn user_state_apply_empty() {
+        let mut user_state = UserState::default();
+        let timestamp = Utc::now();
+        for events in get_user_events(Some(timestamp), EventType::Empty) {
+            user_state.apply(&events);
+        }
+        assert!(!user_state.is_active);
+        assert_eq!(user_state.created_at, None);
+        assert_eq!(user_state.email, None);
     }
 
     #[test]
@@ -428,7 +438,6 @@ pub mod test {
             AggregateRoot::<User>::load_from_history(String::from("wrong_id"), history);
         assert!(aggregate_root.is_err());
         let error = aggregate_root.unwrap_err();
-
         assert_eq!(
             error,
             AggregateLoadError::MismatchedAggregateId {
