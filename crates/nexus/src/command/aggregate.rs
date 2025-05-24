@@ -323,12 +323,14 @@ where
 #[cfg(test)]
 pub mod test {
     use super::super::test::{
-        CreateUser, CreateUserHandler, User, UserDomainEvents, UserError, UserState,
+        ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler, User, UserDomainEvents,
+        UserError, UserState,
         utils::{EventType, get_user_events},
     };
     use super::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState};
     use chrono::Utc;
 
+    // user state tests
     #[test]
     fn user_state_default() {
         let user_state = UserState::default();
@@ -346,9 +348,7 @@ pub mod test {
             email: String::from("joel@tixlys.com"),
             timestamp,
         };
-
         user_state.apply(&user_created);
-
         assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
         assert_eq!(user_state.created_at, Some(timestamp));
     }
@@ -364,7 +364,7 @@ pub mod test {
     }
 
     #[test]
-    fn user_state_apply_order() {
+    fn user_state_apply_unorder() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         for events in get_user_events(Some(timestamp), EventType::UnOrdered) {
@@ -375,6 +375,20 @@ pub mod test {
         assert!(!user_state.is_active);
     }
 
+    #[test]
+    fn user_state_apply_empty() {
+        let mut user_state = UserState::default();
+        let timestamp = Utc::now();
+        for events in get_user_events(Some(timestamp), EventType::Empty) {
+            user_state.apply(&events);
+        }
+        assert!(!user_state.is_active);
+        assert_eq!(user_state.created_at, None);
+        assert_eq!(user_state.email, None);
+    }
+
+    // create, modify should be idempotent, but its on the implementor,
+    // can I make it easier for them to adher to idempotency???
     #[test]
     fn user_state_apply_idempotency() {
         let mut user_state = UserState::default();
@@ -393,6 +407,7 @@ pub mod test {
         assert!(!user_state.is_active);
     }
 
+    // aggregate root test
     #[test]
     fn aggregate_root_new() {
         let mut root = AggregateRoot::<User>::new(String::from("id"));
@@ -428,7 +443,6 @@ pub mod test {
             AggregateRoot::<User>::load_from_history(String::from("wrong_id"), history);
         assert!(aggregate_root.is_err());
         let error = aggregate_root.unwrap_err();
-
         assert_eq!(
             error,
             AggregateLoadError::MismatchedAggregateId {
@@ -436,6 +450,33 @@ pub mod test {
                 event_aggregate_id: "id".to_string()
             }
         );
+    }
+
+    #[tokio::test]
+    async fn aggregate_root_load_unordered() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::UnOrdered);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.id, "id");
+        assert!(!root.state.is_active);
+        assert_eq!(root.state.created_at, Some(timestamp));
+        assert_eq!(root.state.email, Some(String::from("joel@tixlys.com")));
+        let handler = ActivateUserHandler;
+        let result = root
+            .execute(
+                ActivateUser {
+                    user_id: "id".to_string(),
+                },
+                &handler,
+                &(),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result, "id");
     }
 
     #[tokio::test]
