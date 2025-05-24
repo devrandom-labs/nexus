@@ -37,6 +37,8 @@ impl DomainEvent for UserDomainEvents {
 pub enum UserError {
     #[error("Failed to create user")]
     FailedToCreateUser,
+    #[error("Failed to activate user")]
+    FailedToActivate,
 }
 
 #[derive(Debug)]
@@ -46,6 +48,17 @@ pub struct CreateUser {
 }
 impl Message for CreateUser {}
 impl Command for CreateUser {
+    type Result = String;
+    type Error = UserError;
+}
+
+#[derive(Debug)]
+pub struct ActivateUser {
+    pub user_id: String,
+}
+
+impl Message for ActivateUser {}
+impl Command for ActivateUser {
     type Result = String;
     type Error = UserError;
 }
@@ -135,6 +148,46 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
                 timestamp,
             };
             let events = vec![create_user];
+            Ok(CommandHandlerResponse {
+                events,
+                result: command.user_id,
+            })
+        })
+    }
+}
+
+pub struct ActivateUserHandler;
+
+impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
+    type AggregateType = User;
+
+    fn handle<'a>(
+        &'a self,
+        _state: &'a <Self::AggregateType as AggregateType>::State,
+        command: ActivateUser,
+        _services: &'a (),
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        CommandHandlerResponse<
+                            <Self::AggregateType as AggregateType>::Event,
+                            <ActivateUser as Command>::Result,
+                        >,
+                        <ActivateUser as Command>::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            sleep(Duration::from_millis(100)).await;
+
+            let activate_user = UserDomainEvents::UserActivated {
+                id: command.user_id.clone(),
+            };
+
+            let events = vec![activate_user];
             Ok(CommandHandlerResponse {
                 events,
                 result: command.user_id,
