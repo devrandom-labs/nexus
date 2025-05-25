@@ -575,8 +575,26 @@ pub mod test {
         assert!(result.is_ok());
         assert_eq!(root.current_version(), 1);
     }
+
     #[tokio::test]
-    async fn should_revert_current_version_to_persisted_version_after_taking_uncommitted_events() {}
+    async fn should_revert_current_version_to_persisted_version_after_taking_uncommitted_events() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.current_version(), 0);
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        assert_eq!(root.current_version(), 1);
+        let _events = root.take_uncommitted_events();
+        assert_eq!(root.current_version(), 0);
+    }
 
     // execute
     #[tokio::test]
