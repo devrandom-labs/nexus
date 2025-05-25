@@ -163,7 +163,7 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
 
     fn handle<'a>(
         &'a self,
-        _state: &'a <Self::AggregateType as AggregateType>::State,
+        state: &'a <Self::AggregateType as AggregateType>::State,
         command: ActivateUser,
         _services: &'a (),
     ) -> Pin<
@@ -182,6 +182,10 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
     > {
         Box::pin(async move {
             sleep(Duration::from_millis(100)).await;
+
+            if state.created_at.is_none() {
+                return Err(UserError::FailedToActivate);
+            }
 
             let activate_user = UserDomainEvents::UserActivated {
                 id: command.user_id.clone(),
