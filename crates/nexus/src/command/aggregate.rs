@@ -556,4 +556,39 @@ pub mod test {
         let result = result.unwrap_err();
         assert_eq!(result, UserError::FailedToCreateUser);
     }
+
+    // current version
+    #[tokio::test]
+    async fn should_calculate_current_version_correctly_after_execute_produces_events() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.current_version(), 0);
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        assert_eq!(root.current_version(), 1);
+    }
+    #[tokio::test]
+    async fn should_revert_current_version_to_persisted_version_after_taking_uncommitted_events() {}
+
+    // execute
+    #[tokio::test]
+    async fn should_process_command_successfully_when_handler_produces_no_events() {}
+    #[tokio::test]
+    async fn should_correctly_process_multiple_commands_sequentially() {}
+    #[tokio::test]
+    async fn should_pass_services_correctly_to_handler_during_execute() {}
+
+    // uncommitted events
+    #[tokio::test]
+    async fn should_return_uncommitted_events_and_clear_internal_list_then_return_empty_on_second_call()
+     {
+    }
 }
