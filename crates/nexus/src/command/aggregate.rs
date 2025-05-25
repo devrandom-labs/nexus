@@ -480,6 +480,33 @@ pub mod test {
     }
 
     #[tokio::test]
+    async fn aggregate_root_load_from_empty() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.id, "id");
+        assert!(!root.state.is_active);
+        assert_eq!(root.state.created_at, None);
+        assert_eq!(root.state.email, None);
+        let handler = ActivateUserHandler; // checking the state and executing
+        let result = root
+            .execute(
+                ActivateUser {
+                    user_id: "id".to_string(),
+                },
+                &handler,
+                &(),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let error_type = result.unwrap_err();
+        assert_eq!(error_type, UserError::FailedToActivate);
+    }
+
+    #[tokio::test]
     async fn aggregate_root_execute_success() {
         let mut root = AggregateRoot::<User>::new(String::from("id"));
         let create_user = CreateUser {
