@@ -332,7 +332,7 @@ pub mod test {
 
     // user state tests
     #[test]
-    fn user_state_default() {
+    fn should_initialize_user_state_with_default_values() {
         let user_state = UserState::default();
         assert_eq!(user_state.email, None);
         assert_eq!(user_state.created_at, None);
@@ -340,7 +340,7 @@ pub mod test {
     }
 
     #[test]
-    fn user_state_apply_created() {
+    fn should_set_email_and_timestamp_when_user_created_event_applied() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         let user_created = UserDomainEvents::UserCreated {
@@ -354,7 +354,7 @@ pub mod test {
     }
 
     #[test]
-    fn user_state_apply_activated() {
+    fn should_set_active_when_user_activated_event_applied_after_creation() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         for events in get_user_events(Some(timestamp), EventType::Ordered) {
@@ -364,7 +364,7 @@ pub mod test {
     }
 
     #[test]
-    fn user_state_apply_unorder() {
+    fn should_not_activate_user_if_activated_event_applied_before_created() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         for events in get_user_events(Some(timestamp), EventType::UnOrdered) {
@@ -376,7 +376,7 @@ pub mod test {
     }
 
     #[test]
-    fn user_state_apply_empty() {
+    fn should_not_change_state_when_empty_event_list_applied() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         for events in get_user_events(Some(timestamp), EventType::Empty) {
@@ -390,7 +390,7 @@ pub mod test {
     // create, modify should be idempotent, but its on the implementor,
     // can I make it easier for them to adher to idempotency???
     #[test]
-    fn user_state_apply_idempotency() {
+    fn should_be_idempotent_when_user_created_event_applied_multiple_times() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
         let user_created = UserDomainEvents::UserCreated {
@@ -409,7 +409,7 @@ pub mod test {
 
     // aggregate root test
     #[test]
-    fn aggregate_root_new() {
+    fn should_initialize_aggregate_root_with_id_version_zero_and_default_state() {
         let mut root = AggregateRoot::<User>::new(String::from("id"));
         assert_eq!(root.id(), "id");
         assert_eq!(root.version(), 0);
@@ -419,7 +419,7 @@ pub mod test {
     }
 
     #[test]
-    fn aggregate_root_load_from_history() {
+    fn should_rehydrate_state_and_version_from_event_history() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Ordered);
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
@@ -436,7 +436,7 @@ pub mod test {
     }
 
     #[test]
-    fn aggregate_root_load_fail() {
+    fn should_fail_to_load_when_event_aggregate_id_mismatches() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Ordered);
         let aggregate_root =
@@ -453,7 +453,8 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn aggregate_root_load_unordered() {
+    async fn should_correctly_reflect_state_from_unordered_history_and_then_process_activate_command()
+     {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::UnOrdered);
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
@@ -480,7 +481,29 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn aggregate_root_load_from_empty() {
+    async fn should_start_with_default_state_from_empty_history_and_then_create_user() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.id, "id");
+        assert!(!root.state.is_active);
+        assert_eq!(root.state.created_at, None);
+        assert_eq!(root.state.email, None);
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result, "id");
+    }
+
+    #[tokio::test]
+    async fn should_fail_to_activate_user_when_loaded_from_empty_history_and_not_created() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Empty);
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
@@ -507,7 +530,7 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn aggregate_root_execute_success() {
+    async fn should_apply_events_and_return_result_on_successful_command_execution() {
         let mut root = AggregateRoot::<User>::new(String::from("id"));
         let create_user = CreateUser {
             user_id: "id".to_string(),
@@ -521,7 +544,7 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn aggregate_root_domain_error() {
+    async fn should_propagate_error_and_not_apply_events_when_command_handler_fails() {
         let mut root = AggregateRoot::<User>::new(String::from("id"));
         let create_user = CreateUser {
             user_id: "id".to_string(),
