@@ -23,9 +23,14 @@
 //! By using the components in this module, you can build robust, testable, and
 //! auditable systems where state mutations are explicit, event-driven, and
 //! managed through well-defined domain models.
+//!
+use smallvec::SmallVec;
 pub mod aggregate;
 pub mod handler;
 pub mod repository;
 
 #[cfg(test)]
 pub mod test;
+
+pub const SMALLVEC_INLINE_CAPACITY: usize = 1;
+pub type Events<E> = SmallVec<[E; SMALLVEC_INLINE_CAPACITY]>;

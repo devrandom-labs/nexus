@@ -4,9 +4,11 @@ use super::handler::{AggregateCommandHandler, CommandHandlerResponse};
 use crate::{Command, DomainEvent, Message};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use smallvec::smallvec;
 use std::{pin::Pin, time::Duration};
 use thiserror::Error as ThisError;
 use tokio::time::sleep;
+
 // events
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UserDomainEvents {
@@ -147,7 +149,7 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
                 email: command.email,
                 timestamp,
             };
-            let events = vec![create_user];
+            let events = smallvec![create_user];
             Ok(CommandHandlerResponse {
                 events,
                 result: command.user_id,
@@ -191,7 +193,7 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
                 id: command.user_id.clone(),
             };
 
-            let events = vec![activate_user];
+            let events = smallvec![activate_user];
             Ok(CommandHandlerResponse {
                 events,
                 result: command.user_id,
