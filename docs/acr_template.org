@@ -1,0 +1,147 @@
+#+TITLE: ACR: [Concise Title of the Change]
+#+AUTHOR: [Your Name/Alias, e.g., Supreme Rust Architect]
+#+DATE: <YYYY-MM-DD>
+#+PROPERTY: ACR_ID NEXUS-ACR-[Sequential Number, e.g., 001]
+#+PROPERTY: STATUS [Proposed | Accepted | Rejected | Implemented | Deprecated]
+#+PROPERTY: CHAMPION [Lead person advocating for this change]
+#+PROPERTY: CATEGORY [e.g., CoreFramework | API | Performance | Security | DX | Refactoring | NewFeature]
+#+PROPERTY: RELATED_ISSUES [Link to issue tracker IDs, if any, e.g., #123, #456]
+#+PROPERTY: VERSION_TARGET [Target version for this change, if applicable, e.g., 0.2.0]
+
+* Executive Summary
+  :PROPERTIES:
+  :SECTION_TYPE: ExecutiveSummary
+  :END:
+  ;; Provide a 2-3 sentence high-level overview of the proposed change and its primary benefit or reason.
+  ;; This section is for quick understanding.
+
+* 1. Change Description
+  :PROPERTIES:
+  :SECTION_TYPE: ChangeDescription
+  :KEY_FEATURES: [Comma-separated list of key features or aspects of the change]
+  :END:
+  ;; Describe the proposed change in detail.
+  ;; What exactly is being added, removed, or modified?
+  ;; Be specific about components, modules, traits, functions, or architectural layers affected.
+  ;; Use precise language. Include references to specific parts of the codebase if helpful.
+  ;; Example: "This change introduces a new trait `NonEmptyEvents` and modifies `CommandHandlerResponse`
+  ;; to use this trait for its `events` field, enforcing that successful command handlers
+  ;; always produce at least one `DomainEvent`."
+
+* 2. Background and Problem Statement
+  :PROPERTIES:
+  :SECTION_TYPE: ProblemStatement
+  :PROBLEM_DOMAIN: [e.g., TypeSafety, Performance, Ergonomics, Auditability, Consistency]
+  :CURRENT_BEHAVIOR: [Description of how the system currently behaves in relation to this problem]
+  :LIMITATIONS_OF_CURRENT_BEHAVIOR: [List of limitations or issues with the current behavior]
+  :END:
+  ;; Explain the current situation and the problem or opportunity this change addresses.
+  ;; - What limitations or issues exist in the current architecture or implementation?
+  ;; - Why is a change needed or beneficial?
+  ;; - What goals does this change help achieve? (Link to overarching project goals if possible)
+  ;; - Provide context: e.g., "Currently, `CommandHandlerResponse` allows an empty event list,
+  ;;   which can lead to ambiguity regarding the outcome of a 'successful' command..."
+
+* 3. Proposed Solution / Design
+  :PROPERTIES:
+  :SECTION_TYPE: ProposedSolution
+  :SOLUTION_TYPE: [e.g., NewType, TraitModification, NewModule, AlgorithmChange, DependencyAddition]
+  :CORE_COMPONENTS_AFFECTED: [List of primary code components, e.g., `CommandHandlerResponse`, `AggregateRoot`]
+  :END:
+  ;; Detail the proposed solution and its design.
+  ;; - How will the change be implemented?
+  ;; - Describe new structures, traits, methods, or modifications to existing ones.
+  ;; - Include code snippets (conceptual or actual, if brief) or pseudocode where it clarifies.
+  ;; - Mention any new dependencies introduced.
+  ;; - If there are different design options within the solution, briefly discuss them.
+  ;; Example:
+  ;;   1. Introduce `NonEmptyEvents<E, N_MORE>` struct:
+  ;;      - =first: E=
+  ;;      - =more: SmallVec<[E; N_MORE]>=
+  ;;      - Constructors: =from_one(E)=, =new(E, IntoIterator<Item = E>)=
+  ;;   2. Modify =CommandHandlerResponse= to use =NonEmptyEvents=.
+  ;;   3. Detail expected changes in =AggregateCommandHandler= implementations.
+  ;;   4. Detail changes in =AggregateRoot::execute= and =uncommitted_events=.
+
+* 4. Justification / Rationale
+  :PROPERTIES:
+  :SECTION_TYPE: Justification
+  :PRIMARY_BENEFIT: [e.g., ImprovedTypeSafety, EnhancedPerformance, BetterDX, IncreasedRobustness]
+  :ALIGNMENT_WITH_PRINCIPLES: [List core project principles this aligns with, e.g., ExtremeTypeSafety, ArchitecturalPurity]
+  :END:
+  ;; Explain *why* this proposed solution is the preferred approach.
+  ;; - What are the main benefits of this change?
+  ;; - How does it address the problem statement?
+  ;; - How does it align with the overall architectural vision and principles of the project (e.g., `nexus`'s philosophy of type safety, performance, purity)?
+  ;; - Reference specific design goals or requirements it meets.
+  ;; Example: "This change is justified because:
+  ;;   - *Enhanced Semantic Clarity*: Successful commands now unequivocally mean state change.
+  ;;   - *Improved Audit Trail Quality*: Event log only contains significant changes.
+  ;;   - *Type-Level Invariant Enforcement*: Compiler guarantees at least one event on success."
+
+* 5. Impact Analysis
+  :PROPERTIES:
+  :SECTION_TYPE: ImpactAnalysis
+  :IMPACT_AREA_CODE: [true | false] ;; Does it impact core crate code?
+  :IMPACT_AREA_API_BREAKING: [true | false] ;; Is it a breaking API change for users?
+  :IMPACT_AREA_PERFORMANCE: [Positive | Negative | Neutral | TBD]
+  :IMPACT_AREA_SECURITY: [Positive | Negative | Neutral | TBD]
+  :IMPACT_AREA_TESTABILITY: [Easier | Harder | Neutral]
+  :IMPACT_AREA_DOCUMENTATION: [Required | NotRequired]
+  :IMPACT_AREA_DEVELOPER_EXPERIENCE: [Improved | Degraded | Neutral]
+  :END:
+  ;; Analyze the potential consequences of making this change.
+  ;; - *On Crate Internals*: What existing code needs to be modified? New modules/dependencies?
+  ;; - *On Users of the Crate (API Consumers)*:
+  ;;   - Is this a breaking change? How will users need to adapt their code?
+  ;;   - What is the impact on developer experience (DX)? Learning curve?
+  ;;   - How does it affect error handling patterns they might use?
+  ;; - *On Performance*: Expected performance gains or losses? Benchmarks if available/needed.
+  ;; - *On Security*: Any security implications?
+  ;; - *On Testability*: Does it make testing easier or harder? What new test considerations arise?
+  ;; - *On Documentation*: What documentation needs to be updated or created?
+  ;; - *On Maintainability*: How does it affect the long-term maintainability of the codebase?
+  ;; - *On Interoperability*: Any impact on how this crate interacts with other potential ecosystem components?
+
+* 6. Alternatives Considered
+  :PROPERTIES:
+  :SECTION_TYPE: AlternativesConsidered
+  :NUMBER_OF_ALTERNATIVES: [Integer]
+  :END:
+  ;; Briefly describe any significant alternative solutions that were considered.
+  ;; For each alternative:
+  ;;   - *Alternative [N] Description*: Briefly describe the alternative.
+  ;;   - *Reason for Not Choosing*: Explain why the proposed solution was favored over this alternative. (e.g., complexity, less alignment with goals, performance concerns).
+  ;; Example:
+  ;;   - *Alternative 1: Flexible Event Enum (`CommandOutcomeEvents`)*
+  ;;     - *Description*: Use an enum with =NoChange= and =EventsProduced(NonEmptyEvents)= variants in =CommandHandlerResponse=.
+  ;;     - *Reason for Not Choosing*: While offering more flexibility for "successful no-op" commands, it does not enforce the desired "hard rule" that all =Ok= successes from a command handler imply event production, which was a primary driver for *this specific ACR's proposed solution*.
+
+* 7. Decision
+  :PROPERTIES:
+  :SECTION_TYPE: Decision
+  :DECISION_MAKER: [Name/Role]
+  :DECISION_DATE: <YYYY-MM-DD>
+  :DECISION_OUTCOME: [Accepted | Rejected | Deferred]
+  :END:
+  ;; Record the final decision on this ACR.
+  ;; (This section is filled out after review)
+
+* 8. Action Items / Next Steps (If Accepted)
+  :PROPERTIES:
+  :SECTION_TYPE: ActionItems
+  :END:
+  ;; List the concrete tasks required to implement this change.
+  ;; Assign owners and target completion dates if possible.
+  ;; 1. [ ] Task 1 (e.g., Implement =NonEmptyEvents= struct) - Owner: X, Due: YYYY-MM-DD
+  ;; 2. [ ] Task 2 (e.g., Refactor =CommandHandlerResponse=) - Owner: X, Due: YYYY-MM-DD
+  ;; 3. [ ] Task 3 (e.g., Update documentation for this change)
+
+* 9. Notes / Discussion Points / Open Questions
+  :PROPERTIES:
+  :SECTION_TYPE: Discussion
+  :END:
+  ;; Capture any remaining thoughts, discussion points from reviews, or open questions
+  ;; that need further consideration during or after implementation.
+  ;; This is also a good place for ML training notes: e.g., "Key indicators for this type of change:
+  ;; focus on 'type safety', 'invariant', 'audit trail quality'."

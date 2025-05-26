@@ -1,7 +1,10 @@
 use super::handler::{AggregateCommandHandler, CommandHandlerResponse};
 use crate::{Command, DomainEvent, Id};
+use smallvec::SmallVec;
 use std::fmt::Debug;
 use thiserror::Error as ThisError;
+
+pub type Events<E> = SmallVec<[E; 1]>;
 
 /// # `AggregateState<E>`
 ///
@@ -108,7 +111,7 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     /// This method is typically called by the [`EventSourceRepository`] during the save
     /// process. After calling this, the aggregate's internal list of uncommitted events
     /// will be empty.
-    fn take_uncommitted_events(&mut self) -> Vec<Self::Event>;
+    fn take_uncommitted_events(&mut self) -> Events<Self::Event>;
 }
 
 /// # `AggregateLoadError<Id>`
@@ -160,7 +163,7 @@ pub struct AggregateRoot<AT: AggregateType> {
     id: AT::Id,
     state: AT::State,
     version: u64,
-    uncommitted_events: Vec<AT::Event>,
+    uncommitted_events: Events<AT::Event>,
 }
 
 impl<AT> Aggregate for AggregateRoot<AT>
@@ -190,7 +193,7 @@ where
 
     /// Takes ownership of newly generated events.
     /// After calling this, the aggregate's internal list of uncommitted events will be empty.
-    fn take_uncommitted_events(&mut self) -> Vec<Self::Event> {
+    fn take_uncommitted_events(&mut self) -> Events<Self::Event> {
         std::mem::take(&mut self.uncommitted_events)
     }
 }
@@ -211,7 +214,7 @@ where
             id,
             state: AT::State::default(),
             version: 0,
-            uncommitted_events: Vec::new(),
+            uncommitted_events: Events::new(),
         }
     }
 
@@ -255,7 +258,7 @@ where
             id,
             state,
             version,
-            uncommitted_events: Vec::new(),
+            uncommitted_events: Events::new(),
         })
     }
 
@@ -312,6 +315,7 @@ where
     {
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
+        let events = events.into_small_vec(); // FIXME: remove this and directly get iterator
         for event in &events {
             self.state.apply(event);
         }
@@ -322,10 +326,13 @@ where
 
 #[cfg(test)]
 pub mod test {
-    use super::super::test::{
-        ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler, User, UserDomainEvents,
-        UserError, UserState,
-        utils::{EventType, get_user_events},
+    use super::{
+        super::test::{
+            ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler, User,
+            UserDomainEvents, UserError, UserState,
+            utils::{EventType, get_user_events},
+        },
+        Events,
     };
     use super::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState};
     use chrono::Utc;
@@ -415,7 +422,7 @@ pub mod test {
         assert_eq!(root.version(), 0);
         assert_eq!(root.state(), &UserState::default());
         assert_eq!(root.current_version(), 0);
-        assert_eq!(root.take_uncommitted_events(), Vec::new());
+        assert_eq!(root.take_uncommitted_events(), Events::new());
     }
 
     #[test]
@@ -432,7 +439,7 @@ pub mod test {
             &UserState::new(Some(String::from("joel@tixlys.com")), true, Some(timestamp))
         );
         assert_eq!(aggregate_root.current_version(), 2);
-        assert_eq!(aggregate_root.take_uncommitted_events(), Vec::new());
+        assert_eq!(aggregate_root.take_uncommitted_events(), Events::new());
     }
 
     #[test]
@@ -596,17 +603,59 @@ pub mod test {
         assert_eq!(root.current_version(), 0);
     }
 
-    // execute
     #[tokio::test]
-    async fn should_process_command_successfully_when_handler_produces_no_events() {}
-    #[tokio::test]
-    async fn should_correctly_process_multiple_commands_sequentially() {}
+    async fn should_correctly_process_multiple_commands_sequentially() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.current_version(), 0);
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        assert_eq!(root.current_version(), 1);
+        let handler = ActivateUserHandler; // checking the state and executing
+        let result = root
+            .execute(
+                ActivateUser {
+                    user_id: "id".to_string(),
+                },
+                &handler,
+                &(),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(root.current_version(), 2);
+    }
+
     #[tokio::test]
     async fn should_pass_services_correctly_to_handler_during_execute() {}
 
-    // uncommitted events
     #[tokio::test]
     async fn should_return_uncommitted_events_and_clear_internal_list_then_return_empty_on_second_call()
      {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.current_version(), 0);
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        let events = root.take_uncommitted_events();
+        assert_eq!(events.len(), 1);
+        let events = root.take_uncommitted_events();
+        assert_eq!(events.len(), 0);
     }
 }
