@@ -1,0 +1,147 @@
+#+TITLE: Architecture Change Request: Strict Event Emission for Command Handlers
+#+AUTHOR: Joel DSouza <joel@tixlys>
+#+DATE: <2025-05-26 Mon>
+#+PROPERTY: ACR_ID NEXUS-ACR-001
+#+PROPERTY: STATUS Proposed
+#+PROPERTY: CHAMPION SupremeRustArchitect
+#+PROPERTY: CATEGORY ArchitecturalRule CoreFramework
+
+* 1. Feature / Change Description
+  :PROPERTIES:
+  :SECTION_TYPE: ChangeDescription
+  :END:
+  This architectural change mandates a "Hard Rule" for command handler success within the Nexus framework. Specifically, any =AggregateCommandHandler=, upon successful processing of a command, *must* produce one or more =DomainEvent=s.
+
+  Key aspects of this change:
+  1. The =CommandHandlerResponse::events= field will be modified from a collection type that can be empty (e.g., =SmallEventVec=) to a new, dedicated type (e.g., =NonEmptyEvents=) that structurally and typologically guarantees it contains at least one =DomainEvent=.
+  2. If the logic within a command handler determines that no valid state change is warranted or possible (e.g., an update command where the new data is identical to existing data, or a creation command for an entity that already exists), the handler *must* return an =Err(Command::Error)=. It cannot return an =Ok= result with zero events.
+  3. These business logic errors returned by the command handler are intended to be mapped to a "fail" status in API response specifications like JSend, clearly indicating a controlled failure due to predefined business rules rather than an unexpected system error or runtime exception.
+
+* 2. Background / Problem Statement
+  :PROPERTIES:
+  :SECTION_TYPE: ProblemStatement
+  :END:
+  The current design of =CommandHandlerResponse= allows for an empty list of events. This means a command can be processed and considered "successful" (returning an =Ok= variant) without resulting in any state change being recorded as a domain event. This flexibility, while present, can lead to:
+  - *Ambiguity in Command Semantics*: What does a "successful" command truly signify if it doesn't always lead to a recorded state change?
+  - *Reduced Audit Trail Clarity*: The event log (audit trail) might become less definitive if "no-op" successes are indistinguishable from actual state-changing successes without inspecting event counts or types.
+  - *Philosophical Misalignment*: If the core philosophy is that commands processed by an aggregate are fundamentally intended to mutate its state and record that mutation as events, the allowance for zero events on success is a slight deviation.
+
+  While current idempotency strategies for "create" commands (error if entity exists) are sound, the handling of "update" commands that result in no actual change could benefit from a stricter contract to ensure only meaningful changes are recorded as events.
+
+* 3. Proposed Solution
+  :PROPERTIES:
+  :SECTION_TYPE: ProposedSolution
+  :END:
+  The proposed solution involves the following concrete changes to the =nexus= crate:
+
+  1.  **Introduce `NonEmptyEvents<E: DomainEvent, const N_MORE: usize>` Struct:**
+      - This struct will be designed with a mandatory =first: E= field and a =more: SmallVec<[E; N_MORE]>= field.
+      - Its constructors (e.g., =from_one(E)=, =new(E, IntoIterator<Item = E>)=) will enforce the presence of at least the 'first' event.
+      - This structure provides a type-level guarantee of non-emptiness.
+      - =N_MORE= will be a const generic parameter determining the inline capacity for additional events in the =SmallVec=, optimizing for common small event counts (e.g., =N_MORE = 0= for one total inline event, or =N_MORE = 1= for two total inline events).
+
+  2.  **Modify `CommandHandlerResponse<E: DomainEvent, R>`:**
+      - The =events= field will be changed from =pub events: SmallEventVec<E>= (or similar) to =pub events: NonEmptyEvents<E, N_MORE_CAPACITY>=.
+      - This change makes it a compile-time requirement for implementors of =AggregateCommandHandler= to provide at least one event when constructing an =Ok(CommandHandlerResponse)=.
+
+  3.  **Update `AggregateCommandHandler<C, Services>` Trait Expectation:**
+      - While the trait signature for the return type `Result<CommandHandlerResponse<...>, C::Error>` remains, the internal structure of a successful =CommandHandlerResponse= now mandates =NonEmptyEvents=.
+      - Implementors *must* ensure their logic produces at least one event to construct =NonEmptyEvents= or, alternatively, return an =Err(Command::Error)= if:
+          - A creation command targets an aggregate that already exists.
+          - An update command would result in no discernible state change from the current state.
+          - Any other business rule violation prevents a state-changing event from being emitted.
+
+  4.  **Adaptations in `AggregateRoot`:**
+      - The =uncommitted_events= field within =AggregateRoot= will remain typed as =SmallEventVec<[AT::Event; N]>=. This is because an =AggregateRoot= can exist in a state with no uncommitted events (e.g., after creation before any command, after loading from history, or after events have been taken).
+      - The =AggregateRoot::execute= method will:
+          - Receive the =CommandHandlerResponse= (which now contains =NonEmptyEvents= on success).
+          - Iterate through these guaranteed non-empty events (e.g., using =response.events.iter()=) to apply to its internal state.
+          - Extend its internal =self.uncommitted_events: SmallEventVec= using the events from =response.events= (e.g., via =response.events.into_vec()= and then =extend=). After a successful =execute= call, the aggregate's =uncommitted_events= list will thus contain at least one event.
+      - =AggregateRoot::take_uncommitted_events= will continue to return a =SmallEventVec= (which might be empty if called when no uncommitted events are present, but not immediately after a successful =execute= before another =take=).
+
+* 4. Justification / Rationale
+  :PROPERTIES:
+  :SECTION_TYPE: Justification
+  :END:
+  This architectural decision is driven by a desire to enhance several key aspects of the =nexus= framework, aligning with its core philosophies:
+
+  1.  **Enhanced Semantic Clarity and Stronger Contracts:**
+      - *Reasoning*: The change establishes an unambiguous meaning for a "successful command" when processed by an =AggregateCommandHandler=: it *always* results in a recorded state change represented by at least one =DomainEvent=.
+      - *Benefit*: This makes the contract with command handler implementors stricter, more explicit, and more predictable.
+
+  2.  **Improved Audit Trail (Event Log) Quality:**
+      - *Reasoning*: By mandating that only actual state changes generate events upon command success, the event log becomes a more concise and significant record.
+      - *Benefit*: "No-operation" successes or updates that don't alter state are not recorded as events, preserving the integrity and clarity of the event stream as a historical record of *meaningful changes*.
+
+  3.  **Alignment with Type-Level Invariants and Extreme Type Safety:**
+      - *Reasoning*: The introduction and use of the =NonEmptyEvents= type for the =events= field in a successful =CommandHandlerResponse= elevates the "at least one event" rule to a type-level invariant.
+      - *Benefit*: This is enforced by the Rust compiler, preventing developers from returning a success state from a command handler without actually providing events. This directly supports the "Extreme Type Safety" goal of =nexus=.
+
+  4.  **Cohesive Error Handling Strategy for Idempotency and Business Rules:**
+      - *Reasoning*: This rule naturally integrates with robust idempotency strategies.
+          - For *creation* commands: If an entity already exists, the handler cannot produce a "created" event. Under this rule, it must return an =Err(Command::Error)=, preventing duplicate creation events.
+          - For *update* commands: If an update results in no actual state change (e.g., setting a value to what it already is), the handler cannot produce a state change event. It must therefore return an =Err(Command::Error)=. This prevents redundant "update" events for no actual change.
+      - *Benefit*: This provides a consistent mechanism for handling such business rule violations.
+
+  5.  **JSend Specification Alignment for API Responses:**
+      - *Reasoning*: Returning an =Err(Command::Error)= for business logic outcomes like "entity already exists" or "no update necessary as data is identical" maps cleanly to the JSend "fail" status.
+      - *Benefit*: Provides a clear and standardized way to communicate controlled business logic failures to API consumers, distinct from system/server errors.
+
+  6.  **Architectural Purity and Predictability:**
+      - *Reasoning*: This decision enforces a stricter interpretation of CQRS and Event Sourcing, where commands processed by aggregates are unequivocally tied to state transition and event production.
+      - *Benefit*: Leads to a more predictable system core where the implications of a successful command are always evident in the event stream.
+
+* 5. Impact Analysis
+  :PROPERTIES:
+  :SECTION_TYPE: ImpactAnalysis
+  :END:
+  - **On =nexus= Crate Internals:**
+    - *Code Changes*:
+        - Introduction of the =NonEmptyEvents<E, N_MORE>= struct.
+        - Modification of the =CommandHandlerResponse= struct to use =NonEmptyEvents= for its =events= field.
+        - The =AggregateCommandHandler= trait's =handle= method signature changes implicitly due to the change in =CommandHandlerResponse=.
+        - Minor adjustments in =AggregateRoot::execute= to correctly handle the =NonEmptyEvents= from the response and extend its internal =SmallEventVec= based =uncommitted_events= field.
+    - *Dependencies*: Potentially relies more heavily on =smallvec= if not already pervasively used for event collections.
+    - *Testing*: Existing tests for command handlers will need to be updated to ensure they produce =NonEmptyEvents= on success or correctly return errors. New tests will be needed for =NonEmptyEvents= itself.
+
+  - **On Users of =nexus= (Developers Implementing Command Handlers):**
+    - *Behavioral Change*: Developers must now design their command handlers such that any path that results in an =Ok(CommandHandlerResponse)= also produces at least one =DomainEvent=.
+    - *Error Handling*: If business logic dictates that a command is valid but no state change should occur (e.g., update with no diff, create if exists), this must be modeled as an =Err(Command::Error)=. The specific error variant should be meaningful (e.g., =Error::NoChangeNeeded=, =Error::EntityAlreadyExists=).
+    - *API Contract*: This implies a stricter API contract for commands. Users need to understand that "success" always means events were generated.
+    - *Initial Learning Curve*: Slight adjustment for developers to understand this "hard rule" if they are accustomed to "successful no-op" commands.
+
+  - **On Performance:**
+    - The use of =NonEmptyEvents= (backed by =SmallVec= for the 'more' part) is designed to be performant, especially for the common case of few events. This change is not expected to negatively impact performance and might offer slight benefits by being more explicit about collection states.
+
+  - **On Testability:**
+    - Makes the success contract of command handlers clearer to test: an =Ok= result *must* have events.
+    - Tests for "no-op" scenarios will now assert for specific error types rather than an empty event list in a success case.
+
+* 6. Alternatives Considered
+  :PROPERTIES:
+  :SECTION_TYPE: AlternativesConsidered
+  :END:
+  1.  **`CommandOutcomeEvents` Enum (with `NoChange` and `EventsProduced(NonEmptyEvents)` variants):**
+      - *Description*: Allow =CommandHandlerResponse::events= to be an enum that explicitly differentiates between a successful outcome with no events (=NoChange=) and a successful outcome with at least one event (=EventsProduced=).
+      - *Reason for Not Choosing (for this "Hard Rule")*: While this offers more flexibility and makes the "no events" case explicit and type-safe, it does *not* enforce the "hard rule" that every =Ok= success from a command handler implies events. The current ACR aims for a stricter model where =Ok= always means events.
+
+  2.  **Allowing `Ok` with Empty `SmallEventVec` (Current/Previous State without the "Hard Rule"):**
+      - *Description*: Continue to use =SmallEventVec= directly for =CommandHandlerResponse::events=, allowing it to be empty on success.
+      - *Reason for Not Choosing (for this "Hard Rule")*: This does not provide the desired type-level guarantee of at least one event on success and makes the meaning of a "successful command" regarding state changes more ambiguous. It doesn't enforce the clean audit trail or the strict JSend mapping for "no-change" scenarios as errors.
+
+* 7. Decision
+  :PROPERTIES:
+  :SECTION_TYPE: Decision
+  :END:
+  Adopt the proposed solution to enforce the "Hard Rule." The =CommandHandlerResponse= will use a =NonEmptyEvents= type for its =events= field, compelling command handlers to either produce at least one event upon success or return an error that can be mapped to a JSend "fail" status. This prioritizes semantic clarity, audit trail integrity, and type-safe enforcement of command outcomes.
+
+* 8. Action Items / Next Steps
+  :PROPERTIES:
+  :SECTION_TYPE: ActionItems
+  :END:
+  1. Implement the =NonEmptyEvents<E, N_MORE>= struct with appropriate constructors and methods. Define a crate-level const for =N_MORE= (e.g., =DEFAULT_ADDITIONAL_EVENT_CAPACITY=).
+  2. Refactor =CommandHandlerResponse= to use =NonEmptyEvents= for its =events= field.
+  3. Update all existing implementations and tests of =AggregateCommandHandler= to comply with the new response contract (either produce events or return an error).
+  4. Adjust =AggregateRoot::execute= to correctly process =NonEmptyEvents= from the handler response and integrate them into its =uncommitted_events= list.
+  5. Update =nexus= crate documentation (including =lib.rs= and relevant module docs) to clearly explain this "hard rule," the new =NonEmptyEvents= type, and the implications for command handler implementation and error handling.
+  6. Ensure test cases explicitly cover scenarios where command handlers should now return errors (e.g., create if exists, update with no change).
