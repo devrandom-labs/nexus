@@ -604,12 +604,39 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn should_correctly_process_multiple_commands_sequentially() {}
+    async fn should_correctly_process_multiple_commands_sequentially() {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.current_version(), 0);
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        assert_eq!(root.current_version(), 1);
+        let handler = ActivateUserHandler; // checking the state and executing
+        let result = root
+            .execute(
+                ActivateUser {
+                    user_id: "id".to_string(),
+                },
+                &handler,
+                &(),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(root.current_version(), 2);
+    }
 
     #[tokio::test]
     async fn should_pass_services_correctly_to_handler_during_execute() {}
 
-    // uncommitted events
     #[tokio::test]
     async fn should_return_uncommitted_events_and_clear_internal_list_then_return_empty_on_second_call()
      {
