@@ -24,7 +24,9 @@
 //! auditable systems where state mutations are explicit, event-driven, and
 //! managed through well-defined domain models.
 //!
-use smallvec::SmallVec;
+use crate::DomainEvent;
+use smallvec::{SmallVec, smallvec};
+
 pub mod aggregate;
 pub mod handler;
 pub mod repository;
@@ -32,5 +34,37 @@ pub mod repository;
 #[cfg(test)]
 pub mod test;
 
-pub const SMALLVEC_INLINE_CAPACITY: usize = 1;
-pub type Events<E> = SmallVec<[E; SMALLVEC_INLINE_CAPACITY]>;
+#[derive(Debug)]
+pub struct NonEmptyEvents<E, const N: usize>
+where
+    E: DomainEvent,
+{
+    first: E,
+    more: SmallVec<[E; N]>,
+}
+
+impl<E, const N: usize> NonEmptyEvents<E, N>
+where
+    E: DomainEvent,
+{
+    pub fn new(event: E) -> Self {
+        NonEmptyEvents {
+            first: event,
+            more: SmallVec::new(),
+        }
+    }
+
+    pub fn add(&mut self, event: E) {
+        self.more.push(event);
+    }
+
+    pub fn into_small_vec(self) -> SmallVec<[E; N]> {
+        let mut events = smallvec![self.first];
+        events.extend(self.more);
+        events
+    }
+}
+
+// TODO: create an iterator for NonEmptyEvents
+// TODO: impl From trait to small_vec
+// TODO: macro nonemptyevents![] to directly add to more. or first depending on the number of params in it.

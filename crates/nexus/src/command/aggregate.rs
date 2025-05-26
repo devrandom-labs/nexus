@@ -1,11 +1,10 @@
-use super::{
-    Events,
-    handler::{AggregateCommandHandler, CommandHandlerResponse},
-};
+use super::handler::{AggregateCommandHandler, CommandHandlerResponse};
 use crate::{Command, DomainEvent, Id};
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use thiserror::Error as ThisError;
+
+pub type Events<E> = SmallVec<[E; 1]>;
 
 /// # `AggregateState<E>`
 ///
@@ -215,7 +214,7 @@ where
             id,
             state: AT::State::default(),
             version: 0,
-            uncommitted_events: SmallVec::new(),
+            uncommitted_events: Events::new(),
         }
     }
 
@@ -259,7 +258,7 @@ where
             id,
             state,
             version,
-            uncommitted_events: SmallVec::new(),
+            uncommitted_events: Events::new(),
         })
     }
 
@@ -316,6 +315,7 @@ where
     {
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
+        let events = events.into_small_vec(); // FIXME: remove this and directly get iterator
         for event in &events {
             self.state.apply(event);
         }
@@ -328,8 +328,8 @@ where
 pub mod test {
     use super::{
         super::test::{
-            ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler,
-            CreateUserWithoutEvents, User, UserDomainEvents, UserError, UserState,
+            ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler, User,
+            UserDomainEvents, UserError, UserState,
             utils::{EventType, get_user_events},
         },
         Events,
@@ -603,24 +603,9 @@ pub mod test {
         assert_eq!(root.current_version(), 0);
     }
 
-    // execute
-    #[tokio::test]
-    async fn should_process_command_successfully_when_handler_produces_no_events() {
-        let mut root = AggregateRoot::<User>::new(String::from("id"));
-        let create_user = CreateUser {
-            user_id: "id".to_string(),
-            email: "joel@tixlys.com".to_string(),
-        };
-        let handler = CreateUserWithoutEvents;
-        let result = root.execute(create_user, &handler, &()).await;
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert_eq!(root.uncommitted_events.len(), 0);
-        assert_eq!(result, "id");
-    }
-
     #[tokio::test]
     async fn should_correctly_process_multiple_commands_sequentially() {}
+
     #[tokio::test]
     async fn should_pass_services_correctly_to_handler_during_execute() {}
 
@@ -628,5 +613,22 @@ pub mod test {
     #[tokio::test]
     async fn should_return_uncommitted_events_and_clear_internal_list_then_return_empty_on_second_call()
      {
+        let timestamp = Utc::now();
+        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        assert!(aggregate_root.is_ok());
+        let mut root = aggregate_root.unwrap();
+        assert_eq!(root.current_version(), 0);
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        let events = root.take_uncommitted_events();
+        assert_eq!(events.len(), 1);
+        let events = root.take_uncommitted_events();
+        assert_eq!(events.len(), 0);
     }
 }

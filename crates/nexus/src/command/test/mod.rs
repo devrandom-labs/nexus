@@ -1,10 +1,13 @@
 pub mod utils;
-use super::aggregate::{AggregateState, AggregateType};
-use super::handler::{AggregateCommandHandler, CommandHandlerResponse};
+
+use super::{
+    NonEmptyEvents,
+    aggregate::{AggregateState, AggregateType},
+    handler::{AggregateCommandHandler, CommandHandlerResponse},
+};
 use crate::{Command, DomainEvent, Message};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use smallvec::smallvec;
 use std::{pin::Pin, time::Duration};
 use thiserror::Error as ThisError;
 use tokio::time::sleep;
@@ -149,7 +152,7 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
                 email: command.email,
                 timestamp,
             };
-            let events = smallvec![create_user];
+            let events = NonEmptyEvents::new(create_user);
             Ok(CommandHandlerResponse {
                 events,
                 result: command.user_id,
@@ -193,45 +196,7 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
                 id: command.user_id.clone(),
             };
 
-            let events = smallvec![activate_user];
-            Ok(CommandHandlerResponse {
-                events,
-                result: command.user_id,
-            })
-        })
-    }
-}
-
-pub struct CreateUserWithoutEvents;
-
-impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithoutEvents {
-    type AggregateType = User;
-
-    fn handle<'a>(
-        &'a self,
-        _state: &'a <Self::AggregateType as AggregateType>::State,
-        command: CreateUser,
-        _services: &'a (),
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<
-                            <Self::AggregateType as AggregateType>::Event,
-                            <CreateUser as Command>::Result,
-                        >,
-                        <CreateUser as Command>::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            sleep(Duration::from_secs(2)).await;
-            if command.email.contains("error") {
-                return Err(UserError::FailedToCreateUser);
-            }
-            let events = smallvec![];
+            let events = NonEmptyEvents::new(activate_user);
             Ok(CommandHandlerResponse {
                 events,
                 result: command.user_id,
