@@ -201,3 +201,41 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
         })
     }
 }
+
+pub struct CreateUserWithoutEvents;
+
+impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithoutEvents {
+    type AggregateType = User;
+
+    fn handle<'a>(
+        &'a self,
+        _state: &'a <Self::AggregateType as AggregateType>::State,
+        command: CreateUser,
+        _services: &'a (),
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        CommandHandlerResponse<
+                            <Self::AggregateType as AggregateType>::Event,
+                            <CreateUser as Command>::Result,
+                        >,
+                        <CreateUser as Command>::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            sleep(Duration::from_secs(2)).await;
+            if command.email.contains("error") {
+                return Err(UserError::FailedToCreateUser);
+            }
+            let events = smallvec![];
+            Ok(CommandHandlerResponse {
+                events,
+                result: command.user_id,
+            })
+        })
+    }
+}

@@ -328,8 +328,8 @@ where
 pub mod test {
     use super::{
         super::test::{
-            ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler, User,
-            UserDomainEvents, UserError, UserState,
+            ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler,
+            CreateUserWithoutEvents, User, UserDomainEvents, UserError, UserState,
             utils::{EventType, get_user_events},
         },
         Events,
@@ -605,7 +605,20 @@ pub mod test {
 
     // execute
     #[tokio::test]
-    async fn should_process_command_successfully_when_handler_produces_no_events() {}
+    async fn should_process_command_successfully_when_handler_produces_no_events() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserWithoutEvents;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(root.uncommitted_events.len(), 0);
+        assert_eq!(result, "id");
+    }
+
     #[tokio::test]
     async fn should_correctly_process_multiple_commands_sequentially() {}
     #[tokio::test]
