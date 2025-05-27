@@ -204,3 +204,52 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
         })
     }
 }
+
+pub struct SomeService {
+    pub name: String,
+}
+
+pub struct CreateUserHandlerWithService;
+
+impl AggregateCommandHandler<CreateUser, SomeService> for CreateUserHandlerWithService {
+    type AggregateType = User;
+
+    fn handle<'a>(
+        &'a self,
+        _state: &'a <Self::AggregateType as AggregateType>::State,
+        command: CreateUser,
+        services: &'a SomeService,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        CommandHandlerResponse<
+                            <Self::AggregateType as AggregateType>::Event,
+                            <CreateUser as Command>::Result,
+                        >,
+                        <CreateUser as Command>::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let timestamp = Utc::now();
+            sleep(Duration::from_secs(2)).await;
+            if command.email.contains("error") {
+                return Err(UserError::FailedToCreateUser);
+            }
+
+            let create_user = UserDomainEvents::UserCreated {
+                id: command.user_id.clone(),
+                email: command.email,
+                timestamp,
+            };
+            let events = NonEmptyEvents::new(create_user);
+            Ok(CommandHandlerResponse {
+                events,
+                result: services.name.to_owned(),
+            })
+        })
+    }
+}
