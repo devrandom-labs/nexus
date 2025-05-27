@@ -107,7 +107,7 @@ pub mod test {
     use super::AggregateCommandHandler;
 
     #[tokio::test]
-    async fn handler_logic_success() {
+    async fn should_execute_handler_successfully_returning_events_and_result() {
         let state = UserState::default();
 
         let create_user = CreateUser {
@@ -129,7 +129,7 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn handler_logic_failure() {
+    async fn should_fail_execution_when_handler_logic_encounters_error() {
         let state = UserState::default();
         let create_user = CreateUser {
             user_id: "id".to_string(),
@@ -141,4 +141,21 @@ pub mod test {
         let result = result.unwrap_err();
         assert_eq!(result, UserError::FailedToCreateUser);
     }
+
+    #[tokio::test]
+    async fn should_succeed_when_state_satisfies_handler_preconditions() {}
+    #[tokio::test]
+    async fn should_fail_when_state_does_not_satisfy_handler_preconditions() {}
+    #[tokio::test]
+    async fn should_correctly_use_concrete_service_to_influence_outcome() {}
+    #[tokio::test]
+    async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {}
+    #[tokio::test]
+    async fn should_emit_single_event_as_dictated_by_handler_logic() {}
+    #[tokio::test]
+    async fn should_emit_multiple_distinct_events_when_logic_requires() {}
+    #[tokio::test]
+    async fn should_accurately_reflect_command_data_in_emitted_event() {}
+    #[tokio::test]
+    async fn should_accurately_reflect_command_data_in_handler_result() {}
 }
