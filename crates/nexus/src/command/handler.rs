@@ -101,8 +101,11 @@ where
 
 #[cfg(test)]
 pub mod test {
+    use crate::command::test::{ActivateUser, ActivateUserHandler};
+
     use super::super::test::{
-        CreateUser, CreateUserHandler, UserDomainEvents, UserError, UserState,
+        CreateUser, CreateUserHandler, CreateUserWithStateCheck, UserDomainEvents, UserError,
+        UserState,
     };
     use super::AggregateCommandHandler;
 
@@ -144,9 +147,37 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn should_succeed_when_state_satisfies_handler_preconditions() {}
+    async fn should_succeed_when_state_satisfies_handler_preconditions() {
+        let state = UserState::default();
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+
+        let handler = CreateUserWithStateCheck;
+        let result = handler.handle(&state, create_user, &()).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        assert!(matches!(
+            result.events.into_small_vec().as_slice(),
+            [UserDomainEvents::UserCreated { .. }]
+        ));
+        assert_eq!(result.result, "id".to_owned());
+    }
+
     #[tokio::test]
-    async fn should_fail_when_state_does_not_satisfy_handler_preconditions() {}
+    async fn should_fail_when_state_does_not_satisfy_handler_preconditions() {
+        let state = UserState::default();
+        let activate_user = ActivateUser {
+            user_id: "id".to_string(),
+        };
+        let handler = ActivateUserHandler;
+        let result = handler.handle(&state, activate_user, &()).await;
+        assert!(result.is_err());
+        let result = result.unwrap_err();
+        assert_eq!(result, UserError::FailedToActivate);
+    }
     #[tokio::test]
     async fn should_correctly_use_concrete_service_to_influence_outcome() {}
     #[tokio::test]

@@ -46,7 +46,7 @@ pub enum UserError {
     FailedToActivate,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateUser {
     pub user_id: String,
     pub email: String,
@@ -250,6 +250,51 @@ impl AggregateCommandHandler<CreateUser, SomeService> for CreateUserHandlerWithS
                 events,
                 result: services.name.to_owned(),
             })
+        })
+    }
+}
+
+pub struct CreateUserWithStateCheck;
+
+impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithStateCheck {
+    type AggregateType = User;
+
+    fn handle<'a>(
+        &'a self,
+        state: &'a <Self::AggregateType as AggregateType>::State,
+        command: CreateUser,
+        _services: &'a (),
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        CommandHandlerResponse<
+                            <Self::AggregateType as AggregateType>::Event,
+                            <CreateUser as Command>::Result,
+                        >,
+                        <CreateUser as Command>::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let timestamp = Utc::now();
+            sleep(Duration::from_secs(2)).await;
+            if let Some(_) = state.created_at {
+                return Err(UserError::FailedToCreateUser);
+            } else {
+                let create_user = UserDomainEvents::UserCreated {
+                    id: command.user_id.clone(),
+                    email: command.email,
+                    timestamp,
+                };
+                let events = NonEmptyEvents::new(create_user);
+                return Ok(CommandHandlerResponse {
+                    events,
+                    result: command.user_id.to_string(),
+                });
+            }
         })
     }
 }
