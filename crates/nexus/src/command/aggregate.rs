@@ -328,8 +328,9 @@ where
 pub mod test {
     use super::{
         super::test::{
-            ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler, User,
-            UserDomainEvents, UserError, UserState,
+            ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler,
+            CreateUserHandlerWithService, SomeService, User, UserDomainEvents, UserError,
+            UserState,
             utils::{EventType, get_user_events},
         },
         Events,
@@ -635,7 +636,21 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn should_pass_services_correctly_to_handler_during_execute() {}
+    async fn should_pass_services_correctly_to_handler_during_execute() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandlerWithService;
+        let service = SomeService {
+            name: "Service".to_string(),
+        };
+        let result = root.execute(create_user, &handler, &service).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result, "Service");
+    }
 
     #[tokio::test]
     async fn should_return_uncommitted_events_and_clear_internal_list_then_return_empty_on_second_call()
