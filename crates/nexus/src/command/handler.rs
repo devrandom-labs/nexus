@@ -135,6 +135,7 @@ pub mod test {
             user_id: "id".to_string(),
             email: "error@tixlys.com".to_string(),
         };
+
         let handler = CreateUserHandler;
         let result = handler.handle(&state, create_user, &()).await;
         assert!(result.is_err());
