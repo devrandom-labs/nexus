@@ -281,8 +281,8 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithStateCheck {
         Box::pin(async move {
             let timestamp = Utc::now();
             sleep(Duration::from_secs(2)).await;
-            if let Some(_) = state.created_at {
-                return Err(UserError::FailedToCreateUser);
+            if state.created_at.is_some() {
+                Err(UserError::FailedToCreateUser)
             } else {
                 let create_user = UserDomainEvents::UserCreated {
                     id: command.user_id.clone(),
@@ -290,10 +290,10 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithStateCheck {
                     timestamp,
                 };
                 let events = NonEmptyEvents::new(create_user);
-                return Ok(CommandHandlerResponse {
+                Ok(CommandHandlerResponse {
                     events,
                     result: command.user_id.to_string(),
-                });
+                })
             }
         })
     }
