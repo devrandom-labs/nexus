@@ -119,7 +119,7 @@ pub mod test {
         };
 
         let handler = CreateUserHandler;
-        let result = handler.handle(&state, create_user, &()).await;
+        let result = handler.handle(&state, create_user.clone(), &()).await;
 
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -128,7 +128,8 @@ pub mod test {
             result.events.into_small_vec().as_slice(),
             [UserDomainEvents::UserCreated { .. }]
         ));
-        assert_eq!(result.result, "id");
+        // Assertions for command data in result
+        assert_eq!(result.result, create_user.user_id);
     }
 
     #[tokio::test]
@@ -178,16 +179,16 @@ pub mod test {
         let result = result.unwrap_err();
         assert_eq!(result, UserError::FailedToActivate);
     }
+
     #[tokio::test]
     async fn should_correctly_use_concrete_service_to_influence_outcome() {}
+
     #[tokio::test]
     async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {}
-    #[tokio::test]
-    async fn should_emit_single_event_as_dictated_by_handler_logic() {}
+
     #[tokio::test]
     async fn should_emit_multiple_distinct_events_when_logic_requires() {}
+
     #[tokio::test]
     async fn should_accurately_reflect_command_data_in_emitted_event() {}
-    #[tokio::test]
-    async fn should_accurately_reflect_command_data_in_handler_result() {}
 }
