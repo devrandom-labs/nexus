@@ -104,8 +104,8 @@ pub mod test {
     use crate::command::test::{ActivateUser, ActivateUserHandler};
 
     use super::super::test::{
-        CreateUser, CreateUserHandler, CreateUserWithStateCheck, UserDomainEvents, UserError,
-        UserState,
+        CreateUser, CreateUserHandler, CreateUserHandlerWithService, CreateUserWithStateCheck,
+        SomeService, UserDomainEvents, UserError, UserState,
     };
     use super::AggregateCommandHandler;
 
@@ -201,7 +201,27 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn should_correctly_use_concrete_service_to_influence_outcome() {}
+    async fn should_correctly_use_concrete_service_to_influence_outcome() {
+        let state = UserState::default();
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+
+        let service = SomeService {
+            name: "some_service".to_string(),
+        };
+        let handler = CreateUserHandlerWithService;
+        let result = handler.handle(&state, create_user, &service).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        assert!(matches!(
+            result.events.into_small_vec().as_slice(),
+            [UserDomainEvents::UserCreated { .. }]
+        ));
+        assert_eq!(result.result, "some_service".to_owned());
+    }
 
     #[tokio::test]
     async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {}
