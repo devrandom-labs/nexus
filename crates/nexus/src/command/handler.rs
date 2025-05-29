@@ -124,10 +124,30 @@ pub mod test {
         assert!(result.is_ok());
         let result = result.unwrap();
 
-        assert!(matches!(
-            result.events.into_small_vec().as_slice(),
-            [UserDomainEvents::UserCreated { .. }]
-        ));
+        // Convert SmallVec to a regular slice or Vec to inspect elements
+        let events_vec = result.events.into_small_vec();
+        assert_eq!(events_vec.len(), 1, "Expected exactly one event");
+
+        // Perform a pattern match on the first event
+        if let Some(UserDomainEvents::UserCreated {
+            id: event_id,
+            email: event_email,
+            timestamp: _,
+        }) = events_vec.get(0)
+        {
+            // Assertions for command data in event
+            assert_eq!(
+                event_id, &create_user.user_id,
+                "Event ID should match command user_id"
+            );
+            assert_eq!(
+                event_email, &create_user.email,
+                "Event email should match command email"
+            );
+        } else {
+            panic!("Expected UserCreated event, but found another event type or no event.");
+        }
+
         // Assertions for command data in result
         assert_eq!(result.result, create_user.user_id);
     }
@@ -188,7 +208,4 @@ pub mod test {
 
     #[tokio::test]
     async fn should_emit_multiple_distinct_events_when_logic_requires() {}
-
-    #[tokio::test]
-    async fn should_accurately_reflect_command_data_in_emitted_event() {}
 }
