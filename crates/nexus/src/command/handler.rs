@@ -101,13 +101,13 @@ where
 
 #[cfg(test)]
 pub mod test {
-    use crate::command::test::{ActivateUser, ActivateUserHandler};
-
     use super::super::test::{
-        CreateUser, CreateUserHandler, CreateUserHandlerWithService, CreateUserWithStateCheck,
+        CreateUser, CreateUserAndActivate, CreateUserHandler, CreateUserHandlerWithService,
+        CreateUserWithStateCheck, DynTestService, MockDynTestService, ProcessWithDynServiceHandler,
         SomeService, UserDomainEvents, UserError, UserState,
     };
     use super::AggregateCommandHandler;
+    use crate::command::test::{ActivateUser, ActivateUserHandler};
 
     #[tokio::test]
     async fn should_execute_handler_successfully_returning_events_and_result() {
@@ -224,8 +224,73 @@ pub mod test {
     }
 
     #[tokio::test]
-    async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {}
+    async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {
+        let state = UserState::default(); // Assuming UserState is appropriate
+        let command = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+
+        let mock_service_impl = MockDynTestService {
+            prefix: "DynServicePrefix".to_string(),
+            suffix_to_add: Some("ProcessedData".to_string()),
+        };
+
+        let handler = ProcessWithDynServiceHandler;
+
+        // 2. Create a trait object for the service
+        // This is the key part: `services` will be of type `&(dyn DynTestService + 'a)`
+        let dyn_services: &dyn DynTestService = &mock_service_impl;
+
+        // 3. Execute the handler with the trait object
+        let result = handler.handle(&state, command.clone(), dyn_services).await;
+
+        // 4. Assert the outcome
+        assert!(result.is_ok(), "Handler failed: {:?}", result.err());
+        let response = result.unwrap();
+
+        // Assert that the service influenced the result
+        let expected_result_string = mock_service_impl.process(&command.email);
+        assert_eq!(
+            response.result, expected_result_string,
+            "The result string from the handler should match the service's processed output."
+        );
+
+        // Assert the event (confirming it's the placeholder UserActivated with correct id)
+        let events_vec = response.events.into_small_vec();
+        assert_eq!(events_vec.len(), 1, "Expected exactly one event");
+
+        match events_vec.get(0) {
+            Some(UserDomainEvents::UserCreated { id, .. }) => {
+                assert_eq!(
+                    id, &command.user_id,
+                    "Event ID should match command item_id"
+                );
+            }
+            _ => panic!("Expected UserCreated event, but found something else or no event."),
+        }
+    }
 
     #[tokio::test]
-    async fn should_emit_multiple_distinct_events_when_logic_requires() {}
+    async fn should_emit_multiple_distinct_events_when_logic_requires() {
+        let state = UserState::default();
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+
+        let handler = CreateUserAndActivate;
+        let result = handler.handle(&state, create_user, &()).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+
+        assert!(matches!(
+            result.events.into_small_vec().as_slice(),
+            [
+                UserDomainEvents::UserCreated { .. },
+                UserDomainEvents::UserActivated { .. }
+            ]
+        ));
+        assert_eq!(result.result, "id".to_owned());
+    }
 }
