@@ -257,6 +257,7 @@
             gzip
             sops
             age
+            cargo-edit
           ];
         };
       }) // {
