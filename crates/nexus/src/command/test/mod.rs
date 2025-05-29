@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::{pin::Pin, time::Duration};
 use thiserror::Error as ThisError;
 use tokio::time::sleep;
-use tower::Service;
 
 // events
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

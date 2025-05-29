@@ -133,7 +133,7 @@ pub mod test {
             id: event_id,
             email: event_email,
             timestamp: _,
-        }) = events_vec.get(0)
+        }) = events_vec.first()
         {
             // Assertions for command data in event
             assert_eq!(
@@ -260,7 +260,7 @@ pub mod test {
         let events_vec = response.events.into_small_vec();
         assert_eq!(events_vec.len(), 1, "Expected exactly one event");
 
-        match events_vec.get(0) {
+        match events_vec.first() {
             Some(UserDomainEvents::UserCreated { id, .. }) => {
                 assert_eq!(
                     id, &command.user_id,
