@@ -1,13 +1,6 @@
 use super::User;
-use crate::command::{
-    aggregate::{AggregateRoot, AggregateType},
-    repository::{EventSourceRepository, RepositoryError},
-};
-use crate::{DomainEvent, Id};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use crate::Id;
+use crate::command::{aggregate::AggregateRoot, repository::RepositoryError};
 
 pub enum MockUserEventSourceRepsitory<I: Id> {
     LoadReturns(Result<AggregateRoot<User>, RepositoryError<I>>),
