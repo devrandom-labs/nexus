@@ -171,3 +171,33 @@ pub trait EventSourceRepository: Send + Sync + Clone + Debug {
         >,
     >;
 }
+
+#[cfg(test)]
+mod tests {
+
+    #[tokio::test]
+    async fn should_load_aggregate_when_correct_id_is_provided() {}
+
+    #[tokio::test]
+    async fn should_give_aggregate_not_found_error_when_invalid_id_is_provided() {}
+
+    #[tokio::test]
+    async fn should_save_aggregate_uncommited_events() {}
+
+    #[tokio::test]
+    async fn should_give_conflict_error_when_version_mismatch_while_saving_aggregates() {} // optimistic locking
+
+    #[tokio::test]
+    async fn should_give_data_integrity_error_if_aggrgate_id_mismatches_with_event_aggregate_id_on_load()
+     {
+    }
+
+    #[tokio::test]
+    async fn should_give_store_error_on_unreleated_database_error() {}
+
+    #[tokio::test]
+    async fn should_return_deserialization_error_on_load() {}
+
+    #[tokio::test]
+    async fn should_return_serialization_error_on_save() {}
+}
