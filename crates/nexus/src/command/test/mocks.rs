@@ -3,44 +3,13 @@ use crate::command::{
     aggregate::{AggregateRoot, AggregateType},
     repository::{EventSourceRepository, RepositoryError},
 };
+use crate::{DomainEvent, Id};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
-#[derive(Debug, Clone)]
-pub struct MockUserEventSourceRepsitory;
-
-impl EventSourceRepository for MockUserEventSourceRepsitory {
-    type AggregateType = User;
-
-    fn load<'a>(
-        &'a self,
-        _id: &'a <Self::AggregateType as AggregateType>::Id,
-    ) -> std::pin::Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        AggregateRoot<Self::AggregateType>,
-                        RepositoryError<<Self::AggregateType as AggregateType>::Id>,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        todo!("load an aggregate")
-    }
-
-    fn save<'a>(
-        &'a self,
-        _aggregate: AggregateRoot<Self::AggregateType>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (),
-                        RepositoryError<<Self::AggregateType as AggregateType>::Id>,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        todo!("save an aggregate")
-    }
+pub enum MockUserEventSourceRepsitory<I: Id> {
+    LoadReturns(Result<AggregateRoot<User>, RepositoryError<I>>),
+    SaveReturns(Result<(), RepositoryError<I>>),
 }

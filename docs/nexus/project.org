@@ -82,7 +82,7 @@
       - [ ] `QueryHandlerFn::new`
       - [ ] Document its `tower::Service` implementation (purpose and usage).
 
-*** TODO Expand Test Coverage for Existing `command` Module
+*** STRT Expand Test Coverage for Existing `command` Module
     SCHEDULED: <2025-05-26 Mon>
     :PROPERTIES:
     :CATEGORY: Testing
