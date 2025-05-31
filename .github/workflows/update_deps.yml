@@ -1,0 +1,48 @@
+##
+## TODO: run nix flake update
+## TODO: run cargo upgrade -i
+## TODO: run cargo update
+## TODO: run cargo-hakari generate
+## TODO: create a pull request
+name: udpate dependencies
+on:
+  schedule:
+    - cron: "0 9 * * MON"
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-dept: 0
+      - name: Install Nix
+        uses: nixbuild/nix-quick-install-action@v30
+        with:
+          nix_conf: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+            keep-env-derivations = true
+            keep-outputs = true
+      - name: Restore and save Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: build-${{ runner.os }}-${{ hashFiles('Cargo.toml', 'flake.nix', 'flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 1G
+          purge: true
+          purge-prefixes: cache-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+      - name: Flake update
+        run: nix flake update
+      - name: Cargo upgrade
+        run: cargo upgrade -i
+      - name: Cargo update
+        run: cargo update
+      - name: cargo-hakari workspace
+        run: cargo-hakari generate
