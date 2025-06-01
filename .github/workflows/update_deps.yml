@@ -50,9 +50,9 @@ jobs:
             echo 'Dependency update process complete.'
           "
       - name: Create Pull Request if changes exist
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.GITHUB_TOKEN }} # This is automatically provided by GitHub Actions
+          token: ${{ secrets.GH_PAT_FOR_PRS }}
           commit-message: "chore: update dependencies"
           title: "Update Nix and Rust Dependencies"
           body: |
@@ -61,12 +61,14 @@ jobs:
             - Nix flake updated
             - Cargo dependencies upgraded/updated
             - Cargo Hakari workspace regenerated
-          branch: "chore/auto-dependency-updates" # Branch name for the PR
-          delete-branch: true # Deletes the branch once the PR is merged or closed
+          branch: "chore/auto-dependency-updates"
+          delete-branch: true
           labels: |
             dependencies
             automated pull request
-          assignees: |
-            joeldsouzax
-          reviewers: |
-            joeldsouzax
+          assignees: joeldsouzax
+          reviewers: joeldsouzax
+          committer_name: "Tixlys Bot"
+          committer_email: "bot@tixlys.com"
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}
