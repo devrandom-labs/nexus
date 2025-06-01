@@ -174,8 +174,11 @@ pub trait EventSourceRepository: Send + Sync + Clone + Debug {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::command::test::mocks::MockRepository;
+    use super::super::aggregate::AggregateRoot;
+    use super::{
+        super::test::{CreateUser, CreateUserHandler, User, mocks::MockRepository},
+        *,
+    };
 
     #[tokio::test]
     async fn should_load_aggregate_when_correct_id_is_provided() {}
@@ -196,7 +199,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_save_aggregate_uncommited_events() {}
+    async fn should_save_aggregate_uncommited_events() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let result = root.execute(create_user, &handler, &()).await;
+        assert!(result.is_ok());
+        let repo = MockRepository::new();
+        let result = repo.save(root).await;
+        assert!(result.is_ok());
+    }
 
     #[tokio::test]
     async fn should_give_conflict_error_when_version_mismatch_while_saving_aggregates() {} // optimistic locking
