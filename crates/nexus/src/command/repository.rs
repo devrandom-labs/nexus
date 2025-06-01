@@ -119,9 +119,9 @@ pub trait EventSourceRepository: Send + Sync + Clone + Debug {
     ///
     /// The `'a` lifetime ensures the future does not outlive the `id` reference.
     #[allow(clippy::type_complexity)]
-    fn load<'a>(
-        &'a self,
-        id: &'a <Self::AggregateType as AT>::Id,
+    fn load(
+        &self,
+        id: &<Self::AggregateType as AT>::Id,
     ) -> Pin<
         Box<
             dyn Future<
@@ -130,7 +130,7 @@ pub trait EventSourceRepository: Send + Sync + Clone + Debug {
                         RepositoryError<<Self::AggregateType as AT>::Id>,
                     >,
                 > + Send
-                + 'a,
+                + 'static,
         >,
     >;
 
@@ -160,14 +160,14 @@ pub trait EventSourceRepository: Send + Sync + Clone + Debug {
     ///
     /// The `'a` lifetime here relates to `&'a self`.
     #[allow(clippy::type_complexity)]
-    fn save<'a>(
-        &'a self,
+    fn save(
+        &self,
         aggregate: AggregateRoot<Self::AggregateType>,
     ) -> Pin<
         Box<
             dyn Future<Output = Result<(), RepositoryError<<Self::AggregateType as AT>::Id>>>
                 + Send
-                + 'a,
+                + 'static,
         >,
     >;
 }
