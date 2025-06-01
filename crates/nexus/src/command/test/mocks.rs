@@ -35,18 +35,16 @@ impl EventSourceRepository for MockRepository {
         let id = id.clone();
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let store = store.lock().unwrap();
-            let history = store
-                .get(&id)
-                .ok_or(RepositoryError::AggregateNotFound(id.clone()))?;
-
-            let aggregate =
+            let store_gaurd = store.lock().unwrap();
+            let aggregate = if let Some(history) = store_gaurd.get(&id) {
                 AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
                     .map_err(|err| RepositoryError::DataIntegrityError {
-                        aggregate_id: id.clone(),
+                        aggregate_id: id,
                         source: err,
-                    })?;
-
+                    })?
+            } else {
+                return Err(RepositoryError::AggregateNotFound(id));
+            };
             Ok(aggregate)
         })
     }
