@@ -67,8 +67,8 @@ impl EventSourceRepository for MockRepository {
         Box::pin(async move {
             let version = aggregate.version();
             let events = aggregate.take_uncommitted_events().to_vec();
-            let mut store = store.lock().unwrap();
-            match store.entry(aggregate.id().into()) {
+            let mut store_guard = store.lock().unwrap();
+            match store_guard.entry(aggregate.id().into()) {
                 Entry::Occupied(mut entry) => {
                     let current_events = entry.get_mut();
                     if current_events.len() != version as usize {
