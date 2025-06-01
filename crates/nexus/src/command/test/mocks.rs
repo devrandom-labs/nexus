@@ -1,18 +1,35 @@
 #![allow(dead_code)]
-use super::{User, UserDomainEvents};
+use super::{
+    User, UserDomainEvents,
+    utils::{EventType, convert_to_hashmap, get_user_events},
+};
 use crate::command::{
     aggregate::{Aggregate, AggregateRoot, AggregateType},
     repository::{EventSourceRepository, RepositoryError},
 };
+use chrono::{DateTime, Utc};
 use std::collections::{HashMap, hash_map::Entry};
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct MockRepository {
     store: Arc<Mutex<HashMap<String, Vec<UserDomainEvents>>>>,
+}
+
+impl MockRepository {
+    pub fn new(timestamp: Option<DateTime<Utc>>, event_type: EventType) -> Self {
+        match event_type {
+            EventType::Empty => MockRepository::default(),
+            _ => MockRepository {
+                store: Arc::new(Mutex::new(convert_to_hashmap(get_user_events(
+                    timestamp, event_type,
+                )))),
+            },
+        }
+    }
 }
 
 impl EventSourceRepository for MockRepository {
@@ -35,8 +52,8 @@ impl EventSourceRepository for MockRepository {
         let id = id.clone();
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let store_gaurd = store.lock().unwrap();
-            let aggregate = if let Some(history) = store_gaurd.get(&id) {
+            let store_guard = store.lock().unwrap();
+            let aggregate = if let Some(history) = store_guard.get(&id) {
                 AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
                     .map_err(|err| RepositoryError::DataIntegrityError {
                         aggregate_id: id,
