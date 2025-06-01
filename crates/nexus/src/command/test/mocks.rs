@@ -10,9 +10,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct MockRepository {
     store: Arc<Mutex<HashMap<String, Vec<UserDomainEvents>>>>,
+}
+
+impl MockRepository {
+    pub fn new() -> Self {
+        MockRepository::default()
+    }
 }
 
 impl EventSourceRepository for MockRepository {
@@ -35,8 +41,8 @@ impl EventSourceRepository for MockRepository {
         let id = id.clone();
         let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let store_gaurd = store.lock().unwrap();
-            let aggregate = if let Some(history) = store_gaurd.get(&id) {
+            let store_guard = store.lock().unwrap();
+            let aggregate = if let Some(history) = store_guard.get(&id) {
                 AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
                     .map_err(|err| RepositoryError::DataIntegrityError {
                         aggregate_id: id,
