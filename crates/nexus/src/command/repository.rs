@@ -221,7 +221,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_give_conflict_error_when_version_mismatch_while_saving_aggregates() {} // optimistic locking
+    async fn should_give_conflict_error_when_version_mismatch_while_saving_aggregates() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let _ = root.execute(create_user, &handler, &()).await;
+        let repo = MockRepository::new(None, EventType::Ordered);
+        let result = repo.save(root).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            RepositoryError::Conflict {
+                aggregate_id,
+                expected_version,
+            } => {
+                assert_eq!(aggregate_id, "id");
+                assert_eq!(expected_version, 0);
+            }
+            _ => panic!("expected Conflict Error"),
+        }
+    }
 
     #[tokio::test]
     async fn should_give_data_integrity_error_if_aggrgate_id_mismatches_with_event_aggregate_id_on_load()
