@@ -67,14 +67,15 @@ impl EventSourceRepository for MockRepository {
         Box::pin(async move {
             let version = aggregate.version();
             let events = aggregate.take_uncommitted_events().to_vec();
+            let id = aggregate.id().to_string();
             let mut store_guard = store.lock().unwrap();
-            match store_guard.entry(aggregate.id().into()) {
+            match store_guard.entry(id.clone()) {
                 Entry::Occupied(mut entry) => {
                     let current_events = entry.get_mut();
                     if current_events.len() != version as usize {
                         Err(RepositoryError::Conflict {
-                            aggregate_id: aggregate.id().to_string(),
-                            expected_version: aggregate.version(),
+                            aggregate_id: id,
+                            expected_version: version,
                         })
                     } else {
                         current_events.extend(events);
@@ -82,8 +83,15 @@ impl EventSourceRepository for MockRepository {
                     }
                 }
                 Entry::Vacant(entry) => {
-                    entry.insert(events);
-                    Ok(())
+                    if version == 0 {
+                        entry.insert(events);
+                        Ok(())
+                    } else {
+                        Err(RepositoryError::Conflict {
+                            aggregate_id: id,
+                            expected_version: version,
+                        })
+                    }
                 }
             }
         })
