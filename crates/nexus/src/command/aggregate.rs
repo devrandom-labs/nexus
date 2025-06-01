@@ -221,7 +221,7 @@ where
     /// # Method: `load_from_history`
     /// Rehydrates the aggregate's state by applying an iterator of historical events.
     ///
-    /// This method takes a unique `id` and an `history` (an iterator over `AT::Event`).
+    /// This method takes a unique `id` and an `history` (an iterator over `&AT::Event`).
     /// It initializes a default state, then iterates through the provided events,
     /// applying each one to the state using `AT::State::apply`.
     ///
@@ -231,11 +231,12 @@ where
     /// Returns [`AggregateLoadError::MismatchedAggregateId`] if any event in the
     /// history has an `aggregate_id()` that does not match the provided `id`
     /// for this aggregate root. This ensures data integrity.
-    pub fn load_from_history(
+    pub fn load_from_history<'h, H>(
         id: AT::Id,
-        history: impl IntoIterator<Item = AT::Event>,
+        history: H,
     ) -> Result<Self, AggregateLoadError<AT::Id>>
     where
+        H: IntoIterator<Item = &'h AT::Event>,
         AT::Id: ToString,
     {
         let mut state = AT::State::default();
@@ -250,7 +251,7 @@ where
                 });
             }
 
-            state.apply(&event);
+            state.apply(event);
             version += 1;
         }
 
@@ -430,7 +431,7 @@ pub mod test {
     fn should_rehydrate_state_and_version_from_event_history() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Ordered);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut aggregate_root = aggregate_root.unwrap();
         assert_eq!(aggregate_root.id(), "id");
@@ -448,7 +449,7 @@ pub mod test {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Ordered);
         let aggregate_root =
-            AggregateRoot::<User>::load_from_history(String::from("wrong_id"), history);
+            AggregateRoot::<User>::load_from_history(String::from("wrong_id"), &history);
         assert!(aggregate_root.is_err());
         let error = aggregate_root.unwrap_err();
         assert_eq!(
@@ -465,7 +466,7 @@ pub mod test {
      {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::UnOrdered);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
         assert_eq!(root.id, "id");
@@ -492,7 +493,7 @@ pub mod test {
     async fn should_start_with_default_state_from_empty_history_and_then_create_user() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Empty);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
         assert_eq!(root.id, "id");
@@ -514,7 +515,7 @@ pub mod test {
     async fn should_fail_to_activate_user_when_loaded_from_empty_history_and_not_created() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Empty);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
         assert_eq!(root.id, "id");
@@ -570,7 +571,7 @@ pub mod test {
     async fn should_calculate_current_version_correctly_after_execute_produces_events() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Empty);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
         assert_eq!(root.current_version(), 0);
@@ -588,7 +589,7 @@ pub mod test {
     async fn should_revert_current_version_to_persisted_version_after_taking_uncommitted_events() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Empty);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
         assert_eq!(root.current_version(), 0);
@@ -608,7 +609,7 @@ pub mod test {
     async fn should_correctly_process_multiple_commands_sequentially() {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Empty);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
         assert_eq!(root.current_version(), 0);
@@ -657,7 +658,7 @@ pub mod test {
      {
         let timestamp = Utc::now();
         let history = get_user_events(Some(timestamp), EventType::Empty);
-        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), history);
+        let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
         assert_eq!(root.current_version(), 0);

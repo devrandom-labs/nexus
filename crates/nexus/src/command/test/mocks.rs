@@ -1,12 +1,10 @@
 #![allow(dead_code)]
 use super::{User, UserDomainEvents};
-use crate::command::repository::EventSourceRepository;
 use crate::command::{
     aggregate::{Aggregate, AggregateRoot, AggregateType},
-    repository::RepositoryError,
+    repository::{EventSourceRepository, RepositoryError},
 };
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::collections::{HashMap, hash_map::Entry};
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
@@ -22,7 +20,7 @@ impl EventSourceRepository for MockRepository {
 
     fn load<'a>(
         &'a self,
-        _id: &'a <Self::AggregateType as AggregateType>::Id,
+        id: &'a <Self::AggregateType as AggregateType>::Id,
     ) -> Pin<
         Box<
             dyn Future<
@@ -34,7 +32,23 @@ impl EventSourceRepository for MockRepository {
                 + 'a,
         >,
     > {
-        todo!("get the vector")
+        let id = id.clone();
+        let store = Arc::clone(&self.store);
+        Box::pin(async move {
+            let store = store.lock().unwrap();
+            let history = store
+                .get(&id)
+                .ok_or(RepositoryError::AggregateNotFound(id.clone()))?;
+
+            let aggregate =
+                AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
+                    .map_err(|err| RepositoryError::DataIntegrityError {
+                        aggregate_id: id.clone(),
+                        source: err,
+                    })?;
+
+            Ok(aggregate)
+        })
     }
 
     fn save<'a>(
@@ -51,11 +65,11 @@ impl EventSourceRepository for MockRepository {
                 + 'a,
         >,
     > {
+        let store = Arc::clone(&self.store);
         Box::pin(async move {
-            let mut store = self.store.lock().unwrap();
             let version = aggregate.version();
             let events = aggregate.take_uncommitted_events().to_vec();
-
+            let mut store = store.lock().unwrap();
             match store.entry(aggregate.id().into()) {
                 Entry::Occupied(mut entry) => {
                     let current_events = entry.get_mut();
