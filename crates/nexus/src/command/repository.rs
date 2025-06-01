@@ -176,16 +176,23 @@ pub trait EventSourceRepository: Send + Sync + Clone + Debug {
 mod tests {
     use super::super::aggregate::AggregateRoot;
     use super::{
-        super::test::{CreateUser, CreateUserHandler, User, mocks::MockRepository},
+        super::test::{
+            CreateUser, CreateUserHandler, User, mocks::MockRepository, utils::EventType,
+        },
         *,
     };
 
     #[tokio::test]
-    async fn should_load_aggregate_when_correct_id_is_provided() {}
+    async fn should_load_aggregate_when_correct_id_is_provided() {
+        let repo = MockRepository::new(None, EventType::Ordered);
+        let id = "id".to_string();
+        let user_aggregate = repo.load(&id).await;
+        assert!(user_aggregate.is_ok());
+    }
 
     #[tokio::test]
     async fn should_give_aggregate_not_found_error_when_invalid_id_is_provided() {
-        let repo = MockRepository::new();
+        let repo = MockRepository::new(None, EventType::Empty);
         let id = "id".to_string();
         let user_aggregate = repo.load(&id).await;
         assert!(user_aggregate.is_err());
@@ -208,7 +215,7 @@ mod tests {
         let handler = CreateUserHandler;
         let result = root.execute(create_user, &handler, &()).await;
         assert!(result.is_ok());
-        let repo = MockRepository::new();
+        let repo = MockRepository::new(None, EventType::Empty);
         let result = repo.save(root).await;
         assert!(result.is_ok());
     }

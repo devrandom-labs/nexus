@@ -1,9 +1,13 @@
 #![allow(dead_code)]
-use super::{User, UserDomainEvents};
+use super::{
+    User, UserDomainEvents,
+    utils::{EventType, convert_to_hashmap, get_user_events},
+};
 use crate::command::{
     aggregate::{Aggregate, AggregateRoot, AggregateType},
     repository::{EventSourceRepository, RepositoryError},
 };
+use chrono::{DateTime, Utc};
 use std::collections::{HashMap, hash_map::Entry};
 use std::{
     pin::Pin,
@@ -16,8 +20,15 @@ pub struct MockRepository {
 }
 
 impl MockRepository {
-    pub fn new() -> Self {
-        MockRepository::default()
+    pub fn new(timestamp: Option<DateTime<Utc>>, event_type: EventType) -> Self {
+        match event_type {
+            EventType::Empty => MockRepository::default(),
+            _ => MockRepository {
+                store: Arc::new(Mutex::new(convert_to_hashmap(get_user_events(
+                    timestamp, event_type,
+                )))),
+            },
+        }
     }
 }
 
