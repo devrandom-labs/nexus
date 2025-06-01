@@ -18,9 +18,9 @@ pub struct MockRepository {
 impl EventSourceRepository for MockRepository {
     type AggregateType = User;
 
-    fn load<'a>(
-        &'a self,
-        id: &'a <Self::AggregateType as AggregateType>::Id,
+    fn load(
+        &self,
+        id: &<Self::AggregateType as AggregateType>::Id,
     ) -> Pin<
         Box<
             dyn Future<
@@ -29,7 +29,7 @@ impl EventSourceRepository for MockRepository {
                         RepositoryError<<Self::AggregateType as AggregateType>::Id>,
                     >,
                 > + Send
-                + 'a,
+                + 'static,
         >,
     > {
         let id = id.clone();
@@ -49,8 +49,8 @@ impl EventSourceRepository for MockRepository {
         })
     }
 
-    fn save<'a>(
-        &'a self,
+    fn save(
+        &self,
         mut aggregate: AggregateRoot<Self::AggregateType>,
     ) -> Pin<
         Box<
@@ -60,7 +60,7 @@ impl EventSourceRepository for MockRepository {
                         RepositoryError<<Self::AggregateType as AggregateType>::Id>,
                     >,
                 > + Send
-                + 'a,
+                + 'static,
         >,
     > {
         let store = Arc::clone(&self.store);
