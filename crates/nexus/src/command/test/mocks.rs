@@ -6,6 +6,7 @@ use crate::command::{
     repository::RepositoryError,
 };
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
@@ -38,7 +39,7 @@ impl EventSourceRepository for MockRepository {
 
     fn save<'a>(
         &'a self,
-        aggregate: AggregateRoot<Self::AggregateType>,
+        mut aggregate: AggregateRoot<Self::AggregateType>,
     ) -> Pin<
         Box<
             dyn Future<
@@ -52,18 +53,26 @@ impl EventSourceRepository for MockRepository {
     > {
         Box::pin(async move {
             let mut store = self.store.lock().unwrap();
-            let current_events = store
-                .get_mut(aggregate.id())
-                .ok_or(RepositoryError::AggregateNotFound(aggregate.id().clone()))?;
+            let version = aggregate.version();
+            let events = aggregate.take_uncommitted_events().to_vec();
 
-            if current_events.len() as u64 != aggregate.version() {
-                Err(RepositoryError::Conflict {
-                    aggregate_id: aggregate.id().to_string(),
-                    expected_version: aggregate.version(),
-                })
-            } else {
-                // TODO: expand the current events and insert it back, we can use hashmaps entries way of doing things
-                Ok(())
+            match store.entry(aggregate.id().into()) {
+                Entry::Occupied(mut entry) => {
+                    let current_events = entry.get_mut();
+                    if current_events.len() != version as usize {
+                        Err(RepositoryError::Conflict {
+                            aggregate_id: aggregate.id().to_string(),
+                            expected_version: aggregate.version(),
+                        })
+                    } else {
+                        current_events.extend(events);
+                        Ok(())
+                    }
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(events);
+                    Ok(())
+                }
             }
         })
     }
