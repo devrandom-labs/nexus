@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 use crate::Id;
 
 /// # `ReadModel`
@@ -14,10 +12,12 @@ use crate::Id;
 /// This trait requires that a read model has an associated `Id` type for unique
 /// identification.
 ///
-/// Implementors must be `Send + Sync + Debug + 'static`.
-pub trait ReadModel: Send + Sync + Debug + 'static {
+/// Implementors must be `Send + Sync + 'static`.
+pub trait ReadModel: Send + Sync + 'static {
     /// ## Associated Type: `Id`
     /// The type used to uniquely identify an instance of this read model.
     /// It must be `Send + Sync + Debug + Clone + Eq + Hash + 'static`.
     type Id: Id;
+
+    fn id(&self) -> &Self::Id;
 }
