@@ -55,7 +55,7 @@ impl MockData {
 
     pub fn get_hash_map(self) -> HashMap<String, Vec<UserDomainEvents>> {
         let mut map: HashMap<String, Vec<UserDomainEvents>> = HashMap::new();
-        let events = self.events.get(0);
+        let events = self.events.first();
         if let Some(evn) = events {
             if let EventType::Mismatch = self.r#type {
                 map.insert(evn.aggregate_id().to_owned(), self.events);
