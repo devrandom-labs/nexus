@@ -177,7 +177,9 @@ mod tests {
     use super::super::aggregate::AggregateRoot;
     use super::{
         super::test::{
-            CreateUser, CreateUserHandler, User, mocks::MockRepository, utils::EventType,
+            CreateUser, CreateUserHandler, User,
+            mocks::{ErrorTypes, MockRepository},
+            utils::EventType,
         },
         *,
     };
@@ -263,11 +265,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_give_store_error_on_unreleated_database_error() {}
+    async fn should_give_store_error_on_unreleated_database_error() {
+        let repo = MockRepository::new_with_error(ErrorTypes::StoreError);
+        let id = "id".to_string();
+        let user_aggregate = repo.load(&id).await;
+        assert!(user_aggregate.is_err());
+        let error = user_aggregate.unwrap_err();
+        match error {
+            RepositoryError::StoreError { .. } => {}
+            _ => panic!("expected StoreError"),
+        }
+    }
 
     #[tokio::test]
-    async fn should_return_deserialization_error_on_load() {}
+    async fn should_return_deserialization_error_on_load() {
+        let repo = MockRepository::new_with_error(ErrorTypes::DeserializationError);
+        let id = "id".to_string();
+        let user_aggregate = repo.load(&id).await;
+        assert!(user_aggregate.is_err());
+        let error = user_aggregate.unwrap_err();
+        match error {
+            RepositoryError::DeserializationError { .. } => {}
+            _ => panic!("expected AggregateNotFoundError"),
+        }
+    }
 
     #[tokio::test]
-    async fn should_return_serialization_error_on_save() {}
+    async fn should_return_serialization_error_on_save() {
+        let mut root = AggregateRoot::<User>::new(String::from("id"));
+        let create_user = CreateUser {
+            user_id: "id".to_string(),
+            email: "joel@tixlys.com".to_string(),
+        };
+        let handler = CreateUserHandler;
+        let _ = root.execute(create_user, &handler, &()).await;
+        let repo = MockRepository::new_with_error(ErrorTypes::SerializationError);
+        let result = repo.save(root).await;
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        match error {
+            RepositoryError::SerializationError { .. } => {}
+            _ => panic!("expected Serialization Error"),
+        }
+    }
 }
