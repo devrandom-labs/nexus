@@ -332,7 +332,7 @@ pub mod test {
             ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler,
             CreateUserHandlerWithService, SomeService, User, UserDomainEvents, UserError,
             UserState,
-            utils::{EventType, get_user_events},
+            utils::{EventType, MockData},
         },
         Events,
     };
@@ -366,7 +366,7 @@ pub mod test {
     fn should_set_active_when_user_activated_event_applied_after_creation() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
-        for events in get_user_events(Some(timestamp), EventType::Ordered) {
+        for events in MockData::new(Some(timestamp), EventType::Ordered).events {
             user_state.apply(&events);
         }
         assert!(user_state.is_active);
@@ -376,7 +376,7 @@ pub mod test {
     fn should_not_activate_user_if_activated_event_applied_before_created() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
-        for events in get_user_events(Some(timestamp), EventType::UnOrdered) {
+        for events in MockData::new(Some(timestamp), EventType::UnOrdered).events {
             user_state.apply(&events);
         }
         assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
@@ -388,7 +388,7 @@ pub mod test {
     fn should_not_change_state_when_empty_event_list_applied() {
         let mut user_state = UserState::default();
         let timestamp = Utc::now();
-        for events in get_user_events(Some(timestamp), EventType::Empty) {
+        for events in MockData::new(Some(timestamp), EventType::Empty).events {
             user_state.apply(&events);
         }
         assert!(!user_state.is_active);
@@ -430,7 +430,7 @@ pub mod test {
     #[test]
     fn should_rehydrate_state_and_version_from_event_history() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Ordered);
+        let history = MockData::new(Some(timestamp), EventType::Ordered).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut aggregate_root = aggregate_root.unwrap();
@@ -447,7 +447,7 @@ pub mod test {
     #[test]
     fn should_fail_to_load_when_event_aggregate_id_mismatches() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Ordered);
+        let history = MockData::new(Some(timestamp), EventType::Ordered).events;
         let aggregate_root =
             AggregateRoot::<User>::load_from_history(String::from("wrong_id"), &history);
         assert!(aggregate_root.is_err());
@@ -465,7 +465,7 @@ pub mod test {
     async fn should_correctly_reflect_state_from_unordered_history_and_then_process_activate_command()
      {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::UnOrdered);
+        let history = MockData::new(Some(timestamp), EventType::UnOrdered).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
@@ -492,7 +492,7 @@ pub mod test {
     #[tokio::test]
     async fn should_start_with_default_state_from_empty_history_and_then_create_user() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let history = MockData::new(Some(timestamp), EventType::Empty).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
@@ -514,7 +514,7 @@ pub mod test {
     #[tokio::test]
     async fn should_fail_to_activate_user_when_loaded_from_empty_history_and_not_created() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let history = MockData::new(Some(timestamp), EventType::Empty).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
@@ -570,7 +570,7 @@ pub mod test {
     #[tokio::test]
     async fn should_calculate_current_version_correctly_after_execute_produces_events() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let history = MockData::new(Some(timestamp), EventType::Empty).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
@@ -588,7 +588,7 @@ pub mod test {
     #[tokio::test]
     async fn should_revert_current_version_to_persisted_version_after_taking_uncommitted_events() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let history = MockData::new(Some(timestamp), EventType::Empty).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
@@ -608,7 +608,7 @@ pub mod test {
     #[tokio::test]
     async fn should_correctly_process_multiple_commands_sequentially() {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let history = MockData::new(Some(timestamp), EventType::Empty).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
@@ -657,7 +657,7 @@ pub mod test {
     async fn should_return_uncommitted_events_and_clear_internal_list_then_return_empty_on_second_call()
      {
         let timestamp = Utc::now();
-        let history = get_user_events(Some(timestamp), EventType::Empty);
+        let history = MockData::new(Some(timestamp), EventType::Empty).events;
         let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
         assert!(aggregate_root.is_ok());
         let mut root = aggregate_root.unwrap();
