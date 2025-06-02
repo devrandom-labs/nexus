@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use super::{
     User, UserDomainEvents,
-    utils::{EventType, convert_to_hashmap, get_user_events},
+    utils::{EventType, MockData},
 };
 use crate::command::{
     aggregate::{Aggregate, AggregateRoot, AggregateType},
@@ -24,9 +24,9 @@ impl MockRepository {
         match event_type {
             EventType::Empty => MockRepository::default(),
             _ => MockRepository {
-                store: Arc::new(Mutex::new(convert_to_hashmap(get_user_events(
-                    timestamp, event_type,
-                )))),
+                store: Arc::new(Mutex::new(
+                    MockData::new(event_type, timestamp).get_hash_map(),
+                )),
             },
         }
     }

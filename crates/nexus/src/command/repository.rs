@@ -248,6 +248,18 @@ mod tests {
     #[tokio::test]
     async fn should_give_data_integrity_error_if_aggrgate_id_mismatches_with_event_aggregate_id_on_load()
      {
+        let repo = MockRepository::new(None, EventType::Mismatch);
+        let id = "id".to_string();
+        let user_aggregate = repo.load(&id).await;
+        assert!(user_aggregate.is_err());
+        let error = user_aggregate.unwrap_err();
+        match error {
+            RepositoryError::DataIntegrityError { aggregate_id, .. } => {
+                assert_eq!(aggregate_id, id);
+                // TODO: test if source is AggregateLoad error
+            }
+            _ => panic!("expected DataIntegrityError"),
+        }
     }
 
     #[tokio::test]
