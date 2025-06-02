@@ -119,3 +119,6 @@ where
         Box::pin(async move { (handler)(req, repo, services).await })
     }
 }
+
+#[cfg(test)]
+mod test {}
