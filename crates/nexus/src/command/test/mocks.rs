@@ -80,10 +80,10 @@ impl EventSourceRepository for MockRepository {
     > {
         let id = id.clone();
         let store = Arc::clone(&self.store);
-        let error = self.error.clone();
+        let error = self.error;
         Box::pin(async move {
-            if error.is_some() {
-                match error.unwrap() {
+            if let Some(error) = error {
+                match error {
                     ErrorTypes::DeserializationError => {
                         Err(RepositoryError::DeserializationError {
                             source: BoxError::from(MockRepositoryError::Deserialization),
@@ -127,10 +127,10 @@ impl EventSourceRepository for MockRepository {
         >,
     > {
         let store = Arc::clone(&self.store);
-        let error = self.error.clone();
+        let error = self.error;
         Box::pin(async move {
-            if error.is_some() {
-                match error.unwrap() {
+            if let Some(error) = error {
+                match error {
                     ErrorTypes::DeserializationError => {
                         Err(RepositoryError::DeserializationError {
                             source: BoxError::from(MockRepositoryError::Deserialization),
