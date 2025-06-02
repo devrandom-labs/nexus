@@ -25,7 +25,7 @@ impl MockRepository {
             EventType::Empty => MockRepository::default(),
             _ => MockRepository {
                 store: Arc::new(Mutex::new(
-                    MockData::new(event_type, timestamp).get_hash_map(),
+                    MockData::new(timestamp, event_type).get_hash_map(),
                 )),
             },
         }
