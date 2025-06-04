@@ -121,4 +121,39 @@ where
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+
+    use super::super::test::{GetUserQuery, GetUserRepository, QueryError, User};
+    use super::*;
+
+    #[tokio::test]
+    async fn should_be_able_to_execute_query_async_fn() {
+        let get_user_repo = GetUserRepository;
+
+        async fn get_user(
+            query: GetUserQuery,
+            repo: GetUserRepository,
+            _service: (),
+        ) -> Result<User, QueryError> {
+            repo.get(&query.id).await
+        }
+
+        let mut query_handler = QueryHandlerFn::new(get_user, get_user_repo, ());
+
+        let result = query_handler
+            .call(GetUserQuery {
+                id: "1".to_string(),
+            })
+            .await;
+
+        assert!(result.is_ok());
+
+        let result = result.unwrap();
+        assert_eq!(result.email, "joel@tixlys.com");
+    }
+
+    #[tokio::test]
+    async fn should_return_read_model_error_if_according_to_constraints() {}
+}
+
+// TODO: improve the type of get_user async fn

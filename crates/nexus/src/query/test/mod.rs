@@ -1,8 +1,20 @@
 use super::{model::ReadModel, repository::ReadModelRepository};
+use crate::{Message, Query};
 use std::pin::Pin;
 use thiserror::Error;
 
+#[derive(Debug)]
+pub struct GetUserQuery {
+    pub id: String,
+}
+impl Message for GetUserQuery {}
+impl Query for GetUserQuery {
+    type Error = QueryError;
+    type Result = User;
+}
+
 // Read model
+#[derive(Debug)]
 pub struct User {
     id: String,
     pub email: String,
