@@ -28,7 +28,7 @@ impl ReadModel for User {
     }
 }
 
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, PartialEq)]
 pub enum QueryError {
     #[error("User not found")]
     UserNotFound,
