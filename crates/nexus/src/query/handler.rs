@@ -122,7 +122,6 @@ where
 
 #[cfg(test)]
 mod test {
-
     use super::super::test::{GetUserQuery, GetUserRepository, QueryError, User};
     use super::*;
 
@@ -137,15 +136,12 @@ mod test {
     #[tokio::test]
     async fn should_be_able_to_execute_query_async_fn() {
         let get_user_repo = GetUserRepository;
-
         let mut query_handler = QueryHandlerFn::new(get_user, get_user_repo, ());
-
         let result = query_handler
             .call(GetUserQuery {
                 id: "1".to_string(),
             })
             .await;
-
         assert!(result.is_ok());
 
         let result = result.unwrap();
@@ -169,6 +165,12 @@ mod test {
         let result = result.unwrap_err();
         assert_eq!(result, QueryError::UserNotFound);
     }
+
+    #[tokio::test]
+    async fn should_be_able_to_take_dyn_service() {}
+
+    #[tokio::test]
+    async fn should_be_able_call_it_as_tower_service() {}
 }
 
 // TODO: improve the type of get_user async fn
