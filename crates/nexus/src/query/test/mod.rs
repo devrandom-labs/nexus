@@ -56,3 +56,26 @@ impl ReadModelRepository for GetUserRepository {
         })
     }
 }
+
+// service
+
+pub trait QueryService: Send + Sync {
+    fn process(&self, input: &str) -> String;
+}
+
+#[derive(Debug)]
+pub struct MockQueryService {
+    pub prefix: String,
+    pub suffix_to_add: Option<String>,
+}
+
+impl QueryService for MockQueryService {
+    fn process(&self, input: &str) -> String {
+        let base = format!("{}: {}", self.prefix, input);
+        if let Some(suffix) = &self.suffix_to_add {
+            format!("{} - {}", base, suffix)
+        } else {
+            base
+        }
+    }
+}
