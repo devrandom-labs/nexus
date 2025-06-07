@@ -20,12 +20,6 @@
   networking.useDHCP = true;
   networking.hostName = "tixlys-local";
 
-  virtualisation.qemu.options = [
-    "-m 2048" # Allocate 2GB of RAM (up from a small default)
-    "-smp 2" # Allocate 2 CPU cores
-  ];
-
-  virtualisation.qemu.networkingOptions =
-    [ "-net user,hostfwd=tcp::2222-:22" "-net nic" ];
-
+  virtualisation.qemu.options =
+    [ "-cpu max" "-m 2G" "-smp 4" "-nic user,hostfwd=tcp::2222-:22" ];
 }

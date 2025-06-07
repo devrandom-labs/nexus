@@ -83,6 +83,7 @@
       - [ ] Document its `tower::Service` implementation (purpose and usage).
 
 *** DONE Expand Test Coverage for Existing `command` Module
+
     SCHEDULED: <2025-05-26 Mon>
     :PROPERTIES:
     :CATEGORY: Testing
@@ -97,7 +98,7 @@
     - [-] TODO Test `command::repository::RepositoryError` variants (e.g. in mock repository tests).
     - [-] TODO Define a mock implementation for `command::repository::EventSourceRepository` if not covered by in-memory repo tests.
 
-*** STRT Expand Test Coverage for Existing `query` Module
+*** DONE Expand Test Coverage for Existing `query` Module
     SCHEDULED: <2025-05-28 Wed>
     :PROPERTIES:
     :CATEGORY: Testing
