@@ -19,7 +19,4 @@
 
   networking.useDHCP = true;
   networking.hostName = "tixlys-local";
-
-  virtualisation.qemu.options =
-    [ "-cpu max" "-m 2G" "-smp 4" "-nic user,hostfwd=tcp::2222-:22" ];
 }
