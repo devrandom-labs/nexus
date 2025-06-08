@@ -1,7 +1,8 @@
 use super::repository::ReadModelRepository;
 use crate::Query;
 use std::{
-    boxed::Box, error::Error as StdError, marker::PhantomData, pin::Pin, task::Context, task::Poll,
+    boxed::Box, clone::Clone, error::Error as StdError, marker::PhantomData, pin::Pin,
+    task::Context, task::Poll,
 };
 use tower::Service;
 
@@ -26,7 +27,6 @@ use tower::Service;
 ///
 /// The struct holds [`PhantomData<Q>`] to acknowledge its association with the query type `Q`
 /// at the type level, even if `Q` isn't directly stored as a field.
-#[derive(Clone)]
 pub struct QueryHandlerFn<F, Q, R, S, Fut>
 where
     F: Fn(Q, R, S) -> Fut,
@@ -39,6 +39,24 @@ where
     handler: F,
     repo: R,
     services: S,
+}
+
+impl<F, Q, R, S, Fut> Clone for QueryHandlerFn<F, Q, R, S, Fut>
+where
+    F: Fn(Q, R, S) -> Fut + Clone,
+    Fut: Future<Output = Result<Q::Result, Q::Error>>,
+    Q: Query,
+    R: Clone,
+    S: Clone,
+{
+    fn clone(&self) -> Self {
+        QueryHandlerFn {
+            _query: self._query,
+            handler: self.handler.clone(),
+            repo: self.repo.clone(),
+            services: self.services.clone(),
+        }
+    }
 }
 
 impl<F, Q, R, S, Fut> QueryHandlerFn<F, Q, R, S, Fut>
@@ -122,15 +140,31 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::super::test::{GetUserQuery, GetUserRepository, QueryError, User};
+    use super::super::test::{
+        GetUserQuery, GetUserRepository, MockQueryService, QueryError, QueryService, User,
+    };
     use super::*;
+    use std::sync::Arc;
+    use tower::{Service, ServiceExt};
 
-    async fn get_user(
-        query: GetUserQuery,
-        repo: GetUserRepository,
-        _service: (),
-    ) -> Result<User, QueryError> {
+    async fn get_user<R>(query: GetUserQuery, repo: R, _service: ()) -> Result<User, QueryError>
+    where
+        // The handler now accepts *any* type `R` that implements the required repository trait.
+        R: ReadModelRepository<Model = User, Error = QueryError> + Send,
+    {
         repo.get(&query.id).await
+    }
+
+    async fn get_user_dyn_service<R>(
+        _query: GetUserQuery,
+        repo: R,
+        service: Arc<dyn QueryService>, // Correctly accepts the shared trait object
+    ) -> Result<User, QueryError>
+    where
+        R: ReadModelRepository<Model = User, Error = QueryError> + Send,
+    {
+        let data = service.process();
+        repo.get(&data).await
     }
 
     #[tokio::test]
@@ -167,10 +201,48 @@ mod test {
     }
 
     #[tokio::test]
-    async fn should_be_able_to_take_dyn_service() {}
+    async fn should_be_able_to_take_dyn_service() {
+        let service = MockQueryService {
+            id: "1".to_string(),
+        };
+
+        let dyn_services: Arc<dyn QueryService> = Arc::new(service);
+        let get_user_repo = GetUserRepository;
+        let mut query_handler =
+            QueryHandlerFn::new(get_user_dyn_service, get_user_repo, dyn_services);
+        let result = query_handler
+            .call(GetUserQuery {
+                id: "1".to_string(),
+            })
+            .await;
+        assert!(result.is_ok());
+        let user = result.unwrap();
+        assert_eq!(user.email, "joel@tixlys.com");
+    }
 
     #[tokio::test]
-    async fn should_be_able_call_it_as_tower_service() {}
+    async fn should_be_able_call_it_as_tower_service() {
+        let mut handler = QueryHandlerFn::new(get_user, GetUserRepository, ());
+
+        let success_query = GetUserQuery {
+            id: "1".to_string(),
+        };
+
+        let result = handler.clone().oneshot(success_query).await;
+
+        assert!(result.is_ok());
+        let user = result.unwrap();
+        assert_eq!(user.email, "joel@tixlys.com");
+
+        let error_query = GetUserQuery {
+            id: "2".to_string(),
+        };
+        let error_result = handler.oneshot(error_query).await;
+
+        assert!(error_result.is_err());
+        let error = error_result.unwrap_err();
+        assert_eq!(error, QueryError::UserNotFound);
+    }
 }
 
 // TODO: improve the type of get_user async fn
