@@ -109,6 +109,21 @@
     - [-] TODO Test `query::model::ReadModel` trait usage with a sample implementation.
     - [-] TODO Define a mock implementation for `query::repository::ReadModelRepository` if not covered by in-memory repo tests.
 
+
+*** TODO Create derive macros for basic traits
+    SCHEDULED: <2025-06-08 Sun>
+    :PROPERTIES:
+    :CATEGORY: Macros
+    :EFFORT: 2d
+    :END:
+    - [ ] TODO Create Query Macros
+    - [-] TODO Create Command macro.
+    - [ ] TODO Create DomainEvent Macro
+
+*** TODO derive macro test
+
+
+
 ** Phase 2: Authentication Considerations & Further Documentation (~1-2 Iterations)
    *Goal: Provide guidance on integrating authentication/authorization and finalize overall documentation.*
 
