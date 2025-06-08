@@ -222,12 +222,10 @@ mod test {
 
     #[tokio::test]
     async fn should_be_able_call_it_as_tower_service() {
-        let mut handler = QueryHandlerFn::new(get_user, GetUserRepository, ());
-
+        let handler = QueryHandlerFn::new(get_user, GetUserRepository, ());
         let success_query = GetUserQuery {
             id: "1".to_string(),
         };
-
         let result = handler.clone().oneshot(success_query).await;
 
         assert!(result.is_ok());
@@ -244,5 +242,3 @@ mod test {
         assert_eq!(error, QueryError::UserNotFound);
     }
 }
-
-// TODO: improve the type of get_user async fn
