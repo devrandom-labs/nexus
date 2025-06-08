@@ -67,4 +67,21 @@ where
 
 // TODO: create an iterator for NonEmptyEvents
 // TODO: impl From trait to small_vec
-// TODO: macro nonemptyevents![] to directly add to more. or first depending on the number of params in it.
+
+macro_rules! events {
+    [$x:expr] => [
+        {
+            let mut events = NonEmptyEvents::new($x);
+            events
+        }
+    ];
+    [$($x:expr), +] => [
+        {
+            let mut events = NonEmptyEvents::new($x);
+            $(
+                events.push($x);
+            )+
+                events
+        }
+    ]
+}
