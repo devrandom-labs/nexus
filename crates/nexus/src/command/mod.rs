@@ -35,15 +35,15 @@ pub mod repository;
 pub mod test;
 
 #[derive(Debug)]
-pub struct Events<E, const N: usize>
+pub struct Events<E>
 where
     E: DomainEvent,
 {
     first: E,
-    more: SmallVec<[E; N]>,
+    more: SmallVec<[E; 1]>,
 }
 
-impl<E, const N: usize> Events<E, N>
+impl<E> Events<E>
 where
     E: DomainEvent,
 {
@@ -58,7 +58,7 @@ where
         self.more.push(event);
     }
 
-    pub fn into_small_vec(self) -> SmallVec<[E; N]> {
+    pub fn into_small_vec(self) -> SmallVec<[E; 1]> {
         let mut events = smallvec![self.first];
         events.extend(self.more);
         events
@@ -66,7 +66,6 @@ where
 }
 
 // TODO: impl IntoIterator for this collection
-// TODO: create an iterator for NonEmptyEvents
 // TODO: impl From trait to small_vec
 
 #[macro_export]
