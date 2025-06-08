@@ -3,7 +3,7 @@ use crate::{Message, Query};
 use std::pin::Pin;
 use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GetUserQuery {
     pub id: String,
 }
@@ -54,5 +54,22 @@ impl ReadModelRepository for GetUserRepository {
                 Err(QueryError::UserNotFound)
             }
         })
+    }
+}
+
+// service
+
+pub trait QueryService: Send + Sync {
+    fn process(&self) -> String;
+}
+
+#[derive(Debug)]
+pub struct MockQueryService {
+    pub id: String,
+}
+
+impl QueryService for MockQueryService {
+    fn process(&self) -> String {
+        self.id.to_string()
     }
 }

@@ -52,4 +52,10 @@
   # List packages installed in system profile.
   # You can use https://search.nixos.org/ to find more packages (and options).
   environment.systemPackages = with pkgs; [ cowsay lolcat ];
+
+  virtualisation.forwardPorts = [{
+    from = "host";
+    host.port = 2222;
+    guest.port = 22;
+  }];
 }
