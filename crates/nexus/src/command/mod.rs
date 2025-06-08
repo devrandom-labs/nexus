@@ -68,20 +68,21 @@ where
 // TODO: create an iterator for NonEmptyEvents
 // TODO: impl From trait to small_vec
 
+#[macro_export]
 macro_rules! events {
-    [$x:expr] => [
+    [$head:expr] => {
         {
-            let mut events = NonEmptyEvents::new($x);
+            let mut events = NonEmptyEvents::new($head);
             events
         }
-    ];
-    [$($x:expr), +] => [
+    };
+    [$head:expr, $($tail:expr), +] => {
         {
-            let mut events = NonEmptyEvents::new($x);
+            let mut events = NonEmptyEvents::new($head);
             $(
-                events.push($x);
-            )+
+                events.push($tail);
+            )*
                 events
         }
-    ]
+    }
 }
