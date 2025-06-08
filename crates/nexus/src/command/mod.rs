@@ -35,7 +35,7 @@ pub mod repository;
 pub mod test;
 
 #[derive(Debug)]
-pub struct NonEmptyEvents<E, const N: usize>
+pub struct Events<E, const N: usize>
 where
     E: DomainEvent,
 {
@@ -43,12 +43,12 @@ where
     more: SmallVec<[E; N]>,
 }
 
-impl<E, const N: usize> NonEmptyEvents<E, N>
+impl<E, const N: usize> Events<E, N>
 where
     E: DomainEvent,
 {
     pub fn new(event: E) -> Self {
-        NonEmptyEvents {
+        Events {
             first: event,
             more: SmallVec::new(),
         }
@@ -65,6 +65,7 @@ where
     }
 }
 
+// TODO: impl IntoIterator for this collection
 // TODO: create an iterator for NonEmptyEvents
 // TODO: impl From trait to small_vec
 
@@ -72,13 +73,13 @@ where
 macro_rules! events {
     [$head:expr] => {
         {
-            let mut events = NonEmptyEvents::new($head);
+            let mut events = Events::new($head);
             events
         }
     };
     [$head:expr, $($tail:expr), +] => {
         {
-            let mut events = NonEmptyEvents::new($head);
+            let mut events = Events::new($head);
             $(
                 events.push($tail);
             )*
