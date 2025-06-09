@@ -11,6 +11,7 @@ axum = { workspace = true, features = ["macros"] }
 nexus = { path = "../../crates/nexus" }
 password-hash = { workspace = true, features = ["rand_core", "getrandom", "alloc"] }
 pawz = { path = "../../crates/pawz" }
+rusqlite = { workspace = true, features = ["bundled"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

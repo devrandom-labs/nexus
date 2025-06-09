@@ -13,6 +13,7 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 digest = { version = "0.10", features = ["mac", "std"] }
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
@@ -30,6 +31,7 @@ tracing-core = { version = "0.1" }
 
 [build-dependencies]
 digest = { version = "0.10", features = ["mac", "std"] }
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }

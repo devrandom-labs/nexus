@@ -80,7 +80,7 @@ macro_rules! events {
         {
             let mut events = Events::new($head);
             $(
-                events.push($tail);
+                events.add($tail);
             )*
                 events
         }
