@@ -140,7 +140,9 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::{any::Any, error::Error, fmt::Debug, hash::Hash};
 
 pub mod command;
+pub mod events;
 pub mod query;
+pub mod store;
 
 /// # `Message`
 ///
