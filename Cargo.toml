@@ -11,10 +11,10 @@ axum = { version = "0.8.4", features = ["macros"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 password-hash = { version = "0.5.0", features = ["rand_core", "getrandom", "alloc"] }
 reqwest = "0.12.19"
+rusqlite = { version = "0.36.0", features = ["bundled"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 smallvec = "1.15.1"
-sqlx = { version = "0.8.6", features = ["sqlite", "migrate", "runtime-tokio-rustls"] }
 thiserror = "2.0.12"
 tokio = { version = "1.45.1", features = ["full"] }
 tower = { version = "0.5.2", features = ["util"] }
@@ -26,6 +26,7 @@ utoipa = { version = "5.3.1", features = ["axum_extras"] }
 utoipa-axum = { version = "0.2.0", features = ["debug"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 utoipa-swagger-ui-vendored = "0.1.2"
+uuid = { version = "1.17.0", features = ["v7", "fast-rng", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [workspace.package]

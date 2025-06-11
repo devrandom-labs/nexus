@@ -1,8 +1,7 @@
 pub mod mocks;
 pub mod utils;
-
 use super::{
-    NonEmptyEvents,
+    Events,
     aggregate::{AggregateState, AggregateType},
     handler::{AggregateCommandHandler, CommandHandlerResponse},
 };
@@ -179,7 +178,7 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
                 email: command.email,
                 timestamp,
             };
-            let events = NonEmptyEvents::new(create_user);
+            let events = Events::new(create_user);
             Ok(CommandHandlerResponse {
                 events,
                 result: command.user_id,
@@ -223,7 +222,7 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
                 id: command.user_id.clone(),
             };
 
-            let events = NonEmptyEvents::new(activate_user);
+            let events = Events::new(activate_user);
             Ok(CommandHandlerResponse {
                 events,
                 result: command.user_id,
@@ -268,7 +267,7 @@ impl AggregateCommandHandler<CreateUser, SomeService> for CreateUserHandlerWithS
                 email: command.email,
                 timestamp,
             };
-            let events = NonEmptyEvents::new(create_user);
+            let events = Events::new(create_user);
             Ok(CommandHandlerResponse {
                 events,
                 result: services.name.to_owned(),
@@ -312,7 +311,7 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithStateCheck {
                     email: command.email,
                     timestamp,
                 };
-                let events = NonEmptyEvents::new(create_user);
+                let events = Events::new(create_user);
                 Ok(CommandHandlerResponse {
                     events,
                     result: command.user_id.to_string(),
@@ -362,7 +361,7 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserAndActivate {
                     id: command.user_id.clone(),
                 };
 
-                let mut events = NonEmptyEvents::new(create_user);
+                let mut events = Events::new(create_user);
                 events.add(activate_user);
                 Ok(CommandHandlerResponse {
                     events,
@@ -411,7 +410,7 @@ impl<S: DynTestService + ?Sized> AggregateCommandHandler<CreateUser, S>
             };
 
             Ok(CommandHandlerResponse {
-                events: NonEmptyEvents::new(event),
+                events: Events::new(event),
                 result: processed_data,
             })
         })

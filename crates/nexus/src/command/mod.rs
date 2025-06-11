@@ -35,20 +35,20 @@ pub mod repository;
 pub mod test;
 
 #[derive(Debug)]
-pub struct NonEmptyEvents<E, const N: usize>
+pub struct Events<E>
 where
     E: DomainEvent,
 {
     first: E,
-    more: SmallVec<[E; N]>,
+    more: SmallVec<[E; 1]>,
 }
 
-impl<E, const N: usize> NonEmptyEvents<E, N>
+impl<E> Events<E>
 where
     E: DomainEvent,
 {
     pub fn new(event: E) -> Self {
-        NonEmptyEvents {
+        Events {
             first: event,
             more: SmallVec::new(),
         }
@@ -58,13 +58,31 @@ where
         self.more.push(event);
     }
 
-    pub fn into_small_vec(self) -> SmallVec<[E; N]> {
+    pub fn into_small_vec(self) -> SmallVec<[E; 1]> {
         let mut events = smallvec![self.first];
         events.extend(self.more);
         events
     }
 }
 
-// TODO: create an iterator for NonEmptyEvents
+// TODO: impl IntoIterator for this collection
 // TODO: impl From trait to small_vec
-// TODO: macro nonemptyevents![] to directly add to more. or first depending on the number of params in it.
+
+#[macro_export]
+macro_rules! events {
+    [$head:expr] => {
+        {
+            let mut events = Events::new($head);
+            events
+        }
+    };
+    [$head:expr, $($tail:expr), +] => {
+        {
+            let mut events = Events::new($head);
+            $(
+                events.add($tail);
+            )*
+                events
+        }
+    }
+}

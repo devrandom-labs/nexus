@@ -54,3 +54,5 @@
 
   };
 }
+
+## TODO: add apicurio schema registry

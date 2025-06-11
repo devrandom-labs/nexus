@@ -1,4 +1,4 @@
-use super::{NonEmptyEvents, aggregate::AggregateType as AT};
+use super::{Events, aggregate::AggregateType as AT};
 use crate::{Command, DomainEvent};
 use std::{boxed::Box, fmt::Debug, future::Future, pin::Pin};
 
@@ -22,7 +22,7 @@ where
 {
     /// A vector of domain events that were generated as a result of the command.
     /// These events capture the state changes that occurred.
-    pub events: NonEmptyEvents<E, 1>,
+    pub events: Events<E>,
 
     /// The specific result value from processing the command (e.g., an ID, a status).
     pub result: R,
