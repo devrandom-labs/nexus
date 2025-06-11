@@ -53,6 +53,13 @@ where
             domain_event,
         }
     }
+
+    pub fn with_version(self, version: u64) -> EventRecordBuilderWithVersion<D, I> {
+        EventRecordBuilderWithVersion {
+            initial_event_record: self,
+            version: version,
+        }
+    }
 }
 
 pub struct EventRecordBuilderWithVersion<D, I>
