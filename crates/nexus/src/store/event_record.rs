@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 use crate::{DomainEvent, Id};
 use serde::{Deserialize, Serialize};
-use std::default::Default;
-use thiserror::Error;
+use std::{default::Default, future::Future};
+use tower::BoxError;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,6 +26,7 @@ impl<I> EventRecord<I>
 where
     I: Id,
 {
+    // do not want people to directly create EventRecord
     pub(crate) fn new(stream_id: I, version: u64, payload: Vec<u8>) -> Self {
         EventRecord {
             id: EventRecordId::default(),
@@ -71,10 +72,6 @@ where
     }
 }
 
-#[derive(Error, Debug)]
-#[error("PayloadSerializationError")]
-pub struct PayloadSerializationError;
-
 pub struct EventRecordBuilderWithVersion<D, I>
 where
     I: Id,
@@ -89,15 +86,16 @@ where
     I: Id,
     D: DomainEvent<Id = I>,
 {
-    pub fn build<S>(self, serializer: S) -> Result<EventRecord<I>, PayloadSerializationError>
+    pub async fn build<S, Fut>(self, serializer: S) -> Result<EventRecord<I>, BoxError>
     where
-        S: Fn(D) -> Result<Vec<u8>, PayloadSerializationError>,
+        S: Fn(D) -> Fut + Send + Sync,
+        Fut: Future<Output = Result<Vec<u8>, BoxError>> + Send + Sync + 'static,
     {
         let EventRecordBuilder {
             stream_id,
             domain_event,
         } = self.initial_event_record;
-        let payload = serializer(domain_event)?;
+        let payload = serializer(domain_event).await?;
         Ok(EventRecord::new(stream_id, self.version, payload))
     }
 }
