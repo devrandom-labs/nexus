@@ -12,7 +12,6 @@ smallvec = { workspace = true }
 thiserror = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 tracing = { workspace = true }
-ulid = { workspace = true }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
