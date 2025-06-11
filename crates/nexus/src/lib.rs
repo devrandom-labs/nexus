@@ -143,6 +143,7 @@ pub mod command;
 pub mod events;
 pub mod query;
 pub mod store;
+pub mod utils;
 
 /// # `Message`
 ///
