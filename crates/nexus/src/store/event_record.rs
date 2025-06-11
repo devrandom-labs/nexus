@@ -2,7 +2,6 @@
 use crate::{DomainEvent, Id};
 use serde::{Deserialize, Serialize};
 use std::default::Default;
-use thiserror::Error;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +25,7 @@ impl<I> EventRecord<I>
 where
     I: Id,
 {
-    pub fn builder<D>(domain_event: D) -> EventRecordBuilder<I>
+    pub fn builder<D>(domain_event: D) -> EventRecordBuilder<D, I>
     where
         D: DomainEvent<Id = I>,
     {
@@ -34,28 +33,33 @@ where
     }
 }
 
-#[derive(Debug, Error)]
-enum EventRecordBuilderError {
-    #[error("")]
-    SerializingError,
-}
-
 pub struct EventRecordBuilder<D, I>
 where
     I: Id,
     D: DomainEvent<Id = I>,
 {
+    stream_id: I,
     domain_event: D,
 }
 
-impl<I> EventRecordBuilder<I>
+impl<D, I> EventRecordBuilder<D, I>
 where
     I: Id,
+    D: DomainEvent<Id = I>,
 {
-    pub fn new<D>(domain_event: D) -> Result<Self, EventRecordBuilderError>
-    where
-        D: DomainEvent<Id = I>,
-    {
-        todo!()
+    pub fn new(domain_event: D) -> Self {
+        EventRecordBuilder {
+            stream_id: domain_event.aggregate_id().clone(),
+            domain_event,
+        }
     }
+}
+
+pub struct EventRecordBuilderWithVersion<D, I>
+where
+    I: Id,
+    D: DomainEvent<Id = I>,
+{
+    initial_event_record: EventRecordBuilder<D, I>,
+    version: u64,
 }
