@@ -1,7 +1,8 @@
 #![allow(dead_code)]
+use super::event_serializer::EventSerializer;
 use crate::{DomainEvent, Id};
 use serde::{Deserialize, Serialize};
-use std::{default::Default, future::Future};
+use std::default::Default;
 use tower::BoxError;
 use uuid::Uuid;
 
@@ -86,16 +87,15 @@ where
     I: Id,
     D: DomainEvent<Id = I>,
 {
-    pub async fn build<S, Fut>(self, serializer: S) -> Result<EventRecord<I>, BoxError>
+    pub async fn build<S, Fut>(self, serializer: &S) -> Result<EventRecord<I>, BoxError>
     where
-        S: Fn(D) -> Fut + Send + Sync,
-        Fut: Future<Output = Result<Vec<u8>, BoxError>> + Send + Sync + 'static,
+        S: EventSerializer,
     {
         let EventRecordBuilder {
             stream_id,
             domain_event,
         } = self.initial_event_record;
-        let payload = serializer(domain_event).await?;
+        let payload = serializer.serialize(domain_event).await?;
         Ok(EventRecord::new(stream_id, self.version, payload))
     }
 }
