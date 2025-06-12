@@ -66,7 +66,6 @@ jobs:
           labels: |
             dependencies
             automated pull request
-          reviewers: joeldsouzax
           committer_name: "Tixlys Bot"
           committer_email: "bot@tixlys.com"
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
