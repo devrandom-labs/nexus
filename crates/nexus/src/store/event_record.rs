@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use super::event_serializer::EventSerializer;
+use super::{EventDeserializer, EventSerializer};
 use crate::{DomainEvent, Id};
 use serde::{Deserialize, Serialize};
 use std::default::Default;
@@ -36,6 +36,27 @@ where
             payload,
         }
     }
+
+    pub async fn event<E, De>(&self, deserializer: De) -> Result<E, BoxError>
+    where
+        De: EventDeserializer,
+        E: DomainEvent<Id = I>,
+    {
+        deserializer.deserialize(&self.payload).await
+    }
+
+    pub fn stream_id(&self) -> &I {
+        &self.stream_id
+    }
+
+    pub fn id(&self) -> &EventRecordId {
+        &self.id
+    }
+
+    pub fn version(&self) -> &u64 {
+        &self.version
+    }
+
     pub fn builder<D>(domain_event: D) -> EventRecordBuilder<D, I>
     where
         D: DomainEvent<Id = I>,
