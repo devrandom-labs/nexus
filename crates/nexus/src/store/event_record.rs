@@ -87,8 +87,13 @@ where
     }
 
     pub fn with_version(self, version: u64) -> EventRecordBuilderWithVersion<D, I> {
+        let EventRecordBuilder {
+            stream_id,
+            domain_event,
+        } = self;
         EventRecordBuilderWithVersion {
-            initial_event_record: self,
+            stream_id,
+            domain_event,
             version,
         }
     }
@@ -99,7 +104,8 @@ where
     I: Id,
     D: DomainEvent<Id = I>,
 {
-    initial_event_record: EventRecordBuilder<D, I>,
+    stream_id: I,
+    domain_event: D,
     version: u64,
 }
 
@@ -112,11 +118,22 @@ where
     where
         S: EventSerializer,
     {
-        let EventRecordBuilder {
+        let EventRecordBuilderWithVersion {
             stream_id,
             domain_event,
-        } = self.initial_event_record;
+            version,
+        } = self;
         let payload = serializer.serialize(domain_event).await?;
-        Ok(EventRecord::new(stream_id, self.version, payload))
+        Ok(EventRecord::new(stream_id, version, payload))
     }
+}
+
+#[cfg(test)]
+mod test {
+
+    #[tokio::test]
+    async fn should_be_able_to_build_event_record_from_domain_events() {}
+
+    #[tokio::test]
+    async fn should_fail_to_build_if_serialization_fails() {}
 }
