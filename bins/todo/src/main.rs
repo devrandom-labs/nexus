@@ -1,5 +1,7 @@
 use rusqlite::{Connection, Result};
 
+mod store;
+
 // event record
 #[derive(Debug)]
 struct Person {
