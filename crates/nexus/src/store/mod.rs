@@ -1,5 +1,6 @@
 use crate::DomainEvent;
 use async_trait::async_trait;
+use thiserror::Error;
 use tower::BoxError;
 
 pub mod event_record;
@@ -22,4 +23,28 @@ pub trait EventDeserializer {
     async fn deserialize<D>(&self, payload: &[u8]) -> Result<D, BoxError>
     where
         D: DomainEvent;
+}
+
+#[derive(Debug, Error)]
+pub enum StoreError {
+    #[error("A connection to the data store could not be established")]
+    ConnectionFailed {
+        #[source]
+        source: BoxError,
+    },
+
+    #[error("Source '{name}' not found (e.g., Table, Collection, Document)")]
+    SourceNotFound { name: String },
+
+    #[error("Stream with ID '{id}' not found")]
+    StreamNotFound { id: String },
+
+    #[error("A stream with ID '{id}' already exists, violating a unique constraint")]
+    UniqueIdViolation { id: String },
+
+    #[error(transparent)]
+    Underlying {
+        #[from]
+        source: BoxError,
+    },
 }
