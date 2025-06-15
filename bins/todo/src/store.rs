@@ -1,24 +1,13 @@
-// use async_trait::async_trait;
-// use nexus::store::{EventStore, event_record::EventRecord};
+use rusqlite::{Connection, Error};
 
-// pub struct Store;
+pub struct Store {
+    pub connection: Connection,
+}
 
-// #[async_trait]
-// impl EventStore for Store {
-//     async fn append_events<I>(
-//         &self,
-//         stream_id: &I,
-//         expected_version: u64,
-//         event_records: Vec<EventRecord<I>>,
-//     ) -> Result<(), BoxError>
-//     where
-//         I: Id,
-//     {
-//     }
+impl Store {
+    pub fn new() -> Result<Self, Error> {
+        let connection = Connection::open_in_memory()?;
 
-//     async fn read_stream_forward<I>(&self, stream_id: &I) -> Result<Vec<EventRecord<I>>, BoxError>
-//     where
-//         I: Id,
-//     {
-//     }
-// }
+        Ok(Store { connection })
+    }
+}

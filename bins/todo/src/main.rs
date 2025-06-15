@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result};
+use rusqlite::Result;
 
 mod store;
 
@@ -13,10 +13,10 @@ struct Person {
 
 fn main() -> Result<()> {
     // setup
-    let conn = Connection::open_in_memory()?;
+    let store = store::Store::new()?;
 
     // one time bootstrap, since its in memory, we need this everytime.
-    conn.execute(
+    store.connection.execute(
         "CREATE TABLE person (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
@@ -32,13 +32,15 @@ fn main() -> Result<()> {
     };
 
     // part of EventStore append
-    conn.execute(
+    store.connection.execute(
         "INSERT INTO person(name, data) VALUES (?1, ?2)",
         (&me.name, &me.data),
     )?;
 
     // part of EventStore fetch
-    let mut stmt = conn.prepare("SELECT id, name, data FROM person")?;
+    let mut stmt = store
+        .connection
+        .prepare("SELECT id, name, data FROM person")?;
 
     let person_iter = stmt.query_map([], |row| {
         Ok(Person {
