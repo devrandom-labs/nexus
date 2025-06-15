@@ -50,6 +50,11 @@
       - `nexus::store::Error` will be a rich enum describing all possible storage failures (`ConnectionFailed`, `SourceNotFound`, `UniqueIdViolation`, etc.).
       - `nexus::command::repository::Error<Id>` will be a rich enum for repository-specific logical failures (`AggregateNotFound`, `Conflict`).
 
+
+
+
+
+
   2.  **Top-Level Unifying `nexus::Error`**:
       - This enum will be the primary return type for most public-facing methods in the `nexus` crate.
       - It will contain *promoted variants* for common, actionable errors. For example: `ConnectionFailed { source: BoxError }` and `ConcurrencyConflict { ... }`.

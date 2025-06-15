@@ -1,25 +1,22 @@
-use super::event_record::EventRecord;
-use crate::{Id, error::Error};
+use super::event_record::{EventRecord, StreamId};
+use crate::error::Error;
 use async_trait::async_trait;
 use std::pin::Pin;
 use tokio_stream::Stream;
 
 #[async_trait]
 pub trait EventStore {
-    async fn append_to_stream<I>(
+    async fn append_to_stream(
         &self,
-        stream_id: &I,
+        stream_id: &StreamId,
         expected_version: u64,
-        event_records: Vec<EventRecord<I>>,
-    ) -> Result<(), Error>
-    where
-        I: Id;
+        event_records: Vec<EventRecord>,
+    ) -> Result<(), Error>;
 
-    fn read_stream<I, 'a>(
+    fn read_stream<'a>(
         &'a self,
-        stream_id: &I,
-    ) -> Pin<Box<dyn Stream<Item = Result<EventRecord<I>, Error>> + Send + 'a>>
+        stream_id: &StreamId,
+    ) -> Pin<Box<dyn Stream<Item = Result<EventRecord, Error>> + Send + 'a>>
     where
-        Self: Sync + 'a,
-        I: Id;
+        Self: Sync + 'a;
 }

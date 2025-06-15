@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 use super::{EventDeserializer, EventSerializer};
-use crate::{DomainEvent, Id, error::Error};
+use crate::{DomainEvent, error::Error};
 use serde::{Deserialize, Serialize};
 use std::default::Default;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventRecordId(Uuid);
 
 impl Default for EventRecordId {
@@ -14,25 +14,34 @@ impl Default for EventRecordId {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamId(String);
+
+impl StreamId {
+    pub fn new(id: String) -> Self {
+        StreamId(id)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct EventRecord<I: Id> {
+pub struct EventRecord {
     id: EventRecordId,
-    stream_id: I,
+    stream_id: StreamId,
     version: u64,
     event_type: String,
     payload: Vec<u8>,
 }
 
-impl<I> EventRecord<I>
-where
-    I: Id,
-{
+impl EventRecord {
     // do not want people to directly create EventRecord
-    pub(crate) fn new(stream_id: I, event_type: String, version: u64, payload: Vec<u8>) -> Self {
+    pub(crate) fn new<I>(stream_id: I, event_type: String, version: u64, payload: Vec<u8>) -> Self
+    where
+        I: Into<StreamId>,
+    {
         EventRecord {
             id: EventRecordId::default(),
             event_type,
-            stream_id,
+            stream_id: stream_id.into(),
             version,
             payload,
         }
@@ -41,12 +50,12 @@ where
     pub async fn event<E, De>(&self, deserializer: De) -> Result<E, Error>
     where
         De: EventDeserializer,
-        E: DomainEvent<Id = I>,
+        E: DomainEvent,
     {
         deserializer.deserialize(&self.payload).await
     }
 
-    pub fn stream_id(&self) -> &I {
+    pub fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
 
@@ -62,9 +71,10 @@ where
         &self.event_type
     }
 
-    pub fn builder<D>(domain_event: D) -> EventRecordBuilder<WithDomain<I, D>>
+    pub fn builder<D>(domain_event: D) -> EventRecordBuilder<WithDomain<D>>
     where
-        D: DomainEvent<Id = I>,
+        D: DomainEvent,
+        D::Id: Into<StreamId>,
     {
         EventRecordBuilder::new(domain_event)
     }
@@ -77,20 +87,20 @@ where
     state: E,
 }
 
-impl<D, I> EventRecordBuilder<WithDomain<I, D>>
+impl<D> EventRecordBuilder<WithDomain<D>>
 where
-    I: Id,
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
+    D::Id: Into<StreamId>,
 {
     pub fn new(domain_event: D) -> Self {
         let state = WithDomain {
-            stream_id: domain_event.aggregate_id().clone(),
+            stream_id: domain_event.aggregate_id().clone().into(),
             domain_event,
         };
         EventRecordBuilder { state }
     }
 
-    pub fn with_version(self, version: u64) -> EventRecordBuilder<WithVersion<I, D>> {
+    pub fn with_version(self, version: u64) -> EventRecordBuilder<WithVersion<D>> {
         let state = WithVersion {
             stream_id: self.state.stream_id,
             domain_event: self.state.domain_event,
@@ -101,12 +111,11 @@ where
     }
 }
 
-impl<D, I> EventRecordBuilder<WithVersion<I, D>>
+impl<D> EventRecordBuilder<WithVersion<D>>
 where
-    I: Id,
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
 {
-    pub fn with_event_type(self, event_type: &str) -> EventRecordBuilder<WithEventType<I, D>> {
+    pub fn with_event_type(self, event_type: &str) -> EventRecordBuilder<WithEventType<D>> {
         let state = WithEventType {
             stream_id: self.state.stream_id,
             domain_event: self.state.domain_event,
@@ -118,12 +127,11 @@ where
     }
 }
 
-impl<D, I> EventRecordBuilder<WithEventType<I, D>>
+impl<D> EventRecordBuilder<WithEventType<D>>
 where
-    I: Id,
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
 {
-    pub async fn build<S, Fut>(self, serializer: &S) -> Result<EventRecord<I>, Error>
+    pub async fn build<S, Fut>(self, serializer: &S) -> Result<EventRecord, Error>
     where
         S: EventSerializer,
     {
@@ -141,56 +149,38 @@ where
 // type state pattern
 pub trait EventBuilderState {}
 
-pub struct WithDomain<I, D>
+pub struct WithDomain<D>
 where
-    I: Id,
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
 {
-    stream_id: I,
+    stream_id: StreamId,
     domain_event: D,
 }
 
-impl<I, D> EventBuilderState for WithDomain<I, D>
-where
-    I: Id,
-    D: DomainEvent<Id = I>,
-{
-}
+impl<D> EventBuilderState for WithDomain<D> where D: DomainEvent {}
 
-pub struct WithVersion<I, D>
+pub struct WithVersion<D>
 where
-    I: Id,
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
 {
     version: u64,
-    stream_id: I,
+    stream_id: StreamId,
     domain_event: D,
 }
 
-impl<I, D> EventBuilderState for WithVersion<I, D>
-where
-    I: Id,
-    D: DomainEvent<Id = I>,
-{
-}
+impl<D> EventBuilderState for WithVersion<D> where D: DomainEvent {}
 
-pub struct WithEventType<I, D>
+pub struct WithEventType<D>
 where
-    I: Id,
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
 {
     event_type: String,
-    stream_id: I,
+    stream_id: StreamId,
     domain_event: D,
     version: u64,
 }
 
-impl<I, D> EventBuilderState for WithEventType<I, D>
-where
-    I: Id,
-    D: DomainEvent<Id = I>,
-{
-}
+impl<D> EventBuilderState for WithEventType<D> where D: DomainEvent {}
 
 #[cfg(test)]
 mod test {
