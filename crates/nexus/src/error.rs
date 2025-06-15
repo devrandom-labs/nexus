@@ -4,7 +4,16 @@ use tower::BoxError;
 
 #[derive(Debug, Err)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("A connection to the data store could not be established")]
+    ConnectionFailed {
+        #[source]
+        source: BoxError,
+    },
+
+    #[error("Source '{name}' not found (e.g., Table, Collection, Document)")]
+    SourceNotFound { name: String },
+
+    #[error("A storage layer operation failed")]
     Store(#[from] store::Error),
 
     /// ## Variant: `DeserializationError`
