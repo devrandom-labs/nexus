@@ -1,24 +1,20 @@
 use super::event_record::EventRecord;
 use crate::Id;
-use std::{future::Future, pin::Pin};
+use async_trait::async_trait;
 use tower::BoxError;
 
+#[async_trait]
 pub trait EventStore {
-    #[allow(clippy::type_complexity)]
-    fn append_events<I>(
+    async fn append_events<I>(
         &self,
         stream_id: &I,
-        expected_version: u64, // The crucial parameter for the concurrency check
+        expected_version: u64,
         event_records: Vec<EventRecord<I>>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send + 'static>>
+    ) -> Result<(), BoxError>
     where
         I: Id;
 
-    #[allow(clippy::type_complexity)]
-    fn read_stream_forward<I>(
-        &self,
-        stream_id: &I,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<EventRecord<I>>, BoxError>> + Send + 'static>>
+    async fn read_stream_forward<I>(&self, stream_id: &I) -> Result<Vec<EventRecord<I>>, BoxError>
     where
         I: Id;
 }

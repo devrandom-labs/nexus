@@ -1,5 +1,5 @@
 use crate::DomainEvent;
-use std::{future::Future, pin::Pin};
+use async_trait::async_trait;
 use tower::BoxError;
 
 pub mod event_record;
@@ -8,22 +8,16 @@ pub mod event_store;
 #[cfg(test)]
 pub mod test;
 
+#[async_trait]
 pub trait EventSerializer {
-    #[allow(clippy::type_complexity)]
-    fn serialize<D>(
-        &self,
-        domain_event: D,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, BoxError>> + Send + 'static>>
+    async fn serialize<D>(&self, domain_event: D) -> Result<Vec<u8>, BoxError>
     where
         D: DomainEvent;
 }
 
+#[async_trait]
 pub trait EventDeserializer {
-    #[allow(clippy::type_complexity)]
-    fn deserialize<D>(
-        &self,
-        payload: &[u8],
-    ) -> Pin<Box<dyn Future<Output = Result<D, BoxError>> + Send + 'static>>
+    async fn deserialize<D>(&self, payload: &[u8]) -> Result<D, BoxError>
     where
         D: DomainEvent;
 }
