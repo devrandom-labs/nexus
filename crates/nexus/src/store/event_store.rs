@@ -8,14 +8,14 @@ use tokio_stream::Stream;
 pub trait EventStore {
     async fn append_to_stream(
         &self,
-        stream_id: &StreamId,
+        stream_id: StreamId,
         expected_version: u64,
         event_records: Vec<EventRecord>,
     ) -> Result<(), Error>;
 
     fn read_stream<'a>(
         &'a self,
-        stream_id: &StreamId,
+        stream_id: StreamId,
     ) -> Pin<Box<dyn Stream<Item = Result<EventRecord, Error>> + Send + 'a>>
     where
         Self: Sync + 'a;
