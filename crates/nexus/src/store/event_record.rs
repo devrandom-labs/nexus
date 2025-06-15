@@ -1,9 +1,8 @@
 #![allow(dead_code)]
 use super::{EventDeserializer, EventSerializer};
-use crate::{DomainEvent, Id};
+use crate::{DomainEvent, Id, error::Error};
 use serde::{Deserialize, Serialize};
 use std::default::Default;
-use tower::BoxError;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,7 +38,7 @@ where
         }
     }
 
-    pub async fn event<E, De>(&self, deserializer: De) -> Result<E, BoxError>
+    pub async fn event<E, De>(&self, deserializer: De) -> Result<E, Error>
     where
         De: EventDeserializer,
         E: DomainEvent<Id = I>,
@@ -124,7 +123,7 @@ where
     I: Id,
     D: DomainEvent<Id = I>,
 {
-    pub async fn build<S, Fut>(self, serializer: &S) -> Result<EventRecord<I>, BoxError>
+    pub async fn build<S, Fut>(self, serializer: &S) -> Result<EventRecord<I>, Error>
     where
         S: EventSerializer,
     {
