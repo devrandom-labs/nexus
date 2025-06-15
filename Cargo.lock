@@ -1820,6 +1820,8 @@ dependencies = [
 name = "todo"
 version = "0.1.0"
 dependencies = [
+ "nexus",
+ "rusqlite",
  "workspace-hack",
 ]
 

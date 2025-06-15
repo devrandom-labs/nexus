@@ -6,4 +6,6 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+nexus = { path = "../../crates/nexus" }
+rusqlite = { workspace = true, features = ["bundled"] }
 workspace-hack = { version = "0.1.0", path = "../../crates/workspace-hack" }
