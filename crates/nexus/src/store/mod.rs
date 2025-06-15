@@ -5,6 +5,8 @@ use tower::BoxError;
 pub mod event_record;
 pub mod event_store;
 
+pub use event_store::EventStore;
+
 #[cfg(test)]
 pub mod test;
 

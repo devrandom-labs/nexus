@@ -1832,6 +1832,7 @@ dependencies = [
 name = "todo"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "nexus",
  "rusqlite",
  "workspace-hack",
