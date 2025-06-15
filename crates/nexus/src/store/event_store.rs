@@ -1,6 +1,8 @@
 use super::event_record::EventRecord;
 use crate::{Id, error::Error};
 use async_trait::async_trait;
+use std::pin::Pin;
+use tokio_stream::Stream;
 
 #[async_trait]
 pub trait EventStore {
@@ -13,7 +15,11 @@ pub trait EventStore {
     where
         I: Id;
 
-    async fn read_stream<I>(&self, stream_id: &I) -> Result<Vec<EventRecord<I>>, Error>
+    fn read_stream<I, 'a>(
+        &'a self,
+        stream_id: &I,
+    ) -> Pin<Box<dyn Stream<Item = Result<EventRecord<I>, Error>> + Send + 'a>>
     where
+        Self: Sync + 'a,
         I: Id;
 }
