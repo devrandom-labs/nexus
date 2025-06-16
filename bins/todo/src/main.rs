@@ -1,4 +1,3 @@
-use nexus::store::event_record::EventRecord;
 use rusqlite::Result;
 use tracing::{debug, instrument};
 use tracing_subscriber::{
