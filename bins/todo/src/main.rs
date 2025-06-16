@@ -1,3 +1,4 @@
+use nexus::store::event_record::EventRecord;
 use rusqlite::Result;
 use tracing::{debug, instrument};
 use tracing_subscriber::{
@@ -16,9 +17,7 @@ fn main() -> Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .with_filter(filter);
     tracing_subscriber::registry().with(console).init();
-
     debug!("initializing rusqlite store..");
-
-    let _store = store::Store::new()?;
+    let _ = store::Store::new()?;
     Ok(())
 }

@@ -48,10 +48,14 @@ impl EventStore for Store {
     #[instrument]
     async fn append_to_stream(
         &self,
-        _stream_id: StreamId,
-        _expected_version: u64,
+        stream_id: StreamId,
+        expected_version: u64,
         _event_records: Vec<EventRecord>,
     ) -> Result<(), Error> {
+        debug!(?stream_id, expected_version, "appending events");
+        // TODO: get latest version for a stream_id
+        // TODO: if version does not match return Error::Conflict or something?
+        // TODO: write the events to the db
         todo!("insert into db");
     }
 
