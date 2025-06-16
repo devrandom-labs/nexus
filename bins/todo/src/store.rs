@@ -12,17 +12,20 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio_stream::Stream;
+use tracing::{debug, instrument};
 
-// going to be started in one place..
+#[derive(Debug)]
 pub struct Store {
     #[allow(dead_code)]
     pub connection: Arc<Mutex<Connection>>,
 }
 
 impl Store {
+    #[instrument]
     pub fn new() -> Result<Self, SqlError> {
+        debug!("initializing store connection...");
         let connection = Connection::open_in_memory()?;
-        connection.execute(
+        let result = connection.execute(
             "CREATE TABLE IF NOT EXISTS nexus_events (
                  id TEXT PRIMARY KEY,
                  stream_id TEXT NOT NULL,
@@ -33,6 +36,7 @@ impl Store {
             )",
             (),
         )?;
+        debug!("nexus_events table created: {}", result);
         Ok(Store {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -41,6 +45,7 @@ impl Store {
 
 #[async_trait]
 impl EventStore for Store {
+    #[instrument]
     async fn append_to_stream(
         &self,
         _stream_id: StreamId,
@@ -50,6 +55,7 @@ impl EventStore for Store {
         todo!("insert into db");
     }
 
+    #[instrument]
     fn read_stream<'a>(
         &'a self,
         _stream_id: StreamId,

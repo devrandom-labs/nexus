@@ -1831,6 +1831,8 @@ dependencies = [
  "nexus",
  "rusqlite",
  "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 
