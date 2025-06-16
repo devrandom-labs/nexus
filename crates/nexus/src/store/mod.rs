@@ -6,6 +6,7 @@ pub mod event_record;
 pub mod event_store;
 
 pub use error::Error;
+pub use event_record::{EventRecordBuilder, StreamId};
 pub use event_store::EventStore;
 
 #[cfg(test)]

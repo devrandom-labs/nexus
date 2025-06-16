@@ -1,5 +1,14 @@
-use rusqlite::{Connection, Error};
-use std::sync::{Arc, Mutex};
+use async_trait::async_trait;
+use nexus::{
+    error::Error,
+    store::{EventStore, StreamId, event_record::EventRecord},
+};
+use rusqlite::{Connection, Error as SqlError};
+use std::{
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
+use tokio_stream::Stream;
 
 // going to be started in one place..
 pub struct Store {
@@ -8,7 +17,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new() -> Result<Self, Error> {
+    pub fn new() -> Result<Self, SqlError> {
         let connection = Connection::open_in_memory()?;
         connection.execute(
             "CREATE TABLE IF NOT EXISTS nexus_events (
@@ -24,5 +33,27 @@ impl Store {
         Ok(Store {
             connection: Arc::new(Mutex::new(connection)),
         })
+    }
+}
+
+#[async_trait]
+impl EventStore for Store {
+    async fn append_to_stream(
+        &self,
+        _stream_id: StreamId,
+        _expected_version: u64,
+        _event_records: Vec<EventRecord>,
+    ) -> Result<(), Error> {
+        todo!("insert into db");
+    }
+
+    fn read_stream<'a>(
+        &'a self,
+        _stream_id: StreamId,
+    ) -> Pin<Box<dyn Stream<Item = Result<EventRecord, Error>> + Send + 'a>>
+    where
+        Self: Sync + 'a,
+    {
+        todo!("iterate and convert it to streams")
     }
 }
