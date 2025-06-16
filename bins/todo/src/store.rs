@@ -1,8 +1,10 @@
 use rusqlite::{Connection, Error};
+use std::sync::{Arc, Mutex};
 
+// going to be started in one place..
 pub struct Store {
     #[allow(dead_code)]
-    pub connection: Connection,
+    pub connection: Arc<Mutex<Connection>>,
 }
 
 impl Store {
@@ -19,6 +21,8 @@ impl Store {
             )",
             (),
         )?;
-        Ok(Store { connection })
+        Ok(Store {
+            connection: Arc::new(Mutex::new(connection)),
+        })
     }
 }
