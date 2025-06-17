@@ -17,3 +17,22 @@ expression = "MIT AND ISC AND OpenSSL"
 license-files = [
     { path = "LICENSE", hash = 0xbd0eed23 }
 ]
+
+
+[bans]
+multiple-versions = "deny"
+deny = [
+    # Core ecosystem crates where duplication can cause link errors or subtle bugs.
+    { name = "syn" },
+    { name = "serde" },
+    { name = "log" },
+    { name = "proc-macro2" },
+    { name = "tokio" },
+    { name = "openssl", reason = "Our project policy is to use rustls exclusively" }
+]
+
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
