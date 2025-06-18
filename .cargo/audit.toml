@@ -1,16 +1,6 @@
 [advisories]
 ignore = [
-"RUSTSEC-2025-0009", ## not using quic
-"RUSTSEC-2023-0071", ## not using sqlx-mysql
-## pingora advisories
-"RUSTSEC-2024-0320", ## windows issue with atty not gonna run gateway in windows
-"RUSTSEC-2024-0370", ## proce-macro-error
 "RUSTSEC-2024-0436", ## paste error
-# "RUSTSEC-2024-0145",
-"RUSTSEC-2024-0436",
-"RUSTSEC-2024-0375",
-"RUSTSEC-2021-0145",
-"RUSTSEC-2024-0437"
 ]
 
 [yanked]
