@@ -20,18 +20,21 @@ pub struct Store {
     pub connection: Arc<Mutex<Connection>>,
 }
 
+// TODO: added persisted_at
 impl Store {
     #[instrument]
     pub fn new() -> Result<Self, SqlError> {
         debug!("initializing store connection...");
         let connection = Connection::open_in_memory()?;
         let result = connection.execute(
-            "CREATE TABLE IF NOT EXISTS nexus_events (
+            "CREATE TABLE IF NOT EXISTS events (
                  id TEXT PRIMARY KEY,
                  stream_id TEXT NOT NULL,
-                 version INTEGER NOT NULL,
+                 version INTEGER NOT NULL CHECK (version > 0),
                  event_type TEXT NOT NULL,
                  payload BLOB NOT NULL,
+                 persisted_at TEXT NOT NULL DEFAULT (datetime('now', 'utc')),
+                 metadata BLOB,
                  UNIQUE (stream_id, version)
             )",
             (),
