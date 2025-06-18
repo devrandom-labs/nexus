@@ -1830,6 +1830,9 @@ dependencies = [
  "async-trait",
  "nexus",
  "rusqlite",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 
