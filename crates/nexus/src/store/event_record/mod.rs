@@ -2,7 +2,7 @@
 use super::{EventDeserializer, EventSerializer};
 use crate::{DomainEvent, error::Error};
 use serde::{Deserialize, Serialize};
-use std::default::Default;
+use std::{collections::HashMap, default::Default};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -29,6 +29,7 @@ pub struct EventRecord {
     stream_id: StreamId,
     version: u64,
     event_type: String,
+    metadata: HashMap<String, String>,
     payload: Vec<u8>,
 }
 
@@ -42,6 +43,7 @@ impl EventRecord {
             id: EventRecordId::default(),
             event_type,
             stream_id: stream_id.into(),
+            metadata: HashMap::new(),
             version,
             payload,
         }
@@ -181,6 +183,19 @@ where
 }
 
 impl<D> EventBuilderState for WithEventType<D> where D: DomainEvent {}
+
+pub struct WithMetadata<D>
+where
+    D: DomainEvent,
+{
+    event_type: String,
+    stream_id: StreamId,
+    domain_event: D,
+    version: u64,
+    metadata: HashMap<String, String>,
+}
+
+impl<D> EventBuilderState for WithMetadata<D> where D: DomainEvent {}
 
 #[cfg(test)]
 mod test {
