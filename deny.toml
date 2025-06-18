@@ -20,16 +20,51 @@ license-files = [
 
 
 [bans]
-multiple-versions = "deny"
+multiple-versions = "warn"
 deny = [
-    # Core ecosystem crates where duplication can cause link errors or subtle bugs.
-    { name = "syn" },
-    { name = "serde" },
-    { name = "log" },
-    { name = "proc-macro2" },
-    { name = "tokio" },
-    { name = "openssl", reason = "Our project policy is to use rustls exclusively" }
+    { name = "openssl", reason = "Project policy mandates the use of rustls for cryptographic implementations to ensure a pure Rust stack and avoid OpenSSL's C-bindings." }
 ]
+
+
+[[bans.multiple-versions.deny]]
+name = "tokio"
+reason = "The async runtime is a singleton. Multiple versions will lead to conflicting runtimes, broken wakers, and guaranteed runtime failures."
+
+[[bans.multiple-versions.deny]]
+name = "hyper"
+reason = "Core HTTP primitives (Request, Response, Uri) must be of a single version to ensure type compatibility across all services and middleware."
+
+[[bans.multiple-versions.deny]]
+name = "tonic"
+reason = "Similar to Hyper, Tonic's gRPC types must be consistent. Multiple versions break gRPC service definitions and client/server communication."
+
+[[bans.multiple-versions.deny]]
+name = "syn"
+reason = "A core component of the Rust macro ecosystem. Duplicates can cause linker errors and unpredictable procedural macro behavior."
+
+[[bans.multiple-versions.deny]]
+name = "serde"
+reason = "Core serialization framework. Duplicates lead to type mismatches where `T` from `serde@1.0.150` is not the same as `T` from `serde@1.0.160`, breaking serialization boundaries."
+
+[[bans.multiple-versions.deny]]
+name = "proc-macro2"
+reason = "A dependency of `syn`. Must be kept in lockstep with `syn` to prevent macro expansion failures."
+
+[[bans.multiple-versions.deny]]
+name = "log"
+reason = "The logging facade must be a singleton. Multiple versions mean log messages can be lost or handled by different, unconfigured logger backends."
+
+[[bans.multiple-versions.deny]]
+name = "tracing"
+reason = "The observability facade must be a singleton. Multiple versions lead to disconnected spans, broken traces, and an incoherent view of the system."
+
+[[bans.multiple-versions.deny]]
+name = "bytes"
+reason = "The fundamental buffer type used by `hyper`, `tokio`, and other I/O crates. Duplicates cause severe type compatibility issues at I/O boundaries."
+
+[[bans.multiple-versions.deny]]
+name = "http"
+reason = "Defines shared HTTP types like `StatusCode` and `HeaderMap` used by `hyper`, `axum`, etc. Duplicates are a source of type mismatches."
 
 
 [sources]
