@@ -1,4 +1,4 @@
-use super::event_record::{EventRecord, StreamId};
+use super::record::{EventRecord, StreamId};
 use crate::error::Error;
 use async_trait::async_trait;
 use std::pin::Pin;
