@@ -136,6 +136,8 @@
 //! By leveraging Nexus, you are choosing a path towards building systems that are
 //! robust, maintainable, scalable, and grounded in proven architectural excellence.
 //!
+use super::error::Error as NexusError;
+use async_trait::async_trait;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{any::Any, error::Error, fmt::Debug, hash::Hash};
 
@@ -286,3 +288,17 @@ pub trait Id: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
 /// automatically implements the `Id` marker trait. This avoids the need for
 /// manual `impl Id for ...` for common types like `String`, `Uuid`, integers, etc.
 impl<T> Id for T where T: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
+
+#[async_trait]
+pub trait EventSerializer {
+    async fn serialize<D>(&self, domain_event: D) -> Result<Vec<u8>, NexusError>
+    where
+        D: DomainEvent;
+}
+
+#[async_trait]
+pub trait EventDeserializer {
+    async fn deserialize<D>(&self, payload: &[u8]) -> Result<D, NexusError>
+    where
+        D: DomainEvent;
+}

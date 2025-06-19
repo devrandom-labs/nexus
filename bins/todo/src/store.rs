@@ -1,10 +1,7 @@
 use async_trait::async_trait;
 use nexus::{
     error::Error,
-    store::{
-        EventStore,
-        event_record::{EventRecord, StreamId},
-    },
+    store::{EventRecord, EventStore, StreamId},
 };
 use rusqlite::{Connection, Error as SqlError};
 use std::{
