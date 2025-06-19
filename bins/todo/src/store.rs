@@ -17,7 +17,9 @@ pub struct Store {
     pub connection: Arc<Mutex<Connection>>,
 }
 
-// TODO: added persisted_at
+// TODO: evaluate refinery
+// TODO: evaluate barrel
+
 impl Store {
     #[instrument]
     pub fn new() -> Result<Self, SqlError> {
