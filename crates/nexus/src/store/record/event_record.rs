@@ -16,7 +16,13 @@ pub struct EventRecord {
 
 impl EventRecord {
     // do not want people to directly create EventRecord
-    pub(crate) fn new<I>(stream_id: I, event_type: String, version: u64, payload: Vec<u8>) -> Self
+    pub(crate) fn new<I>(
+        stream_id: I,
+        event_type: String,
+        version: u64,
+        metadata: HashMap<String, String>,
+        payload: Vec<u8>,
+    ) -> Self
     where
         I: Into<StreamId>,
     {
@@ -24,7 +30,7 @@ impl EventRecord {
             id: EventRecordId::default(),
             event_type,
             stream_id: stream_id.into(),
-            metadata: HashMap::new(),
+            metadata,
             version,
             payload,
         }
