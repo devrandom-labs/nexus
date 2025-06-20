@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS events (
+CREATE TABLE IF NOT EXISTS event (
        sequence_number INTEGER PRIMARY KEY,
        id TEXT NOT NULL UNIQUE,
        stream_id TEXT NOT NULL,
@@ -9,3 +9,12 @@ CREATE TABLE IF NOT EXISTS events (
        metadata BLOB,
        UNIQUE (stream_id, version)
 );
+
+
+CREATE TABLE IF NOT EXISTS event_metadata (
+       sequence_number INTEGER PRIMARY KEY,
+       correlation_id TEXT NOT NULL,
+       FOREIGN KEY (sequence_number) REFERENCES event(sequence_number)
+);
+
+CREATE INDEX IF NOT EXISTS metadata_correlation_id_idx ON event_metadata (correlation_id);
