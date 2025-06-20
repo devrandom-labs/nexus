@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS event (
-       id TEXT PRIMARY,
+       id BLOB(16) PRIMARY KEY,
        stream_id TEXT NOT NULL,
        version INTEGER NOT NULL CHECK (version > 0),
        event_type TEXT NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS event (
 
 
 CREATE TABLE IF NOT EXISTS event_metadata (
-       event_id TEXT PRIMARY,
+       event_id BLOB(16) PRIMARY KEY,
        correlation_id TEXT NOT NULL,
        FOREIGN KEY (event_id) REFERENCES event(id)
 );
