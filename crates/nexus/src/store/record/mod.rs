@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use serde::{Deserialize, Serialize};
-use std::default::Default;
+use std::{default::Default, sync::Arc};
 use uuid::Uuid;
 
 pub mod builder;
@@ -18,20 +18,22 @@ impl Default for EventRecordId {
     }
 }
 
+// TODO: update this to have ARC inside
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct StreamId(String);
+pub struct StreamId(Arc<String>);
 
 impl StreamId {
     pub fn new(id: String) -> Self {
-        StreamId(id)
+        StreamId(Arc::new(id))
     }
 }
 
+// TODO: update these to have arc inside, so it is not cloned
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CorrelationId(Uuid);
+pub struct CorrelationId(pub Arc<String>);
 
-impl Default for CorrelationId {
-    fn default() -> Self {
-        CorrelationId(Uuid::new_v4())
+impl CorrelationId {
+    pub fn new(id: String) -> Self {
+        CorrelationId(Arc::new(id))
     }
 }

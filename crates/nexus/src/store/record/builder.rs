@@ -47,21 +47,6 @@ where
 
         EventRecordBuilder { state }
     }
-
-    pub fn with_event_type<E>(self, event_type: E) -> EventRecordBuilder<WithEventType<D>>
-    where
-        E: Into<String>,
-    {
-        let state = WithEventType {
-            stream_id: self.state.stream_id,
-            domain_event: self.state.domain_event,
-            version: self.state.version,
-            metadata: EventMetadata::default(),
-            event_type: event_type.into(),
-        };
-
-        EventRecordBuilder { state }
-    }
 }
 
 impl<D> EventRecordBuilder<WithMetadata<D>>
