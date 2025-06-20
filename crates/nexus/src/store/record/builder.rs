@@ -1,7 +1,6 @@
 #![allow(dead_code)]
-use super::{StreamId, event_record::EventRecord};
+use super::{StreamId, event_metadata::EventMetadata, event_record::EventRecord};
 use crate::{DomainEvent, core::EventSerializer, error::Error};
-use std::collections::HashMap;
 
 pub struct EventRecordBuilder<E>
 where
@@ -38,30 +37,12 @@ impl<D> EventRecordBuilder<WithVersion<D>>
 where
     D: DomainEvent,
 {
-    pub fn with_metadata(
-        self,
-        metadata: HashMap<String, String>,
-    ) -> EventRecordBuilder<WithMetadata<D>> {
+    pub fn with_metadata(self, metadata: EventMetadata) -> EventRecordBuilder<WithMetadata<D>> {
         let state = WithMetadata {
             stream_id: self.state.stream_id,
             domain_event: self.state.domain_event,
             version: self.state.version,
             metadata,
-        };
-
-        EventRecordBuilder { state }
-    }
-
-    pub fn with_event_type<E>(self, event_type: E) -> EventRecordBuilder<WithEventType<D>>
-    where
-        E: Into<String>,
-    {
-        let state = WithEventType {
-            stream_id: self.state.stream_id,
-            domain_event: self.state.domain_event,
-            version: self.state.version,
-            metadata: HashMap::new(),
-            event_type: event_type.into(),
         };
 
         EventRecordBuilder { state }
@@ -143,7 +124,7 @@ where
     stream_id: StreamId,
     domain_event: D,
     version: u64,
-    metadata: HashMap<String, String>,
+    metadata: EventMetadata,
 }
 
 impl<D> EventBuilderState for WithMetadata<D> where D: DomainEvent {}
@@ -156,7 +137,7 @@ where
     stream_id: StreamId,
     domain_event: D,
     version: u64,
-    metadata: HashMap<String, String>,
+    metadata: EventMetadata,
 }
 
 impl<D> EventBuilderState for WithEventType<D> where D: DomainEvent {}

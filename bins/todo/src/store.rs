@@ -18,7 +18,6 @@ pub struct Store {
 }
 
 // TODO: evaluate refinery
-// TODO: evaluate barrel
 
 impl Store {
     #[instrument]
@@ -71,4 +70,17 @@ impl EventStore for Store {
     {
         todo!("iterate and convert it to streams")
     }
+}
+
+#[cfg(test)]
+mod tests {
+
+    // TODO: test schema is valid
+    // TODO: pragma foreign key.
+
+    #[test]
+    fn should_have_correct_schema_and_is_valid() {}
+
+    #[test]
+    fn should_be_able_to_store_event_records() {}
 }

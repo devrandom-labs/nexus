@@ -1,8 +1,11 @@
-use super::builder::{EventRecordBuilder, WithDomain};
-use super::{EventRecordId, StreamId};
+use super::{
+    EventRecordId, StreamId,
+    builder::{EventRecordBuilder, WithDomain},
+    event_metadata::EventMetadata,
+};
 use crate::{DomainEvent, core::EventDeserializer, error::Error};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, default::Default};
+use std::default::Default;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EventRecord {
@@ -10,7 +13,7 @@ pub struct EventRecord {
     stream_id: StreamId,
     version: u64,
     event_type: String,
-    metadata: HashMap<String, String>,
+    metadata: EventMetadata,
     payload: Vec<u8>,
 }
 
@@ -20,7 +23,7 @@ impl EventRecord {
         stream_id: I,
         event_type: String,
         version: u64,
-        metadata: HashMap<String, String>,
+        metadata: EventMetadata,
         payload: Vec<u8>,
     ) -> Self
     where
@@ -60,7 +63,7 @@ impl EventRecord {
         &self.event_type
     }
 
-    pub fn metadata(&self) -> &HashMap<String, String> {
+    pub fn metadata(&self) -> &EventMetadata {
         &self.metadata
     }
 
