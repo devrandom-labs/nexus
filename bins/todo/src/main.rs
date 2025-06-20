@@ -16,7 +16,7 @@ fn main() -> Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .with_filter(filter);
     tracing_subscriber::registry().with(console).init();
-    debug!("initializing rusqlite store..");
+    debug!("running migrations..");
     let _ = store::Store::new()?;
     Ok(())
 }

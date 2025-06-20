@@ -4,6 +4,7 @@ use std::default::Default;
 use uuid::Uuid;
 
 pub mod builder;
+pub mod event_metadata;
 pub mod event_record;
 
 pub use event_record::EventRecord;
@@ -23,5 +24,14 @@ pub struct StreamId(String);
 impl StreamId {
     pub fn new(id: String) -> Self {
         StreamId(id)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CorrelationId(Uuid);
+
+impl Default for CorrelationId {
+    fn default() -> Self {
+        CorrelationId(Uuid::new_v4())
     }
 }

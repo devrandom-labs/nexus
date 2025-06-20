@@ -9,5 +9,3 @@ CREATE TABLE IF NOT EXISTS events (
        metadata BLOB,
        UNIQUE (stream_id, version)
 );
-
-CREATE INDEX IF NOT EXISTS events_stream_id_versions ON events (stream_id, version);
