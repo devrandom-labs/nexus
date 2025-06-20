@@ -18,7 +18,6 @@ impl Default for EventRecordId {
     }
 }
 
-// TODO: update this to have ARC inside
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamId(Arc<String>);
 
@@ -28,7 +27,6 @@ impl StreamId {
     }
 }
 
-// TODO: update these to have arc inside, so it is not cloned
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CorrelationId(pub Arc<String>);
 
