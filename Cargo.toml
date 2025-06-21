@@ -28,7 +28,7 @@ utoipa = { version = "5.3.1", features = ["axum_extras"] }
 utoipa-axum = { version = "0.2.0", features = ["debug"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
 utoipa-swagger-ui-vendored = "0.1.2"
-uuid = { version = "1.17.0", features = ["v7", "fast-rng", "serde", "v4"] }
+uuid = { version = "1.17.0", features = ["v7", "fast-rng", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [workspace.package]
