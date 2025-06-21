@@ -8,7 +8,8 @@ authors.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 nexus = { path = "../../crates/nexus" }
-rusqlite = { workspace = true, features = ["bundled", "trace"] }
+refinery = { workspace = true, features = ["rusqlite"] }
+rusqlite = { workspace = true, features = ["bundled", "trace", "uuid"] }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

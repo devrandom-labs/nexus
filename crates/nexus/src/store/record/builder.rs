@@ -155,5 +155,5 @@ mod test {
     async fn should_be_able_to_build_event_record_with_metadata() {}
 
     #[tokio::test]
-    async fn shoudl_be_able_to_build_event_record_without_metadata() {}
+    async fn should_be_able_to_build_event_record_without_metadata() {}
 }
