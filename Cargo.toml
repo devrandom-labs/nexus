@@ -11,9 +11,9 @@ async-trait = "0.1.88"
 axum = { version = "0.8.4", features = ["macros"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 password-hash = { version = "0.5.0", features = ["rand_core", "getrandom", "alloc"] }
-refinery = { version = "0.8.16", features = ["rusqlite"] }
+refinery = { version = "0.8.16", features = ["rusqlite", "enums"] }
 reqwest = "0.12.20"
-rusqlite = { version = "0.36.0", features = ["bundled", "trace", "uuid"] }
+rusqlite = { version = "0.33.0", features = ["bundled", "trace", "uuid"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 smallvec = "1.15.1"

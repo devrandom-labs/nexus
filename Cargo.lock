@@ -922,9 +922,9 @@ checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.34.0"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91632f3b4fb6bd1d72aa3d78f41ffecfcf2b1a6648d8c241dbe7dbfaf4875e15"
+checksum = "ad8935b44e7c13394a179a438e0cebba0fe08fe01b54f152e29a93b5cf993fd4"
 dependencies = [
  "cc",
  "pkg-config",
@@ -1374,6 +1374,7 @@ dependencies = [
  "cfg-if",
  "log",
  "regex",
+ "rusqlite",
  "serde",
  "siphasher",
  "thiserror 1.0.69",
@@ -1497,9 +1498,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.36.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3de23c3319433716cf134eed225fe9986bc24f63bed9be9f20c329029e672dc7"
+checksum = "1c6d5e5acb6f6129fe3f7ba0a7fc77bca1942cb568535e18e7bc40262baf3110"
 dependencies = [
  "bitflags",
  "fallible-iterator",
@@ -2760,6 +2761,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
+name = "winnow"
+version = "0.7.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74c7b26e3480b707944fc872477815d29a8e429d2f93a1ce000f5fa84a15cbcd"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "wit-bindgen-rt"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2773,17 +2783,20 @@ name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
  "digest",
+ "form_urlencoded",
  "hashbrown",
  "idna",
  "indexmap",
  "libc",
+ "libsqlite3-sys",
  "log",
  "memchr",
- "proc-macro2",
- "quote",
+ "percent-encoding",
+ "refinery-core",
  "regex",
  "regex-automata 0.4.9",
  "regex-syntax 0.8.5",
+ "rusqlite",
  "serde",
  "smallvec",
  "syn",
@@ -2793,6 +2806,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-core",
+ "uuid",
 ]
 
 [[package]]
