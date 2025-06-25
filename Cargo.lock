@@ -1986,11 +1986,8 @@ dependencies = [
 name = "todo"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "nexus",
  "nexus-rusqlite",
- "refinery",
- "rusqlite",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
