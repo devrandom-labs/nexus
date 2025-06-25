@@ -10,6 +10,7 @@ async-trait = { workspace = true }
 nexus = { path = "../../crates/nexus" }
 refinery = { workspace = true, features = ["rusqlite"] }
 rusqlite = { workspace = true, features = ["bundled", "trace", "uuid"] }
+thiserror = { workspace = true }
 tokio-stream = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

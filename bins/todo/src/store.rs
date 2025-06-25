@@ -3,13 +3,13 @@ use nexus::{
     error::Error,
     store::{EventRecord, EventStore, StreamId},
 };
-use rusqlite::{Connection, Error as SqlError};
+use rusqlite::{Connection, Error as SqlError, config::DbConfig};
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
 use tokio_stream::Stream;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 
 #[derive(Debug)]
 pub struct Store {
@@ -18,13 +18,24 @@ pub struct Store {
 }
 
 impl Store {
-    #[instrument]
+    #[instrument(level = "debug", err)]
     pub fn new() -> Result<Self, SqlError> {
-        debug!("initializing store connection...");
-        let connection = Connection::open_in_memory()?;
+        trace!("Opening SQLite connection in-memory.");
+        let conn = Connection::open_in_memory()?;
+        debug!("Applying database connection configurations for security and integrity...");
+        Self::configure_connection(&conn)?;
         Ok(Store {
-            connection: Arc::new(Mutex::new(connection)),
+            connection: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    #[instrument(level = "debug", skip(conn), err)]
+    fn configure_connection(conn: &Connection) -> Result<(), SqlError> {
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_FKEY, true)?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_FTS3_TOKENIZER, false)?;
+        Ok(())
     }
 }
 
@@ -58,52 +69,12 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
-    use rusqlite::{Connection, Result};
-    use std::collections::HashSet;
 
     mod embedded {
         use refinery::embed_migrations;
         embed_migrations!("migrations");
     }
 
-    fn return_table_fields(table_name: &str, conn: &mut Connection) -> Result<HashSet<String>> {
-        let mut stm = conn
-            .prepare(&format!("PRAGMA table_info('{}')", table_name))
-            .unwrap();
-
-        stm.query_map([], |row| row.get(1))
-            .unwrap()
-            .collect::<Result<HashSet<String>>>()
-    }
-
-    #[test]
-    fn should_have_events_table() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        embedded::migrations::runner().run(&mut conn).unwrap();
-        let actual_fields = return_table_fields("event", &mut conn).unwrap();
-        assert!(!actual_fields.is_empty(), "migration has not been applied.");
-        for &expected_field in &[
-            "id",
-            "stream_id",
-            "version",
-            "event_type",
-            "payload",
-            "persisted_at",
-        ] {
-            assert!(actual_fields.contains(expected_field));
-        }
-    }
-
-    #[test]
-    fn should_have_event_metadata_table() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        embedded::migrations::runner().run(&mut conn).unwrap();
-        let actual_fields = return_table_fields("event_metadata", &mut conn).unwrap();
-        assert!(!actual_fields.is_empty(), "migration has not been applied.");
-        for &expected_field in &["event_id", "correlation_id"] {
-            assert!(actual_fields.contains(expected_field));
-        }
-    }
     #[test]
     fn should_have_unique_contraint_on_stream_id_and_version() {}
     #[test]

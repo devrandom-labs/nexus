@@ -1,12 +1,11 @@
 use rusqlite::Result;
+use todo::store::Store;
 use tracing::{debug, instrument};
 use tracing_subscriber::{
     EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
 };
-
-mod store;
 
 #[instrument]
 fn main() -> Result<()> {
@@ -17,6 +16,6 @@ fn main() -> Result<()> {
         .with_filter(filter);
     tracing_subscriber::registry().with(console).init();
     debug!("running migrations..");
-    let _ = store::Store::new()?;
+    let _ = Store::new()?;
     Ok(())
 }

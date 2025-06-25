@@ -1969,6 +1969,7 @@ dependencies = [
  "nexus",
  "refinery",
  "rusqlite",
+ "thiserror 2.0.12",
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
