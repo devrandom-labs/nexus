@@ -2,4 +2,8 @@
 fn main() {
     // trigger recompilation when a new migration is added
     println!("cargo:rerun-if-changed=../nexus-sql-schemas/migrations");
+
+    // TODO: get only the up migration schemas in time order
+    // TODO: convert them into seq
+    // TODO: create migration folder
 }

@@ -11,7 +11,7 @@ use std::{
 use tokio_stream::Stream;
 use tracing::{debug, instrument, trace};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Store {
     #[allow(dead_code)]
     pub connection: Arc<Mutex<Connection>>,
