@@ -29,6 +29,7 @@ impl Store {
         })
     }
 
+    #[inline]
     #[instrument(level = "debug", skip(conn), err)]
     fn configure_connection(conn: &Connection) -> Result<(), SqlError> {
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_FKEY, true)?;
