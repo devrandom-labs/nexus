@@ -258,6 +258,7 @@
             sops
             age
             cargo-edit
+            sqlx-cli
           ];
         };
       }) // {

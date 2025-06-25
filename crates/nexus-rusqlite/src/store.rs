@@ -70,11 +70,6 @@ impl EventStore for Store {
 #[cfg(test)]
 mod tests {
 
-    mod embedded {
-        use refinery::embed_migrations;
-        embed_migrations!("migrations");
-    }
-
     #[test]
     fn should_have_unique_contraint_on_stream_id_and_version() {}
     #[test]

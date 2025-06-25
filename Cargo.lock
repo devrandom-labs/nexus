@@ -1070,6 +1070,13 @@ dependencies = [
 name = "nexus-rusqlite"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "nexus",
+ "refinery",
+ "rusqlite",
+ "thiserror 2.0.12",
+ "tokio-stream",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -1981,10 +1988,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "nexus",
+ "nexus-rusqlite",
  "refinery",
  "rusqlite",
- "thiserror 2.0.12",
- "tokio-stream",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
