@@ -42,7 +42,7 @@ impl Store {
 
 #[async_trait]
 impl EventStore for Store {
-    #[instrument]
+    #[instrument(level = "debug", skip(self), err)]
     async fn append_to_stream(
         &self,
         stream_id: StreamId,
@@ -50,13 +50,13 @@ impl EventStore for Store {
         _event_records: Vec<EventRecord>,
     ) -> Result<(), Error> {
         debug!(?stream_id, expected_version, "appending events");
-        // TODO: get latest version for a stream_id
+        // TODO: get mutexgaurd for connection and query_one with stream_id and max(version)
+
         // TODO: if version does not match return Error::Conflict or something?
         // TODO: write the events to the db
         todo!("insert into db");
     }
 
-    #[instrument]
     fn read_stream<'a>(
         &'a self,
         _stream_id: StreamId,
