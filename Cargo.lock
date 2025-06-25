@@ -1067,6 +1067,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-rusqlite"
+version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
+
+[[package]]
+name = "nexus-sql-schemas"
+version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
