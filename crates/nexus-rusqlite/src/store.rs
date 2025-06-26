@@ -47,13 +47,28 @@ impl EventStore for Store {
         &self,
         stream_id: StreamId,
         expected_version: u64,
+
         _event_records: Vec<EventRecord>,
     ) -> Result<(), Error> {
         debug!(?stream_id, expected_version, "appending events");
-        // TODO: get mutexgaurd for connection and query_one with stream_id and max(version)
-
-        // TODO: if version does not match return Error::Conflict or something?
-        // TODO: write the events to the db
+        let conn = &self.connection.lock().unwrap();
+        let current_version = conn
+            .query_row_and_then(
+                "SELECT MAX(version) FROM event WHERE stream_id = ?1",
+                [&stream_id.to_string()],
+                |row| row.get::<_, u64>("version"),
+            )
+            .map_err(|err| Error::Store { source: err.into() })?;
+        trace!(
+            "stream_id: {}, current_version: {}",
+            stream_id, current_version
+        );
+        if current_version != expected_version {
+            return Err(Error::Conflict {
+                stream_id,
+                expected_version,
+            });
+        }
         todo!("insert into db");
     }
 

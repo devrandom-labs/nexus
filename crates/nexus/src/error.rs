@@ -1,4 +1,4 @@
-use crate::store;
+use crate::store::StreamId;
 use thiserror::Error;
 use tower::BoxError;
 
@@ -55,6 +55,9 @@ pub enum Error {
     #[error("Source '{name}' not found (e.g., Table, Collection, Document)")]
     SourceNotFound { name: String },
 
+    #[error("A stream with ID '{id}' already exists, violating a unique constraint")]
+    UniqueIdViolation { id: String },
+
     /// A wrapper for any other error originating from the storage layer (`store::Error`)
     /// that has not been promoted to a first-class variant on this top-level enum.
     ///
@@ -62,8 +65,11 @@ pub enum Error {
     /// storage errors. This preserves the full error detail for logging and
     /// debugging without bloating the top-level API. Consumers will typically
     /// log this error rather than matching on its inner content.
-    #[error("A storage layer operation failed")]
-    Store(#[from] store::Error),
+    #[error(transparent)]
+    Store {
+        #[from]
+        source: BoxError,
+    },
 
     /// An error occurred while deserializing event data from a raw format (e.g., JSON)
     /// into a structured `EventRecord`.
@@ -84,5 +90,18 @@ pub enum Error {
     SerializationError {
         #[source]
         source: BoxError,
+    },
+
+    /// ## Variant: `Conflict`
+    /// Signals an optimistic concurrency control violation. This typically happens when
+    /// attempting to save an aggregate, and its expected version (based on when it was loaded)
+    /// does not match the current version in the event store, indicating that another
+    /// process has modified the aggregate in the meantime.
+    #[error(
+        "Concurrency conflict for stream '{stream_id:?}'. Expected version {expected_version}."
+    )]
+    Conflict {
+        stream_id: StreamId,
+        expected_version: u64,
     },
 }
