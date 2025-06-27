@@ -1,22 +1,21 @@
-use rusqlite::Result;
-use tracing::{debug, instrument};
+use nexus_rusqlite::Store;
+use tracing::{info, instrument};
 use tracing_subscriber::{
     EnvFilter, Layer,
     fmt::{self, format::FmtSpan},
     prelude::*,
 };
 
-mod store;
+mod events;
 
 #[instrument]
-fn main() -> Result<()> {
+fn main() {
     let filter = EnvFilter::from_default_env();
     let console = fmt::layer()
         .with_level(true)
         .with_span_events(FmtSpan::CLOSE)
         .with_filter(filter);
     tracing_subscriber::registry().with(console).init();
-    debug!("running migrations..");
-    let _ = store::Store::new()?;
-    Ok(())
+    info!("running migrations..");
+    let _ = Store::new().unwrap();
 }

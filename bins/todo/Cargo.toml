@@ -6,10 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 nexus = { path = "../../crates/nexus" }
-rusqlite = { workspace = true, features = ["bundled", "trace"] }
-tokio-stream = { workspace = true }
+nexus-rusqlite = { path = "../../crates/nexus-rusqlite" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 workspace-hack = { version = "0.1.0", path = "../../crates/workspace-hack" }

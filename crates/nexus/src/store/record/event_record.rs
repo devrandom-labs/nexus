@@ -67,6 +67,10 @@ impl EventRecord {
         &self.metadata
     }
 
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
     pub fn builder<D>(domain_event: D) -> EventRecordBuilder<WithDomain<D>>
     where
         D: DomainEvent,
