@@ -93,6 +93,7 @@ impl EventStore for Store {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn read_stream<'a>(
         &'a self,
         _stream_id: StreamId,
