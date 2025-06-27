@@ -51,26 +51,7 @@ impl EventStore for Store {
     ) -> Result<(), Error> {
         debug!(?stream_id, expected_version, "appending events");
         let conn = Arc::clone(&self.connection);
-        let mut conn = conn.lock().unwrap(); // this mutex lives long?
-        let current_version = conn
-            .query_row_and_then(
-                "SELECT MAX(version) FROM event WHERE stream_id = ?1",
-                [&stream_id.to_string()],
-                |row| row.get::<_, u64>("version"),
-            )
-            .map_err(|err| Error::Store { source: err.into() })?;
-        trace!(
-            "stream_id: {}, current_version: {}",
-            stream_id, current_version
-        );
-        if current_version != expected_version {
-            return Err(Error::Conflict {
-                stream_id,
-                expected_version,
-            });
-        }
-
-        // needs mutable connection :/
+        let mut conn = conn.lock().unwrap();
         let tx = conn
             .transaction()
             .map_err(|err| Error::Store { source: err.into() })?;
