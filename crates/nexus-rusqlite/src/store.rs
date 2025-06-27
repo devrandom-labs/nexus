@@ -3,7 +3,7 @@ use nexus::{
     error::Error,
     store::{EventRecord, EventStore, StreamId},
 };
-use rusqlite::{Connection, Error as SqlError, config::DbConfig};
+use rusqlite::{Connection, Error as SqlError, config::DbConfig, params};
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
@@ -47,11 +47,11 @@ impl EventStore for Store {
         &self,
         stream_id: StreamId,
         expected_version: u64,
-
-        _event_records: Vec<EventRecord>,
+        event_records: Vec<EventRecord>,
     ) -> Result<(), Error> {
         debug!(?stream_id, expected_version, "appending events");
-        let conn = &self.connection.lock().unwrap();
+        let conn = Arc::clone(&self.connection);
+        let mut conn = conn.lock().unwrap(); // this mutex lives long?
         let current_version = conn
             .query_row_and_then(
                 "SELECT MAX(version) FROM event WHERE stream_id = ?1",
@@ -69,7 +69,47 @@ impl EventStore for Store {
                 expected_version,
             });
         }
-        todo!("insert into db");
+
+        // needs mutable connection :/
+        let tx = conn
+            .transaction()
+            .map_err(|err| Error::Store { source: err.into() })?;
+
+        {
+            let mut event_stmt = tx
+                .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
+                .map_err(|err| Error::Store { source: err.into() })?;
+
+            let mut event_metadata_stmt = tx
+                .prepare_cached(
+                    "INSERT INTO event_metadata (event_id, correlation_id) VALUES (?1, ?2)",
+                )
+                .map_err(|err| Error::Store { source: err.into() })?;
+
+            for record in &event_records {
+                event_stmt
+                    .execute(params![
+                        record.id().to_string(),
+                        record.stream_id().to_string(),
+                        record.version(),
+                        record.event_type(),
+                        record.payload()
+                    ])
+                    .map_err(|err| Error::Store { source: err.into() })?;
+
+                event_metadata_stmt
+                    .execute(params![
+                        record.id().to_string(),
+                        record.metadata().correlation_id().to_string()
+                    ])
+                    .map_err(|err| Error::Store { source: err.into() })?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|err| Error::Store { source: err.into() })?;
+
+        Ok(())
     }
 
     fn read_stream<'a>(
