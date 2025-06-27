@@ -1,4 +1,4 @@
-use super::record::{EventRecord, StreamId};
+use super::record::{EventRecord, EventRecordResponse, StreamId};
 use crate::error::Error;
 use async_trait::async_trait;
 use std::pin::Pin;
@@ -16,7 +16,7 @@ pub trait EventStore {
     fn read_stream<'a>(
         &'a self,
         stream_id: StreamId,
-    ) -> Pin<Box<dyn Stream<Item = Result<EventRecord, Error>> + Send + 'a>>
+    ) -> Pin<Box<dyn Stream<Item = Result<EventRecordResponse, Error>> + Send + 'a>>
     where
         Self: Sync + 'a;
 }

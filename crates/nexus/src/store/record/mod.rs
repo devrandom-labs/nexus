@@ -7,7 +7,7 @@ pub mod builder;
 pub mod event_metadata;
 pub mod event_record;
 
-pub use event_record::EventRecord;
+pub use event_record::{EventRecord, EventRecordResponse};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventRecordId(Uuid);
