@@ -14,7 +14,10 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
-use tokio::{sync::mpsc::channel, task::spawn_blocking};
+use tokio::{
+    sync::{mpsc::channel, oneshot},
+    task::spawn_blocking,
+};
 use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
@@ -75,7 +78,6 @@ impl Store {
 
 #[async_trait]
 impl EventStore for Store {
-    ///TODO: FIXME: IMPORTANT: MAKE A ONE SHOT CHANNEL TO GIVE BACK THE VALUE OF THIS TRANSACTION
     #[instrument(level = "debug", skip(self), err)]
     async fn append_to_stream(
         &self,
@@ -84,47 +86,63 @@ impl EventStore for Store {
         event_records: Vec<EventRecord>,
     ) -> Result<(), Error> {
         debug!(?stream_id, expected_version, "appending events");
-        let conn = Arc::clone(&self.connection);
-        let mut conn = conn.lock().unwrap();
-        let tx = conn
-            .transaction()
-            .map_err(|err| Error::Store { source: err.into() })?;
 
-        {
-            let mut event_stmt = tx
+        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
+        let conn = Arc::clone(&self.connection);
+
+        spawn_blocking(move || {
+            let result = (|| {
+                let mut conn = conn.lock().map_err(|_| Error::System {
+                    reason: "mutex lock poisoned..".to_string(),
+                })?;
+
+                let tx = conn
+                    .transaction()
+                    .map_err(|err| Error::Store { source: err.into() })?;
+
+                {
+                    let mut event_stmt = tx
                 .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
                 .map_err(|err| Error::Store { source: err.into() })?;
 
-            let mut event_metadata_stmt = tx
-                .prepare_cached(
-                    "INSERT INTO event_metadata (event_id, correlation_id) VALUES (?1, ?2)",
-                )
-                .map_err(|err| Error::Store { source: err.into() })?;
+                    let mut event_metadata_stmt = tx
+                        .prepare_cached(
+                            "INSERT INTO event_metadata (event_id, correlation_id) VALUES (?1, ?2)",
+                        )
+                        .map_err(|err| Error::Store { source: err.into() })?;
 
-            for record in &event_records {
-                event_stmt
-                    .execute(params![
-                        record.id().to_string(),
-                        record.stream_id().to_string(),
-                        record.version(),
-                        record.event_type(),
-                        record.payload()
-                    ])
+                    for record in &event_records {
+                        event_stmt
+                            .execute(params![
+                                record.id().to_string(),
+                                record.stream_id().to_string(),
+                                record.version(),
+                                record.event_type(),
+                                record.payload()
+                            ])
+                            .map_err(|err| Error::Store { source: err.into() })?;
+
+                        event_metadata_stmt
+                            .execute(params![
+                                record.id().to_string(),
+                                record.metadata().correlation_id().to_string()
+                            ])
+                            .map_err(|err| Error::Store { source: err.into() })?;
+                    }
+                }
+
+                tx.commit()
                     .map_err(|err| Error::Store { source: err.into() })?;
 
-                event_metadata_stmt
-                    .execute(params![
-                        record.id().to_string(),
-                        record.metadata().correlation_id().to_string()
-                    ])
-                    .map_err(|err| Error::Store { source: err.into() })?;
-            }
-        }
+                Ok(())
+            })();
 
-        tx.commit()
-            .map_err(|err| Error::Store { source: err.into() })?;
+            let _ = tx.send(result);
+        });
 
-        Ok(())
+        rx.await.map_err(|_| Error::System {
+            reason: "Write stream for one shot channel panicked".to_string(),
+        })?
     }
 
     fn read_stream<'a>(
