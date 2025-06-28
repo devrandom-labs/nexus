@@ -14,7 +14,10 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
-use tokio::{sync::mpsc::channel, task::spawn_blocking};
+use tokio::{
+    sync::{mpsc::channel, oneshot},
+    task::spawn_blocking,
+};
 use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
@@ -76,6 +79,7 @@ impl Store {
 #[async_trait]
 impl EventStore for Store {
     ///TODO: FIXME: IMPORTANT: MAKE A ONE SHOT CHANNEL TO GIVE BACK THE VALUE OF THIS TRANSACTION
+    ///
     #[instrument(level = "debug", skip(self), err)]
     async fn append_to_stream(
         &self,
