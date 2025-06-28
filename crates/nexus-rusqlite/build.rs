@@ -13,29 +13,21 @@ struct MigrationFile {
 
 fn main() -> Result<()> {
     let migration_path = get_migration_path();
-    println!(
-        "cargo:warning=Searching for migrations in: {}",
-        migration_path.display()
-    );
+    println!("Searching for migrations in: {}", migration_path.display());
     println!("cargo:rerun-if-changed={}", migration_path.display());
 
     if !migration_path.exists() {
-        println!("cargo:warning=Migration source directory does not exist. Skipping.");
+        println!("Migration source directory does not exist. Skipping.");
         return Ok(());
     }
 
     let mut migration_files = fs::read_dir(migration_path)?
         .filter_map(|r| r.ok())
-        .inspect(|entry| println!("cargo:warning=Found entry: {:?}", entry.file_name())) // DEBUG: See all entries
+        .inspect(|entry| println!("Found entry: {:?}", entry.file_name())) // DEBUG: See all entries
         .filter(is_sql)
-        .inspect(|entry| println!("cargo:warning=After is_sql filter: {:?}", entry.file_name())) // DEBUG: See what passes is_sql
+        .inspect(|entry| println!("After is_sql filter: {:?}", entry.file_name())) // DEBUG: See what passes is_sql
         .filter(only_up_files)
-        .inspect(|entry| {
-            println!(
-                "cargo:warning=After only_up filter: {:?}",
-                entry.file_name()
-            )
-        }) // DEBUG: See what passes only_up
+        .inspect(|entry| println!("After only_up filter: {:?}", entry.file_name())) // DEBUG: See what passes only_up
         .filter_map(convert_to_tuple)
         .collect::<Vec<_>>();
 
@@ -48,12 +40,18 @@ fn main() -> Result<()> {
 
     if !migration_files.is_empty() {
         let local_migration_dir = Path::new("migrations");
+        println!(
+            "Creating migrations directory at: {}",
+            local_migration_dir.display()
+        );
+
         remove_dir_if_exists(local_migration_dir)?;
         fs::create_dir(local_migration_dir)?;
 
         for (idx, migration) in migration_files.iter().enumerate() {
             let new_file_name = format!("V{}__{}.sql", idx + 1, migration.file_name);
             let dest_path = local_migration_dir.join(new_file_name);
+            println!("Copying to: {}", dest_path.display());
             fs::copy(&migration.from, &dest_path)?;
         }
     }
