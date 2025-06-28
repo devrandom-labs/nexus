@@ -1,15 +1,21 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use nexus::{
     error::Error,
-    store::{EventRecord, EventStore, StreamId},
+    store::{
+        EventRecord, EventStore, StreamId,
+        record::{CorrelationId, EventRecordId, EventRecordResponse},
+    },
 };
-use rusqlite::{Connection, Error as SqlError, config::DbConfig, params};
+use rusqlite::{Connection, Error as SqlError, Result as SResult, config::DbConfig, params};
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
-use tokio_stream::Stream;
+use tokio::{sync::mpsc::channel, task::spawn_blocking};
+use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tracing::{debug, instrument, trace};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -93,23 +99,70 @@ impl EventStore for Store {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self))]
     fn read_stream<'a>(
         &'a self,
-        _stream_id: StreamId,
-    ) -> Pin<Box<dyn Stream<Item = Result<EventRecord, Error>> + Send + 'a>>
+        stream_id: StreamId,
+    ) -> Pin<Box<dyn Stream<Item = Result<EventRecordResponse, Error>> + Send + 'a>>
     where
         Self: Sync + 'a,
     {
-        todo!("iterate and convert it to streams")
+        debug!(?stream_id, "fetching events");
+        let (tx, mut rx) = channel::<Result<EventRecordResponse, Error>>(10);
+        let conn = Arc::clone(&self.connection);
+        let sql = "
+            SELECT e.id, e.stream_id, e.version, e.event_type, e.payload, e.persisted_at, m.correlation_id
+            FROM event AS e
+            INNER JOIN event_metadata AS m ON e.id = m.event_id
+            WHERE e.stream_id = ?1
+            ORDER BY e.version ASC
+        ";
+        let task = spawn_blocking(move || {
+            let conn = conn.lock().unwrap();
+            let mut stmt_result = conn
+                .prepare(sql)
+                .map_err(|err| Error::Store { source: err.into() });
+
+            if let Ok(mut stmt) = stmt_result {
+                let query_result = stmt
+                    .query_and_then([&stream_id.to_string()], |row| {
+                        // correlation
+                        let correlation_id: SResult<String> = row.get("correlation_id");
+                        let id: SResult<Uuid> = row.get("id");
+                        let stream_id: SResult<String> = row.get("stream_id");
+                        let version: SResult<u64> = row.get("version");
+                        let event_type: SResult<String> = row.get("version");
+                        let payload: SResult<Vec<u8>> = row.get("payload");
+                        let persisted_at: SResult<DateTime<Utc>> = row.get("persisted_at");
+
+                        todo!()
+                    })
+                    .map_err(|err| Error::Store { source: err.into() });
+
+                if let Err(err) = query_result {
+                    tx.send(Err(err));
+                }
+            } else {
+                tx.send(Err(stmt_result.unwrap_err()));
+            }
+        });
+
+        let stream: Pin<Box<dyn Stream<Item = Result<EventRecordResponse, Error>> + Send + 'a>> =
+            Box::pin(ReceiverStream::new(rx));
+        stream
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     #[test]
     fn should_have_unique_contraint_on_stream_id_and_version() {}
     #[test]
     fn should_have_foreign_key_config_on() {}
 }
+
+// TODO: performance test it
+// // TODO: property test it
+//
+// // TODO: property test it
+// TODO: feature for inmemory
+// TODO: feature for tracing
