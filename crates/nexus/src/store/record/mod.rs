@@ -32,6 +32,12 @@ impl Deref for EventRecordId {
     }
 }
 
+impl From<Uuid> for EventRecordId {
+    fn from(id: Uuid) -> Self {
+        Self(id)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamId(Arc<String>);
 

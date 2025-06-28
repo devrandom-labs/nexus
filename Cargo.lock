@@ -2804,6 +2804,7 @@ dependencies = [
 name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "digest",
  "form_urlencoded",
  "hashbrown",

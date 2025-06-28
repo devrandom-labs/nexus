@@ -104,4 +104,7 @@ pub enum Error {
         stream_id: StreamId,
         expected_version: u64,
     },
+
+    #[error("System Error: '{reason:?}'")]
+    System { reason: String },
 }
