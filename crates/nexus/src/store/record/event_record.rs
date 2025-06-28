@@ -4,6 +4,7 @@ use super::{
     event_metadata::EventMetadata,
 };
 use crate::{DomainEvent, core::EventDeserializer, error::Error};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::default::Default;
 
@@ -39,14 +40,6 @@ impl EventRecord {
         }
     }
 
-    pub async fn event<E, De>(&self, deserializer: De) -> Result<E, Error>
-    where
-        De: EventDeserializer,
-        E: DomainEvent,
-    {
-        deserializer.deserialize(&self.payload).await
-    }
-
     pub fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
@@ -77,5 +70,47 @@ impl EventRecord {
         D::Id: Into<StreamId>,
     {
         EventRecordBuilder::new(domain_event)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EventRecordResponse {
+    pub id: EventRecordId,
+    pub stream_id: StreamId,
+    pub version: u64,
+    pub event_type: String,
+    pub metadata: EventMetadata,
+    pub payload: Vec<u8>,
+    pub persisted_at: DateTime<Utc>,
+}
+
+impl EventRecordResponse {
+    // do not want people to directly create EventRecord
+    pub fn new(
+        id: EventRecordId,
+        stream_id: StreamId,
+        event_type: String,
+        version: u64,
+        metadata: EventMetadata,
+        payload: Vec<u8>,
+        persisted_at: DateTime<Utc>,
+    ) -> Self {
+        EventRecordResponse {
+            id,
+            event_type,
+            stream_id,
+            metadata,
+            version,
+            payload,
+            persisted_at,
+        }
+    }
+
+    pub async fn event<E, De>(&self, deserializer: De) -> Result<E, Error>
+    where
+        De: EventDeserializer,
+        E: DomainEvent,
+    {
+        deserializer.deserialize(&self.payload).await
     }
 }
