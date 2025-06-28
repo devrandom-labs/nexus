@@ -1,9 +1,77 @@
-const SQL_SCHEMA: &str = "../nexus-sql-schemas/migrations";
+use std::{
+    fs::{self, DirEntry},
+    io::{ErrorKind, Result},
+    path::{Path, PathBuf},
+};
 
-fn main() {
-    println!("cargo:rerun-if-changed={}", SQL_SCHEMA);
-    // TODO: go to "../nesus-sql-schemas/migrations"
-    // TODO: get only the up migration schemas in time order
-    // TODO: convert them into seq
-    // TODO: create migration folder
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct MigrationFile {
+    pub timestamp: u64,
+    pub from: PathBuf,
+    pub file_name: String,
+}
+
+fn main() -> Result<()> {
+    let migration_path = get_migration_path();
+    println!("cargo:rerun-if-changed={}", migration_path.display());
+    let mut migration_files = fs::read_dir(migration_path)?
+        .filter_map(|r| r.ok())
+        .filter(is_sql)
+        .filter(only_up_files)
+        .filter_map(convert_to_tuple)
+        .collect::<Vec<_>>();
+
+    migration_files.sort_unstable_by_key(|m| m.timestamp);
+
+    if !migration_files.is_empty() {
+        let local_migration_dir = Path::new("migrations");
+        remove_dir_if_exists(local_migration_dir)?;
+        fs::create_dir(local_migration_dir)?;
+
+        for (idx, migration) in migration_files.iter().enumerate() {
+            let new_file_name = format!("V{}__{}.sql", idx + 1, migration.file_name);
+            let dest_path = local_migration_dir.join(new_file_name);
+            fs::copy(&migration.from, &dest_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+// cross Operating system
+fn get_migration_path() -> PathBuf {
+    let mut migration_path = PathBuf::new();
+    migration_path.push("..");
+    migration_path.push("nexus-sql-schemas");
+    migration_path.push("migrations");
+    migration_path
+}
+
+fn is_sql(entry: &DirEntry) -> bool {
+    entry.path().extension().map_or(false, |ext| ext == "sql")
+}
+
+fn only_up_files(entry: &DirEntry) -> bool {
+    entry.path().to_string_lossy().contains("_up.sql")
+}
+
+fn convert_to_tuple(entry: DirEntry) -> Option<MigrationFile> {
+    let file_name = entry.file_name();
+    let file_name = file_name.to_string_lossy();
+    let (prefix, rest) = file_name.split_once("_")?;
+    let timestamp = prefix.parse::<u64>().ok()?;
+    let file_name = rest.strip_suffix("_up.sql")?.to_string();
+    Some(MigrationFile {
+        timestamp,
+        from: entry.path(),
+        file_name,
+    })
+}
+
+fn remove_dir_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
