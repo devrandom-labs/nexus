@@ -13,15 +13,38 @@ struct MigrationFile {
 
 fn main() -> Result<()> {
     let migration_path = get_migration_path();
+    println!(
+        "cargo:warning=Searching for migrations in: {}",
+        migration_path.display()
+    );
     println!("cargo:rerun-if-changed={}", migration_path.display());
+
+    if !migration_path.exists() {
+        println!("cargo:warning=Migration source directory does not exist. Skipping.");
+        return Ok(());
+    }
+
     let mut migration_files = fs::read_dir(migration_path)?
         .filter_map(|r| r.ok())
+        .inspect(|entry| println!("cargo:warning=Found entry: {:?}", entry.file_name())) // DEBUG: See all entries
         .filter(is_sql)
+        .inspect(|entry| println!("cargo:warning=After is_sql filter: {:?}", entry.file_name())) // DEBUG: See what passes is_sql
         .filter(only_up_files)
+        .inspect(|entry| {
+            println!(
+                "cargo:warning=After only_up filter: {:?}",
+                entry.file_name()
+            )
+        }) // DEBUG: See what passes only_up
         .filter_map(convert_to_tuple)
         .collect::<Vec<_>>();
 
-    migration_files.sort_unstable_by_key(|m| m.timestamp);
+    println!(
+        "Found {} valid migration files to process.",
+        migration_files.len()
+    );
+
+    migration_files.sort();
 
     if !migration_files.is_empty() {
         let local_migration_dir = Path::new("migrations");
@@ -52,7 +75,7 @@ fn is_sql(entry: &DirEntry) -> bool {
 }
 
 fn only_up_files(entry: &DirEntry) -> bool {
-    entry.path().to_string_lossy().contains("_up.sql")
+    entry.path().to_string_lossy().contains(".up.sql")
 }
 
 fn convert_to_tuple(entry: DirEntry) -> Option<MigrationFile> {
@@ -60,7 +83,7 @@ fn convert_to_tuple(entry: DirEntry) -> Option<MigrationFile> {
     let file_name = file_name.to_string_lossy();
     let (prefix, rest) = file_name.split_once("_")?;
     let timestamp = prefix.parse::<u64>().ok()?;
-    let file_name = rest.strip_suffix("_up.sql")?.to_string();
+    let file_name = rest.strip_suffix(".up.sql")?.to_string();
     Some(MigrationFile {
         timestamp,
         from: entry.path(),
