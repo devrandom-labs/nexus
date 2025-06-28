@@ -48,7 +48,7 @@ fn get_migration_path() -> PathBuf {
 }
 
 fn is_sql(entry: &DirEntry) -> bool {
-    entry.path().extension().map_or(false, |ext| ext == "sql")
+    entry.path().extension().is_some_and(|ext| ext == "sql")
 }
 
 fn only_up_files(entry: &DirEntry) -> bool {
