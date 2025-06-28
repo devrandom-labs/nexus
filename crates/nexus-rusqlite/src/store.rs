@@ -39,7 +39,6 @@ impl Store {
         })
     }
 
-    #[inline]
     #[instrument(level = "debug", skip(conn), err)]
     fn configure_connection(conn: &Connection) -> SResult<()> {
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_FKEY, true)?;
@@ -76,6 +75,7 @@ impl Store {
 
 #[async_trait]
 impl EventStore for Store {
+    ///TODO: FIXME: IMPORTANT: MAKE A ONE SHOT CHANNEL TO GIVE BACK THE VALUE OF THIS TRANSACTION
     #[instrument(level = "debug", skip(self), err)]
     async fn append_to_stream(
         &self,
