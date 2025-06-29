@@ -8,7 +8,7 @@ authors.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
-nexus = { path = "../../crates/nexus" }
+nexus = { path = "../nexus" }
 refinery = { workspace = true, features = ["rusqlite"] }
 rusqlite = { workspace = true, features = ["bundled", "trace", "uuid", "chrono"] }
 thiserror = { workspace = true }

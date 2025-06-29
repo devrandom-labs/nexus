@@ -208,24 +208,21 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
-
-    use nexus::store::record::builder::EventRecordBuilder;
+    use refinery::embed_migrations;
     use rusqlite::Connection;
 
-    mod embedded {
-        use refinery::embed_migrations;
-        embed_migrations!("migrations");
-    }
+    embed_migrations!("migrations");
 
     fn apply_migrations() {
         let mut conn = Connection::open_in_memory().expect("could not open connection");
-        embedded::migrations::runner()
+        migrations::runner()
             .run(&mut conn)
             .expect("migrations could not be applied.");
     }
 
-    // TODO: create "nexus::message" and "nexus::event" derive macro
     mod events {
+
+        #[allow(dead_code)]
         pub struct UserCreated {
             user_id: String,
         }

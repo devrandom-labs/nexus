@@ -18,7 +18,6 @@ form_urlencoded = { version = "1" }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
-libsqlite3-sys = { version = "0.31", features = ["bundled"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 percent-encoding = { version = "2" }
@@ -43,7 +42,6 @@ form_urlencoded = { version = "1" }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
-libsqlite3-sys = { version = "0.31", features = ["bundled"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 percent-encoding = { version = "2" }
@@ -55,6 +53,11 @@ rusqlite = { version = "0.33", default-features = false, features = ["bundled", 
 serde = { version = "1", features = ["derive", "rc"] }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", default-features = false, features = ["log", "make", "util"] }
+tracing = { version = "0.1", features = ["log"] }
+tracing-core = { version = "0.1" }
 uuid = { version = "1", features = ["fast-rng", "serde", "v7"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
@@ -64,5 +67,7 @@ tower-http = { version = "0.6", features = ["follow-redirect", "trace"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 libc = { version = "0.2" }
+tower = { version = "0.5", default-features = false, features = ["timeout"] }
+tower-http = { version = "0.6", features = ["follow-redirect", "trace"] }
 
 ### END HAKARI SECTION

@@ -9,4 +9,5 @@ authors.workspace = true
 proc-macro = true
 
 [dependencies]
+nexus = { path = "../nexus" }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }

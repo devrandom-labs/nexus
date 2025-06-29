@@ -1063,6 +1063,7 @@ dependencies = [
 name = "nexus-macros"
 version = "0.1.0"
 dependencies = [
+ "nexus",
  "workspace-hack",
 ]
 
@@ -2811,7 +2812,6 @@ dependencies = [
  "idna",
  "indexmap",
  "libc",
- "libsqlite3-sys",
  "log",
  "memchr",
  "percent-encoding",

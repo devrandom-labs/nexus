@@ -1,14 +1,12 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+// TODO: create derive macro for message message trait
+// TODO: create attribute macro for DomainEvent trait called nexus::
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use proc_macro::TokenStream;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[proc_macro_attribute]
+pub fn domain_event(args: TokenStream, input: TokenStream) -> TokenStream {
+    // should impl nexus::Message
+    let _ = args;
+    let _ = input;
+    unimplemented!()
 }
