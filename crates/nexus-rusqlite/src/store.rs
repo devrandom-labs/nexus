@@ -209,9 +209,32 @@ impl EventStore for Store {
 #[cfg(test)]
 mod tests {
 
+    use nexus::store::record::builder::EventRecordBuilder;
+    use rusqlite::Connection;
+
+    mod embedded {
+        use refinery::embed_migrations;
+        embed_migrations!("migrations");
+    }
+
+    fn apply_migrations() {
+        let mut conn = Connection::open_in_memory().expect("could not open connection");
+        embedded::migrations::runner()
+            .run(&mut conn)
+            .expect("migrations could not be applied.");
+    }
+
+    // TODO: create "nexus::message" and "nexus::event" derive macro
+    mod events {
+        pub struct UserCreated {
+            user_id: String,
+        }
+    }
+
     #[tokio::test]
     async fn should_be_able_to_write_and_read_stream_events() {
-        // TODO: initialize migration
+        apply_migrations();
+
         // TODO: create sample event record
         // TODO: write to event store
         // TODO: read event record response
