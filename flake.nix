@@ -203,6 +203,9 @@
             partitionType = "count";
           });
 
+          myCrateCoverage =
+            craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
+
           # Ensure that cargo-hakari is up to date
           tixlys-hakari = craneLib.mkCargoDerivation {
             inherit src;

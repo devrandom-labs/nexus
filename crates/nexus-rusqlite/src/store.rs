@@ -206,8 +206,9 @@ mod tests {
 }
 
 // TODO: performance test it
-// // TODO: property test it
-//
-// TODO: feature for inmemory
+// TODO: property test it
 // TODO: feature for tracing
-// TODO: feature for tracing
+
+// what is the property of this store?
+// read the events
+// write the events
