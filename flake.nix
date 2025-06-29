@@ -68,10 +68,9 @@
               (craneLib.fileset.commonCargoSources ./crates/nexus)
               (craneLib.fileset.commonCargoSources ./crates/nexus-rusqlite)
               (craneLib.fileset.commonCargoSources ./crates/nexus-macros)
-              (craneLib.fileset.commonCargoSources ./crates/nexus-sql-schemas)
               (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
               (craneLib.fileset.commonCargoSources crate)
-              ./crates/nexus-sql-schemas/migrations
+              ./schemas
             ];
           };
 
