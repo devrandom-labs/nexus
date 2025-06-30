@@ -1048,6 +1048,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "nexus-macros",
  "serde",
  "smallvec",
  "thiserror 2.0.12",
@@ -1063,7 +1064,6 @@ dependencies = [
 name = "nexus-macros"
 version = "0.1.0"
 dependencies = [
- "nexus",
  "quote",
  "syn",
  "workspace-hack",
@@ -2810,6 +2810,7 @@ dependencies = [
  "log",
  "memchr",
  "percent-encoding",
+ "proc-macro2",
  "refinery-core",
  "regex",
  "regex-automata 0.4.9",

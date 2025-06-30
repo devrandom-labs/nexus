@@ -5,7 +5,7 @@ use super::{
     aggregate::{AggregateState, AggregateType},
     handler::{AggregateCommandHandler, CommandHandlerResponse},
 };
-use crate::{Command, DomainEvent, Message};
+use crate::core::{Command, DomainEvent, Message};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{pin::Pin, time::Duration};

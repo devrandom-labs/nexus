@@ -45,6 +45,7 @@ indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 percent-encoding = { version = "2" }
+proc-macro2 = { version = "1" }
 refinery-core = { version = "0.8", features = ["rusqlite", "toml"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
