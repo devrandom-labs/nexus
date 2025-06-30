@@ -10,4 +10,6 @@ proc-macro = true
 
 [dependencies]
 nexus = { path = "../nexus" }
+quote = "1.0.40"
+syn = { version = "2.0.104", features = ["extra-traits"] }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }

@@ -62,17 +62,8 @@ fn main() -> Result<()> {
 
 // cross Operating system
 fn get_migration_path() -> PathBuf {
-    // let mut migration_path = PathBuf::new();
-    // migration_path.push("..");
-    // migration_path.push("nexus-sql-schemas");
-    // migration_path.push("migrations");
-    // migration_path
-
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-
-    // Navigate from there to the root of your project
     let project_root = manifest_dir.parent().unwrap().parent().unwrap();
-
     // Now, build the path to the desired schemas
     // For this example, we hardcode 'sqlite'
     project_root.join("schemas").join("sqlite")
