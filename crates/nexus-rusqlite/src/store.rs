@@ -222,7 +222,6 @@ mod tests {
 
     mod events {
         use nexus::Message;
-
         #[allow(dead_code)]
         #[derive(Message, Debug)]
         pub struct UserCreated {
