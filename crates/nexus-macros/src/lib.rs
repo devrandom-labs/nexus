@@ -18,9 +18,17 @@ pub fn message(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Command, attributes(command))]
 pub fn command(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
-    let struct_name = &ast.ident;
+    let _struct_name = &ast.ident;
     // TODO: get id type and result type, full type..
     // TODO: also add message trait to all command
+    eprintln!("{:#?}", ast);
+    TokenStream::new()
+}
+
+#[proc_macro_derive(Query, attributes(query))]
+pub fn query(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    let _struct_name = &ast.ident;
     eprintln!("{:#?}", ast);
     TokenStream::new()
 }
