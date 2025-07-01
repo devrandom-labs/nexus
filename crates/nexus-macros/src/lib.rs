@@ -27,8 +27,12 @@ pub fn query(input: TokenStream) -> TokenStream {
 
 #[proc_macro_derive(DomainEvent, attributes(domain_event))]
 pub fn domain_event(input: TokenStream) -> TokenStream {
-    let _ast = parse_macro_input!(input as DeriveInput);
-    unimplemented!()
+    let ast = parse_macro_input!(input as DeriveInput);
+    match parse_domain_event(&ast) {
+        Ok(code) => code,
+        Err(e) => e.to_compile_error(),
+    }
+    .into()
 }
 
 fn parse_command(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
@@ -108,4 +112,11 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     .into();
 
     Ok(expanded)
+}
+
+fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
+    let name = &ast.ident;
+    let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
+    // this is a bit diff, we need ID
+    unimplemented!()
 }
