@@ -12,7 +12,7 @@ use syn::{Attribute, Error, Result};
 /// # Returns
 /// A `Result` containing a reference to the found attribute, or a `syn::Error`
 /// pinpointing the error's location.
-fn get_attribute<'a>(
+pub fn get_attribute<'a>(
     attributes: &'a [Attribute],
     name: &'a str,
     error_span: Span,
@@ -27,4 +27,44 @@ fn get_attribute<'a>(
 }
 
 #[cfg(test)]
-mod tests {}
+mod test {
+    use super::*;
+    use proc_macro2::Span;
+    use syn::{Attribute, DeriveInput, parse_str};
+
+    fn parse_attr(code: &str) -> Vec<Attribute> {
+        let ast: DeriveInput = parse_str(code).expect("Failed to parse the test code");
+        ast.attrs
+    }
+
+    #[test]
+    fn should_find_attribute_when_present() {
+        let attrs = parse_attr(
+            r#"
+        #[other_attr]
+        #[command(result = User)]
+        struct TestStruct;
+        "#,
+        );
+        let span = Span::call_site();
+        let result = get_attribute(&attrs, "command", span);
+        assert!(result.is_ok());
+        let found_attr = result.unwrap();
+        assert!(found_attr.path().is_ident("command"));
+    }
+    #[test]
+    fn should_return_error_when_absent() {
+        let attrs = parse_attr(
+            r#"
+        #[other_attr]
+        #[query(result = User)]
+        struct TestStruct;
+        "#,
+        );
+        let span = Span::call_site();
+        let result = get_attribute(&attrs, "command", span);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.to_string(), "missing required attribute `#[command]`");
+    }
+}
