@@ -10,5 +10,5 @@ proc-macro = true
 
 [dependencies]
 quote = "1.0.40"
-syn = { version = "2.0.104", features = ["extra-traits"] }
+syn = { version = "2.0.104", features = ["extra-traits", "parsing", "derive"] }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
