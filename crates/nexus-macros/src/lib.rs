@@ -1,14 +1,56 @@
 #![allow(dead_code)]
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Attribute, DeriveInput, Ident, Result, Type, parse_macro_input};
+use syn::{DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
 
-mod command;
 mod utils;
 
 #[proc_macro_derive(Command, attributes(command))]
 pub fn command(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
-    eprintln!("{:#?}", &ast.ident);
-    TokenStream::new()
+    match parse_command(&ast) {
+        Ok(code) => code,
+        Err(e) => e.to_compile_error(),
+    }
+    .into()
+}
+
+fn parse_command(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
+    let name = &ast.ident;
+    let attribute = utils::get_attribute(&ast.attrs, "command", name.span())?;
+
+    let mut result: Option<Type> = None;
+    let mut error_type: Option<Type> = None;
+
+    attribute.parse_nested_meta(|meta| {
+        if meta.path.is_ident("result") {
+            result = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("error") {
+            error_type = Some(meta.value()?.parse()?);
+        } else {
+            return Err(meta.error("unrecognized key for `#[command]` attribute"));
+        }
+        Ok(())
+    })?;
+
+    let result =
+        result.ok_or_else(|| Error::new(attribute.path().span(), "`result` key is required"))?;
+
+    let error_type =
+        error_type.ok_or_else(|| Error::new(attribute.path().span(), "`error` key is required"))?;
+
+    let expanded = quote! {
+        impl ::nexus::core::Command for #name {
+            type Result = #result;
+            type Error = #error_type;
+
+        }
+
+        impl ::nexus::core::Message for #name {
+
+        }
+    }
+    .into();
+
+    Ok(expanded)
 }
