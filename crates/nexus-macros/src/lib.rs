@@ -99,15 +99,16 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         error_type.ok_or_else(|| Error::new(attribute.path().span(), "`error` key is required"))?;
 
     let expanded = quote! {
+        impl ::nexus::core::Message for #name {
+
+        }
         impl ::nexus::core::Query for #name {
             type Result = #result;
             type Error = #error_type;
 
         }
 
-        impl ::nexus::core::Message for #name {
 
-        }
     }
     .into();
 
@@ -118,5 +119,32 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
     // this is a bit diff, we need ID
-    unimplemented!()
+    //
+    let mut id: Option<Type> = None;
+
+    attribute.parse_nested_meta(|meta| {
+        if meta.path.is_ident("id") {
+            id = Some(meta.value()?.parse()?);
+        } else {
+            return Err(meta.error("unrecognized key for `#[command]` attribute"));
+        }
+        Ok(())
+    })?;
+
+    let id = id.ok_or_else(|| Error::new(attribute.path().span(), "`id` key is required"))?;
+
+    let expanded = quote! {
+
+        impl ::nexus::core::Message for #name {
+
+        }
+
+        impl ::nexus::core::DomainEvent for #name {
+            type Id = #id;
+        }
+
+    }
+    .into();
+
+    Ok(expanded)
 }
