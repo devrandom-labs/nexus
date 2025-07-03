@@ -115,6 +115,8 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     Ok(expanded)
 }
 
+// for now events must be a struct
+// will change it
 fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
