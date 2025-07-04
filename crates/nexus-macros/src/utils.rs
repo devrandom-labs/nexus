@@ -1,5 +1,6 @@
 use proc_macro2::Span;
-use syn::{Attribute, Data, DataStruct, Error, Fields, Result, Type};
+use std::collections::HashMap;
+use syn::{Attribute, Data, DataStruct, Error, Fields, Ident, Result, Type};
 
 /// Finds a specific attribute in a slice, returning a targeted error if not found.
 ///
@@ -26,7 +27,7 @@ pub fn get_attribute<'a>(
         })
 }
 
-pub fn get_field_type_and_name(data: &Data, attribute: &str, error_span: Span) -> Result<Type> {
+pub fn get_field_type(data: &Data, attribute: &str, error_span: Span) -> Result<Type> {
     // if struct get the name and type of the field
     let fields = match data {
         Data::Struct(DataStruct {
@@ -34,7 +35,7 @@ pub fn get_field_type_and_name(data: &Data, attribute: &str, error_span: Span) -
             ..
         }) => &fields.named,
         _ => {
-            return Err(Error::new(error_span, "must be a struct or enum."));
+            return Err(Error::new(error_span, "must be a struct"));
         }
     };
 
@@ -51,6 +52,75 @@ pub fn get_field_type_and_name(data: &Data, attribute: &str, error_span: Span) -
     Err(Error::new(
         error_span,
         "A field must be marked with `#[{attribute}]`",
+    ))
+}
+
+pub struct FieldInfo<'a> {
+    pub name: &'a Ident,
+    pub ty: &'a Type,
+    pub variant: &'a Ident,
+}
+
+pub enum DataTypesFieldInfo<'a> {
+    Struct { name: &'a Ident, ty: &'a Type },
+    Enum(Vec<FieldInfo<'a>>),
+}
+
+pub fn get_fields_info<'a>(
+    data: &'a Data,
+    attribute_name: &'a str,
+    error_span: Span,
+) -> Result<DataTypesFieldInfo<'a>> {
+    match data {
+        Data::Struct(s) => {
+            let info = find_in_fields(&s.fields, attribute_name)?;
+            return Ok(DataTypesFieldInfo::Struct {
+                name: info.0,
+                ty: info.1,
+            });
+        }
+        Data::Enum(e) => {
+            let mut field_infos: Vec<FieldInfo<'a>> = Vec::new();
+            for variant in &e.variants {
+                let info = find_in_fields(&variant.fields, attribute_name)?;
+                field_infos.push(FieldInfo {
+                    name: info.0,
+                    ty: info.1,
+                    variant: &variant.ident,
+                });
+            }
+
+            if field_infos.len() > 0 {
+                Ok(DataTypesFieldInfo::Enum(field_infos))
+            } else {
+                Err(Error::new(error_span, format!("")))
+            }
+        }
+        Data::Union(_) => Err(Error::new(error_span, "Unions are not supported.")),
+    }
+}
+
+// get the fiel type and name from this
+pub fn find_in_fields<'a>(
+    fields: &'a Fields,
+    attribute_name: &'a str,
+) -> Result<(&'a Ident, &'a Type)> {
+    for field in fields {
+        for attr in &field.attrs {
+            if attr.path().is_ident(attribute_name) {
+                return Ok((
+                    field.ident.as_ref().ok_or_else(|| {
+                        Error::new_spanned(field, "Attribute can only be on named fields.")
+                    })?,
+                    &field.ty,
+                ));
+            }
+        }
+    }
+
+    Err(Error::new(
+        proc_macro2::Span::call_site(),
+        format!("Attribute `#[{}]` not found on any field.", attribute_name),
     ))
 }
 
