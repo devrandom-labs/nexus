@@ -2,6 +2,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
+use utils::DataTypesFieldInfo;
 
 mod utils;
 
@@ -119,34 +120,70 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 // will change it
 fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
-    let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
-    // this is a bit diff, we need ID
-    //
-    let mut id: Option<Type> = None;
+    match utils::get_fields_info(&ast.data, "#[attribute_id]", name.span())? {
+        DataTypesFieldInfo::Struct {
+            name: field_name,
+            ty: id_type,
+        } => {
+            let expanded = quote! {
 
-    attribute.parse_nested_meta(|meta| {
-        if meta.path.is_ident("id") {
-            id = Some(meta.value()?.parse()?);
-        } else {
-            return Err(meta.error("unrecognized key for `#[command]` attribute"));
+                impl ::nexus::core::Message for #name {
+
+                }
+
+                impl ::nexus::core::DomainEvent for #name {
+                    type Id = #id_type;
+
+                    fn aggregate_id(&self) -> &Self::Id {
+                        &self.#field_name
+                    }
+                }
+            }
+            .into();
+            Ok(expanded)
         }
-        Ok(())
-    })?;
+        DataTypesFieldInfo::Enum(fields) => {
+            let id_type = fields[0].ty;
 
-    let id = id.ok_or_else(|| Error::new(attribute.path().span(), "`id` key is required"))?;
+            for field in fields.iter().skip(1) {
+                if field.ty != id_type {
+                    let msg = "All fields marked with `#[attribute_id]` must have the same type across all enum variants.";
+                    return Err(Error::new_spanned(field.ty, msg));
+                }
+            }
 
-    let expanded = quote! {
+            let match_arms = fields.iter().map(|info| {
+                let variant = info.variant;
+                let field_name = info.name;
 
-        impl ::nexus::core::Message for #name {
+                quote! {
+                    Self::#variant { #field_name, .. } => #field_name
+                }
+            });
 
+            let expanded = quote! {
+
+
+                impl ::nexus::core::Message for #name {
+
+                }
+
+                impl ::nexus::core::DomainEvent for #name {
+
+                    type Id = #id_type;
+
+                    fn aggregate_id(&self) -> &Self::Id {
+
+                        match self {
+                            #(#match_arms),*
+                        }
+                    }
+                }
+
+            }
+            .into();
+
+            Ok(expanded)
         }
-
-        impl ::nexus::core::DomainEvent for #name {
-            type Id = #id;
-        }
-
     }
-    .into();
-
-    Ok(expanded)
 }
