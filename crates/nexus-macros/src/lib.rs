@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
+use syn::{Attribute, DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
 use utils::DataTypesFieldInfo;
 
 mod utils;
@@ -30,6 +30,16 @@ pub fn query(input: TokenStream) -> TokenStream {
 pub fn domain_event(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     match parse_domain_event(&ast) {
+        Ok(code) => code,
+        Err(e) => e.to_compile_error(),
+    }
+    .into()
+}
+
+#[proc_macro_derive(Aggregate, attributes(aggregate))]
+pub fn aggregate(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    match parse_aggregate(&ast) {
         Ok(code) => code,
         Err(e) => e.to_compile_error(),
     }
@@ -186,4 +196,46 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
             Ok(expanded)
         }
     }
+}
+
+fn parse_aggregate(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
+    let name = &ast.ident;
+    let attribute = utils::get_attribute(&ast.attrs, "aggregate", name.span())?;
+
+    let mut id: Option<Type> = None;
+    let mut event: Option<Type> = None;
+    let mut state: Option<Type> = None;
+
+    attribute.parse_nested_meta(|meta| {
+        if meta.path.is_ident("id") {
+            id = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("event") {
+            event = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("state") {
+            state = Some(meta.value()?.parse()?);
+        } else {
+            return Err(meta.error("unrecognized key for `#[aggregate]` attribute"));
+        }
+        Ok(())
+    })?;
+
+    let id = id.ok_or_else(|| Error::new(attribute.path().span(), "`id` key is required"))?;
+
+    let event =
+        event.ok_or_else(|| Error::new(attribute.path().span(), "`event` key is required"))?;
+
+    let state =
+        state.ok_or_else(|| Error::new(attribute.path().span(), "`state` key is required"))?;
+
+    let expanded = quote! {
+            impl AggregateType for User {
+                type Id = #id;
+                type Event = #event;
+                type State = #state;
+            }
+
+    }
+    .into();
+
+    Ok(expanded)
 }
