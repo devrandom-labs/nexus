@@ -1,5 +1,4 @@
 use proc_macro2::Span;
-use std::collections::HashMap;
 use syn::{Attribute, Data, DataStruct, Error, Fields, Ident, Result, Type};
 
 /// Finds a specific attribute in a slice, returning a targeted error if not found.
@@ -73,7 +72,7 @@ pub fn get_fields_info<'a>(
 ) -> Result<DataTypesFieldInfo<'a>> {
     match data {
         Data::Struct(s) => {
-            let info = find_in_fields(&s.fields, attribute_name)?;
+            let info = find_in_fields(&s.fields, attribute_name, error_span)?;
             return Ok(DataTypesFieldInfo::Struct {
                 name: info.0,
                 ty: info.1,
@@ -82,19 +81,14 @@ pub fn get_fields_info<'a>(
         Data::Enum(e) => {
             let mut field_infos: Vec<FieldInfo<'a>> = Vec::new();
             for variant in &e.variants {
-                let info = find_in_fields(&variant.fields, attribute_name)?;
+                let info = find_in_fields(&variant.fields, attribute_name, error_span)?;
                 field_infos.push(FieldInfo {
                     name: info.0,
                     ty: info.1,
                     variant: &variant.ident,
                 });
             }
-
-            if field_infos.len() > 0 {
-                Ok(DataTypesFieldInfo::Enum(field_infos))
-            } else {
-                Err(Error::new(error_span, format!("")))
-            }
+            Ok(DataTypesFieldInfo::Enum(field_infos))
         }
         Data::Union(_) => Err(Error::new(error_span, "Unions are not supported.")),
     }
@@ -104,24 +98,38 @@ pub fn get_fields_info<'a>(
 pub fn find_in_fields<'a>(
     fields: &'a Fields,
     attribute_name: &'a str,
+    error_span: Span,
 ) -> Result<(&'a Ident, &'a Type)> {
+    let mut found_fields = Vec::new();
+
     for field in fields {
-        for attr in &field.attrs {
-            if attr.path().is_ident(attribute_name) {
-                return Ok((
-                    field.ident.as_ref().ok_or_else(|| {
-                        Error::new_spanned(field, "Attribute can only be on named fields.")
-                    })?,
-                    &field.ty,
-                ));
-            }
+        if field
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident(attribute_name))
+        {
+            // This is an early error: attribute on a tuple field with no name.
+            let field_name = field.ident.as_ref().ok_or_else(|| {
+                let msg = format!(
+                    "The `#[{attribute_name}]` attribute can only be placed on fields with names."
+                );
+                Error::new_spanned(field, msg)
+            })?;
+            found_fields.push((field_name, &field.ty));
         }
     }
 
-    Err(Error::new(
-        proc_macro2::Span::call_site(),
-        format!("Attribute `#[{}]` not found on any field.", attribute_name),
-    ))
+    match found_fields.len() {
+        1 => Ok(found_fields.pop().unwrap()), // Safe due to length check
+        0 => {
+            let msg = format!("A field must be marked with `#[{attribute_name}]`");
+            Err(Error::new(error_span, msg))
+        }
+        _ => {
+            let msg = format!("Only one field can be marked with `#[{attribute_name}]`");
+            Err(Error::new(error_span, msg))
+        }
+    }
 }
 
 #[cfg(test)]
