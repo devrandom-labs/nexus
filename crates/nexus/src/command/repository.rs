@@ -1,5 +1,5 @@
 use super::aggregate::{AggregateLoadError, AggregateRoot, AggregateType as AT};
-use crate::Id as AggregateId;
+use crate::core::Id as AggregateId;
 use std::{error::Error as StdError, fmt::Debug, future::Future, pin::Pin};
 use thiserror::Error as ThisError;
 use tower::BoxError;

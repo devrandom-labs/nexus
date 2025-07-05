@@ -1,5 +1,5 @@
 use super::repository::ReadModelRepository;
-use crate::Query;
+use crate::core::Query;
 use std::{
     boxed::Box, clone::Clone, error::Error as StdError, marker::PhantomData, pin::Pin,
     task::Context, task::Poll,

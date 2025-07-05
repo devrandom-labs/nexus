@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Attribute, DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
+use syn::{DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
 use utils::DataTypesFieldInfo;
 
 mod utils;
@@ -26,7 +26,7 @@ pub fn query(input: TokenStream) -> TokenStream {
     .into()
 }
 
-#[proc_macro_derive(DomainEvent, attributes(domain_event))]
+#[proc_macro_derive(DomainEvent, attributes(attribute_id))]
 pub fn domain_event(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     match parse_domain_event(&ast) {
@@ -130,7 +130,7 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 // will change it
 fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
-    match utils::get_fields_info(&ast.data, "#[attribute_id]", name.span())? {
+    match utils::get_fields_info(&ast.data, "attribute_id", name.span())? {
         DataTypesFieldInfo::Struct {
             name: field_name,
             ty: id_type,
@@ -228,7 +228,7 @@ fn parse_aggregate(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         state.ok_or_else(|| Error::new(attribute.path().span(), "`state` key is required"))?;
 
     let expanded = quote! {
-            impl AggregateType for User {
+            impl ::nexus::command::aggregate::AggregateType for User {
                 type Id = #id;
                 type Event = #event;
                 type State = #state;

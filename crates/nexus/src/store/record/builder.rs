@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 use super::{StreamId, event_metadata::EventMetadata, event_record::EventRecord};
-use crate::{DomainEvent, core::EventSerializer, error::Error};
+use crate::{
+    core::{DomainEvent, EventSerializer},
+    error::Error,
+};
 
 pub struct EventRecordBuilder<E>
 where

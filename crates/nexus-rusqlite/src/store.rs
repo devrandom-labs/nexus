@@ -220,12 +220,15 @@ mod tests {
             .expect("migrations could not be applied.");
     }
 
-    mod events {
-        use nexus::Message;
+    pub mod events {
+        use nexus::DomainEvent;
+        use serde::{Deserialize, Serialize};
+
         #[allow(dead_code)]
-        #[derive(Message, Debug)]
+        #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct UserCreated {
-            user_id: String,
+            #[attribute_id]
+            pub user_id: String,
         }
     }
 

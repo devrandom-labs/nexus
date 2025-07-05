@@ -265,6 +265,7 @@
             age
             cargo-edit
             sqlx-cli
+            cargo-expand
           ];
         };
       }) // {
