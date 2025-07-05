@@ -73,10 +73,10 @@ pub fn get_fields_info<'a>(
     match data {
         Data::Struct(s) => {
             let info = find_in_fields(&s.fields, attribute_name, error_span)?;
-            return Ok(DataTypesFieldInfo::Struct {
+            Ok(DataTypesFieldInfo::Struct {
                 name: info.0,
                 ty: info.1,
-            });
+            })
         }
         Data::Enum(e) => {
             let mut field_infos: Vec<FieldInfo<'a>> = Vec::new();

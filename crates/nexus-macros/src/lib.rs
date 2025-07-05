@@ -80,8 +80,7 @@ fn parse_command(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         impl ::nexus::core::Message for #name {
 
         }
-    }
-    .into();
+    };
 
     Ok(expanded)
 }
@@ -120,8 +119,7 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         }
 
 
-    }
-    .into();
+    };
 
     Ok(expanded)
 }
@@ -148,8 +146,8 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                         &self.#field_name
                     }
                 }
-            }
-            .into();
+            };
+
             Ok(expanded)
         }
         DataTypesFieldInfo::Enum(fields) => {
@@ -190,8 +188,7 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                     }
                 }
 
-            }
-            .into();
+            };
 
             Ok(expanded)
         }
@@ -233,9 +230,7 @@ fn parse_aggregate(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 type Event = #event;
                 type State = #state;
             }
-
-    }
-    .into();
+    };
 
     Ok(expanded)
 }
