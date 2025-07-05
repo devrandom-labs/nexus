@@ -6,8 +6,9 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-nexus = { path = "../../crates/nexus" }
+nexus = { path = "../../crates/nexus" , features = ["derive"]}
 nexus-rusqlite = { path = "../../crates/nexus-rusqlite" }
 tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 workspace-hack = { version = "0.1.0", path = "../../crates/workspace-hack" }

@@ -1990,6 +1990,7 @@ version = "0.1.0"
 dependencies = [
  "nexus",
  "nexus-rusqlite",
+ "serde",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
