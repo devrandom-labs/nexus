@@ -1,5 +1,5 @@
 use super::UserDomainEvents;
-use crate::DomainEvent;
+use crate::core::DomainEvent;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 

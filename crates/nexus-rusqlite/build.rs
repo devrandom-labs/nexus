@@ -14,7 +14,10 @@ struct MigrationFile {
 
 fn main() -> Result<()> {
     let migration_path = get_migration_path();
-    println!("Searching for migrations in: {}", migration_path.display());
+    println!(
+        "cargo:warning=Searching for migrations in: {}",
+        migration_path.display()
+    );
     println!("cargo:rerun-if-changed={}", migration_path.display());
 
     if !migration_path.exists() {
@@ -61,11 +64,13 @@ fn main() -> Result<()> {
 }
 
 // cross Operating system
+
 fn get_migration_path() -> PathBuf {
+    // if let Ok(schemas_dir) = env::var("SCHEMAS_DIR") {
+    //     return PathBuf::from(schemas_dir).join("sqlite");
+    // }
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let project_root = manifest_dir.parent().unwrap().parent().unwrap();
-    // Now, build the path to the desired schemas
-    // For this example, we hardcode 'sqlite'
     project_root.join("schemas").join("sqlite")
 }
 
