@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::{self, DirEntry},
     io::{ErrorKind, Result},
     path::{Path, PathBuf},
@@ -13,7 +14,10 @@ struct MigrationFile {
 
 fn main() -> Result<()> {
     let migration_path = get_migration_path();
-    println!("Searching for migrations in: {}", migration_path.display());
+    println!(
+        "cargo:warning=Searching for migrations in: {}",
+        migration_path.display()
+    );
     println!("cargo:rerun-if-changed={}", migration_path.display());
 
     if !migration_path.exists() {
@@ -60,12 +64,14 @@ fn main() -> Result<()> {
 }
 
 // cross Operating system
+
 fn get_migration_path() -> PathBuf {
-    let mut migration_path = PathBuf::new();
-    migration_path.push("..");
-    migration_path.push("nexus-sql-schemas");
-    migration_path.push("migrations");
-    migration_path
+    // if let Ok(schemas_dir) = env::var("SCHEMAS_DIR") {
+    //     return PathBuf::from(schemas_dir).join("sqlite");
+    // }
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let project_root = manifest_dir.parent().unwrap().parent().unwrap();
+    project_root.join("schemas").join("sqlite")
 }
 
 fn is_sql(entry: &DirEntry) -> bool {

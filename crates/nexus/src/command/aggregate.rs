@@ -1,5 +1,5 @@
 use super::handler::{AggregateCommandHandler, CommandHandlerResponse};
-use crate::{Command, DomainEvent, Id};
+use crate::core::{Command, DomainEvent, Id};
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use thiserror::Error as ThisError;

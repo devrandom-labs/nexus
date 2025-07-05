@@ -1,4 +1,4 @@
-use crate::Id;
+use crate::core::Id;
 
 /// # `ReadModel`
 ///

@@ -1,9 +1,0 @@
-[package]
-name = "nexus-sql-schemas"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
-
-[dependencies]
-workspace-hack = { version = "0.1", path = "../workspace-hack" }

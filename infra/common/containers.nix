@@ -56,3 +56,6 @@
 }
 
 ## TODO: add apicurio schema registry
+## TODO: add keri witness
+## TODO: add liteFS
+## TODO: add tixlys receptionist (instead of auth) with its own keri-id

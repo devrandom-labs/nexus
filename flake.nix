@@ -28,7 +28,16 @@
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
         craneLib = crane.mkLib pkgs;
-        src = craneLib.cleanCargoSource ./.;
+
+        unfilteredSrc = ./.;
+
+        src = lib.fileset.toSource {
+          root = unfilteredSrc;
+          fileset = lib.fileset.unions [
+            (craneLib.fileset.commonCargoSources unfilteredSrc)
+            ./schemas
+          ];
+        };
 
         commonArgs = {
           inherit src;
@@ -58,26 +67,9 @@
           doCheck = false;
         };
 
-        fileSetForCrate = crate:
-          lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./Cargo.toml
-              ./Cargo.lock
-              (craneLib.fileset.commonCargoSources ./crates/pawz)
-              (craneLib.fileset.commonCargoSources ./crates/nexus)
-              (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
-              (craneLib.fileset.commonCargoSources crate)
-            ];
-          };
-
-        ### packaging derivation to build oci image.
         mkPackage = name:
           let
-            cratePath = ./bins/${name};
             cargoTomlPath = ./bins/${name}/Cargo.toml;
-            _ = assert builtins.pathExists cratePath;
-              throw "Path does nopt exist: ${cratePath}";
             _c = assert builtins.pathExists cargoTomlPath;
               throw "Cargo file does not exist: ${cargoTomlPath}";
             cargoToml = builtins.fromTOML (builtins.readFile cargoTomlPath);
@@ -86,7 +78,6 @@
             bin = craneLib.buildPackage (individualCrateArgs // {
               inherit pname version;
               cargoExtraArgs = "-p ${pname}";
-              src = (fileSetForCrate cratePath);
             });
 
             image = pkgs.dockerTools.streamLayeredImage {
@@ -189,10 +180,8 @@
             # taplo arguments can be further customized below as needed
             # taploExtraArgs = "format";
           };
-          # Audit dependencies
-          tixlys-audit = craneLib.cargoAudit { inherit src advisory-db; };
 
-          # # Audit licenses
+          tixlys-audit = craneLib.cargoAudit { inherit src advisory-db; };
           tixlys-deny = craneLib.cargoDeny { inherit src; };
           # Run tests with cargo-nextest
           # Consider setting `doCheck = false` on other crate derivations
@@ -202,6 +191,9 @@
             partitions = 1;
             partitionType = "count";
           });
+
+          myCrateCoverage =
+            craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
 
           # Ensure that cargo-hakari is up to date
           tixlys-hakari = craneLib.mkCargoDerivation {
@@ -259,6 +251,7 @@
             age
             cargo-edit
             sqlx-cli
+            cargo-expand
           ];
         };
       }) // {

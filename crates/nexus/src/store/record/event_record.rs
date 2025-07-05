@@ -3,7 +3,10 @@ use super::{
     builder::{EventRecordBuilder, WithDomain},
     event_metadata::EventMetadata,
 };
-use crate::{DomainEvent, core::EventDeserializer, error::Error};
+use crate::{
+    core::{DomainEvent, EventDeserializer},
+    error::Error,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::default::Default;

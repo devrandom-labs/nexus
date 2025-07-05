@@ -24,7 +24,7 @@
 //! auditable systems where state mutations are explicit, event-driven, and
 //! managed through well-defined domain models.
 //!
-use crate::DomainEvent;
+use crate::core::DomainEvent;
 use smallvec::{SmallVec, smallvec};
 
 pub mod aggregate;

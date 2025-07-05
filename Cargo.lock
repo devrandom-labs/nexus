@@ -1048,6 +1048,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "nexus-macros",
  "serde",
  "smallvec",
  "thiserror 2.0.12",
@@ -1063,6 +1064,9 @@ dependencies = [
 name = "nexus-macros"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
  "workspace-hack",
 ]
 
@@ -1075,18 +1079,12 @@ dependencies = [
  "nexus",
  "refinery",
  "rusqlite",
+ "serde",
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
  "tracing",
  "uuid",
- "workspace-hack",
-]
-
-[[package]]
-name = "nexus-sql-schemas"
-version = "0.1.0"
-dependencies = [
  "workspace-hack",
 ]
 
@@ -1992,6 +1990,7 @@ version = "0.1.0"
 dependencies = [
  "nexus",
  "nexus-rusqlite",
+ "serde",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
@@ -2811,10 +2810,10 @@ dependencies = [
  "idna",
  "indexmap",
  "libc",
- "libsqlite3-sys",
  "log",
  "memchr",
  "percent-encoding",
+ "proc-macro2",
  "refinery-core",
  "regex",
  "regex-automata 0.4.9",

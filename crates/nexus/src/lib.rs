@@ -5,4 +5,5 @@ pub mod events;
 pub mod query;
 pub mod store;
 
-pub use core::{Command, DomainEvent, Id, Message, Query};
+#[cfg(feature = "derive")]
+pub use nexus_macros::{Aggregate, Command, DomainEvent, Query};

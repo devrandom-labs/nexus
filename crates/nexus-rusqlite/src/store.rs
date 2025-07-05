@@ -22,6 +22,15 @@ use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
+// for any given stream_id, the stream of events I read back must be identical to content and order to the stream of events I wrote
+//
+// TODO: The Foundation (Classic Unit Test): Start with the simplest case.
+// TODO: The Generalization (Property Test): Elevate the simple case to a universal law.
+// TODO: The Chaos (Fuzz Test): Attack the boundaries with invalid and malicious data.
+// TODO: The Structure (Snapshot Test): Ensure the physical data format remains stable.
+// TODO: The Audit (Mutation Test): Test the quality of our other tests.
+//
+//
 #[derive(Debug, Clone)]
 pub struct Store {
     #[allow(dead_code)]
@@ -199,15 +208,38 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn should_have_unique_contraint_on_stream_id_and_version() {}
-    #[test]
-    fn should_have_foreign_key_config_on() {}
-}
+    use refinery::embed_migrations;
+    use rusqlite::Connection;
 
-// TODO: performance test it
-// // TODO: property test it
-//
-// TODO: feature for inmemory
-// TODO: feature for tracing
-// TODO: feature for tracing
+    embed_migrations!("migrations");
+
+    fn apply_migrations() {
+        let mut conn = Connection::open_in_memory().expect("could not open connection");
+        migrations::runner()
+            .run(&mut conn)
+            .expect("migrations could not be applied.");
+    }
+
+    pub mod events {
+        use nexus::DomainEvent;
+        use serde::{Deserialize, Serialize};
+
+        #[allow(dead_code)]
+        #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub struct UserCreated {
+            #[attribute_id]
+            pub user_id: String,
+        }
+    }
+
+    #[tokio::test]
+    async fn should_be_able_to_write_and_read_stream_events() {
+        apply_migrations();
+
+        // TODO: create sample event record
+        // TODO: write to event store
+        // TODO: read event record response
+        //
+        // assert every field is equal to event record written
+    }
+}

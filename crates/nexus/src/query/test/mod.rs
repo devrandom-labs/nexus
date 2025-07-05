@@ -1,5 +1,5 @@
 use super::{model::ReadModel, repository::ReadModelRepository};
-use crate::{Message, Query};
+use crate::core::{Message, Query};
 use std::pin::Pin;
 use thiserror::Error;
 
