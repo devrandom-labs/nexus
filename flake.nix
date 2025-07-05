@@ -167,9 +167,7 @@
 
           tixlys-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
-            inherit src;
             cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-            SCHEMAS_DIR = "${src}/schemas";
           });
 
           tixlys-doc =
