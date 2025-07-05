@@ -111,8 +111,8 @@ impl EventStore for Store {
 
                 {
                     let mut event_stmt = tx
-                .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
-                .map_err(|err| Error::Store { source: err.into() })?;
+                        .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
+                        .map_err(|err| Error::Store { source: err.into() })?;
 
                     let mut event_metadata_stmt = tx
                         .prepare_cached(
@@ -208,6 +208,11 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
+    use events::UserCreated;
+    use nexus::store::{
+        EventRecord,
+        record::{CorrelationId, event_metadata::EventMetadata},
+    };
     use refinery::embed_migrations;
     use rusqlite::Connection;
 
@@ -235,11 +240,17 @@ mod tests {
     #[tokio::test]
     async fn should_be_able_to_write_and_read_stream_events() {
         apply_migrations();
+        let domain_event = UserCreated {
+            user_id: "1".to_string(),
+        };
+        let metadata = EventMetadata::new("1-corr".into());
+        let record = EventRecord::builder(domain_event)
+            .with_version(1)
+            .with_metadata(metadata)
+            .with_event_type("UserCreated".to_string()); // event type should just be struct name at this point and optional
 
-        // TODO: create sample event record
+        unimplemented!()
         // TODO: write to event store
         // TODO: read event record response
-        //
-        // assert every field is equal to event record written
     }
 }
