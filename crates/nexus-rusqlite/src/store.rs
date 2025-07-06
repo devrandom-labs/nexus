@@ -268,8 +268,9 @@ mod tests {
             .await
             .unwrap();
 
-        let record_response = store.read_stream(stream_id).await; // its streamed/ how can I check the data in them?
+        let record_response = store.read_stream(stream_id).await;
         assert!(record_response.is_ok());
         let record_response = record_response.unwrap().collect().await;
     }
 }
+ 
