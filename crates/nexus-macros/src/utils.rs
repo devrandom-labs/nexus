@@ -1,5 +1,5 @@
 use proc_macro2::Span;
-use syn::{Attribute, Data, DataStruct, Error, Fields, Ident, Result, Type, Variant};
+use syn::{Attribute, Data, Error, Fields, Ident, Result, Type, Variant};
 
 /// Finds a specific attribute in a slice, returning a targeted error if not found.
 ///
@@ -24,34 +24,6 @@ pub fn get_attribute<'a>(
             let msg = format!("missing required attribute `#[{}]`", name);
             Error::new(error_span, msg)
         })
-}
-
-pub fn get_field_type(data: &Data, attribute: &str, error_span: Span) -> Result<Type> {
-    // if struct get the name and type of the field
-    let fields = match data {
-        Data::Struct(DataStruct {
-            fields: Fields::Named(fields),
-            ..
-        }) => &fields.named,
-        _ => {
-            return Err(Error::new(error_span, "must be a struct"));
-        }
-    };
-
-    for field in fields {
-        if field
-            .attrs
-            .iter()
-            .any(|attr| attr.path().is_ident(attribute))
-        {
-            return Ok(field.ty.clone());
-        }
-    }
-
-    Err(Error::new(
-        error_span,
-        "A field must be marked with `#[{attribute}]`",
-    ))
 }
 
 pub struct FieldInfo<'a> {
@@ -94,7 +66,6 @@ pub fn get_fields_info<'a>(
     }
 }
 
-// get the fiel type and name from this
 pub fn find_in_fields<'a>(
     fields: &'a Fields,
     attribute_name: &'a str,

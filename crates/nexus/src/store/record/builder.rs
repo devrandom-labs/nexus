@@ -1,9 +1,6 @@
 #![allow(dead_code)]
 use super::{StreamId, event_metadata::EventMetadata, event_record::EventRecord};
-use crate::{
-    core::{DomainEvent, EventSerializer},
-    error::Error,
-};
+use crate::{core::DomainEvent, error::Error};
 
 pub struct EventRecordBuilder<E>
 where
@@ -20,6 +17,7 @@ where
     pub fn new(domain_event: D) -> Self {
         let state = WithDomain {
             stream_id: domain_event.aggregate_id().clone().into(),
+            event_type: domain_event.name().to_owned(),
             domain_event,
         };
         EventRecordBuilder { state }
@@ -29,6 +27,7 @@ where
         let state = WithVersion {
             stream_id: self.state.stream_id,
             domain_event: self.state.domain_event,
+            event_type: self.state.event_type,
             version,
         };
 
@@ -45,6 +44,7 @@ where
             stream_id: self.state.stream_id,
             domain_event: self.state.domain_event,
             version: self.state.version,
+            event_type: self.state.event_type,
             metadata,
         };
 
@@ -56,37 +56,19 @@ impl<D> EventRecordBuilder<WithMetadata<D>>
 where
     D: DomainEvent,
 {
-    pub fn with_event_type<E>(self, event_type: E) -> EventRecordBuilder<WithEventType<D>>
+    pub async fn build<F, Fut>(self, serializer: F) -> Result<EventRecord, Error>
     where
-        E: Into<String>,
+        F: FnOnce(D) -> Fut,
+        Fut: Future<Output = Result<Vec<u8>, Error>>,
     {
-        let state = WithEventType {
-            stream_id: self.state.stream_id,
-            domain_event: self.state.domain_event,
-            version: self.state.version,
-            metadata: self.state.metadata,
-            event_type: event_type.into(),
-        };
-        EventRecordBuilder { state }
-    }
-}
-
-impl<D> EventRecordBuilder<WithEventType<D>>
-where
-    D: DomainEvent,
-{
-    pub async fn build<S, Fut>(self, serializer: &S) -> Result<EventRecord, Error>
-    where
-        S: EventSerializer,
-    {
-        let WithEventType {
+        let WithMetadata {
             stream_id,
             domain_event,
             version,
             event_type,
             metadata,
         } = self.state;
-        let payload = serializer.serialize(domain_event).await?;
+        let payload = serializer(domain_event).await?;
         Ok(EventRecord::new(
             stream_id, event_type, version, metadata, payload,
         ))
@@ -104,6 +86,7 @@ where
     D: DomainEvent,
 {
     stream_id: StreamId,
+    event_type: String,
     domain_event: D,
 }
 
@@ -115,6 +98,7 @@ where
 {
     version: u64,
     stream_id: StreamId,
+    event_type: String,
     domain_event: D,
 }
 
@@ -126,24 +110,12 @@ where
 {
     stream_id: StreamId,
     domain_event: D,
+    event_type: String,
     version: u64,
     metadata: EventMetadata,
 }
 
 impl<D> EventBuilderState for WithMetadata<D> where D: DomainEvent {}
-
-pub struct WithEventType<D>
-where
-    D: DomainEvent,
-{
-    event_type: String,
-    stream_id: StreamId,
-    domain_event: D,
-    version: u64,
-    metadata: EventMetadata,
-}
-
-impl<D> EventBuilderState for WithEventType<D> where D: DomainEvent {}
 
 #[cfg(test)]
 mod test {

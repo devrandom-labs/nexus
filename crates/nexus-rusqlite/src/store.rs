@@ -90,7 +90,7 @@ impl EventStore for Store {
     #[instrument(level = "debug", skip(self), err)]
     async fn append_to_stream(
         &self,
-        stream_id: StreamId,
+        stream_id: &StreamId,
         expected_version: u64,
         event_records: Vec<EventRecord>,
     ) -> Result<(), Error> {
@@ -209,9 +209,15 @@ impl EventStore for Store {
 #[cfg(test)]
 mod tests {
     use events::UserCreated;
-    use nexus::store::{EventRecord, record::event_metadata::EventMetadata};
+    use nexus::{
+        error::Error,
+        store::{EventRecord, EventStore, StreamId, record::event_metadata::EventMetadata},
+    };
     use refinery::embed_migrations;
     use rusqlite::Connection;
+    use serde_json::to_vec;
+
+    use crate::Store;
 
     embed_migrations!("migrations");
 
@@ -223,6 +229,7 @@ mod tests {
     }
 
     pub mod events {
+
         use nexus::DomainEvent;
         use serde::{Deserialize, Serialize};
 
@@ -238,17 +245,29 @@ mod tests {
     #[tokio::test]
     async fn should_be_able_to_write_and_read_stream_events() {
         apply_migrations();
+
         let domain_event = UserCreated {
             user_id: "1".to_string(),
         };
         let metadata = EventMetadata::new("1-corr".into());
+
         let record = EventRecord::builder(domain_event)
             .with_version(1)
             .with_metadata(metadata)
-            .with_event_type("UserCreated".to_string()); // event type should just be struct name at this point and optional
+            .build(|domain_event| async move {
+                to_vec(&domain_event)
+                    .map_err(|err| Error::SerializationError { source: err.into() })
+            })
+            .await;
 
-        unimplemented!()
-        // TODO: write to event store
-        // TODO: read event record response
+        assert!(record.is_ok());
+        let stream_id: StreamId = "1".into();
+        let record = record.unwrap();
+        let store = Store::new().expect("Store should be initialized");
+        let result = store
+            .append_to_stream(&stream_id, 1, vec![record])
+            .await
+            .unwrap();
+        // TODO: result should return stream_id
     }
 }

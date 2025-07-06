@@ -14,10 +14,7 @@ struct MigrationFile {
 
 fn main() -> Result<()> {
     let migration_path = get_migration_path();
-    println!(
-        "cargo:warning=Searching for migrations in: {}",
-        migration_path.display()
-    );
+    println!("Searching for migrations in: {}", migration_path.display());
     println!("cargo:rerun-if-changed={}", migration_path.display());
 
     if !migration_path.exists() {
