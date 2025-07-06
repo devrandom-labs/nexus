@@ -209,10 +209,7 @@ impl EventStore for Store {
 #[cfg(test)]
 mod tests {
     use events::UserCreated;
-    use nexus::store::{
-        EventRecord,
-        record::{CorrelationId, event_metadata::EventMetadata},
-    };
+    use nexus::store::{EventRecord, record::event_metadata::EventMetadata};
     use refinery::embed_migrations;
     use rusqlite::Connection;
 
@@ -231,6 +228,7 @@ mod tests {
 
         #[allow(dead_code)]
         #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[domain_event(name = "user_created_v1")]
         pub struct UserCreated {
             #[attribute_id]
             pub user_id: String,

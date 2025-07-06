@@ -1,5 +1,5 @@
 use proc_macro2::Span;
-use syn::{Attribute, Data, DataStruct, Error, Fields, Ident, Result, Type};
+use syn::{Attribute, Data, DataStruct, Error, Fields, Ident, Result, Type, Variant};
 
 /// Finds a specific attribute in a slice, returning a targeted error if not found.
 ///
@@ -57,7 +57,7 @@ pub fn get_field_type(data: &Data, attribute: &str, error_span: Span) -> Result<
 pub struct FieldInfo<'a> {
     pub name: &'a Ident,
     pub ty: &'a Type,
-    pub variant: &'a Ident,
+    pub variant: &'a Variant,
 }
 
 pub enum DataTypesFieldInfo<'a> {
@@ -85,7 +85,7 @@ pub fn get_fields_info<'a>(
                 field_infos.push(FieldInfo {
                     name: info.0,
                     ty: info.1,
-                    variant: &variant.ident,
+                    variant,
                 });
             }
             Ok(DataTypesFieldInfo::Enum(field_infos))
@@ -108,7 +108,6 @@ pub fn find_in_fields<'a>(
             .iter()
             .any(|attr| attr.path().is_ident(attribute_name))
         {
-            // This is an early error: attribute on a tuple field with no name.
             let field_name = field.ident.as_ref().ok_or_else(|| {
                 let msg = format!(
                     "The `#[{attribute_name}]` attribute can only be placed on fields with names."

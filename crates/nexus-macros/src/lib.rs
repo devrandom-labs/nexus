@@ -1,7 +1,6 @@
-#![allow(dead_code)]
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
+use syn::{DeriveInput, Error, LitStr, Result, Type, parse_macro_input, spanned::Spanned};
 use utils::DataTypesFieldInfo;
 
 mod utils;
@@ -26,7 +25,7 @@ pub fn query(input: TokenStream) -> TokenStream {
     .into()
 }
 
-#[proc_macro_derive(DomainEvent, attributes(attribute_id))]
+#[proc_macro_derive(DomainEvent, attributes(domain_event, attribute_id))]
 pub fn domain_event(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
     match parse_domain_event(&ast) {
@@ -124,17 +123,30 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     Ok(expanded)
 }
 
-// for now events must be a struct
-// will change it
 fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
-    match utils::get_fields_info(&ast.data, "attribute_id", name.span())? {
+    match utils::get_fields_info(&ast.data, "attribute_id", ast.span())? {
         DataTypesFieldInfo::Struct {
             name: field_name,
             ty: id_type,
         } => {
-            let expanded = quote! {
+            let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
 
+            let mut event_name: Option<LitStr> = None;
+            attribute.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    event_name = Some(meta.value()?.parse()?);
+                } else {
+                    return Err(meta.error("unrecognized key for `#[domain_event]` attribute"));
+                }
+
+                Ok(())
+            })?;
+
+            let event_name = event_name
+                .ok_or_else(|| Error::new(attribute.path().span(), "`name` key is required"))?;
+
+            let expanded = quote! {
                 impl ::nexus::core::Message for #name {
 
                 }
@@ -144,6 +156,10 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 
                     fn aggregate_id(&self) -> &Self::Id {
                         &self.#field_name
+                    }
+
+                    fn name(&self) -> &'static str {
+                        #event_name
                     }
                 }
             };
@@ -160,34 +176,64 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 }
             }
 
-            let match_arms = fields.iter().map(|info| {
-                let variant = info.variant;
-                let field_name = info.name;
+            let mut aggregate_id_arms = Vec::new();
+            let mut name_arms = Vec::new();
 
-                quote! {
-                    Self::#variant { #field_name, .. } => #field_name
-                }
-            });
+            for info in fields {
+                let variant_ident = &info.variant.ident;
+                let field_ident = info.name;
+
+                let variant_attribute = utils::get_attribute(
+                    &info.variant.attrs,
+                    "domain_event",
+                    info.variant.ident.span(),
+                )?;
+
+                let mut event_name: Option<LitStr> = None;
+                variant_attribute.parse_nested_meta(|meta| {
+                    if meta.path.is_ident("name") {
+                        event_name = Some(meta.value()?.parse()?);
+                    } else {
+                        return Err(meta.error("unrecognized key for `#[domain_event]` attribute"));
+                    }
+
+                    Ok(())
+                })?;
+
+                let event_name = event_name.ok_or_else(|| {
+                    Error::new(variant_attribute.path().span(), "`name` key is required")
+                })?;
+
+                aggregate_id_arms.push(quote! {
+                    Self::#variant_ident { #field_ident, .. } => #field_ident
+                });
+
+                name_arms.push(quote! {
+                    Self::#variant_ident { .. } => #event_name
+                });
+            }
 
             let expanded = quote! {
 
-
                 impl ::nexus::core::Message for #name {
-
                 }
 
                 impl ::nexus::core::DomainEvent for #name {
-
                     type Id = #id_type;
 
-                    fn aggregate_id(&self) -> &Self::Id {
 
+                    fn aggregate_id(&self) -> &Self::Id {
                         match self {
-                            #(#match_arms),*
+                            #(#aggregate_id_arms),*
+                        }
+                    }
+
+                    fn name(&self) -> &'static str {
+                        match self {
+                            #(#name_arms),*
                         }
                     }
                 }
-
             };
 
             Ok(expanded)
@@ -225,7 +271,7 @@ fn parse_aggregate(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         state.ok_or_else(|| Error::new(attribute.path().span(), "`state` key is required"))?;
 
     let expanded = quote! {
-            impl ::nexus::command::aggregate::AggregateType for User {
+            impl ::nexus::command::aggregate::AggregateType for #name {
                 type Id = #id;
                 type Event = #event;
                 type State = #state;

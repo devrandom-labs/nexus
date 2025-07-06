@@ -35,6 +35,13 @@ impl DomainEvent for UserDomainEvents {
             Self::UserCreated { id, .. } => id,
         }
     }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::UserActivated { .. } => "user_activated_v1",
+            Self::UserCreated { .. } => "user_created_v1",
+        }
+    }
 }
 
 // command

@@ -260,6 +260,8 @@ pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned + PartialE
     /// This is crucial for routing events, rehydrating aggregates, and ensuring
     /// that events are applied to the correct aggregate instance.
     fn aggregate_id(&self) -> &Self::Id;
+
+    fn name(&self) -> &'static str;
 }
 
 /// # `Id`
