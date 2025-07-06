@@ -9,7 +9,7 @@ pub mod event_record;
 
 pub use event_record::{EventRecord, EventRecordResponse};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct EventRecordId(Uuid);
 
 impl Default for EventRecordId {
@@ -38,7 +38,7 @@ impl From<Uuid> for EventRecordId {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct StreamId(Arc<String>);
 
 impl StreamId {
@@ -73,7 +73,7 @@ impl From<&str> for StreamId {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct CorrelationId(pub Arc<String>);
 
 impl CorrelationId {

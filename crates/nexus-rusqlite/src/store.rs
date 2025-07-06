@@ -205,7 +205,9 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use events::UserCreated;
+    use futures::TryStreamExt;
     use nexus::{
         error::Error,
         store::{EventRecord, EventStore, StreamId, record::event_metadata::EventMetadata},
@@ -214,7 +216,7 @@ mod tests {
     use rusqlite::Connection;
     use serde_json::to_vec;
 
-    use crate::Store;
+    use super::Store;
 
     embed_migrations!("migrations");
 
@@ -264,13 +266,28 @@ mod tests {
         let record = record.unwrap();
 
         store
-            .append_to_stream(&stream_id, 1, vec![record])
+            .append_to_stream(&stream_id, 1, vec![record.clone()])
             .await
             .unwrap();
 
-        let record_response = store.read_stream(stream_id).await;
-        assert!(record_response.is_ok());
-        let record_response = record_response.unwrap().collect().await;
+        let events = store
+            .read_stream(stream_id)
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("Read stream should succeed");
+
+        assert_eq!(events.len(), 1);
+        let read_event = &events[0];
+
+        assert_eq!(record.id(), &read_event.id);
+        assert_eq!(record.stream_id(), &read_event.stream_id);
+        assert_eq!(record.version(), &read_event.version);
+        assert_eq!(record.event_type(), &read_event.event_type);
+        assert_eq!(record.payload(), &read_event.payload);
+        assert_eq!(
+            record.metadata().correlation_id(),
+            read_event.metadata.correlation_id()
+        );
+        assert!(read_event.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
     }
 }
- 

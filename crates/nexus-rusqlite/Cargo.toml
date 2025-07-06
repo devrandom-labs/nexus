@@ -8,7 +8,6 @@ authors.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
-futures = { workspace = true }
 nexus = { path = "../nexus", features = ["derive"] }
 refinery = { workspace = true, features = ["rusqlite"] }
 rusqlite = { workspace = true, features = ["bundled", "trace", "uuid", "chrono"] }
@@ -21,5 +20,6 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+futures = "0.3.31"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
