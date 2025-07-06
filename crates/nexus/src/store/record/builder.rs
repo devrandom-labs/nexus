@@ -56,7 +56,7 @@ impl<D> EventRecordBuilder<WithMetadata<D>>
 where
     D: DomainEvent,
 {
-    pub async fn build<F, Fut>(self, serializer: F) -> Result<EventRecord, Error>
+    pub async fn serialize<F, Fut>(self, serializer: F) -> Result<EventRecord, Error>
     where
         F: FnOnce(D) -> Fut,
         Fut: Future<Output = Result<Vec<u8>, Error>>,

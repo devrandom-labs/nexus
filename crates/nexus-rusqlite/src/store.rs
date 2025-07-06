@@ -254,7 +254,7 @@ mod tests {
         let record = EventRecord::builder(domain_event)
             .with_version(1)
             .with_metadata(metadata)
-            .build(|domain_event| async move {
+            .serialize(|domain_event| async move {
                 to_vec(&domain_event)
                     .map_err(|err| Error::SerializationError { source: err.into() })
             })
@@ -268,6 +268,7 @@ mod tests {
             .append_to_stream(&stream_id, 1, vec![record])
             .await
             .unwrap();
-        // TODO: result should return stream_id
+
+        // TODO: check why this is failing :D
     }
 }
