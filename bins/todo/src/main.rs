@@ -1,4 +1,3 @@
-use nexus_rusqlite::Store;
 use tracing::{info, instrument};
 use tracing_subscriber::{
     EnvFilter, Layer,
@@ -17,5 +16,4 @@ fn main() {
         .with_filter(filter);
     tracing_subscriber::registry().with(console).init();
     info!("running migrations..");
-    let _ = Store::new().unwrap();
 }

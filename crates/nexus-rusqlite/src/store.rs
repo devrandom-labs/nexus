@@ -19,7 +19,7 @@ use tokio::{
     task::spawn_blocking,
 };
 use tokio_stream::{Stream, wrappers::ReceiverStream};
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 // for any given stream_id, the stream of events I read back must be identical to content and order to the stream of events I wrote
@@ -39,10 +39,7 @@ pub struct Store {
 
 impl Store {
     #[instrument(level = "debug", err)]
-    pub fn new() -> Result<Self, Error> {
-        trace!("Opening SQLite connection in-memory.");
-        let conn = Connection::open_in_memory()
-            .map_err(|err| Error::ConnectionFailed { source: err.into() })?;
+    pub fn new(conn: Connection) -> Result<Self, Error> {
         debug!("Applying database connection configurations for security and integrity...");
         Self::configure_connection(&conn)
             .map_err(|err| Error::ConnectionFailed { source: err.into() })?;
@@ -221,11 +218,12 @@ mod tests {
 
     embed_migrations!("migrations");
 
-    fn apply_migrations() {
+    fn apply_migrations() -> Connection {
         let mut conn = Connection::open_in_memory().expect("could not open connection");
         migrations::runner()
             .run(&mut conn)
             .expect("migrations could not be applied.");
+        conn
     }
 
     pub mod events {
@@ -244,13 +242,14 @@ mod tests {
 
     #[tokio::test]
     async fn should_be_able_to_write_and_read_stream_events() {
-        apply_migrations();
-
+        let conn = apply_migrations();
+        let store = Store::new(conn).expect("Store should be initialized");
         let domain_event = UserCreated {
             user_id: "1".to_string(),
         };
         let metadata = EventMetadata::new("1-corr".into());
 
+        // its now a builder, figure a good fluent way that makes sense.
         let record = EventRecord::builder(domain_event)
             .with_version(1)
             .with_metadata(metadata)
@@ -263,12 +262,14 @@ mod tests {
         assert!(record.is_ok());
         let stream_id: StreamId = "1".into();
         let record = record.unwrap();
-        let store = Store::new().expect("Store should be initialized");
-        let result = store
+
+        store
             .append_to_stream(&stream_id, 1, vec![record])
             .await
             .unwrap();
 
-        // TODO: check why this is failing :D
+        let record_response = store.read_stream(stream_id).await; // its streamed/ how can I check the data in them?
+        assert!(record_response.is_ok());
+        let record_response = record_response.unwrap().collect().await;
     }
 }
