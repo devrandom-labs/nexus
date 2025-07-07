@@ -15,6 +15,10 @@ publish = false
 chrono = { version = "0.4", features = ["serde"] }
 digest = { version = "0.10", features = ["mac", "std"] }
 form_urlencoded = { version = "1" }
+futures-channel = { version = "0.3", features = ["sink"] }
+futures-sink = { version = "0.3", default-features = false, features = ["std"] }
+futures-task = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
@@ -40,6 +44,10 @@ uuid = { version = "1", features = ["fast-rng", "serde", "v7"] }
 chrono = { version = "0.4", features = ["serde"] }
 digest = { version = "0.10", features = ["mac", "std"] }
 form_urlencoded = { version = "1" }
+futures-channel = { version = "0.3", features = ["sink"] }
+futures-sink = { version = "0.3", default-features = false, features = ["std"] }
+futures-task = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
@@ -64,11 +72,13 @@ tracing-core = { version = "0.1" }
 uuid = { version = "1", features = ["fast-rng", "serde", "v7"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
+futures-sink = { version = "0.3" }
 libc = { version = "0.2" }
 tower = { version = "0.5", default-features = false, features = ["timeout"] }
 tower-http = { version = "0.6", features = ["follow-redirect", "trace"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
+futures-sink = { version = "0.3" }
 libc = { version = "0.2" }
 tower = { version = "0.5", default-features = false, features = ["timeout"] }
 tower-http = { version = "0.6", features = ["follow-redirect", "trace"] }

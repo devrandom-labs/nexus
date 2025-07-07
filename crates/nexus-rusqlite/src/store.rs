@@ -63,7 +63,9 @@ impl Store {
         let correlation_id = row
             .get::<_, String>("correlation_id")
             .map(CorrelationId::new)?;
+
         let id = row.get::<_, Uuid>("id").map(Into::<EventRecordId>::into)?;
+
         let stream_id = row.get::<_, String>("stream_id").map(StreamId::new)?;
         let version = row.get::<_, u64>("version")?;
         let event_type = row.get::<_, String>("event_type")?;
@@ -120,7 +122,7 @@ impl EventStore for Store {
                     for record in &event_records {
                         event_stmt
                             .execute(params![
-                                record.id().to_string(),
+                                record.id().as_uuid(),
                                 record.stream_id().to_string(),
                                 record.version(),
                                 record.event_type(),
@@ -130,7 +132,7 @@ impl EventStore for Store {
 
                         event_metadata_stmt
                             .execute(params![
-                                record.id().to_string(),
+                                record.id().as_uuid(),
                                 record.metadata().correlation_id().to_string()
                             ])
                             .map_err(|err| Error::Store { source: err.into() })?;
@@ -233,7 +235,6 @@ mod tests {
         use nexus::DomainEvent;
         use serde::{Deserialize, Serialize};
 
-        #[allow(dead_code)]
         #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
         #[domain_event(name = "user_created_v1")]
         pub struct UserCreated {

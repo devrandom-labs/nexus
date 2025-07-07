@@ -12,6 +12,16 @@ pub use event_record::{EventRecord, EventRecordResponse};
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct EventRecordId(Uuid);
 
+impl EventRecordId {
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> Uuid {
+        self.0
+    }
+}
+
 impl Default for EventRecordId {
     fn default() -> Self {
         EventRecordId(Uuid::now_v7())
@@ -35,6 +45,12 @@ impl Deref for EventRecordId {
 impl From<Uuid> for EventRecordId {
     fn from(id: Uuid) -> Self {
         Self(id)
+    }
+}
+
+impl From<EventRecordId> for Uuid {
+    fn from(value: EventRecordId) -> Self {
+        value.0
     }
 }
 
