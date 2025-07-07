@@ -1,11 +1,13 @@
 use super::{
-    EventRecordId, StreamId,
+    StreamId,
     builder::{EventRecordBuilder, WithDomain},
     event_metadata::EventMetadata,
 };
+
 use crate::{
     core::{DomainEvent, EventDeserializer},
     error::Error,
+    identity::EventRecordId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

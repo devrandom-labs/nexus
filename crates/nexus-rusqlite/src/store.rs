@@ -2,11 +2,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use nexus::{
     error::Error,
+    identity::{CorrelationId, EventRecordId},
     store::{
         EventRecord, EventStore, StreamId,
-        record::{
-            CorrelationId, EventRecordId, EventRecordResponse, event_metadata::EventMetadata,
-        },
+        record::{EventRecordResponse, event_metadata::EventMetadata},
     },
 };
 use rusqlite::{Connection, Result as SResult, Row, config::DbConfig, params};

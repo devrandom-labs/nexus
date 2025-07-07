@@ -1,5 +1,4 @@
-#![allow(dead_code)]
-use super::CorrelationId;
+use crate::identity::CorrelationId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -5,6 +5,3 @@ pub mod record;
 pub use error::Error;
 pub use event_store::EventStore;
 pub use record::{EventRecord, StreamId};
-
-#[cfg(test)]
-pub mod test;
