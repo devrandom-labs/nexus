@@ -4,3 +4,4 @@ pub mod nexus_id;
 
 pub use correlation_id::CorrelationId;
 pub use event_id::EventId;
+pub use nexus_id::NexusId;
