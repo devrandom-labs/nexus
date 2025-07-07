@@ -1,7 +1,7 @@
 use crate::core::Id;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Copy)]
 pub struct NexusId(Uuid);
 
 impl Default for NexusId {

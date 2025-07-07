@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use nexus::{
     error::Error,
-    identity::{CorrelationId, EventRecordId},
+    identity::{CorrelationId, EventId},
     store::{
         EventRecord, EventStore, StreamId,
         record::{EventRecordResponse, event_metadata::EventMetadata},
@@ -63,7 +63,7 @@ impl Store {
             .get::<_, String>("correlation_id")
             .map(CorrelationId::new)?;
 
-        let id = row.get::<_, Uuid>("id").map(Into::<EventRecordId>::into)?;
+        let id = row.get::<_, Uuid>("id").map(Into::<EventId>::into)?;
 
         let stream_id = row.get::<_, String>("stream_id").map(StreamId::new)?;
         let version = row.get::<_, u64>("version")?;
