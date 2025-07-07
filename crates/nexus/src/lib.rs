@@ -1,7 +1,8 @@
 pub mod command;
 pub mod core;
 pub mod error;
-pub mod events;
+pub mod event;
+pub mod identity;
 pub mod query;
 pub mod store;
 
