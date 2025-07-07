@@ -3,9 +3,9 @@ use std::{default::Default, fmt::Display, ops::Deref};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct EventRecordId(Uuid);
+pub struct EventId(Uuid);
 
-impl EventRecordId {
+impl EventId {
     pub fn as_uuid(&self) -> &Uuid {
         &self.0
     }
@@ -15,19 +15,19 @@ impl EventRecordId {
     }
 }
 
-impl Default for EventRecordId {
+impl Default for EventId {
     fn default() -> Self {
-        EventRecordId(Uuid::now_v7())
+        EventId(Uuid::now_v7())
     }
 }
 
-impl Display for EventRecordId {
+impl Display for EventId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl Deref for EventRecordId {
+impl Deref for EventId {
     type Target = Uuid;
 
     fn deref(&self) -> &Self::Target {
@@ -35,14 +35,14 @@ impl Deref for EventRecordId {
     }
 }
 
-impl From<Uuid> for EventRecordId {
+impl From<Uuid> for EventId {
     fn from(id: Uuid) -> Self {
         Self(id)
     }
 }
 
-impl From<EventRecordId> for Uuid {
-    fn from(value: EventRecordId) -> Self {
+impl From<EventId> for Uuid {
+    fn from(value: EventId) -> Self {
         value.0
     }
 }

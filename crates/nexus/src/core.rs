@@ -281,15 +281,15 @@ pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned + PartialE
 /// * `Hash`: Identifiers must be hashable (e.g., for use in `HashMap` keys).
 /// * `Eq`: Identifiers must support equality comparison.
 /// * `'static`: Identifiers must not contain any non-static references.
-pub trait Id: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
+pub trait Id: Clone + Send + Sync + Debug + Hash + Eq + 'static + ToString + AsRef<[u8]> {}
 
-/// Blanket implementation of `Id`.
-///
-/// This implementation ensures that any type `T` which already satisfies all the
-/// necessary bounds (`Clone + Send + Sync + Debug + Hash + Eq + 'static`)
-/// automatically implements the `Id` marker trait. This avoids the need for
-/// manual `impl Id for ...` for common types like `String`, `Uuid`, integers, etc.
-impl<T> Id for T where T: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
+// /// Blanket implementation of `Id`.
+// ///
+// /// This implementation ensures that any type `T` which already satisfies all the
+// /// necessary bounds (`Clone + Send + Sync + Debug + Hash + Eq + 'static`)
+// /// automatically implements the `Id` marker trait. This avoids the need for
+// /// manual `impl Id for ...` for common types like `String`, `Uuid`, integers, etc.
+// impl<T> Id for T where T: Clone + Send + Sync + Debug + Hash + Eq + 'static {}
 
 #[async_trait]
 pub trait EventSerializer {
