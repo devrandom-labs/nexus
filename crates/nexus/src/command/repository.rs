@@ -1,5 +1,4 @@
-use super::aggregate::{AggregateLoadError, AggregateRoot, AggregateType as AT};
-use crate::core::Id as AggregateId;
+use crate::domain::{AggregateLoadError, AggregateRoot, AggregateType as AT, Id as AggregateId};
 use std::{error::Error as StdError, fmt::Debug, future::Future, pin::Pin};
 use thiserror::Error as ThisError;
 use tower::BoxError;

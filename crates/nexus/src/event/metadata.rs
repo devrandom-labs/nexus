@@ -1,4 +1,4 @@
-use crate::identity::CorrelationId;
+use crate::infra::CorrelationId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

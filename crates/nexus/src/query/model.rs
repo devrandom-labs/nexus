@@ -1,4 +1,4 @@
-use crate::core::Id;
+use crate::domain::Id;
 
 /// # `ReadModel`
 ///

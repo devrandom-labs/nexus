@@ -1,5 +1,5 @@
 use crate::{
-    core::Id,
+    domain::Id,
     error::Error,
     event::{PendingEvent, PersistedEvent},
 };

@@ -1,9 +1,10 @@
 pub mod command;
-pub mod core;
+pub mod domain;
 pub mod error;
 pub mod event;
-pub mod identity;
+pub mod infra;
 pub mod query;
+pub mod serde;
 pub mod store;
 
 #[cfg(feature = "derive")]

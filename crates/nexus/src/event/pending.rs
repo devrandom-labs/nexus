@@ -1,8 +1,8 @@
 use super::builder::{PendingEventBuilder, WithDomain};
 use super::metadata::EventMetadata;
 use crate::{
-    core::{DomainEvent, Id},
-    identity::EventId,
+    domain::{DomainEvent, Id},
+    infra::EventId,
 };
 use serde::{Deserialize, Serialize};
 

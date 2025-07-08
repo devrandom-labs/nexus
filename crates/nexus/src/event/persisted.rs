@@ -1,5 +1,5 @@
 use super::metadata::EventMetadata;
-use crate::{core::Id, identity::EventId};
+use crate::{domain::Id, infra::EventId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

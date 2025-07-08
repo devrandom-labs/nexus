@@ -1,5 +1,5 @@
-use super::{Events, aggregate::AggregateType as AT};
-use crate::core::{Command, DomainEvent};
+use super::Events;
+use crate::domain::{AggregateType as AT, Command, DomainEvent};
 use std::{boxed::Box, fmt::Debug, future::Future, pin::Pin};
 
 /// # `CommandHandlerResponse<E, R>`

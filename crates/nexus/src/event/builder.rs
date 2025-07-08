@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use super::{metadata::EventMetadata, pending::PendingEvent};
 use crate::{
-    core::{DomainEvent, Id},
+    domain::{DomainEvent, Id},
     error::Error,
 };
 
