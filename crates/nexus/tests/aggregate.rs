@@ -10,7 +10,7 @@ use common::{
 };
 use nexus::{
     domain::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState},
-    infra::events::Events,
+    infra::{NexusId, events::Events},
 };
 // user state tests
 #[test]
@@ -329,8 +329,11 @@ async fn should_pass_services_correctly_to_handler_during_execute() {
 async fn should_return_uncommitted_events_and_clear_internal_list_then_return_empty_on_second_call()
 {
     let timestamp = Utc::now();
+    let aggregate_id = NexusId::default();
+
     let history = MockData::new(Some(timestamp), EventType::Empty).events;
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
+
+    let aggregate_root = AggregateRoot::<User>::load_from_history(aggregate_id, &history);
     assert!(aggregate_root.is_ok());
     let mut root = aggregate_root.unwrap();
     assert_eq!(root.current_version(), 0);
