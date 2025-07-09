@@ -1,6 +1,6 @@
 use crate::domain::{AggregateLoadError, AggregateRoot, AggregateType as AT, Id as AggregateId};
 use async_trait::async_trait;
-use std::{error::Error as StdError, fmt::Debug, future::Future, pin::Pin};
+use std::{error::Error as StdError, fmt::Debug};
 use thiserror::Error as ThisError;
 use tower::BoxError;
 

@@ -4,12 +4,13 @@ use chrono::Utc;
 use common::{
     utils::{EventType, MockData},
     write_side_setup::{
-        ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler,
-        CreateUserHandlerWithService, SomeService, User, UserDomainEvents, UserError, UserState,
+        ActivateUser, CreateUser, SomeService, User, UserDomainEvents, UserError, UserState,
+        handlers::{ActivateUserHandler, CreateUserHandler, CreateUserHandlerWithService},
     },
 };
 use nexus::{
     domain::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState},
+    events,
     infra::{NexusId, events::Events},
 };
 // user state tests
@@ -26,7 +27,7 @@ fn should_set_email_and_timestamp_when_user_created_event_applied() {
     let mut user_state = UserState::default();
     let timestamp = Utc::now();
     let user_created = UserDomainEvents::UserCreated {
-        id: "id".to_string(),
+        id: NexusId::default(),
         email: String::from("joel@tixlys.com"),
         timestamp,
     };
@@ -39,9 +40,22 @@ fn should_set_email_and_timestamp_when_user_created_event_applied() {
 fn should_set_active_when_user_activated_event_applied_after_creation() {
     let mut user_state = UserState::default();
     let timestamp = Utc::now();
-    for events in MockData::new(Some(timestamp), EventType::Ordered).events {
-        user_state.apply(&events);
-    }
+    let id = NexusId::default();
+    let events = events![
+        UserDomainEvents::UserCreated {
+            id,
+            email: String::from("joel@tixlys.com"),
+            timestamp
+        },
+        UserDomainEvents::UserActivated { id }
+    ];
+
+    // TODO: make Events impl IntoIter
+    /// events
+    // for events in MockData::new(Some(timestamp), EventType::Ordered).events {
+    //     user_state.apply(&events);
+    // }
+
     assert!(user_state.is_active);
 }
 

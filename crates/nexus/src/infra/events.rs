@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::domain::DomainEvent;
 use smallvec::{SmallVec, smallvec};
 
@@ -29,6 +31,15 @@ where
         let mut events = smallvec![self.first];
         events.extend(self.more);
         events
+    }
+}
+
+impl<E> From<E> for Events<E>
+where
+    E: DomainEvent,
+{
+    fn from(value: E) -> Self {
+        Events::new(value)
     }
 }
 

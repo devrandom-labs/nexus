@@ -4,7 +4,6 @@ use nexus::{
     infra::NexusId,
     query::{ReadModel, ReadModelRepository},
 };
-use std::pin::Pin;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Query)]
@@ -41,10 +40,7 @@ pub struct GetUserRepository;
 impl ReadModelRepository for GetUserRepository {
     type Error = QueryError;
     type Model = User;
-    async fn get(
-        &self,
-        id: &<Self::Model as ReadModel>::Id,
-    ) -> Result<Self::Model, Self::Error>> {
+    async fn get(&self, id: &<Self::Model as ReadModel>::Id) -> Result<Self::Model, Self::Error> {
         if id == "1" {
             Ok(User {
                 id: "1".to_string(),
@@ -55,7 +51,6 @@ impl ReadModelRepository for GetUserRepository {
         }
     }
 }
-
 // service
 
 pub trait QueryService: Send + Sync {
