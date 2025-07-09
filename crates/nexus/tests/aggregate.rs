@@ -49,11 +49,9 @@ fn should_set_active_when_user_activated_event_applied_after_creation() {
         },
         UserDomainEvents::UserActivated { id }
     ];
-
     for event in events {
         user_state.apply(&event);
     }
-
     assert!(user_state.is_active);
 }
 
@@ -61,8 +59,17 @@ fn should_set_active_when_user_activated_event_applied_after_creation() {
 fn should_not_activate_user_if_activated_event_applied_before_created() {
     let mut user_state = UserState::default();
     let timestamp = Utc::now();
-    for events in MockData::new(Some(timestamp), EventType::UnOrdered).events {
-        user_state.apply(&events);
+    let id = NexusId::default();
+    let events = events![
+        UserDomainEvents::UserActivated { id },
+        UserDomainEvents::UserCreated {
+            id,
+            email: String::from("joel@tixlys.com"),
+            timestamp
+        }
+    ];
+    for event in events {
+        user_state.apply(&event);
     }
     assert_eq!(user_state.email, Some(String::from("joel@tixlys.com")));
     assert_eq!(user_state.created_at, Some(timestamp));
@@ -73,8 +80,8 @@ fn should_not_activate_user_if_activated_event_applied_before_created() {
 fn should_not_change_state_when_empty_event_list_applied() {
     let mut user_state = UserState::default();
     let timestamp = Utc::now();
-    for events in MockData::new(Some(timestamp), EventType::Empty).events {
-        user_state.apply(&events);
+    for event in [] {
+        user_state.apply(events);
     }
     assert!(!user_state.is_active);
     assert_eq!(user_state.created_at, None);
@@ -87,8 +94,9 @@ fn should_not_change_state_when_empty_event_list_applied() {
 fn should_be_idempotent_when_user_created_event_applied_multiple_times() {
     let mut user_state = UserState::default();
     let timestamp = Utc::now();
+    let id = NexusId::default();
     let user_created = UserDomainEvents::UserCreated {
-        id: "id".to_string(),
+        id,
         email: String::from("joel@tixlys.com"),
         timestamp,
     };
@@ -104,29 +112,40 @@ fn should_be_idempotent_when_user_created_event_applied_multiple_times() {
 // aggregate root test
 #[test]
 fn should_initialize_aggregate_root_with_id_version_zero_and_default_state() {
-    let mut root = AggregateRoot::<User>::new(String::from("id"));
-    assert_eq!(root.id(), "id");
+    let aggregate_id = NexusId::default();
+    let mut root = AggregateRoot::<User>::new(aggregate_id.clone());
+    assert_eq!(root.id(), aggregate_id);
     assert_eq!(root.version(), 0);
     assert_eq!(root.state(), &UserState::default());
     assert_eq!(root.current_version(), 0);
-    assert_eq!(root.take_uncommitted_events(), Events::new());
+    assert_eq!(root.take_uncommitted_events(), []);
 }
 
 #[test]
 fn should_rehydrate_state_and_version_from_event_history() {
     let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::Ordered).events;
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
+    let id = NexusId::default();
+    let history = events![
+        UserDomainEvents::UserCreated {
+            id,
+            email: String::from("joel@tixlys.com"),
+            timestamp
+        },
+        UserDomainEvents::UserActivated { id }
+    ];
+
+    let aggregate_id = NexusId::default();
+    let aggregate_root = AggregateRoot::<User>::load_from_history(aggregate_id.clone(), &history);
     assert!(aggregate_root.is_ok());
     let mut aggregate_root = aggregate_root.unwrap();
-    assert_eq!(aggregate_root.id(), "id");
+    assert_eq!(aggregate_root.id(), aggregate_id);
     assert_eq!(aggregate_root.version(), 2);
     assert_eq!(
         aggregate_root.state(),
         &UserState::new(Some(String::from("joel@tixlys.com")), true, Some(timestamp))
     );
     assert_eq!(aggregate_root.current_version(), 2);
-    assert_eq!(aggregate_root.take_uncommitted_events(), Events::new());
+    assert_eq!(aggregate_root.take_uncommitted_events(), []);
 }
 
 #[test]
