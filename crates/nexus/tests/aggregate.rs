@@ -148,8 +148,8 @@ fn should_rehydrate_state_and_version_from_event_history() {
     assert_eq!(aggregate_root.take_uncommitted_events(), []);
 }
 
-#[test]
-fn should_fail_to_load_when_event_aggregate_id_mismatches() {
+#[tokio::test]
+async fn should_correctly_reflect_state_from_unordered_history_and_then_process_activate_command() {
     let timestamp = Utc::now();
     let id = NexusId::default();
     let history = events![
@@ -160,23 +160,6 @@ fn should_fail_to_load_when_event_aggregate_id_mismatches() {
         },
         UserDomainEvents::UserActivated { id }
     ];
-    let aggregate_root =
-        AggregateRoot::<User>::load_from_history(String::from("wrong_id"), &history);
-    assert!(aggregate_root.is_err());
-    let error = aggregate_root.unwrap_err();
-    assert_eq!(
-        error,
-        AggregateLoadError::MismatchedAggregateId {
-            expected_id: "wrong_id".to_string(),
-            event_aggregate_id: "id".to_string()
-        }
-    );
-}
-
-#[tokio::test]
-async fn should_correctly_reflect_state_from_unordered_history_and_then_process_activate_command() {
-    let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::UnOrdered).events;
     let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
     assert!(aggregate_root.is_ok());
     let mut root = aggregate_root.unwrap();

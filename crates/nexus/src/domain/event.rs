@@ -30,13 +30,5 @@ pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned + PartialE
     /// properties like being cloneable, hashable, equatable, etc.
     type Id: Id;
 
-    /// ## Method: `aggregate_id`
-    /// Returns a reference to the unique identifier of the aggregate instance
-    /// to which this event belongs.
-    ///
-    /// This is crucial for routing events, rehydrating aggregates, and ensuring
-    /// that events are applied to the correct aggregate instance.
-    fn aggregate_id(&self) -> &Self::Id;
-
     fn name(&self) -> &'static str;
 }
