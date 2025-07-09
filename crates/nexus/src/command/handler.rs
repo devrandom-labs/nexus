@@ -2,7 +2,8 @@ use crate::{
     domain::{AggregateType as AT, Command, DomainEvent},
     infra::events::Events,
 };
-use std::{boxed::Box, fmt::Debug, future::Future, pin::Pin};
+use async_trait::async_trait;
+use std::fmt::Debug;
 
 /// # `CommandHandlerResponse<E, R>`
 ///
@@ -51,6 +52,7 @@ where
 ///   or concrete types for static dispatch.
 ///
 /// This trait requires `Send + Sync` to ensure handlers can be used safely across threads.
+#[async_trait]
 pub trait AggregateCommandHandler<C, Services>: Send + Sync
 where
     C: Command,
@@ -82,21 +84,10 @@ where
     ///
     /// The `'a` lifetime ensures that the returned future does not outlive the references
     /// to `self`, `state`, and `services`.
-    #[allow(clippy::type_complexity)]
-    fn handle<'a>(
-        &'a self,
-        state: &'a <Self::AggregateType as AT>::State,
+    async fn handle(
+        &self,
+        state: &<Self::AggregateType as AT>::State,
         command: C,
-        services: &'a Services,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<<Self::AggregateType as AT>::Event, C::Result>,
-                        C::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    >;
+        services: &Services,
+    ) -> Result<CommandHandlerResponse<<Self::AggregateType as AT>::Event, C::Result>, C::Error>;
 }

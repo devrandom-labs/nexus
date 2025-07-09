@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use nexus::{
+    Aggregate, Command, DomainEvent,
     command::{AggregateCommandHandler, CommandHandlerResponse},
-    domain::{AggregateState, AggregateType, Command, DomainEvent, Message},
-    infra::events::Events,
+    domain::{AggregateState, AggregateType},
+    infra::{NexusId, events::Events},
 };
 use serde::{Deserialize, Serialize};
 use std::{pin::Pin, time::Duration};
@@ -10,34 +11,20 @@ use thiserror::Error as ThisError;
 use tokio::time::sleep;
 
 // events
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(DomainEvent, Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub enum UserDomainEvents {
+    #[domain_event(name = "user_created_v1")]
     UserCreated {
-        id: String,
+        #[attribute_id]
+        id: NexusId,
         email: String,
         timestamp: DateTime<Utc>,
     },
+    #[domain_event(name = "user_activated_v1")]
     UserActivated {
-        id: String,
+        #[attribute_id]
+        id: NexusId,
     },
-}
-
-impl Message for UserDomainEvents {}
-impl DomainEvent for UserDomainEvents {
-    type Id = String;
-    fn aggregate_id(&self) -> &Self::Id {
-        match self {
-            Self::UserActivated { id } => id,
-            Self::UserCreated { id, .. } => id,
-        }
-    }
-
-    fn name(&self) -> &'static str {
-        match self {
-            Self::UserActivated { .. } => "user_activated_v1",
-            Self::UserCreated { .. } => "user_created_v1",
-        }
-    }
 }
 
 // command
@@ -49,26 +36,17 @@ pub enum UserError {
     FailedToActivate,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Command)]
+#[command(result = String, error = UserError)]
 pub struct CreateUser {
     pub user_id: String,
     pub email: String,
 }
-impl Message for CreateUser {}
-impl Command for CreateUser {
-    type Result = String;
-    type Error = UserError;
-}
 
-#[derive(Debug)]
+#[derive(Debug, Command)]
+#[command(result = String, error = UserError)]
 pub struct ActivateUser {
     pub user_id: String,
-}
-
-impl Message for ActivateUser {}
-impl Command for ActivateUser {
-    type Result = String;
-    type Error = UserError;
 }
 
 // state definition
@@ -110,13 +88,9 @@ impl AggregateState for UserState {
 }
 
 // AggregateType
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Aggregate)]
+#[aggregate(id = NexusId, event = UserDomainEvents, state = UserState)]
 pub struct User;
-impl AggregateType for User {
-    type Id = String;
-    type Event = UserDomainEvents;
-    type State = UserState;
-}
 
 // service
 pub struct SomeService {
@@ -144,32 +118,35 @@ impl DynTestService for MockDynTestService {
     }
 }
 
-// Command handler
-pub struct CreateUserHandler;
+pub mod handlers {
+    use super::*;
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use nexus::{
+        command::{AggregateCommandHandler, CommandHandlerResponse},
+        domain::{AggregateType, Command},
+        infra::events::Events,
+    };
+    use std::{pin::Pin, time::Duration};
+    use tokio::time::sleep;
 
-impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
-    type AggregateType = User;
+    pub struct CreateUserHandler;
+    #[async_trait]
+    impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
+        type AggregateType = User;
 
-    fn handle<'a>(
-        &'a self,
-        _state: &'a <Self::AggregateType as AggregateType>::State,
-        command: CreateUser,
-        _services: &'a (),
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<
-                            <Self::AggregateType as AggregateType>::Event,
-                            <CreateUser as Command>::Result,
-                        >,
-                        <CreateUser as Command>::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
+        async fn handle(
+            &self,
+            _state: &<Self::AggregateType as AggregateType>::State,
+            command: CreateUser,
+            _services: &(),
+        ) -> Result<
+            CommandHandlerResponse<
+                <Self::AggregateType as AggregateType>::Event,
+                <CreateUser as Command>::Result,
+            >,
+            <CreateUser as Command>::Error,
+        > {
             let timestamp = Utc::now();
             sleep(Duration::from_millis(2)).await;
             if command.email.contains("error") {
@@ -186,35 +163,27 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserHandler {
                 events,
                 result: command.user_id,
             })
-        })
+        }
     }
-}
 
-pub struct ActivateUserHandler;
+    pub struct ActivateUserHandler;
 
-impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
-    type AggregateType = User;
+    #[async_trait]
+    impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
+        type AggregateType = User;
 
-    fn handle<'a>(
-        &'a self,
-        state: &'a <Self::AggregateType as AggregateType>::State,
-        command: ActivateUser,
-        _services: &'a (),
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<
-                            <Self::AggregateType as AggregateType>::Event,
-                            <ActivateUser as Command>::Result,
-                        >,
-                        <ActivateUser as Command>::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
+        async fn handle(
+            &self,
+            state: &<Self::AggregateType as AggregateType>::State,
+            command: ActivateUser,
+            _services: &(),
+        ) -> Result<
+            CommandHandlerResponse<
+                <Self::AggregateType as AggregateType>::Event,
+                <ActivateUser as Command>::Result,
+            >,
+            <ActivateUser as Command>::Error,
+        > {
             sleep(Duration::from_millis(100)).await;
 
             if state.created_at.is_none() {
@@ -230,85 +199,40 @@ impl AggregateCommandHandler<ActivateUser, ()> for ActivateUserHandler {
                 events,
                 result: command.user_id,
             })
-        })
+        }
     }
-}
 
-pub struct CreateUserHandlerWithService;
+    pub struct CreateUserHandlerWithService;
 
-impl AggregateCommandHandler<CreateUser, SomeService> for CreateUserHandlerWithService {
-    type AggregateType = User;
+    impl AggregateCommandHandler<CreateUser, SomeService> for CreateUserHandlerWithService {
+        type AggregateType = User;
 
-    fn handle<'a>(
-        &'a self,
-        _state: &'a <Self::AggregateType as AggregateType>::State,
-        command: CreateUser,
-        services: &'a SomeService,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<
-                            <Self::AggregateType as AggregateType>::Event,
-                            <CreateUser as Command>::Result,
+        fn handle<'a>(
+            &'a self,
+            _state: &'a <Self::AggregateType as AggregateType>::State,
+            command: CreateUser,
+            services: &'a SomeService,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            CommandHandlerResponse<
+                                <Self::AggregateType as AggregateType>::Event,
+                                <CreateUser as Command>::Result,
+                            >,
+                            <CreateUser as Command>::Error,
                         >,
-                        <CreateUser as Command>::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            let timestamp = Utc::now();
-            sleep(Duration::from_millis(2)).await;
-            if command.email.contains("error") {
-                return Err(UserError::FailedToCreateUser);
-            }
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let timestamp = Utc::now();
+                sleep(Duration::from_millis(2)).await;
+                if command.email.contains("error") {
+                    return Err(UserError::FailedToCreateUser);
+                }
 
-            let create_user = UserDomainEvents::UserCreated {
-                id: command.user_id.clone(),
-                email: command.email,
-                timestamp,
-            };
-            let events = Events::new(create_user);
-            Ok(CommandHandlerResponse {
-                events,
-                result: services.name.to_owned(),
-            })
-        })
-    }
-}
-
-pub struct CreateUserWithStateCheck;
-
-impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithStateCheck {
-    type AggregateType = User;
-
-    fn handle<'a>(
-        &'a self,
-        state: &'a <Self::AggregateType as AggregateType>::State,
-        command: CreateUser,
-        _services: &'a (),
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<
-                            <Self::AggregateType as AggregateType>::Event,
-                            <CreateUser as Command>::Result,
-                        >,
-                        <CreateUser as Command>::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            let timestamp = Utc::now();
-            sleep(Duration::from_millis(2)).await;
-            if state.created_at.is_some() {
-                Err(UserError::FailedToCreateUser)
-            } else {
                 let create_user = UserDomainEvents::UserCreated {
                     id: command.user_id.clone(),
                     email: command.email,
@@ -317,105 +241,150 @@ impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithStateCheck {
                 let events = Events::new(create_user);
                 Ok(CommandHandlerResponse {
                     events,
-                    result: command.user_id.to_string(),
+                    result: services.name.to_owned(),
                 })
-            }
-        })
+            })
+        }
     }
-}
 
-pub struct CreateUserAndActivate;
+    pub struct CreateUserWithStateCheck;
 
-impl AggregateCommandHandler<CreateUser, ()> for CreateUserAndActivate {
-    type AggregateType = User;
+    impl AggregateCommandHandler<CreateUser, ()> for CreateUserWithStateCheck {
+        type AggregateType = User;
 
-    fn handle<'a>(
-        &'a self,
-        state: &'a <Self::AggregateType as AggregateType>::State,
-        command: CreateUser,
-        _services: &'a (),
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<
-                            <Self::AggregateType as AggregateType>::Event,
-                            <CreateUser as Command>::Result,
+        fn handle<'a>(
+            &'a self,
+            state: &'a <Self::AggregateType as AggregateType>::State,
+            command: CreateUser,
+            _services: &'a (),
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            CommandHandlerResponse<
+                                <Self::AggregateType as AggregateType>::Event,
+                                <CreateUser as Command>::Result,
+                            >,
+                            <CreateUser as Command>::Error,
                         >,
-                        <CreateUser as Command>::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            let timestamp = Utc::now();
-            sleep(Duration::from_millis(2)).await;
-            if state.created_at.is_some() {
-                Err(UserError::FailedToCreateUser)
-            } else {
-                let create_user = UserDomainEvents::UserCreated {
-                    id: command.user_id.clone(),
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let timestamp = Utc::now();
+                sleep(Duration::from_millis(2)).await;
+                if state.created_at.is_some() {
+                    Err(UserError::FailedToCreateUser)
+                } else {
+                    let create_user = UserDomainEvents::UserCreated {
+                        id: command.user_id.clone(),
+                        email: command.email,
+                        timestamp,
+                    };
+                    let events = Events::new(create_user);
+                    Ok(CommandHandlerResponse {
+                        events,
+                        result: command.user_id.to_string(),
+                    })
+                }
+            })
+        }
+    }
+
+    pub struct CreateUserAndActivate;
+
+    impl AggregateCommandHandler<CreateUser, ()> for CreateUserAndActivate {
+        type AggregateType = User;
+
+        fn handle<'a>(
+            &'a self,
+            state: &'a <Self::AggregateType as AggregateType>::State,
+            command: CreateUser,
+            _services: &'a (),
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            CommandHandlerResponse<
+                                <Self::AggregateType as AggregateType>::Event,
+                                <CreateUser as Command>::Result,
+                            >,
+                            <CreateUser as Command>::Error,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let timestamp = Utc::now();
+                sleep(Duration::from_millis(2)).await;
+                if state.created_at.is_some() {
+                    Err(UserError::FailedToCreateUser)
+                } else {
+                    let create_user = UserDomainEvents::UserCreated {
+                        id: command.user_id.clone(),
+                        email: command.email,
+                        timestamp,
+                    };
+
+                    let activate_user = UserDomainEvents::UserActivated {
+                        id: command.user_id.clone(),
+                    };
+
+                    let mut events = Events::new(create_user);
+                    events.add(activate_user);
+                    Ok(CommandHandlerResponse {
+                        events,
+                        result: command.user_id.to_string(),
+                    })
+                }
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct ProcessWithDynServiceHandler;
+
+    impl<S: DynTestService + ?Sized> AggregateCommandHandler<CreateUser, S>
+        for ProcessWithDynServiceHandler
+    {
+        type AggregateType = User;
+
+        fn handle<'a>(
+            &'a self,
+            _state: &'a <Self::AggregateType as AggregateType>::State,
+            command: CreateUser,
+            services: &'a S,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            CommandHandlerResponse<
+                                <Self::AggregateType as AggregateType>::Event,
+                                <CreateUser as Command>::Result,
+                            >,
+                            <CreateUser as Command>::Error,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                let timestamp = Utc::now();
+                let processed_data = services.process(&command.email);
+
+                let event = UserDomainEvents::UserCreated {
+                    id: command.user_id,
                     email: command.email,
                     timestamp,
                 };
 
-                let activate_user = UserDomainEvents::UserActivated {
-                    id: command.user_id.clone(),
-                };
-
-                let mut events = Events::new(create_user);
-                events.add(activate_user);
                 Ok(CommandHandlerResponse {
-                    events,
-                    result: command.user_id.to_string(),
+                    events: Events::new(event),
+                    result: processed_data,
                 })
-            }
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct ProcessWithDynServiceHandler;
-
-impl<S: DynTestService + ?Sized> AggregateCommandHandler<CreateUser, S>
-    for ProcessWithDynServiceHandler
-{
-    type AggregateType = User;
-
-    fn handle<'a>(
-        &'a self,
-        _state: &'a <Self::AggregateType as AggregateType>::State,
-        command: CreateUser,
-        services: &'a S,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        CommandHandlerResponse<
-                            <Self::AggregateType as AggregateType>::Event,
-                            <CreateUser as Command>::Result,
-                        >,
-                        <CreateUser as Command>::Error,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            let timestamp = Utc::now();
-            let processed_data = services.process(&command.email);
-
-            let event = UserDomainEvents::UserCreated {
-                id: command.user_id,
-                email: command.email,
-                timestamp,
-            };
-
-            Ok(CommandHandlerResponse {
-                events: Events::new(event),
-                result: processed_data,
             })
-        })
+        }
     }
 }

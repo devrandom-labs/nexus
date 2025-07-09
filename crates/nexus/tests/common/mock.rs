@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 use super::{
-    User, UserDomainEvents,
     utils::{EventType, MockData},
-};
-use crate::command::{
-    aggregate::{Aggregate, AggregateRoot, AggregateType},
-    repository::{EventSourceRepository, RepositoryError},
+    write_side_setup::{User, UserDomainEvents},
 };
 use chrono::{DateTime, Utc};
+use nexus::{
+    command::{EventSourceRepository, RepositoryError},
+    domain::{Aggregate, AggregateRoot, AggregateType},
+};
 use std::collections::{HashMap, hash_map::Entry};
 use std::{
     default::Default,

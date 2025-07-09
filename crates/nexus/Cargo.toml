@@ -20,6 +20,7 @@ workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+nexus = { path = ".", features = ["derive"] }
 
 [features]
 default = []
@@ -39,4 +40,9 @@ required-features = ["derive"]
 [[test]]
 name = "write_side_repository_test"
 path = "tests/repository"
+required-features = ["derive"]
+
+[[test]]
+name = "query_handle_test"
+path = "tests/quert_handler"
 required-features = ["derive"]

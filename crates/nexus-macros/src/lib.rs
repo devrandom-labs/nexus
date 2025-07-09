@@ -70,13 +70,13 @@ fn parse_command(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         error_type.ok_or_else(|| Error::new(attribute.path().span(), "`error` key is required"))?;
 
     let expanded = quote! {
-        impl ::nexus::core::Command for #name {
+        impl ::nexus::domain::Command for #name {
             type Result = #result;
             type Error = #error_type;
 
         }
 
-        impl ::nexus::core::Message for #name {
+        impl ::nexus::domain::Message for #name {
 
         }
     };
@@ -108,10 +108,10 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         error_type.ok_or_else(|| Error::new(attribute.path().span(), "`error` key is required"))?;
 
     let expanded = quote! {
-        impl ::nexus::core::Message for #name {
+        impl ::nexus::domain::Message for #name {
 
         }
-        impl ::nexus::core::Query for #name {
+        impl ::nexus::domain::Query for #name {
             type Result = #result;
             type Error = #error_type;
 
@@ -147,11 +147,11 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 .ok_or_else(|| Error::new(attribute.path().span(), "`name` key is required"))?;
 
             let expanded = quote! {
-                impl ::nexus::core::Message for #name {
+                impl ::nexus::domain::Message for #name {
 
                 }
 
-                impl ::nexus::core::DomainEvent for #name {
+                impl ::nexus::domain::DomainEvent for #name {
                     type Id = #id_type;
 
                     fn aggregate_id(&self) -> &Self::Id {
@@ -215,10 +215,10 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 
             let expanded = quote! {
 
-                impl ::nexus::core::Message for #name {
+                impl ::nexus::domain::Message for #name {
                 }
 
-                impl ::nexus::core::DomainEvent for #name {
+                impl ::nexus::domain::DomainEvent for #name {
                     type Id = #id_type;
 
 
@@ -271,7 +271,7 @@ fn parse_aggregate(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
         state.ok_or_else(|| Error::new(attribute.path().span(), "`state` key is required"))?;
 
     let expanded = quote! {
-            impl ::nexus::command::aggregate::AggregateType for #name {
+            impl ::nexus::domain::AggregateType for #name {
                 type Id = #id;
                 type Event = #event;
                 type State = #state;

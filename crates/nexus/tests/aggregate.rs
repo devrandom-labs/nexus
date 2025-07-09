@@ -12,7 +12,6 @@ use nexus::{
     domain::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState},
     infra::events::Events,
 };
-
 // user state tests
 #[test]
 fn should_initialize_user_state_with_default_values() {
