@@ -1,27 +1,26 @@
-use super::{model::ReadModel, repository::ReadModelRepository};
-use crate::core::{Message, Query};
+use nexus::{
+    Query,
+    infra::NexusId,
+    query::{ReadModel, ReadModelRepository},
+};
 use std::pin::Pin;
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Query)]
+#[query(result = User, error = QueryError)]
 pub struct GetUserQuery {
-    pub id: String,
-}
-impl Message for GetUserQuery {}
-impl Query for GetUserQuery {
-    type Error = QueryError;
-    type Result = User;
+    pub id: NexusId,
 }
 
 // Read model
 #[derive(Debug)]
 pub struct User {
-    id: String,
+    id: NexusId,
     pub email: String,
 }
 
 impl ReadModel for User {
-    type Id = String;
+    type Id = NexusId;
 
     fn id(&self) -> &Self::Id {
         &self.id
