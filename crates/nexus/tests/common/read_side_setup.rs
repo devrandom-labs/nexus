@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use nexus::{
     Query,
     infra::NexusId,
@@ -36,23 +37,22 @@ pub enum QueryError {
 #[derive(Clone)]
 pub struct GetUserRepository;
 
+#[async_trait]
 impl ReadModelRepository for GetUserRepository {
     type Error = QueryError;
     type Model = User;
-    fn get<'a>(
-        &'a self,
-        id: &'a <Self::Model as ReadModel>::Id,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Model, Self::Error>> + Send + 'a>> {
-        Box::pin(async move {
-            if id == "1" {
-                Ok(User {
-                    id: "1".to_string(),
-                    email: "joel@tixlys.com".to_string(),
-                })
-            } else {
-                Err(QueryError::UserNotFound)
-            }
-        })
+    async fn get(
+        &self,
+        id: &<Self::Model as ReadModel>::Id,
+    ) -> Result<Self::Model, Self::Error>> {
+        if id == "1" {
+            Ok(User {
+                id: "1".to_string(),
+                email: "joel@tixlys.com".to_string(),
+            })
+        } else {
+            Err(QueryError::UserNotFound)
+        }
     }
 }
 

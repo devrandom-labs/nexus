@@ -1,5 +1,6 @@
 use super::model::ReadModel;
-use std::{boxed::Box, error::Error as StdError, future::Future, pin::Pin};
+use async_trait::async_trait;
+use std::{boxed::Box, error::Error as StdError};
 
 /// # `ReadModelRepository`
 ///
@@ -12,6 +13,7 @@ use std::{boxed::Box, error::Error as StdError, future::Future, pin::Pin};
 ///
 /// This trait requires `Send + Sync + Clone`. `Clone` is useful for sharing
 /// repository instances.
+#[async_trait]
 pub trait ReadModelRepository: Send + Sync + Clone {
     /// ## Associated Type: `Error`
     /// The specific error type that can be returned by repository operations.
@@ -37,9 +39,6 @@ pub trait ReadModelRepository: Send + Sync + Clone {
     ///   occurs during retrieval.
     ///
     /// The `'a` lifetime ensures the future does not outlive the `id` reference.
-    #[allow(clippy::type_complexity)]
-    fn get<'a>(
-        &'a self,
-        id: &'a <Self::Model as ReadModel>::Id,
-    ) -> Pin<Box<dyn Future<Output = Result<Self::Model, Self::Error>> + Send + 'a>>;
+
+    async fn get(&self, id: &<Self::Model as ReadModel>::Id) -> Result<Self::Model, Self::Error>;
 }
