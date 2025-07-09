@@ -50,11 +50,9 @@ fn should_set_active_when_user_activated_event_applied_after_creation() {
         UserDomainEvents::UserActivated { id }
     ];
 
-    // TODO: make Events impl IntoIter
-    /// events
-    // for events in MockData::new(Some(timestamp), EventType::Ordered).events {
-    //     user_state.apply(&events);
-    // }
+    for event in events {
+        user_state.apply(&event);
+    }
 
     assert!(user_state.is_active);
 }

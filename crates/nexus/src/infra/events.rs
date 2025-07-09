@@ -1,7 +1,6 @@
-use std::ops::Deref;
-
 use crate::domain::DomainEvent;
-use smallvec::{SmallVec, smallvec};
+use smallvec::{IntoIter as SmallVecIntoIter, SmallVec, smallvec};
+use std::iter::{Chain, Once, chain, once};
 
 #[derive(Debug)]
 pub struct Events<E>
@@ -26,12 +25,6 @@ where
     pub fn add(&mut self, event: E) {
         self.more.push(event);
     }
-
-    pub fn into_small_vec(self) -> SmallVec<[E; 1]> {
-        let mut events = smallvec![self.first];
-        events.extend(self.more);
-        events
-    }
 }
 
 impl<E> From<E> for Events<E>
@@ -43,6 +36,18 @@ where
     }
 }
 
+impl<E> IntoIterator for Events<E>
+where
+    E: DomainEvent,
+{
+    type Item = E;
+    type IntoIter = Chain<Once<E>, SmallVecIntoIter<[E; 1]>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        once(self.first).chain(self.more)
+    }
+}
+
 // TODO: impl IntoIterator for this collection
 // TODO: impl From trait to small_vec
 
@@ -50,8 +55,7 @@ where
 macro_rules! events {
     [$head:expr] => {
         {
-            let mut events = Events::new($head);
-            events
+             Events::new($head)
         }
     };
     [$head:expr, $($tail:expr), +] => {
