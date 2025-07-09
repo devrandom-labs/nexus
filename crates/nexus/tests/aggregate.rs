@@ -2,11 +2,11 @@ mod common;
 
 use chrono::Utc;
 use common::{
-    setup::{
+    utils::{EventType, MockData},
+    write_side_setup::{
         ActivateUser, ActivateUserHandler, CreateUser, CreateUserHandler,
         CreateUserHandlerWithService, SomeService, User, UserDomainEvents, UserError, UserState,
     },
-    utils::{EventType, MockData},
 };
 use nexus::{
     domain::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState},

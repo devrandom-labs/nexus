@@ -1,6 +1,6 @@
 mod common;
 
-use common::setup::{
+use common::write_side_setup::{
     ActivateUser, ActivateUserHandler, CreateUser, CreateUserAndActivate, CreateUserHandler,
     CreateUserHandlerWithService, CreateUserWithStateCheck, DynTestService, MockDynTestService,
     ProcessWithDynServiceHandler, SomeService, UserDomainEvents, UserError, UserState,

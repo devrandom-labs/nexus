@@ -29,3 +29,14 @@ derive = ["nexus-macros"]
 name = "aggregate_test"
 path = "tests/aggregate"
 required-features = ["derive"]
+
+[[test]]
+name = "command_handler_test"
+path = "tests/command_handler"
+required-features = ["derive"]
+
+
+[[test]]
+name = "write_side_repository_test"
+path = "tests/repository"
+required-features = ["derive"]

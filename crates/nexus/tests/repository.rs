@@ -2,8 +2,8 @@ mod common;
 
 use common::{
     mock::{ErrorTypes, MockRepository},
-    setup::{CreateUser, CreateUserHandler, User},
     utils::EventType,
+    write_side_setup::{CreateUser, CreateUserHandler, User},
 };
 use nexus::{command::RepositoryError, domain::AggregateRoot};
 
