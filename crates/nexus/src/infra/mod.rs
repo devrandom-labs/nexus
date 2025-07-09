@@ -1,5 +1,6 @@
 pub mod correlation_id;
 pub mod event_id;
+pub mod events;
 pub mod nexus_id;
 
 pub use correlation_id::CorrelationId;

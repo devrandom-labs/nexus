@@ -24,3 +24,8 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 [features]
 default = []
 derive = ["nexus-macros"]
+
+[[test]]
+name = "aggregate_test"
+path = "tests/aggregate"
+required-features = ["derive"]

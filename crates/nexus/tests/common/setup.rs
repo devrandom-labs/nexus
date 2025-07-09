@@ -1,13 +1,9 @@
-pub mod mocks;
-pub mod utils;
-use super::{
-    Events,
-    aggregate::{AggregateState, AggregateType},
-    handler::{AggregateCommandHandler, CommandHandlerResponse},
-};
-use crate::core::DomainEvent;
-use crate::core::{Command, Message};
 use chrono::{DateTime, Utc};
+use nexus::{
+    command::{AggregateCommandHandler, CommandHandlerResponse},
+    domain::{AggregateState, AggregateType, Command, DomainEvent, Message},
+    infra::events::Events,
+};
 use serde::{Deserialize, Serialize};
 use std::{pin::Pin, time::Duration};
 use thiserror::Error as ThisError;
