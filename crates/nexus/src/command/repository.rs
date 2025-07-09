@@ -1,4 +1,5 @@
 use crate::domain::{AggregateLoadError, AggregateRoot, AggregateType as AT, Id as AggregateId};
+use async_trait::async_trait;
 use std::{error::Error as StdError, fmt::Debug, future::Future, pin::Pin};
 use thiserror::Error as ThisError;
 use tower::BoxError;
@@ -92,81 +93,17 @@ where
 /// This trait must be `Send + Sync + Clone + Debug` to ensure it can be shared
 /// across threads and used in various contexts. `Clone` is often useful for sharing
 /// repository instances (e.g., if they are lightweight handles to a connection pool).
+#[async_trait]
 pub trait EventSourceRepository: Send + Sync + Clone + Debug {
-    /// ## Associated Type: `AggregateType`
-    /// Specifies the kind of aggregate (which must implement [`AT`](super::aggregate::AggregateType))
-    /// this repository can manage. This links the repository to the aggregate's
-    /// specific `Id`, `Event`, and `State` types.
     type AggregateType: AT;
 
-    /// ## Method: `load`
-    /// Asynchronously loads an [`AggregateRoot`] instance by its unique `id`.
-    ///
-    /// Implementations should:
-    /// 1.  Retrieve the sequence of domain events for the given `id` from the event store.
-    /// 2.  Rehydrate the aggregate by calling [`AggregateRoot::load_from_history`].
-    ///
-    /// ### Parameters:
-    /// * `id`: A reference to the ID of the aggregate to load.
-    ///
-    /// ### Returns:
-    /// A `Pin<Box<dyn Future<Output = Result<AggregateRoot<Self::AggregateType>, RepositoryError<...>>> + Send + 'a>>`.
-    /// This signifies an asynchronous operation that will eventually produce:
-    /// * `Ok(AggregateRoot<Self::AggregateType>)`: If the aggregate is found and successfully loaded.
-    /// * `Err(RepositoryError<Id>)`: If the aggregate is not found, or if any other
-    ///   error occurs during loading (e.g., deserialization issues, store errors).
-    ///
-    /// The `'a` lifetime ensures the future does not outlive the `id` reference.
-    #[allow(clippy::type_complexity)]
-    fn load(
+    async fn load(
         &self,
         id: &<Self::AggregateType as AT>::Id,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        AggregateRoot<Self::AggregateType>,
-                        RepositoryError<<Self::AggregateType as AT>::Id>,
-                    >,
-                > + Send
-                + 'static,
-        >,
-    >;
+    ) -> Result<AggregateRoot<Self::AggregateType>, RepositoryError<<Self::AggregateType as AT>::Id>>;
 
-    /// ## Method: `save`
-    /// Asynchronously saves an [`AggregateRoot`] instance.
-    ///
-    /// Implementations should:
-    /// 1.  Take the uncommitted events from the aggregate using `aggregate.take_uncommitted_events()`.
-    /// 2.  Atomically append these new events to the event stream for the aggregate in the event store.
-    /// 3.  Typically, this involves an optimistic concurrency check using the aggregate's
-    ///     `version()` or `current_version()` against the current stream version in the store.
-    ///
-    /// ### Parameters:
-    /// * `aggregate`: The `AggregateRoot` instance to save. It is passed by value,
-    ///   implying the repository might consume it or parts of it (like its uncommitted events).
-    ///   Consider if `&mut AggregateRoot<Self::AggregateType>` would be more appropriate
-    ///   if the aggregate root itself needs to be updated post-save (e.g., version incremented
-    ///   and uncommitted events cleared, though `take_uncommitted_events` already handles clearing).
-    ///   However, passing by value is common if the aggregate is conceptually "done" after this.
-    ///
-    /// ### Returns:
-    /// A `Pin<Box<dyn Future<Output = Result<(), RepositoryError<...>>> + Send + 'a>>`.
-    /// This signifies an asynchronous operation that will eventually produce:
-    /// * `Ok(())`: If the aggregate's events are successfully saved.
-    /// * `Err(RepositoryError<Id>)`: If any error occurs during saving (e.g.,
-    ///   serialization issues, store errors, concurrency conflicts).
-    ///
-    /// The `'a` lifetime here relates to `&'a self`.
-    #[allow(clippy::type_complexity)]
-    fn save(
+    async fn save(
         &self,
         aggregate: AggregateRoot<Self::AggregateType>,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<(), RepositoryError<<Self::AggregateType as AT>::Id>>>
-                + Send
-                + 'static,
-        >,
-    >;
+    ) -> Result<(), RepositoryError<<Self::AggregateType as AT>::Id>>;
 }

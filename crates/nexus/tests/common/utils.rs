@@ -1,6 +1,6 @@
-use super::UserDomainEvents;
-use crate::domain::DomainEvent;
+use super::write_side_setup::UserDomainEvents;
 use chrono::{DateTime, Utc};
+use nexus::{domain::DomainEvent, infra::NexusId};
 use std::collections::HashMap;
 
 pub enum EventType {
@@ -22,12 +22,12 @@ impl MockData {
         } else {
             let user_created = timestamp.map_or_else(
                 || UserDomainEvents::UserCreated {
-                    id: "id".to_string(),
+                    id: NexusId::default(),
                     email: String::from("joel@tixlys.com"),
-                    timestamp: Utc::now(),
+                    timestamp: NexusId::default(),
                 },
                 |t| UserDomainEvents::UserCreated {
-                    id: "id".to_string(),
+                    id: NexusId::default(),
                     email: String::from("joel@tixlys.com"),
                     timestamp: t,
                 },

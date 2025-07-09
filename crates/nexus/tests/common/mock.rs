@@ -3,15 +3,16 @@ use super::{
     utils::{EventType, MockData},
     write_side_setup::{User, UserDomainEvents},
 };
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use nexus::{
     command::{EventSourceRepository, RepositoryError},
     domain::{Aggregate, AggregateRoot, AggregateType},
+    infra::NexusId,
 };
 use std::collections::{HashMap, hash_map::Entry};
 use std::{
     default::Default,
-    pin::Pin,
     sync::{Arc, Mutex},
 };
 use thiserror::Error;
@@ -36,7 +37,7 @@ pub enum MockRepositoryError {
 
 #[derive(Clone, Debug, Default)]
 pub struct MockRepository {
-    store: Arc<Mutex<HashMap<String, Vec<UserDomainEvents>>>>,
+    store: Arc<Mutex<HashMap<NexusId, Vec<UserDomainEvents>>>>,
     error: Option<ErrorTypes>,
 }
 
@@ -61,119 +62,95 @@ impl MockRepository {
     }
 }
 
+#[async_trait]
 impl EventSourceRepository for MockRepository {
     type AggregateType = User;
 
-    fn load(
+    async fn load(
         &self,
         id: &<Self::AggregateType as AggregateType>::Id,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        AggregateRoot<Self::AggregateType>,
-                        RepositoryError<<Self::AggregateType as AggregateType>::Id>,
-                    >,
-                > + Send
-                + 'static,
-        >,
+    ) -> Result<
+        AggregateRoot<Self::AggregateType>,
+        RepositoryError<<Self::AggregateType as AggregateType>::Id>,
     > {
         let id = id.clone();
         let store = Arc::clone(&self.store);
         let error = self.error;
-        Box::pin(async move {
-            if let Some(error) = error {
-                match error {
-                    ErrorTypes::DeserializationError => {
-                        Err(RepositoryError::DeserializationError {
-                            source: BoxError::from(MockRepositoryError::Deserialization),
-                        })
-                    }
-                    ErrorTypes::SerializationError => Err(RepositoryError::SerializationError {
-                        source: BoxError::from(MockRepositoryError::Serialization),
-                    }),
-                    ErrorTypes::StoreError => Err(RepositoryError::StoreError {
-                        source: BoxError::from(MockRepositoryError::Db),
-                    }),
-                }
-            } else {
-                let store_guard = store.lock().unwrap();
-                let aggregate = if let Some(history) = store_guard.get(&id) {
-                    AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
-                        .map_err(|err| RepositoryError::DataIntegrityError {
-                            aggregate_id: id,
-                            source: err,
-                        })?
-                } else {
-                    return Err(RepositoryError::AggregateNotFound(id));
-                };
-                Ok(aggregate)
+        if let Some(error) = error {
+            match error {
+                ErrorTypes::DeserializationError => Err(RepositoryError::DeserializationError {
+                    source: BoxError::from(MockRepositoryError::Deserialization),
+                }),
+                ErrorTypes::SerializationError => Err(RepositoryError::SerializationError {
+                    source: BoxError::from(MockRepositoryError::Serialization),
+                }),
+                ErrorTypes::StoreError => Err(RepositoryError::StoreError {
+                    source: BoxError::from(MockRepositoryError::Db),
+                }),
             }
-        })
+        } else {
+            let store_guard = store.lock().unwrap();
+            let aggregate = if let Some(history) = store_guard.get(&id) {
+                AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
+                    .map_err(|err| RepositoryError::DataIntegrityError {
+                        aggregate_id: id,
+                        source: err,
+                    })?
+            } else {
+                return Err(RepositoryError::AggregateNotFound(id));
+            };
+            Ok(aggregate)
+        }
     }
 
-    fn save(
+    async fn save(
         &self,
         mut aggregate: AggregateRoot<Self::AggregateType>,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (),
-                        RepositoryError<<Self::AggregateType as AggregateType>::Id>,
-                    >,
-                > + Send
-                + 'static,
-        >,
-    > {
+    ) -> Result<(), RepositoryError<<Self::AggregateType as AggregateType>::Id>> {
         let store = Arc::clone(&self.store);
         let error = self.error;
-        Box::pin(async move {
-            if let Some(error) = error {
-                match error {
-                    ErrorTypes::DeserializationError => {
-                        Err(RepositoryError::DeserializationError {
-                            source: BoxError::from(MockRepositoryError::Deserialization),
+        if let Some(error) = error {
+            match error {
+                ErrorTypes::DeserializationError => Err(RepositoryError::DeserializationError {
+                    source: BoxError::from(MockRepositoryError::Deserialization),
+                }),
+                ErrorTypes::SerializationError => Err(RepositoryError::SerializationError {
+                    source: BoxError::from(MockRepositoryError::Serialization),
+                }),
+                ErrorTypes::StoreError => Err(RepositoryError::StoreError {
+                    source: BoxError::from(MockRepositoryError::Db),
+                }),
+            }
+        } else {
+            let version = aggregate.version();
+            let events = aggregate.take_uncommitted_events().to_vec();
+            let id = aggregate.id();
+            let mut store_guard = store.lock().unwrap();
+            match store_guard.entry(id.clone()) {
+                Entry::Occupied(mut entry) => {
+                    let current_events = entry.get_mut();
+                    if current_events.len() != version as usize {
+                        Err(RepositoryError::Conflict {
+                            aggregate_id: id.clone(),
+                            expected_version: version,
                         })
+                    } else {
+                        current_events.extend(events);
+                        Ok(())
                     }
-                    ErrorTypes::SerializationError => Err(RepositoryError::SerializationError {
-                        source: BoxError::from(MockRepositoryError::Serialization),
-                    }),
-                    ErrorTypes::StoreError => Err(RepositoryError::StoreError {
-                        source: BoxError::from(MockRepositoryError::Db),
-                    }),
                 }
-            } else {
-                let version = aggregate.version();
-                let events = aggregate.take_uncommitted_events().to_vec();
-                let id = aggregate.id().to_string();
-                let mut store_guard = store.lock().unwrap();
-                match store_guard.entry(id.clone()) {
-                    Entry::Occupied(mut entry) => {
-                        let current_events = entry.get_mut();
-                        if current_events.len() != version as usize {
-                            Err(RepositoryError::Conflict {
-                                aggregate_id: id,
-                                expected_version: version,
-                            })
-                        } else {
-                            current_events.extend(events);
-                            Ok(())
-                        }
-                    }
-                    Entry::Vacant(entry) => {
-                        if version == 0 {
-                            entry.insert(events);
-                            Ok(())
-                        } else {
-                            Err(RepositoryError::Conflict {
-                                aggregate_id: id,
-                                expected_version: version,
-                            })
-                        }
+                Entry::Vacant(entry) => {
+                    if version == 0 {
+                        entry.insert(events);
+                        Ok(())
+                    } else {
+                        Err(RepositoryError::Conflict {
+                            aggregate_id: id.clone(),
+                            expected_version: version,
+                        })
                     }
                 }
             }
-        })
+        }
     }
 }
