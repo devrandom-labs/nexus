@@ -151,7 +151,15 @@ fn should_rehydrate_state_and_version_from_event_history() {
 #[test]
 fn should_fail_to_load_when_event_aggregate_id_mismatches() {
     let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::Ordered).events;
+    let id = NexusId::default();
+    let history = events![
+        UserDomainEvents::UserCreated {
+            id,
+            email: String::from("joel@tixlys.com"),
+            timestamp
+        },
+        UserDomainEvents::UserActivated { id }
+    ];
     let aggregate_root =
         AggregateRoot::<User>::load_from_history(String::from("wrong_id"), &history);
     assert!(aggregate_root.is_err());

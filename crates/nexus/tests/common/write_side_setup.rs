@@ -32,14 +32,14 @@ pub enum UserError {
 #[derive(Debug, Clone, Command)]
 #[command(result = String, error = UserError)]
 pub struct CreateUser {
-    pub user_id: String,
+    pub user_id: NexusId,
     pub email: String,
 }
 
 #[derive(Debug, Command)]
 #[command(result = String, error = UserError)]
 pub struct ActivateUser {
-    pub user_id: String,
+    pub user_id: NexusId,
 }
 
 // state definition

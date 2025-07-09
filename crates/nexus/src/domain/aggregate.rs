@@ -114,33 +114,6 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     fn take_uncommitted_events(&mut self) -> Events<Self::Event>;
 }
 
-/// # `AggregateLoadError<Id>`
-///
-/// Represents errors that can occur specifically during the process of loading an
-/// aggregate's state from its event history using [`AggregateRoot::load_from_history`].
-///
-/// The generic parameter `Id` is the type of the aggregate's identifier.
-#[derive(Debug, ThisError, PartialEq)]
-pub enum AggregateLoadError<Id>
-where
-    Id: Debug,
-{
-    /// ## Variant: `MismatchedAggregateId`
-    /// Indicates an integrity error where an event loaded from the history for a
-    /// specific aggregate ID (`expected_id`) was found to have a different
-    /// aggregate ID (`event_aggregate_id`) within its own data. This suggests
-    /// a potential corruption or incorrect data retrieval from the event store.
-    #[error(
-        "Event integrity error: Loaded event with mismatched aggregate ID. Expected '{expected_id:?}', found in event: '{event_aggregate_id:?}'."
-    )]
-    MismatchedAggregateId {
-        /// The ID of the aggregate we are attempting to load.
-        expected_id: Id,
-        /// The ID found within the problematic event.
-        event_aggregate_id: Id,
-    },
-}
-
 /// # `AggregateRoot<AT>`
 ///
 /// The concrete implementation that manages an aggregate's state based on a sequence
@@ -231,10 +204,7 @@ where
     /// Returns [`AggregateLoadError::MismatchedAggregateId`] if any event in the
     /// history has an `aggregate_id()` that does not match the provided `id`
     /// for this aggregate root. This ensures data integrity.
-    pub fn load_from_history<'h, H>(
-        id: AT::Id,
-        history: H,
-    ) -> Result<Self, AggregateLoadError<AT::Id>>
+    pub fn load_from_history<'h, H>(id: AT::Id, history: H) -> Self
     where
         H: IntoIterator<Item = &'h AT::Event>,
         AT::Id: ToString,
@@ -243,24 +213,16 @@ where
         let mut version = 0u64;
 
         for event in history {
-            let event_id = event.aggregate_id();
-            if event_id != &id {
-                return Err(AggregateLoadError::MismatchedAggregateId {
-                    expected_id: id,
-                    event_aggregate_id: event_id.clone(),
-                });
-            }
-
             state.apply(event);
             version += 1;
         }
 
-        Ok(Self {
+        Self {
             id,
             state,
             version,
             uncommitted_events: Events::new(),
-        })
+        }
     }
 
     /// # Method: `current_version`
@@ -316,7 +278,6 @@ where
     {
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
-        let events = events.into_small_vec(); // FIXME: remove this and directly get iterator
         for event in &events {
             self.state.apply(event);
         }

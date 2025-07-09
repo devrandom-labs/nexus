@@ -144,7 +144,7 @@ pub mod id;
 pub mod message;
 pub mod query;
 
-pub use aggregate::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState, AggregateType};
+pub use aggregate::{Aggregate, AggregateRoot, AggregateState, AggregateType};
 pub use command::Command;
 pub use event::DomainEvent;
 pub use id::Id;
