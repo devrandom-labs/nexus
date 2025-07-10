@@ -69,18 +69,6 @@ where
     },
 }
 
-/// # `EventSourceRepository`
-///
-/// A trait (Port in Hexagonal Architecture) defining the contract for loading and saving
-/// event-sourced aggregates (`AggregateRoot<Self::AggregateType>`).
-///
-/// Implementations of this trait (Adapters) will provide the concrete logic for
-/// interacting with a specific event store technology (e.g., a relational database,
-/// a dedicated event store like EventStoreDB, or an in-memory store for testing).
-///
-/// This trait must be `Send + Sync + Clone + Debug` to ensure it can be shared
-/// across threads and used in various contexts. `Clone` is often useful for sharing
-/// repository instances (e.g., if they are lightweight handles to a connection pool).
 #[async_trait]
 pub trait EventSourceRepository: Send + Sync + Clone + Debug {
     type AggregateType: AT;

@@ -1,5 +1,5 @@
 use crate::domain::DomainEvent;
-use smallvec::{IntoIter as SmallVecIntoIter, SmallVec, smallvec};
+use smallvec::{IntoIter as SmallVecIntoIter, SmallVec};
 use std::iter::{Chain, Once, once};
 
 #[derive(Debug)]
