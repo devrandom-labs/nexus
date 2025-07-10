@@ -1,5 +1,5 @@
 use proc_macro2::Span;
-use syn::{Attribute, Data, Error, Fields, Ident, Result, Type, Variant};
+use syn::{Attribute, Data, Error, Fields, Result, Type, Variant};
 
 /// Finds a specific attribute in a slice, returning a targeted error if not found.
 ///
@@ -27,13 +27,12 @@ pub fn get_attribute<'a>(
 }
 
 pub struct FieldInfo<'a> {
-    pub name: &'a Ident,
     pub ty: &'a Type,
     pub variant: &'a Variant,
 }
 
 pub enum DataTypesFieldInfo<'a> {
-    Struct { name: &'a Ident, ty: &'a Type },
+    Struct { ty: &'a Type },
     Enum(Vec<FieldInfo<'a>>),
 }
 
@@ -44,21 +43,14 @@ pub fn get_fields_info<'a>(
 ) -> Result<DataTypesFieldInfo<'a>> {
     match data {
         Data::Struct(s) => {
-            let info = find_in_fields(&s.fields, attribute_name, error_span)?;
-            Ok(DataTypesFieldInfo::Struct {
-                name: info.0,
-                ty: info.1,
-            })
+            let ty = find_in_fields(&s.fields, attribute_name, error_span)?;
+            Ok(DataTypesFieldInfo::Struct { ty })
         }
         Data::Enum(e) => {
             let mut field_infos: Vec<FieldInfo<'a>> = Vec::new();
             for variant in &e.variants {
-                let info = find_in_fields(&variant.fields, attribute_name, error_span)?;
-                field_infos.push(FieldInfo {
-                    name: info.0,
-                    ty: info.1,
-                    variant,
-                });
+                let ty = find_in_fields(&variant.fields, attribute_name, error_span)?;
+                field_infos.push(FieldInfo { ty, variant });
             }
             Ok(DataTypesFieldInfo::Enum(field_infos))
         }
@@ -70,7 +62,7 @@ pub fn find_in_fields<'a>(
     fields: &'a Fields,
     attribute_name: &'a str,
     error_span: Span,
-) -> Result<(&'a Ident, &'a Type)> {
+) -> Result<&'a Type> {
     let mut found_fields = Vec::new();
 
     for field in fields {
@@ -79,13 +71,13 @@ pub fn find_in_fields<'a>(
             .iter()
             .any(|attr| attr.path().is_ident(attribute_name))
         {
-            let field_name = field.ident.as_ref().ok_or_else(|| {
+            field.ident.as_ref().ok_or_else(|| {
                 let msg = format!(
                     "The `#[{attribute_name}]` attribute can only be placed on fields with names."
                 );
                 Error::new_spanned(field, msg)
             })?;
-            found_fields.push((field_name, &field.ty));
+            found_fields.push(&field.ty);
         }
     }
 

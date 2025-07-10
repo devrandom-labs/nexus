@@ -126,10 +126,7 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     match utils::get_fields_info(&ast.data, "attribute_id", ast.span())? {
-        DataTypesFieldInfo::Struct {
-            name: field_name,
-            ty: id_type,
-        } => {
+        DataTypesFieldInfo::Struct { ty: id_type } => {
             let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
 
             let mut event_name: Option<LitStr> = None;
@@ -154,9 +151,6 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 impl ::nexus::domain::DomainEvent for #name {
                     type Id = #id_type;
 
-                    fn aggregate_id(&self) -> &Self::Id {
-                        &self.#field_name
-                    }
 
                     fn name(&self) -> &'static str {
                         #event_name
@@ -176,12 +170,10 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 }
             }
 
-            let mut aggregate_id_arms = Vec::new();
             let mut name_arms = Vec::new();
 
             for info in fields {
                 let variant_ident = &info.variant.ident;
-                let field_ident = info.name;
 
                 let variant_attribute = utils::get_attribute(
                     &info.variant.attrs,
@@ -204,10 +196,6 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                     Error::new(variant_attribute.path().span(), "`name` key is required")
                 })?;
 
-                aggregate_id_arms.push(quote! {
-                    Self::#variant_ident { #field_ident, .. } => #field_ident
-                });
-
                 name_arms.push(quote! {
                     Self::#variant_ident { .. } => #event_name
                 });
@@ -221,12 +209,6 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 impl ::nexus::domain::DomainEvent for #name {
                     type Id = #id_type;
 
-
-                    fn aggregate_id(&self) -> &Self::Id {
-                        match self {
-                            #(#aggregate_id_arms),*
-                        }
-                    }
 
                     fn name(&self) -> &'static str {
                         match self {
