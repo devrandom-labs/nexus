@@ -1,8 +1,5 @@
 #![allow(dead_code)]
-use super::{
-    utils::{EventType, MockData},
-    write_side_setup::{User, UserDomainEvents},
-};
+use super::write_side_setup::{User, UserDomainEvents};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use nexus::{

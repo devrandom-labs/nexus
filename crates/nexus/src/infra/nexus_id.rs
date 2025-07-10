@@ -1,7 +1,8 @@
 use crate::domain::Id;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq, Copy)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Copy, Serialize, Deserialize)]
 pub struct NexusId(Uuid);
 
 impl Default for NexusId {

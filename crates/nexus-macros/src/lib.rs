@@ -125,8 +125,8 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     match &ast.data {
-        Data::Struct(s) => {
-            let attribute = utils::get_attribute(&s.attrs, "domain_event", name.span())?;
+        Data::Struct(_) => {
+            let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
 
             let mut event_name: Option<LitStr> = None;
             attribute.parse_nested_meta(|meta| {

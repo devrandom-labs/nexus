@@ -70,7 +70,7 @@ macro_rules! events {
              Events::new($head)
         }
     };
-    [$head:expr, $($tail:expr), +] => {
+    [$head:expr, $($tail:expr),+ $(,)?] => {
         {
             let mut events = Events::new($head);
             $(

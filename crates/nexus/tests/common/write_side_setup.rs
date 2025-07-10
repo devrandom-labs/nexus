@@ -116,7 +116,7 @@ pub mod handlers {
         domain::{AggregateType, Command},
         infra::events::Events,
     };
-    use std::{pin::Pin, time::Duration};
+    use std::time::Duration;
     use tokio::time::sleep;
 
     pub struct CreateUserHandler;
@@ -150,7 +150,7 @@ pub mod handlers {
             let events = Events::new(create_user);
             Ok(CommandHandlerResponse {
                 events,
-                result: command.user_id,
+                result: command.user_id.to_string(),
             })
         }
     }
@@ -186,7 +186,7 @@ pub mod handlers {
             let events = Events::new(activate_user);
             Ok(CommandHandlerResponse {
                 events,
-                result: command.user_id,
+                result: command.user_id.to_string(),
             })
         }
     }
