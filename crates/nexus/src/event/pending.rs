@@ -1,4 +1,4 @@
-use super::builder::{PendingEventBuilder, WithDomain};
+use super::builder::{PendingEventBuilder, WithStreamId};
 use super::metadata::EventMetadata;
 use crate::{
     domain::{DomainEvent, Id},
@@ -40,11 +40,11 @@ where
         }
     }
 
-    pub fn builder<D>(domain_event: D) -> PendingEventBuilder<WithDomain<D, I>>
+    pub fn builder<I>(stream_id: I) -> PendingEventBuilder<WithStreamId<I>>
     where
-        D: DomainEvent,
+        I: Id,
     {
-        PendingEventBuilder::new(domain_event)
+        PendingEventBuilder::new(stream_id)
     }
 }
 
