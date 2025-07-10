@@ -15,11 +15,11 @@ where
 impl<D, I> PendingEventBuilder<WithDomain<D, I>>
 where
     I: Id,
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
 {
-    pub fn new(domain_event: D) -> Self {
+    pub fn new(stream_id: I, domain_event: D) -> Self {
         let state = WithDomain {
-            stream_id: domain_event.aggregate_id().clone(),
+            stream_id,
             event_type: domain_event.name().to_owned(),
             domain_event,
         };
@@ -40,7 +40,7 @@ where
 
 impl<D, I> PendingEventBuilder<WithVersion<D, I>>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
     pub fn with_metadata(self, metadata: EventMetadata) -> PendingEventBuilder<WithMetadata<D, I>> {
@@ -58,7 +58,7 @@ where
 
 impl<D, I> PendingEventBuilder<WithMetadata<D, I>>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
     pub async fn serialize<F, Fut>(self, serializer: F) -> Result<PendingEvent<I>, Error>
@@ -84,7 +84,7 @@ pub trait PendingEventState {}
 
 pub struct WithDomain<D, I>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
     stream_id: I,
@@ -94,14 +94,14 @@ where
 
 impl<D, I> PendingEventState for WithDomain<D, I>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
 }
 
 pub struct WithVersion<D, I>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
     version: u64,
@@ -112,14 +112,14 @@ where
 
 impl<D, I> PendingEventState for WithVersion<D, I>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
 }
 
 pub struct WithMetadata<D, I>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
     stream_id: I,
@@ -131,7 +131,7 @@ where
 
 impl<D, I> PendingEventState for WithMetadata<D, I>
 where
-    D: DomainEvent<Id = I>,
+    D: DomainEvent,
     I: Id,
 {
 }

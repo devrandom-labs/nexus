@@ -1,10 +1,7 @@
 use super::{Command, DomainEvent, Id};
-use crate::command::handler::{AggregateCommandHandler, CommandHandlerResponse};
-use smallvec::SmallVec;
+use crate::command::{AggregateCommandHandler, CommandHandlerResponse};
+use smallvec::{SmallVec, smallvec};
 use std::fmt::Debug;
-use thiserror::Error as ThisError;
-
-pub type Events<E> = SmallVec<[E; 1]>;
 
 /// # `AggregateState<E>`
 ///
@@ -58,7 +55,7 @@ pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
     /// The specific type of [`DomainEvent`] associated with this aggregate.
     /// This event type must itself implement [`DomainEvent`] with its `Id` associated
     /// type matching `Self::Id`.
-    type Event: DomainEvent<Id = Self::Id>;
+    type Event: DomainEvent;
 
     /// ## Associated Type: `State`
     /// The specific type representing the internal state data of this aggregate.
@@ -83,7 +80,7 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
 
     /// ## Associated Type: `Event`
     /// The specific type of [`DomainEvent`] associated with this aggregate, inherited from `AggregateType::Event`.
-    type Event: DomainEvent<Id = Self::Id>;
+    type Event: DomainEvent;
 
     /// ## Associated Type: `State`
     /// The specific type representing the internal state data, inherited from `AggregateType::State`.
@@ -111,7 +108,7 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     /// This method is typically called by the [`EventSourceRepository`] during the save
     /// process. After calling this, the aggregate's internal list of uncommitted events
     /// will be empty.
-    fn take_uncommitted_events(&mut self) -> Events<Self::Event>;
+    fn take_uncommitted_events(&mut self) -> SmallVec<[Self::Event; 1]>;
 }
 
 /// # `AggregateRoot<AT>`
@@ -136,7 +133,7 @@ pub struct AggregateRoot<AT: AggregateType> {
     id: AT::Id,
     state: AT::State,
     version: u64,
-    uncommitted_events: Events<AT::Event>,
+    uncommitted_events: SmallVec<[AT::Event; 1]>,
 }
 
 impl<AT> Aggregate for AggregateRoot<AT>
@@ -166,7 +163,7 @@ where
 
     /// Takes ownership of newly generated events.
     /// After calling this, the aggregate's internal list of uncommitted events will be empty.
-    fn take_uncommitted_events(&mut self) -> Events<Self::Event> {
+    fn take_uncommitted_events(&mut self) -> SmallVec<[Self::Event; 1]> {
         std::mem::take(&mut self.uncommitted_events)
     }
 }
@@ -187,7 +184,7 @@ where
             id,
             state: AT::State::default(),
             version: 0,
-            uncommitted_events: Events::new(),
+            uncommitted_events: smallvec![],
         }
     }
 
@@ -221,7 +218,7 @@ where
             id,
             state,
             version,
-            uncommitted_events: Events::new(),
+            uncommitted_events: smallvec![],
         }
     }
 

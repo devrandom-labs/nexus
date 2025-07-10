@@ -8,16 +8,12 @@ use thiserror::Error as ThisError;
 pub enum UserDomainEvents {
     #[domain_event(name = "user_created_v1")]
     UserCreated {
-        #[attribute_id]
         id: NexusId,
         email: String,
         timestamp: DateTime<Utc>,
     },
     #[domain_event(name = "user_activated_v1")]
-    UserActivated {
-        #[attribute_id]
-        id: NexusId,
-    },
+    UserActivated { id: NexusId },
 }
 
 // command

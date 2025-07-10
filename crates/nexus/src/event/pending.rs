@@ -42,7 +42,7 @@ where
 
     pub fn builder<D>(domain_event: D) -> PendingEventBuilder<WithDomain<D, I>>
     where
-        D: DomainEvent<Id = I>,
+        D: DomainEvent,
     {
         PendingEventBuilder::new(domain_event)
     }

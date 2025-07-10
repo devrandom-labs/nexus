@@ -19,16 +19,9 @@
 /// * `Id`: The type of the identifier for the aggregate instance to which this event pertains.
 ///   This `Id` type must itself implement the [`Id`] marker trait.
 ///
-use super::{id::Id, message::Message};
+use super::message::Message;
 use serde::{Serialize, de::DeserializeOwned};
 
 pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned + PartialEq {
-    /// ## Associated Type: `Id`
-    /// The type of the identifier for the aggregate instance this event is associated with.
-    ///
-    /// This `Id` must conform to the [`Id`] trait, ensuring it has common
-    /// properties like being cloneable, hashable, equatable, etc.
-    type Id: Id;
-
     fn name(&self) -> &'static str;
 }
