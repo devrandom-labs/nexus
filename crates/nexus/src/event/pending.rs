@@ -1,9 +1,6 @@
 use super::builder::{PendingEventBuilder, WithStreamId};
 use super::metadata::EventMetadata;
-use crate::{
-    domain::{DomainEvent, Id},
-    infra::EventId,
-};
+use crate::{domain::Id, infra::EventId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,10 +37,7 @@ where
         }
     }
 
-    pub fn builder<I>(stream_id: I) -> PendingEventBuilder<WithStreamId<I>>
-    where
-        I: Id,
-    {
+    pub fn builder(stream_id: I) -> PendingEventBuilder<WithStreamId<I>> {
         PendingEventBuilder::new(stream_id)
     }
 }

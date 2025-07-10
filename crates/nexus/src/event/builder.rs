@@ -58,9 +58,9 @@ where
         let state = WithDomain {
             stream_id: self.state.stream_id,
             version: self.state.version,
-            event_type: &domain_event.clone(),
+            event_type: domain_event.name().to_string(),
             domain_event,
-            metadata,
+            metadata: self.state.metadata,
         };
 
         PendingEventBuilder { state }
@@ -123,10 +123,10 @@ where
 
 impl<I> PendingEventState for WithMetadata<I> where I: Id {}
 
-pub struct WithDomain<D, I>
+pub struct WithDomain<I, D>
 where
-    D: DomainEvent,
     I: Id,
+    D: DomainEvent,
 {
     stream_id: I,
     event_type: String,
@@ -135,9 +135,9 @@ where
     metadata: EventMetadata,
 }
 
-impl<D, I> PendingEventState for WithDomain<D, I>
+impl<I, D> PendingEventState for WithDomain<I, D>
 where
-    D: DomainEvent,
     I: Id,
+    D: DomainEvent,
 {
 }
