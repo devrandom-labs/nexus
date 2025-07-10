@@ -44,7 +44,19 @@ where
     type IntoIter = Chain<Once<E>, SmallVecIntoIter<[E; 1]>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        once(self.first).chain(self.more)
+        once(self.first).chain(self.more.into_iter())
+    }
+}
+
+impl<'a, E> IntoIterator for &'a Events<E>
+where
+    E: DomainEvent,
+{
+    type Item = &'a E;
+    type IntoIter = Chain<Once<&'a E>, core::slice::Iter<'a, E>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        once(&self.first).chain(self.more.iter())
     }
 }
 
