@@ -9,7 +9,7 @@ use common::{
     },
 };
 use nexus::{
-    domain::{Aggregate, AggregateLoadError, AggregateRoot, AggregateState},
+    domain::{Aggregate, AggregateRoot, AggregateState},
     events,
     infra::{NexusId, events::Events},
 };
@@ -81,7 +81,7 @@ fn should_not_change_state_when_empty_event_list_applied() {
     let mut user_state = UserState::default();
     let timestamp = Utc::now();
     for event in [] {
-        user_state.apply(events);
+        user_state.apply(event);
     }
     assert!(!user_state.is_active);
     assert_eq!(user_state.created_at, None);
@@ -151,13 +151,12 @@ async fn should_correctly_reflect_state_from_unordered_history_and_then_process_
     let timestamp = Utc::now();
     let id = NexusId::default();
     let history = events![
-        UserDomainEvents::UserActivated { id }
+        UserDomainEvents::UserActivated { id },
         UserDomainEvents::UserCreated {
             id,
             email: String::from("joel@tixlys.com"),
             timestamp
         },
-
     ];
     let aggregate_id = NexusId::default();
     let root = AggregateRoot::<User>::load_from_history(aggregate_id, &history);

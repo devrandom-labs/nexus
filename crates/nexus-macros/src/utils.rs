@@ -1,5 +1,5 @@
 use proc_macro2::Span;
-use syn::{Attribute, Data, Error, Fields, Result, Type, Variant};
+use syn::{Attribute, Error, Result};
 
 /// Finds a specific attribute in a slice, returning a targeted error if not found.
 ///
