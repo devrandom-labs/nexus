@@ -136,8 +136,6 @@ fn should_rehydrate_state_and_version_from_event_history() {
 
     let aggregate_id = NexusId::default();
     let aggregate_root = AggregateRoot::<User>::load_from_history(aggregate_id.clone(), &history);
-    assert!(aggregate_root.is_ok());
-    let mut aggregate_root = aggregate_root.unwrap();
     assert_eq!(aggregate_root.id(), aggregate_id);
     assert_eq!(aggregate_root.version(), 2);
     assert_eq!(
@@ -153,20 +151,20 @@ async fn should_correctly_reflect_state_from_unordered_history_and_then_process_
     let timestamp = Utc::now();
     let id = NexusId::default();
     let history = events![
+        UserDomainEvents::UserActivated { id }
         UserDomainEvents::UserCreated {
             id,
             email: String::from("joel@tixlys.com"),
             timestamp
         },
-        UserDomainEvents::UserActivated { id }
+
     ];
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
-    assert!(aggregate_root.is_ok());
-    let mut root = aggregate_root.unwrap();
-    assert_eq!(root.id, "id");
-    assert!(!root.state.is_active);
-    assert_eq!(root.state.created_at, Some(timestamp));
-    assert_eq!(root.state.email, Some(String::from("joel@tixlys.com")));
+    let aggregate_id = NexusId::default();
+    let root = AggregateRoot::<User>::load_from_history(aggregate_id, &history);
+    assert_eq!(root.id(), aggregate_id);
+    assert!(!root.state().is_active);
+    assert_eq!(root.state().created_at, Some(timestamp));
+    assert_eq!(root.state().email, Some(String::from("joel@tixlys.com")));
     let handler = ActivateUserHandler;
     let result = root
         .execute(
@@ -186,16 +184,17 @@ async fn should_correctly_reflect_state_from_unordered_history_and_then_process_
 #[tokio::test]
 async fn should_start_with_default_state_from_empty_history_and_then_create_user() {
     let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::Empty).events;
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
-    assert!(aggregate_root.is_ok());
-    let mut root = aggregate_root.unwrap();
-    assert_eq!(root.id, "id");
-    assert!(!root.state.is_active);
-    assert_eq!(root.state.created_at, None);
-    assert_eq!(root.state.email, None);
+    let aggregate_id = NexusId::default();
+    let aggregate_root = AggregateRoot::<User>::load_from_history(aggregate_id, &[]);
+
+    assert_eq!(aggregate_root.id(), aggregate_id);
+    assert!(!aggregate_root.state().is_active);
+    assert_eq!(root.state().created_at, None);
+    assert_eq!(root.state().email, None);
+
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id.clone(),
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -208,14 +207,12 @@ async fn should_start_with_default_state_from_empty_history_and_then_create_user
 #[tokio::test]
 async fn should_fail_to_activate_user_when_loaded_from_empty_history_and_not_created() {
     let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::Empty).events;
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
-    assert!(aggregate_root.is_ok());
-    let mut root = aggregate_root.unwrap();
-    assert_eq!(root.id, "id");
-    assert!(!root.state.is_active);
-    assert_eq!(root.state.created_at, None);
-    assert_eq!(root.state.email, None);
+    let id = NexusId::default();
+    let root = AggregateRoot::<User>::load_from_history(id, &[]);
+    assert_eq!(root.id(), id);
+    assert!(!root.state().is_active);
+    assert_eq!(root.state().created_at, None);
+    assert_eq!(root.state().email, None);
     let handler = ActivateUserHandler; // checking the state and executing
     let result = root
         .execute(
@@ -234,9 +231,12 @@ async fn should_fail_to_activate_user_when_loaded_from_empty_history_and_not_cre
 
 #[tokio::test]
 async fn should_apply_events_and_return_result_on_successful_command_execution() {
-    let mut root = AggregateRoot::<User>::new(String::from("id"));
+    let aggregate_id = NexusId::default();
+    let mut root = AggregateRoot::<User>::new(aggregate_id);
+
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id.clone(),
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -248,9 +248,11 @@ async fn should_apply_events_and_return_result_on_successful_command_execution()
 
 #[tokio::test]
 async fn should_propagate_error_and_not_apply_events_when_command_handler_fails() {
-    let mut root = AggregateRoot::<User>::new(String::from("id"));
+    let aggregate_id = NexusId::default();
+    let mut root = AggregateRoot::<User>::new(aggregate_id.clone());
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id,
         email: "error@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -264,13 +266,13 @@ async fn should_propagate_error_and_not_apply_events_when_command_handler_fails(
 #[tokio::test]
 async fn should_calculate_current_version_correctly_after_execute_produces_events() {
     let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::Empty).events;
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
-    assert!(aggregate_root.is_ok());
-    let mut root = aggregate_root.unwrap();
+    let aggregate_id = NexusId::default();
+    let root = AggregateRoot::<User>::load_from_history(aggregate_id.clone(), &[]);
     assert_eq!(root.current_version(), 0);
+
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id.clone(),
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -282,13 +284,13 @@ async fn should_calculate_current_version_correctly_after_execute_produces_event
 #[tokio::test]
 async fn should_revert_current_version_to_persisted_version_after_taking_uncommitted_events() {
     let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::Empty).events;
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
-    assert!(aggregate_root.is_ok());
-    let mut root = aggregate_root.unwrap();
+    let aggregate_id = NexusId::default();
+    let root = AggregateRoot::<User>::load_from_history(aggregate_id.clone(), &[]);
     assert_eq!(root.current_version(), 0);
+
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id.clone(),
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -302,13 +304,14 @@ async fn should_revert_current_version_to_persisted_version_after_taking_uncommi
 #[tokio::test]
 async fn should_correctly_process_multiple_commands_sequentially() {
     let timestamp = Utc::now();
-    let history = MockData::new(Some(timestamp), EventType::Empty).events;
-    let aggregate_root = AggregateRoot::<User>::load_from_history(String::from("id"), &history);
-    assert!(aggregate_root.is_ok());
-    let mut root = aggregate_root.unwrap();
+    let aggregate_id = NexusId::default();
+    let root = AggregateRoot::<User>::load_from_history(aggregate_id, &[]);
+
     assert_eq!(root.current_version(), 0);
+
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id.clone(),
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -319,7 +322,7 @@ async fn should_correctly_process_multiple_commands_sequentially() {
     let result = root
         .execute(
             ActivateUser {
-                user_id: "id".to_string(),
+                user_id: id.clone(),
             },
             &handler,
             &(),
@@ -332,9 +335,12 @@ async fn should_correctly_process_multiple_commands_sequentially() {
 
 #[tokio::test]
 async fn should_pass_services_correctly_to_handler_during_execute() {
-    let mut root = AggregateRoot::<User>::new(String::from("id"));
+    let aggregate_id = NexusId::default();
+    let mut root = AggregateRoot::<User>::new(aggregate_id);
+
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id.clone(),
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandlerWithService;
@@ -352,15 +358,11 @@ async fn should_return_uncommitted_events_and_clear_internal_list_then_return_em
 {
     let timestamp = Utc::now();
     let aggregate_id = NexusId::default();
+    let aggregate_root = AggregateRoot::<User>::load_from_history(aggregate_id, &[]);
 
-    let history = MockData::new(Some(timestamp), EventType::Empty).events;
-
-    let aggregate_root = AggregateRoot::<User>::load_from_history(aggregate_id, &history);
-    assert!(aggregate_root.is_ok());
-    let mut root = aggregate_root.unwrap();
     assert_eq!(root.current_version(), 0);
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: NexusId::default(),
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
