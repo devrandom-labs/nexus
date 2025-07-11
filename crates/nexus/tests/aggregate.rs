@@ -312,13 +312,7 @@ async fn should_correctly_process_multiple_commands_sequentially() {
     assert_eq!(root.current_version(), 1);
     let handler = ActivateUserHandler; // checking the state and executing
     let result = root
-        .execute(
-            ActivateUser {
-                user_id: id.clone(),
-            },
-            &handler,
-            &(),
-        )
+        .execute(ActivateUser { user_id: id }, &handler, &())
         .await;
 
     assert!(result.is_ok());
@@ -332,7 +326,7 @@ async fn should_pass_services_correctly_to_handler_during_execute() {
 
     let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: id.clone(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandlerWithService;

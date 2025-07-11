@@ -39,6 +39,5 @@ pub trait ReadModelRepository: Send + Sync + Clone {
     ///   occurs during retrieval.
     ///
     /// The `'a` lifetime ensures the future does not outlive the `id` reference.
-
     async fn get(&self, id: &<Self::Model as ReadModel>::Id) -> Result<Self::Model, Self::Error>;
 }

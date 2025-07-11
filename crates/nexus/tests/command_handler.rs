@@ -93,7 +93,7 @@ async fn should_succeed_when_state_satisfies_handler_preconditions() {
     // Assert the second event matches
 
     // Finally, assert that there are no more events left
-    assert!(matches!(events_iter.next(), None));
+    assert!(events_iter.next().is_none());
     assert_eq!(result.result, id.to_string());
 }
 
@@ -211,6 +211,6 @@ async fn should_emit_multiple_distinct_events_when_logic_requires() {
     ));
 
     // Finally, assert that there are no more events left
-    assert!(matches!(events_iter.next(), None));
+    assert!(events_iter.next().is_none());
     assert_eq!(result.result, id.to_string());
 }

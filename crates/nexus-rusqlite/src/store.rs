@@ -261,9 +261,7 @@ mod tests {
         let conn = apply_migrations();
         let store = Store::new(conn).expect("Store should be initialized");
         let id = NexusId::default();
-        let domain_event = UserCreated {
-            user_id: id.clone(),
-        };
+        let domain_event = UserCreated { user_id: id };
         let metadata = EventMetadata::new("1-corr".into());
 
         let stream_id = NexusId::default();
