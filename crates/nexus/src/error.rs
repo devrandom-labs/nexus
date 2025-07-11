@@ -1,4 +1,3 @@
-use crate::store::StreamId;
 use thiserror::Error;
 use tower::BoxError;
 
@@ -101,7 +100,7 @@ pub enum Error {
         "Concurrency conflict for stream '{stream_id:?}'. Expected version {expected_version}."
     )]
     Conflict {
-        stream_id: StreamId,
+        stream_id: String,
         expected_version: u64,
     },
 

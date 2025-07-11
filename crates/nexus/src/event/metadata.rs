@@ -1,8 +1,7 @@
-#![allow(dead_code)]
-use super::CorrelationId;
+use crate::infra::CorrelationId;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventMetadata {
     correlation_id: CorrelationId,
 }

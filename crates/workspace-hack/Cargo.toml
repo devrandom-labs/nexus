@@ -15,6 +15,10 @@ publish = false
 chrono = { version = "0.4", features = ["serde"] }
 digest = { version = "0.10", features = ["mac", "std"] }
 form_urlencoded = { version = "1" }
+futures-channel = { version = "0.3", features = ["sink"] }
+futures-sink = { version = "0.3", default-features = false, features = ["std"] }
+futures-task = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
@@ -27,18 +31,23 @@ regex-automata = { version = "0.4", default-features = false, features = ["dfa-o
 regex-syntax = { version = "0.8" }
 rusqlite = { version = "0.33", default-features = false, features = ["bundled", "chrono", "trace", "uuid"] }
 serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["raw_value"] }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-core = { version = "0.1" }
-uuid = { version = "1", features = ["fast-rng", "serde", "v7"] }
+uuid = { version = "1", features = ["fast-rng", "serde", "v4", "v7"] }
 
 [build-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 digest = { version = "0.10", features = ["mac", "std"] }
 form_urlencoded = { version = "1" }
+futures-channel = { version = "0.3", features = ["sink"] }
+futures-sink = { version = "0.3", default-features = false, features = ["std"] }
+futures-task = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
@@ -52,6 +61,7 @@ regex-automata = { version = "0.4", default-features = false, features = ["dfa-o
 regex-syntax = { version = "0.8" }
 rusqlite = { version = "0.33", default-features = false, features = ["bundled", "chrono", "trace", "uuid"] }
 serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["raw_value"] }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
@@ -59,14 +69,16 @@ tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "util"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-core = { version = "0.1" }
-uuid = { version = "1", features = ["fast-rng", "serde", "v7"] }
+uuid = { version = "1", features = ["fast-rng", "serde", "v4", "v7"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
+futures-sink = { version = "0.3" }
 libc = { version = "0.2" }
 tower = { version = "0.5", default-features = false, features = ["timeout"] }
 tower-http = { version = "0.6", features = ["follow-redirect", "trace"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
+futures-sink = { version = "0.3" }
 libc = { version = "0.2" }
 tower = { version = "0.5", default-features = false, features = ["timeout"] }
 tower-http = { version = "0.6", features = ["follow-redirect", "trace"] }

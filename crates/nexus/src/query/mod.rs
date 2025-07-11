@@ -26,5 +26,6 @@ pub mod handler;
 pub mod model;
 pub mod repository;
 
-#[cfg(test)]
-pub mod test;
+pub use handler::QueryHandlerFn;
+pub use model::ReadModel;
+pub use repository::ReadModelRepository;

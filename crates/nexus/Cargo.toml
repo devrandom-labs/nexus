@@ -15,11 +15,13 @@ thiserror = { workspace = true }
 tokio-stream = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 tracing = { workspace = true }
-uuid = { workspace = true, features = ["v7", "fast-rng", "serde"] }
+uuid = { workspace = true, features = ["v7", "fast-rng", "serde", "v4"] }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+nexus-macros = { version = "0.1.0", path = "../nexus-macros" }
 
 [features]
 default = []

@@ -1,5 +1,5 @@
 use proc_macro2::Span;
-use syn::{Attribute, Data, DataStruct, Error, Fields, Ident, Result, Type};
+use syn::{Attribute, Error, Result};
 
 /// Finds a specific attribute in a slice, returning a targeted error if not found.
 ///
@@ -24,112 +24,6 @@ pub fn get_attribute<'a>(
             let msg = format!("missing required attribute `#[{}]`", name);
             Error::new(error_span, msg)
         })
-}
-
-pub fn get_field_type(data: &Data, attribute: &str, error_span: Span) -> Result<Type> {
-    // if struct get the name and type of the field
-    let fields = match data {
-        Data::Struct(DataStruct {
-            fields: Fields::Named(fields),
-            ..
-        }) => &fields.named,
-        _ => {
-            return Err(Error::new(error_span, "must be a struct"));
-        }
-    };
-
-    for field in fields {
-        if field
-            .attrs
-            .iter()
-            .any(|attr| attr.path().is_ident(attribute))
-        {
-            return Ok(field.ty.clone());
-        }
-    }
-
-    Err(Error::new(
-        error_span,
-        "A field must be marked with `#[{attribute}]`",
-    ))
-}
-
-pub struct FieldInfo<'a> {
-    pub name: &'a Ident,
-    pub ty: &'a Type,
-    pub variant: &'a Ident,
-}
-
-pub enum DataTypesFieldInfo<'a> {
-    Struct { name: &'a Ident, ty: &'a Type },
-    Enum(Vec<FieldInfo<'a>>),
-}
-
-pub fn get_fields_info<'a>(
-    data: &'a Data,
-    attribute_name: &'a str,
-    error_span: Span,
-) -> Result<DataTypesFieldInfo<'a>> {
-    match data {
-        Data::Struct(s) => {
-            let info = find_in_fields(&s.fields, attribute_name, error_span)?;
-            Ok(DataTypesFieldInfo::Struct {
-                name: info.0,
-                ty: info.1,
-            })
-        }
-        Data::Enum(e) => {
-            let mut field_infos: Vec<FieldInfo<'a>> = Vec::new();
-            for variant in &e.variants {
-                let info = find_in_fields(&variant.fields, attribute_name, error_span)?;
-                field_infos.push(FieldInfo {
-                    name: info.0,
-                    ty: info.1,
-                    variant: &variant.ident,
-                });
-            }
-            Ok(DataTypesFieldInfo::Enum(field_infos))
-        }
-        Data::Union(_) => Err(Error::new(error_span, "Unions are not supported.")),
-    }
-}
-
-// get the fiel type and name from this
-pub fn find_in_fields<'a>(
-    fields: &'a Fields,
-    attribute_name: &'a str,
-    error_span: Span,
-) -> Result<(&'a Ident, &'a Type)> {
-    let mut found_fields = Vec::new();
-
-    for field in fields {
-        if field
-            .attrs
-            .iter()
-            .any(|attr| attr.path().is_ident(attribute_name))
-        {
-            // This is an early error: attribute on a tuple field with no name.
-            let field_name = field.ident.as_ref().ok_or_else(|| {
-                let msg = format!(
-                    "The `#[{attribute_name}]` attribute can only be placed on fields with names."
-                );
-                Error::new_spanned(field, msg)
-            })?;
-            found_fields.push((field_name, &field.ty));
-        }
-    }
-
-    match found_fields.len() {
-        1 => Ok(found_fields.pop().unwrap()), // Safe due to length check
-        0 => {
-            let msg = format!("A field must be marked with `#[{attribute_name}]`");
-            Err(Error::new(error_span, msg))
-        }
-        _ => {
-            let msg = format!("Only one field can be marked with `#[{attribute_name}]`");
-            Err(Error::new(error_span, msg))
-        }
-    }
 }
 
 #[cfg(test)]
