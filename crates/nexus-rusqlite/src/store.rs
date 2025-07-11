@@ -268,18 +268,19 @@ mod tests {
 
         let stream_id = NexusId::default();
         // its now a builder, figure a good fluent way that makes sense.
-        let record = PendingEvent::builder(stream_id)
+
+        let pending_event = PendingEvent::builder(stream_id)
             .with_version(1)
             .with_metadata(metadata)
             .with_domain(domain_event)
-            .serialize(|domain_event| async move {
+            .build(|domain_event| async move {
                 to_vec(&domain_event)
                     .map_err(|err| Error::SerializationError { source: err.into() })
             })
             .await;
 
-        assert!(record.is_ok());
-        let record = record.unwrap();
+        assert!(pending_event.is_ok());
+        let record = pending_event.unwrap();
         store
             .append_to_stream(&stream_id, 1, vec![record.clone()])
             .await

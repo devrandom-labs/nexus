@@ -51,7 +51,7 @@ impl<I> PendingEventBuilder<WithMetadata<I>>
 where
     I: Id,
 {
-    pub async fn with_domain<D>(self, domain_event: D) -> PendingEventBuilder<WithDomain<I, D>>
+    pub fn with_domain<D>(self, domain_event: D) -> PendingEventBuilder<WithDomain<I, D>>
     where
         D: DomainEvent,
     {
