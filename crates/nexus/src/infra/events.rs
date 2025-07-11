@@ -29,6 +29,10 @@ where
     pub fn len(&self) -> usize {
         &self.more.len() + 1
     }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
 }
 
 impl<E> From<E> for Events<E>
@@ -48,7 +52,7 @@ where
     type IntoIter = Chain<Once<E>, SmallVecIntoIter<[E; 1]>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        once(self.first).chain(self.more.into_iter())
+        once(self.first).chain(self.more)
     }
 }
 
