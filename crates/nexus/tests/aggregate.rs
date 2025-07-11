@@ -1,5 +1,3 @@
-mod common;
-
 use chrono::Utc;
 use common::write_side_setup::{
     ActivateUser, CreateUser, SomeService, User, UserDomainEvents, UserError, UserState,
@@ -10,6 +8,8 @@ use nexus::{
     events,
     infra::NexusId,
 };
+
+mod common;
 
 // user state tests
 #[test]

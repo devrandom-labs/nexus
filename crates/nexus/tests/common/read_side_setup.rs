@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 use async_trait::async_trait;
 use nexus::{
-    Query,
     domain::Id,
     infra::NexusId,
     query::{ReadModel, ReadModelRepository},
 };
+use nexus_macros::Query;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Query)]

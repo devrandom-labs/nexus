@@ -1,12 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use nexus::{
+    domain::Id,
     error::Error,
-    identity::{CorrelationId, EventId},
-    store::{
-        EventRecord, EventStore, StreamId,
-        record::{EventRecordResponse, event_metadata::EventMetadata},
-    },
+    event::{EventMetadata, PendingEvent, PersistedEvent},
+    infra::{CorrelationId, EventId},
+    store::EventStore,
 };
 use rusqlite::{Connection, Result as SResult, Row, config::DbConfig, params};
 use std::{
@@ -58,20 +57,30 @@ impl Store {
 
     #[inline]
     #[instrument(level = "debug", skip(row), err)]
-    fn get_event_response(row: &Row<'_>) -> SResult<EventRecordResponse> {
+    fn get_event_response<I>(row: &Row<'_>) -> SResult<PersistedEvent<I>>
+    where
+        I: Id,
+    {
         let correlation_id = row
             .get::<_, String>("correlation_id")
             .map(CorrelationId::new)?;
-
         let id = row.get::<_, Uuid>("id").map(Into::<EventId>::into)?;
 
-        let stream_id = row.get::<_, String>("stream_id").map(StreamId::new)?;
+        let stream_id_uuid = row.get::<_, Uuid>("stream_id")?;
+        let stream_id = I::from_str(&stream_id_uuid.to_string()).map_err(|_| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                "Failed to parse Id from string".into(),
+            )
+        })?;
+
         let version = row.get::<_, u64>("version")?;
         let event_type = row.get::<_, String>("event_type")?;
         let payload = row.get::<_, Vec<u8>>("payload")?;
         let persisted_at = row.get::<_, DateTime<Utc>>("persisted_at")?;
         let metadata = EventMetadata::new(correlation_id);
-        Ok(EventRecordResponse::new(
+        Ok(PersistedEvent::new(
             id,
             stream_id,
             event_type,
@@ -86,12 +95,15 @@ impl Store {
 #[async_trait]
 impl EventStore for Store {
     #[instrument(level = "debug", skip(self), err)]
-    async fn append_to_stream(
+    async fn append_to_stream<I>(
         &self,
-        stream_id: &StreamId,
+        stream_id: &I,
         expected_version: u64,
-        event_records: Vec<EventRecord>,
-    ) -> Result<(), Error> {
+        event_records: Vec<PendingEvent<I>>,
+    ) -> Result<(), Error>
+    where
+        I: Id,
+    {
         debug!(?stream_id, expected_version, "appending events");
 
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
@@ -152,15 +164,16 @@ impl EventStore for Store {
         })?
     }
 
-    fn read_stream<'a>(
+    fn read_stream<'a, I>(
         &'a self,
-        stream_id: StreamId,
-    ) -> Pin<Box<dyn Stream<Item = Result<EventRecordResponse, Error>> + Send + 'a>>
+        stream_id: I,
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>, Error>> + Send + 'a>>
     where
         Self: Sync + 'a,
+        I: Id,
     {
         debug!(?stream_id, "fetching events");
-        let (tx, rx) = channel::<Result<EventRecordResponse, Error>>(10);
+        let (tx, rx) = channel::<Result<PersistedEvent<I>, Error>>(10);
         let conn = Arc::clone(&self.connection);
         spawn_blocking(move || {
             let result = (|| {
@@ -211,7 +224,9 @@ mod tests {
     use futures::TryStreamExt;
     use nexus::{
         error::Error,
-        store::{EventRecord, EventStore, StreamId, record::event_metadata::EventMetadata},
+        event::{EventMetadata, PendingEvent},
+        infra::NexusId,
+        store::EventStore,
     };
     use refinery::embed_migrations;
     use rusqlite::Connection;
@@ -231,14 +246,13 @@ mod tests {
 
     pub mod events {
 
-        use nexus::DomainEvent;
+        use nexus::{DomainEvent, infra::NexusId};
         use serde::{Deserialize, Serialize};
 
         #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
         #[domain_event(name = "user_created_v1")]
         pub struct UserCreated {
-            #[attribute_id]
-            pub user_id: String,
+            pub user_id: NexusId,
         }
     }
 
@@ -246,15 +260,18 @@ mod tests {
     async fn should_be_able_to_write_and_read_stream_events() {
         let conn = apply_migrations();
         let store = Store::new(conn).expect("Store should be initialized");
+        let id = NexusId::default();
         let domain_event = UserCreated {
-            user_id: "1".to_string(),
+            user_id: id.clone(),
         };
         let metadata = EventMetadata::new("1-corr".into());
 
+        let stream_id = NexusId::default();
         // its now a builder, figure a good fluent way that makes sense.
-        let record = EventRecord::builder(domain_event)
+        let record = PendingEvent::builder(stream_id)
             .with_version(1)
             .with_metadata(metadata)
+            .with_domain(domain_event)
             .serialize(|domain_event| async move {
                 to_vec(&domain_event)
                     .map_err(|err| Error::SerializationError { source: err.into() })
@@ -262,9 +279,7 @@ mod tests {
             .await;
 
         assert!(record.is_ok());
-        let stream_id: StreamId = "1".into();
         let record = record.unwrap();
-
         store
             .append_to_stream(&stream_id, 1, vec![record.clone()])
             .await

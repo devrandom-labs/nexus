@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
-use nexus::{Aggregate, Command, DomainEvent, domain::AggregateState, infra::NexusId};
+use nexus::{domain::AggregateState, infra::NexusId};
+use nexus_macros::{Aggregate, Command, DomainEvent};
 use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
 

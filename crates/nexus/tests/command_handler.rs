@@ -1,5 +1,3 @@
-mod common;
-
 use common::write_side_setup::{
     ActivateUser, CreateUser, DynTestService, MockDynTestService, SomeService, UserDomainEvents,
     UserError, UserState,
@@ -10,6 +8,7 @@ use common::write_side_setup::{
 };
 use nexus::{command::AggregateCommandHandler, infra::NexusId};
 
+mod common;
 #[tokio::test]
 async fn should_execute_handler_successfully_returning_events_and_result() {
     let state = UserState::default();

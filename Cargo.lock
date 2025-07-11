@@ -1098,7 +1098,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
- "nexus",
  "nexus-macros",
  "serde",
  "smallvec",

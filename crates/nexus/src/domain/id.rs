@@ -1,2 +1,9 @@
-use std::{fmt::Debug, hash::Hash};
-pub trait Id: Clone + Send + Sync + Debug + Hash + Eq + 'static + ToString + AsRef<[u8]> {}
+use std::str::FromStr;
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+};
+pub trait Id:
+    FromStr + Clone + Send + Sync + Debug + Hash + Eq + 'static + Display + AsRef<[u8]>
+{
+}

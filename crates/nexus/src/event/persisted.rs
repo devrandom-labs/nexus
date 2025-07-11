@@ -8,13 +8,13 @@ pub struct PersistedEvent<I>
 where
     I: Id,
 {
-    id: EventId,
-    stream_id: I,
-    version: u64,
-    event_type: String,
-    metadata: EventMetadata,
-    payload: Vec<u8>,
-    persisted_at: DateTime<Utc>,
+    pub id: EventId,
+    pub stream_id: I,
+    pub version: u64,
+    pub event_type: String,
+    pub metadata: EventMetadata,
+    pub payload: Vec<u8>,
+    pub persisted_at: DateTime<Utc>,
 }
 
 impl<I> PersistedEvent<I>

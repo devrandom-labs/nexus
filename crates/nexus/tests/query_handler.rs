@@ -1,5 +1,3 @@
-mod common;
-
 use common::read_side_setup::{
     GetUserQuery, GetUserRepository, MockQueryService, QueryError, QueryService, User,
 };
@@ -9,6 +7,8 @@ use nexus::{
 };
 use std::sync::Arc;
 use tower::{Service, ServiceExt};
+
+mod common;
 
 async fn get_user<R>(query: GetUserQuery, repo: R, _service: ()) -> Result<User, QueryError>
 where
