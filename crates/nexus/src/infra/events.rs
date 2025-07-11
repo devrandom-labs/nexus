@@ -67,12 +67,12 @@ where
 macro_rules! events {
     [$head:expr] => {
         {
-             Events::new($head)
+             $crate::infra::events::Events::new($head)
         }
     };
     [$head:expr, $($tail:expr),+ $(,)?] => {
         {
-            let mut events = Events::new($head);
+            let mut events = $crate::infra::events::Events::new($head);
             $(
                 events.add($tail);
             )*

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use super::write_side_setup::{User, UserDomainEvents};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use nexus::{
     command::{EventSourceRepository, RepositoryError},
     domain::{Aggregate, AggregateRoot, AggregateType},
@@ -39,15 +39,14 @@ pub struct MockRepository {
 }
 
 impl MockRepository {
-    pub fn new(timestamp: Option<DateTime<Utc>>, event_type: EventType) -> Self {
-        match event_type {
-            EventType::Empty => MockRepository::default(),
-            _ => MockRepository {
-                store: Arc::new(Mutex::new(
-                    MockData::new(timestamp, event_type).get_hash_map(),
-                )),
+    pub fn new(initial_data: Option<HashMap<NexusId, Vec<UserDomainEvents>>>) -> Self {
+        if let Some(data) = initial_data {
+            MockRepository {
+                store: Arc::new(Mutex::new(data)),
                 error: None,
-            },
+            }
+        } else {
+            MockRepository::default()
         }
     }
 
@@ -89,10 +88,6 @@ impl EventSourceRepository for MockRepository {
             let store_guard = store.lock().unwrap();
             let aggregate = if let Some(history) = store_guard.get(&id) {
                 AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
-                    .map_err(|err| RepositoryError::DataIntegrityError {
-                        aggregate_id: id,
-                        source: err,
-                    })?
             } else {
                 return Err(RepositoryError::AggregateNotFound(id));
             };

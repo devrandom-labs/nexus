@@ -8,7 +8,7 @@ use common::write_side_setup::{
 use nexus::{
     domain::{Aggregate, AggregateRoot, AggregateState},
     events,
-    infra::{NexusId, events::Events},
+    infra::NexusId,
 };
 
 // user state tests

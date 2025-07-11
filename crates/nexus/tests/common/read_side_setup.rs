@@ -34,20 +34,22 @@ pub enum QueryError {
 }
 
 #[derive(Clone)]
-pub struct GetUserRepository;
+pub struct GetUserRepository {
+    fail: bool,
+}
 
 #[async_trait]
 impl ReadModelRepository for GetUserRepository {
     type Error = QueryError;
     type Model = User;
     async fn get(&self, id: &<Self::Model as ReadModel>::Id) -> Result<Self::Model, Self::Error> {
-        if id == "1" {
+        if self.fail {
+            Err(QueryError::UserNotFound)
+        } else {
             Ok(User {
-                id: "1".to_string(),
+                id: id.clone(),
                 email: "joel@tixlys.com".to_string(),
             })
-        } else {
-            Err(QueryError::UserNotFound)
         }
     }
 }
