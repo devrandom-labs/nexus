@@ -79,7 +79,7 @@ async fn should_save_aggregate_uncommited_events() {
 
 #[tokio::test]
 async fn should_give_store_error_on_unreleated_database_error() {
-    let repo = MockRepository::new_with_error(ErrorTypes::StoreError);
+    let repo = MockRepository::new_with_error(ErrorTypes::Store);
     let id = NexusId::default();
     let user_aggregate = repo.load(&id).await;
     assert!(user_aggregate.is_err());
@@ -92,7 +92,7 @@ async fn should_give_store_error_on_unreleated_database_error() {
 
 #[tokio::test]
 async fn should_return_deserialization_error_on_load() {
-    let repo = MockRepository::new_with_error(ErrorTypes::DeserializationError);
+    let repo = MockRepository::new_with_error(ErrorTypes::Deserialization);
     let id = NexusId::default();
     let user_aggregate = repo.load(&id).await;
     assert!(user_aggregate.is_err());
@@ -113,7 +113,7 @@ async fn should_return_serialization_error_on_save() {
     };
     let handler = CreateUserHandler;
     let _ = root.execute(create_user, &handler, &()).await;
-    let repo = MockRepository::new_with_error(ErrorTypes::SerializationError);
+    let repo = MockRepository::new_with_error(ErrorTypes::Serialization);
     let result = repo.save(root).await;
     assert!(result.is_err());
     let error = result.unwrap_err();

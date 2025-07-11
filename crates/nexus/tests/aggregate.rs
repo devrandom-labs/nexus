@@ -111,7 +111,7 @@ fn should_be_idempotent_when_user_created_event_applied_multiple_times() {
 #[test]
 fn should_initialize_aggregate_root_with_id_version_zero_and_default_state() {
     let aggregate_id = NexusId::default();
-    let mut root = AggregateRoot::<User>::new(aggregate_id.clone());
+    let mut root = AggregateRoot::<User>::new(aggregate_id);
     assert_eq!(root.id(), &aggregate_id);
     assert_eq!(root.version(), 0);
     assert_eq!(root.state(), &UserState::default());
@@ -133,8 +133,7 @@ fn should_rehydrate_state_and_version_from_event_history() {
     ];
 
     let aggregate_id = NexusId::default();
-    let mut aggregate_root =
-        AggregateRoot::<User>::load_from_history(aggregate_id.clone(), &history);
+    let mut aggregate_root = AggregateRoot::<User>::load_from_history(aggregate_id, &history);
     assert_eq!(aggregate_root.id(), &aggregate_id);
     assert_eq!(aggregate_root.version(), 2);
     assert_eq!(
@@ -165,13 +164,7 @@ async fn should_correctly_reflect_state_from_unordered_history_and_then_process_
     assert_eq!(root.state().email, Some(String::from("joel@tixlys.com")));
     let handler = ActivateUserHandler;
     let result = root
-        .execute(
-            ActivateUser {
-                user_id: id.clone(),
-            },
-            &handler,
-            &(),
-        )
+        .execute(ActivateUser { user_id: id }, &handler, &())
         .await;
 
     assert!(result.is_ok());
@@ -191,7 +184,7 @@ async fn should_start_with_default_state_from_empty_history_and_then_create_user
 
     let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: id.clone(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -231,7 +224,7 @@ async fn should_apply_events_and_return_result_on_successful_command_execution()
     let mut root = AggregateRoot::<User>::new(aggregate_id);
     let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: id.clone(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -244,7 +237,7 @@ async fn should_apply_events_and_return_result_on_successful_command_execution()
 #[tokio::test]
 async fn should_propagate_error_and_not_apply_events_when_command_handler_fails() {
     let aggregate_id = NexusId::default();
-    let mut root = AggregateRoot::<User>::new(aggregate_id.clone());
+    let mut root = AggregateRoot::<User>::new(aggregate_id);
     let id = NexusId::default();
     let create_user = CreateUser {
         user_id: id,
@@ -261,12 +254,12 @@ async fn should_propagate_error_and_not_apply_events_when_command_handler_fails(
 #[tokio::test]
 async fn should_calculate_current_version_correctly_after_execute_produces_events() {
     let aggregate_id = NexusId::default();
-    let mut root = AggregateRoot::<User>::load_from_history(aggregate_id.clone(), &[]);
+    let mut root = AggregateRoot::<User>::load_from_history(aggregate_id, &[]);
     assert_eq!(root.current_version(), 0);
 
     let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: id.clone(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -278,12 +271,12 @@ async fn should_calculate_current_version_correctly_after_execute_produces_event
 #[tokio::test]
 async fn should_revert_current_version_to_persisted_version_after_taking_uncommitted_events() {
     let aggregate_id = NexusId::default();
-    let mut root = AggregateRoot::<User>::load_from_history(aggregate_id.clone(), &[]);
+    let mut root = AggregateRoot::<User>::load_from_history(aggregate_id, &[]);
     assert_eq!(root.current_version(), 0);
 
     let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: id.clone(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;
@@ -303,7 +296,7 @@ async fn should_correctly_process_multiple_commands_sequentially() {
 
     let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: id.clone(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
     let handler = CreateUserHandler;

@@ -145,7 +145,7 @@ pub mod handlers {
             }
 
             let create_user = UserDomainEvents::UserCreated {
-                id: command.user_id.clone(),
+                id: command.user_id,
                 email: command.email,
                 timestamp,
             };
@@ -182,7 +182,7 @@ pub mod handlers {
             }
 
             let activate_user = UserDomainEvents::UserActivated {
-                id: command.user_id.clone(),
+                id: command.user_id,
             };
 
             let events = Events::new(activate_user);
@@ -218,7 +218,7 @@ pub mod handlers {
             }
 
             let create_user = UserDomainEvents::UserCreated {
-                id: command.user_id.clone(),
+                id: command.user_id,
                 email: command.email,
                 timestamp,
             };
@@ -254,7 +254,7 @@ pub mod handlers {
                 Err(UserError::FailedToCreateUser)
             } else {
                 let create_user = UserDomainEvents::UserCreated {
-                    id: command.user_id.clone(),
+                    id: command.user_id,
                     email: command.email,
                     timestamp,
                 };
@@ -291,13 +291,13 @@ pub mod handlers {
                 Err(UserError::FailedToCreateUser)
             } else {
                 let create_user = UserDomainEvents::UserCreated {
-                    id: command.user_id.clone(),
+                    id: command.user_id,
                     email: command.email,
                     timestamp,
                 };
 
                 let activate_user = UserDomainEvents::UserActivated {
-                    id: command.user_id.clone(),
+                    id: command.user_id,
                 };
 
                 let mut events = Events::new(create_user);

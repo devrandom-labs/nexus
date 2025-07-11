@@ -49,7 +49,7 @@ impl ReadModelRepository for GetUserRepository {
             Err(QueryError::UserNotFound)
         } else {
             Ok(User {
-                id: id.clone(),
+                id: *id,
                 email: "joel@tixlys.com".to_string(),
             })
         }

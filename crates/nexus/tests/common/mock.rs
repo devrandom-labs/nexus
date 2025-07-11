@@ -17,9 +17,9 @@ use tower::BoxError;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ErrorTypes {
-    DeserializationError,
-    SerializationError,
-    StoreError,
+    Deserialization,
+    Serialization,
+    Store,
 }
 
 #[derive(Debug, Error)]
@@ -69,27 +69,26 @@ impl EventSourceRepository for MockRepository {
         AggregateRoot<Self::AggregateType>,
         RepositoryError<<Self::AggregateType as AggregateType>::Id>,
     > {
-        let id = id.clone();
         let store = Arc::clone(&self.store);
         let error = self.error;
         if let Some(error) = error {
             match error {
-                ErrorTypes::DeserializationError => Err(RepositoryError::DeserializationError {
+                ErrorTypes::Deserialization => Err(RepositoryError::DeserializationError {
                     source: BoxError::from(MockRepositoryError::Deserialization),
                 }),
-                ErrorTypes::SerializationError => Err(RepositoryError::SerializationError {
+                ErrorTypes::Serialization => Err(RepositoryError::SerializationError {
                     source: BoxError::from(MockRepositoryError::Serialization),
                 }),
-                ErrorTypes::StoreError => Err(RepositoryError::StoreError {
+                ErrorTypes::Store => Err(RepositoryError::StoreError {
                     source: BoxError::from(MockRepositoryError::Db),
                 }),
             }
         } else {
             let store_guard = store.lock().unwrap();
-            let aggregate = if let Some(history) = store_guard.get(&id) {
-                AggregateRoot::<Self::AggregateType>::load_from_history(id.clone(), history)
+            let aggregate = if let Some(history) = store_guard.get(id) {
+                AggregateRoot::<Self::AggregateType>::load_from_history(*id, history)
             } else {
-                return Err(RepositoryError::AggregateNotFound(id));
+                return Err(RepositoryError::AggregateNotFound(*id));
             };
             Ok(aggregate)
         }
@@ -103,13 +102,13 @@ impl EventSourceRepository for MockRepository {
         let error = self.error;
         if let Some(error) = error {
             match error {
-                ErrorTypes::DeserializationError => Err(RepositoryError::DeserializationError {
+                ErrorTypes::Deserialization => Err(RepositoryError::DeserializationError {
                     source: BoxError::from(MockRepositoryError::Deserialization),
                 }),
-                ErrorTypes::SerializationError => Err(RepositoryError::SerializationError {
+                ErrorTypes::Serialization => Err(RepositoryError::SerializationError {
                     source: BoxError::from(MockRepositoryError::Serialization),
                 }),
-                ErrorTypes::StoreError => Err(RepositoryError::StoreError {
+                ErrorTypes::Store => Err(RepositoryError::StoreError {
                     source: BoxError::from(MockRepositoryError::Db),
                 }),
             }
@@ -118,12 +117,12 @@ impl EventSourceRepository for MockRepository {
             let events = aggregate.take_uncommitted_events().to_vec();
             let id = aggregate.id();
             let mut store_guard = store.lock().unwrap();
-            match store_guard.entry(id.clone()) {
+            match store_guard.entry(*id) {
                 Entry::Occupied(mut entry) => {
                     let current_events = entry.get_mut();
                     if current_events.len() != version as usize {
                         Err(RepositoryError::Conflict {
-                            aggregate_id: id.clone(),
+                            aggregate_id: *id,
                             expected_version: version,
                         })
                     } else {
@@ -137,7 +136,7 @@ impl EventSourceRepository for MockRepository {
                         Ok(())
                     } else {
                         Err(RepositoryError::Conflict {
-                            aggregate_id: id.clone(),
+                            aggregate_id: *id,
                             expected_version: version,
                         })
                     }

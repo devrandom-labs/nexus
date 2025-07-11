@@ -134,7 +134,7 @@ impl EventStore for Store {
                         event_stmt
                             .execute(params![
                                 record.id().as_uuid(),
-                                record.stream_id().to_string(),
+                                record.stream_id().as_ref(),
                                 record.version(),
                                 record.event_type(),
                                 record.payload()
@@ -192,7 +192,7 @@ impl EventStore for Store {
                     .prepare(sql)
                     .map_err(|err| Error::Store { source: err.into() })?;
                 let mut rows = stmt
-                    .query([&stream_id.to_string()])
+                    .query([&stream_id.as_ref()])
                     .map_err(|err| Error::Store { source: err.into() })?;
 
                 while let Some(row) = rows
@@ -277,7 +277,10 @@ mod tests {
             })
             .await;
 
-        assert!(pending_event.is_ok());
+        assert!(
+            pending_event.is_ok(),
+            "pending event should be deserialized"
+        );
         let record = pending_event.unwrap();
         store
             .append_to_stream(&stream_id, 1, vec![record.clone()])
@@ -290,17 +293,34 @@ mod tests {
             .await
             .expect("Read stream should succeed");
 
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 1, "there should be 1 event to read");
         let read_event = &events[0];
 
-        assert_eq!(record.id(), &read_event.id);
-        assert_eq!(record.stream_id(), &read_event.stream_id);
-        assert_eq!(record.version(), &read_event.version);
-        assert_eq!(record.event_type(), &read_event.event_type);
-        assert_eq!(record.payload(), &read_event.payload);
+        assert_eq!(record.id(), &read_event.id, "event id should match");
+        assert_eq!(
+            record.stream_id(),
+            &read_event.stream_id,
+            "stream id should match"
+        );
+        assert_eq!(
+            record.version(),
+            &read_event.version,
+            "version should match"
+        );
+        assert_eq!(
+            record.event_type(),
+            &read_event.event_type,
+            "type should match"
+        );
+        assert_eq!(
+            record.payload(),
+            &read_event.payload,
+            "payload should match"
+        );
         assert_eq!(
             record.metadata().correlation_id(),
-            read_event.metadata.correlation_id()
+            read_event.metadata.correlation_id(),
+            "correlation id should match"
         );
         assert!(read_event.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
     }

@@ -27,7 +27,7 @@ where
     R: ReadModelRepository<Model = User, Error = QueryError> + Send,
 {
     let data = service.process();
-    repo.get(&data).await
+    repo.get(data).await
 }
 
 #[tokio::test]
