@@ -7,8 +7,8 @@ pub struct Events<E>
 where
     E: DomainEvent,
 {
-    first: E,
-    more: SmallVec<[E; 1]>,
+    pub first: E,
+    pub more: SmallVec<[E; 1]>,
 }
 
 impl<E> Events<E>

@@ -30,34 +30,35 @@ async fn should_execute_handler_successfully_returning_events_and_result() {
 
     let events = result.events;
     // Perform a pattern match on the first event
-    if let Some(UserDomainEvents::UserCreated {
-        id: event_id,
-        email: event_email,
-        timestamp: _,
-    }) = events.first()
-    {
-        // Assertions for command data in event
-        assert_eq!(
-            event_id, &create_user.user_id,
-            "Event ID should match command user_id"
-        );
-        assert_eq!(
-            event_email, &create_user.email,
-            "Event email should match command email"
-        );
-    } else {
-        panic!("Expected UserCreated event, but found another event type or no event.");
+    //
+    match events.first {
+        UserDomainEvents::UserCreated {
+            id: event_id,
+            email: event_email,
+            timestamp: _,
+        } => {
+            // Assertions for command data in event
+            assert_eq!(
+                event_id, create_user.user_id,
+                "Event ID should match command user_id"
+            );
+            assert_eq!(
+                event_email, create_user.email,
+                "Event email should match command email"
+            );
+        }
+        _ => panic!("Expected UserCreated event, but found another event type or no event."),
     }
 
-    // Assertions for command data in result
-    assert_eq!(result.result, create_user.user_id);
+    assert_eq!(result.result, create_user.user_id.to_string());
 }
 
 #[tokio::test]
 async fn should_fail_execution_when_handler_logic_encounters_error() {
     let state = UserState::default();
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id,
         email: "error@tixlys.com".to_string(),
     };
 
@@ -71,8 +72,9 @@ async fn should_fail_execution_when_handler_logic_encounters_error() {
 #[tokio::test]
 async fn should_succeed_when_state_satisfies_handler_preconditions() {
     let state = UserState::default();
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
 
@@ -81,19 +83,26 @@ async fn should_succeed_when_state_satisfies_handler_preconditions() {
     assert!(result.is_ok());
     let result = result.unwrap();
 
+    let mut events_iter = result.events.into_iter();
+
+    // Assert the first event matches the expected pattern
     assert!(matches!(
-        result.events.into_small_vec().as_slice(),
-        [UserDomainEvents::UserCreated { .. }]
+        events_iter.next(),
+        Some(UserDomainEvents::UserCreated { .. })
     ));
-    assert_eq!(result.result, "id".to_owned());
+
+    // Assert the second event matches
+
+    // Finally, assert that there are no more events left
+    assert!(matches!(events_iter.next(), None));
+    assert_eq!(result.result, id.to_string());
 }
 
 #[tokio::test]
 async fn should_fail_when_state_does_not_satisfy_handler_preconditions() {
     let state = UserState::default();
-    let activate_user = ActivateUser {
-        user_id: "id".to_string(),
-    };
+    let id = NexusId::default();
+    let activate_user = ActivateUser { user_id: id };
     let handler = ActivateUserHandler;
     let result = handler.handle(&state, activate_user, &()).await;
     assert!(result.is_err());
@@ -104,8 +113,9 @@ async fn should_fail_when_state_does_not_satisfy_handler_preconditions() {
 #[tokio::test]
 async fn should_correctly_use_concrete_service_to_influence_outcome() {
     let state = UserState::default();
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
 
@@ -117,9 +127,12 @@ async fn should_correctly_use_concrete_service_to_influence_outcome() {
     assert!(result.is_ok());
     let result = result.unwrap();
 
+    let mut events_iter = result.events.into_iter();
+
+    // Assert the first event matches the expected pattern
     assert!(matches!(
-        result.events.into_small_vec().as_slice(),
-        [UserDomainEvents::UserCreated { .. }]
+        events_iter.next(),
+        Some(UserDomainEvents::UserCreated { .. })
     ));
     assert_eq!(result.result, "some_service".to_owned());
 }
@@ -127,8 +140,9 @@ async fn should_correctly_use_concrete_service_to_influence_outcome() {
 #[tokio::test]
 async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {
     let state = UserState::default(); // Assuming UserState is appropriate
+    let id = NexusId::default();
     let command = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
 
@@ -158,15 +172,12 @@ async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {
     );
 
     // Assert the event (confirming it's the placeholder UserActivated with correct id)
-    let events_vec = response.events.into_small_vec();
-    assert_eq!(events_vec.len(), 1, "Expected exactly one event");
+    let events = response.events;
+    assert_eq!(events.len(), 1, "Expected exactly one event");
 
-    match events_vec.first() {
-        Some(UserDomainEvents::UserCreated { id, .. }) => {
-            assert_eq!(
-                id, &command.user_id,
-                "Event ID should match command item_id"
-            );
+    match events.first {
+        UserDomainEvents::UserCreated { id, .. } => {
+            assert_eq!(id, command.user_id, "Event ID should match command item_id");
         }
         _ => panic!("Expected UserCreated event, but found something else or no event."),
     }
@@ -175,8 +186,9 @@ async fn should_correctly_use_dyn_trait_service_to_influence_outcome() {
 #[tokio::test]
 async fn should_emit_multiple_distinct_events_when_logic_requires() {
     let state = UserState::default();
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
 
@@ -185,12 +197,21 @@ async fn should_emit_multiple_distinct_events_when_logic_requires() {
     assert!(result.is_ok());
     let result = result.unwrap();
 
+    let mut events_iter = result.events.into_iter();
+
+    // Assert the first event matches the expected pattern
     assert!(matches!(
-        result.events.into_small_vec().as_slice(),
-        [
-            UserDomainEvents::UserCreated { .. },
-            UserDomainEvents::UserActivated { .. }
-        ]
+        events_iter.next(),
+        Some(UserDomainEvents::UserCreated { .. })
     ));
-    assert_eq!(result.result, "id".to_owned());
+
+    // Assert the second event matches
+    assert!(matches!(
+        events_iter.next(),
+        Some(UserDomainEvents::UserActivated { .. })
+    ));
+
+    // Finally, assert that there are no more events left
+    assert!(matches!(events_iter.next(), None));
+    assert_eq!(result.result, id.to_string());
 }
