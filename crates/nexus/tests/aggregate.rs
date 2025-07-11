@@ -176,7 +176,7 @@ async fn should_correctly_reflect_state_from_unordered_history_and_then_process_
 
     assert!(result.is_ok());
     let result = result.unwrap();
-    assert_eq!(result, "id");
+    assert_eq!(result, id.to_string());
 }
 
 #[tokio::test]
@@ -198,7 +198,7 @@ async fn should_start_with_default_state_from_empty_history_and_then_create_user
     let result = aggregate_root.execute(create_user, &handler, &()).await;
     assert!(result.is_ok());
     let result = result.unwrap();
-    assert_eq!(result, "id");
+    assert_eq!(result, id.to_string());
 }
 
 #[tokio::test]
@@ -229,7 +229,6 @@ async fn should_fail_to_activate_user_when_loaded_from_empty_history_and_not_cre
 async fn should_apply_events_and_return_result_on_successful_command_execution() {
     let aggregate_id = NexusId::default();
     let mut root = AggregateRoot::<User>::new(aggregate_id);
-
     let id = NexusId::default();
     let create_user = CreateUser {
         user_id: id.clone(),
@@ -239,7 +238,7 @@ async fn should_apply_events_and_return_result_on_successful_command_execution()
     let result = root.execute(create_user, &handler, &()).await;
     assert!(result.is_ok());
     let result = result.unwrap();
-    assert_eq!(result, "id");
+    assert_eq!(result, id.to_string());
 }
 
 #[tokio::test]
