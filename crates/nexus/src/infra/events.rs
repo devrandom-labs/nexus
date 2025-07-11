@@ -1,5 +1,5 @@
 use crate::domain::DomainEvent;
-use smallvec::{IntoIter as SmallVecIntoIter, SmallVec};
+use smallvec::{IntoIter as SmallVecIntoIter, SmallVec, smallvec};
 use std::iter::{Chain, Once, once};
 
 #[derive(Debug)]
@@ -24,6 +24,10 @@ where
 
     pub fn add(&mut self, event: E) {
         self.more.push(event);
+    }
+
+    pub fn len(&self) -> usize {
+        &self.more.len() + 1
     }
 }
 
@@ -60,8 +64,16 @@ where
     }
 }
 
-// TODO: impl IntoIterator for this collection
-// TODO: impl From trait to small_vec
+impl<E> From<Events<E>> for SmallVec<[E; 1]>
+where
+    E: DomainEvent,
+{
+    fn from(events: Events<E>) -> Self {
+        let mut vec = smallvec![events.first];
+        vec.extend(events.more);
+        vec
+    }
+}
 
 #[macro_export]
 macro_rules! events {

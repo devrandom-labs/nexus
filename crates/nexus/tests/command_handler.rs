@@ -1,18 +1,21 @@
 mod common;
 
 use common::write_side_setup::{
-    ActivateUser, ActivateUserHandler, CreateUser, CreateUserAndActivate, CreateUserHandler,
-    CreateUserHandlerWithService, CreateUserWithStateCheck, DynTestService, MockDynTestService,
-    ProcessWithDynServiceHandler, SomeService, UserDomainEvents, UserError, UserState,
+    ActivateUser, CreateUser, DynTestService, MockDynTestService, SomeService, UserDomainEvents,
+    UserError, UserState,
+    handlers::{
+        ActivateUserHandler, CreateUserAndActivate, CreateUserHandler,
+        CreateUserHandlerWithService, CreateUserWithStateCheck, ProcessWithDynServiceHandler,
+    },
 };
-use nexus::command::AggregateCommandHandler;
+use nexus::{command::AggregateCommandHandler, infra::NexusId};
 
 #[tokio::test]
 async fn should_execute_handler_successfully_returning_events_and_result() {
     let state = UserState::default();
-
+    let id = NexusId::default();
     let create_user = CreateUser {
-        user_id: "id".to_string(),
+        user_id: id,
         email: "joel@tixlys.com".to_string(),
     };
 
@@ -23,15 +26,15 @@ async fn should_execute_handler_successfully_returning_events_and_result() {
     let result = result.unwrap();
 
     // Convert SmallVec to a regular slice or Vec to inspect elements
-    let events_vec = result.events.into_small_vec();
-    assert_eq!(events_vec.len(), 1, "Expected exactly one event");
+    assert_eq!(result.events.len(), 1, "Expected exactly one event");
 
+    let events = result.events;
     // Perform a pattern match on the first event
     if let Some(UserDomainEvents::UserCreated {
         id: event_id,
         email: event_email,
         timestamp: _,
-    }) = events_vec.first()
+    }) = events.first()
     {
         // Assertions for command data in event
         assert_eq!(
