@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use nexus::{
     Query,
+    domain::Id,
     infra::NexusId,
     query::{ReadModel, ReadModelRepository},
 };
@@ -35,7 +36,7 @@ pub enum QueryError {
 
 #[derive(Clone)]
 pub struct GetUserRepository {
-    fail: bool,
+    pub fail: bool,
 }
 
 #[async_trait]
@@ -56,16 +57,18 @@ impl ReadModelRepository for GetUserRepository {
 // service
 
 pub trait QueryService: Send + Sync {
-    fn process(&self) -> String;
+    type Result: Id;
+    fn process(&self) -> &Self::Result;
 }
 
 #[derive(Debug)]
 pub struct MockQueryService {
-    pub id: String,
+    pub id: NexusId,
 }
 
 impl QueryService for MockQueryService {
-    fn process(&self) -> String {
-        self.id.to_string()
+    type Result = NexusId;
+    fn process(&self) -> &Self::Result {
+        &self.id
     }
 }

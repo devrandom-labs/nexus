@@ -47,6 +47,7 @@ pub struct UserState {
 }
 
 impl UserState {
+    #[allow(dead_code)]
     pub fn new(email: Option<String>, is_active: bool, created_at: Option<DateTime<Utc>>) -> Self {
         Self {
             email,
