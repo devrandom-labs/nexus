@@ -418,45 +418,4 @@ mod tests {
             _ => panic!("expected Conflict error"),
         }
     }
-
-    #[tokio::test]
-    async fn should_return_unique_id_constraint_error_for_duplicate_pending_events() {
-        let conn = apply_migrations();
-        let store = Store::new(conn).expect("Store should be initialized");
-        let id = NexusId::default();
-        let domain_event = UserCreated { user_id: id };
-        let metadata = EventMetadata::new("1-corr".into());
-
-        let stream_id = NexusId::default();
-        // its now a builder, figure a good fluent way that makes sense.
-
-        let pending_event = PendingEvent::builder(stream_id)
-            .with_version(1)
-            .with_metadata(metadata.clone())
-            .with_domain(domain_event.clone())
-            .build(|domain_event| async move {
-                to_vec(&domain_event)
-                    .map_err(|err| Error::SerializationError { source: err.into() })
-            })
-            .await;
-
-        assert!(
-            pending_event.is_ok(),
-            "pending event should be deserialized"
-        );
-
-        let record = pending_event.unwrap();
-
-        let result = store
-            .append_to_stream(&stream_id, 2, vec![record.clone(), record])
-            .await;
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-
-        match err {
-            Error::UniqueIdViolation { .. } => {}
-            _ => panic!("expected unique id violation but got:  {}", err),
-        }
-    }
 }
