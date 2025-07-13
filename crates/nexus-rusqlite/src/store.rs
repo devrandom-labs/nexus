@@ -7,7 +7,7 @@ use nexus::{
     infra::{CorrelationId, EventId},
     store::EventStore,
 };
-use rusqlite::{Connection, Result as SResult, Row, config::DbConfig, params};
+use rusqlite::{Connection, Result as SResult, Row, config::DbConfig, ffi, params};
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
@@ -90,6 +90,32 @@ impl Store {
             persisted_at,
         ))
     }
+
+    fn convert_sqlite_error(
+        error: rusqlite::Error,
+        stream_id: &impl ToString,
+        event_id: &impl ToString,
+        expected_version: u64,
+    ) -> Error {
+        if let rusqlite::Error::SqliteFailure(e, _) = &error {
+            return match e.extended_code {
+                ffi::SQLITE_CONSTRAINT_UNIQUE => Error::Conflict {
+                    stream_id: stream_id.to_string(),
+                    expected_version,
+                },
+                ffi::SQLITE_CONSTRAINT_PRIMARYKEY => Error::UniqueIdViolation {
+                    id: event_id.to_string(),
+                },
+                _ => Error::Store {
+                    source: error.into(),
+                },
+            };
+        }
+
+        Error::Store {
+            source: error.into(),
+        }
+    }
 }
 
 #[async_trait]
@@ -139,7 +165,14 @@ impl EventStore for Store {
                                 record.event_type(),
                                 record.payload()
                             ])
-                            .map_err(|err| Error::Store { source: err.into() })?; // return conflic if the error is unique contraints 
+                            .map_err(|err| {
+                                Self::convert_sqlite_error(
+                                    err,
+                                    record.stream_id(),
+                                    record.id(),
+                                    expected_version,
+                                )
+                            })?;
 
                         event_metadata_stmt
                             .execute(params![
@@ -368,7 +401,7 @@ mod tests {
         let record_1 = pending_event_1.unwrap();
         let record_2 = pending_event_2.unwrap();
         let result = store
-            .append_to_stream(&stream_id, 1, vec![record_1, record_2])
+            .append_to_stream(&stream_id, 2, vec![record_1, record_2])
             .await;
 
         assert!(result.is_err());
@@ -383,6 +416,47 @@ mod tests {
                 assert_eq!(expected_version, 2);
             }
             _ => panic!("expected Conflict error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn should_return_unique_id_constraint_error_for_duplicate_pending_events() {
+        let conn = apply_migrations();
+        let store = Store::new(conn).expect("Store should be initialized");
+        let id = NexusId::default();
+        let domain_event = UserCreated { user_id: id };
+        let metadata = EventMetadata::new("1-corr".into());
+
+        let stream_id = NexusId::default();
+        // its now a builder, figure a good fluent way that makes sense.
+
+        let pending_event = PendingEvent::builder(stream_id)
+            .with_version(1)
+            .with_metadata(metadata.clone())
+            .with_domain(domain_event.clone())
+            .build(|domain_event| async move {
+                to_vec(&domain_event)
+                    .map_err(|err| Error::SerializationError { source: err.into() })
+            })
+            .await;
+
+        assert!(
+            pending_event.is_ok(),
+            "pending event should be deserialized"
+        );
+
+        let record = pending_event.unwrap();
+
+        let result = store
+            .append_to_stream(&stream_id, 2, vec![record.clone(), record])
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+
+        match err {
+            Error::UniqueIdViolation { .. } => {}
+            _ => panic!("expected unique id violation but got:  {}", err),
         }
     }
 }

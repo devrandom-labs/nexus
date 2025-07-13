@@ -15,7 +15,7 @@ impl Default for NexusId {
 
 impl Display for NexusId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", 0)
+        write!(f, "{}", &self.0)
     }
 }
 
