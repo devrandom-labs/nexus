@@ -20,7 +20,6 @@ use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tracing::{debug, instrument};
 use uuid::Uuid;
 
-// for any given stream_id, the stream of events I read back must be identical to content and order to the stream of events I wrote
 //
 // TODO: The Foundation (Classic Unit Test): Start with the simplest case.
 // TODO: The Generalization (Property Test): Elevate the simple case to a universal law.
@@ -91,6 +90,7 @@ impl Store {
         ))
     }
 
+    #[inline]
     fn convert_sqlite_error(
         error: rusqlite::Error,
         stream_id: &impl ToString,
@@ -417,5 +417,11 @@ mod tests {
             }
             _ => panic!("expected Conflict error"),
         }
+    }
+
+    #[tokio::test]
+    async fn should_be_able_to_stream_events_of_stream_id() {
+        // TODO: add two records to the store
+        // TODO: read those two records
     }
 }
