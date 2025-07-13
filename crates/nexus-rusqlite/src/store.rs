@@ -139,7 +139,7 @@ impl EventStore for Store {
                                 record.event_type(),
                                 record.payload()
                             ])
-                            .map_err(|err| Error::Store { source: err.into() })?;
+                            .map_err(|err| Error::Store { source: err.into() })?; // return conflic if the error is unique contraints 
 
                         event_metadata_stmt
                             .execute(params![
@@ -245,7 +245,6 @@ mod tests {
     }
 
     pub mod events {
-
         use nexus::{DomainEvent, infra::NexusId};
         use serde::{Deserialize, Serialize};
 
@@ -323,5 +322,67 @@ mod tests {
             "correlation id should match"
         );
         assert!(read_event.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
+    }
+
+    #[tokio::test]
+    async fn should_not_append_event_if_version_is_same() {
+        let conn = apply_migrations();
+        let store = Store::new(conn).expect("Store should be initialized");
+        let id = NexusId::default();
+        let domain_event = UserCreated { user_id: id };
+        let metadata = EventMetadata::new("1-corr".into());
+
+        let stream_id = NexusId::default();
+        // its now a builder, figure a good fluent way that makes sense.
+
+        let pending_event_1 = PendingEvent::builder(stream_id)
+            .with_version(1)
+            .with_metadata(metadata.clone())
+            .with_domain(domain_event.clone())
+            .build(|domain_event| async move {
+                to_vec(&domain_event)
+                    .map_err(|err| Error::SerializationError { source: err.into() })
+            })
+            .await;
+
+        assert!(
+            pending_event_1.is_ok(),
+            "pending event should be deserialized"
+        );
+
+        let pending_event_2 = PendingEvent::builder(stream_id)
+            .with_version(1)
+            .with_metadata(metadata)
+            .with_domain(domain_event)
+            .build(|domain_event| async move {
+                to_vec(&domain_event)
+                    .map_err(|err| Error::SerializationError { source: err.into() })
+            })
+            .await;
+
+        assert!(
+            pending_event_2.is_ok(),
+            "pending event 2 should be deserialized"
+        );
+
+        let record_1 = pending_event_1.unwrap();
+        let record_2 = pending_event_2.unwrap();
+        let result = store
+            .append_to_stream(&stream_id, 1, vec![record_1, record_2])
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+
+        match err {
+            Error::Conflict {
+                stream_id: s,
+                expected_version,
+            } => {
+                assert_eq!(s, stream_id.to_string());
+                assert_eq!(expected_version, 2);
+            }
+            _ => panic!("expected Conflict error"),
+        }
     }
 }
