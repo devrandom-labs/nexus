@@ -192,7 +192,7 @@
             partitionType = "count";
           });
 
-          myCrateCoverage =
+          tixlys-coverage =
             craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
 
           # Ensure that cargo-hakari is up to date
@@ -221,13 +221,6 @@
             nodes = { };
             testScript = { nodes, ... }: "\n";
           });
-
-          ## FIXME: only put this for darwin? maybe
-          # tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
-          #   (commonArgs // { inherit cargoArtifacts; });
-        } // lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
-          tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
-            (commonArgs // { inherit cargoArtifacts; });
         };
 
         apps = { auth = mkApp "auth"; };
