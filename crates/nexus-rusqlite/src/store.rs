@@ -284,7 +284,6 @@ mod tests {
         }
     }
 
-    // creates pending events
     struct TestContext {
         store: Store,
         stream_id: NexusId,
