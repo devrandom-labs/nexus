@@ -250,7 +250,7 @@ impl EventStore for Store {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use events::UserCreated;
+    use events::{UserActivated, UserCreated};
     use futures::TryStreamExt;
     use nexus::{
         domain::DomainEvent,
@@ -266,14 +266,6 @@ mod tests {
     use super::Store;
 
     embed_migrations!("migrations");
-
-    fn apply_migrations() -> Connection {
-        let mut conn = Connection::open_in_memory().expect("could not open connection");
-        migrations::runner()
-            .run(&mut conn)
-            .expect("migrations could not be applied.");
-        conn
-    }
 
     pub mod events {
         use nexus::{DomainEvent, infra::NexusId};
@@ -420,117 +412,42 @@ mod tests {
 
     #[tokio::test]
     async fn should_be_able_to_stream_events_of_stream_id() {
-        let conn = apply_migrations();
-        let store = Store::new(conn).expect("Store should be initialized");
+        let ctx = TestContext::new();
         let id = NexusId::default();
-        let domain_event = UserCreated { user_id: id };
-        let metadata = EventMetadata::new("1-corr".into());
-        let stream_id = NexusId::default();
-
-        let pending_event_1 = PendingEvent::builder(stream_id)
-            .with_version(1)
-            .with_metadata(metadata.clone())
-            .with_domain(domain_event.clone())
-            .build(|domain_event| async move {
-                to_vec(&domain_event)
-                    .map_err(|err| Error::SerializationError { source: err.into() })
-            })
-            .await;
-
+        let user_created_event = UserCreated { user_id: id };
+        let user_activated_event = UserActivated { user_id: id };
+        let pending_event_1 = ctx.create_pending_event(1, user_created_event).await;
         assert!(
             pending_event_1.is_ok(),
             "pending event should be deserialized"
         );
-
-        let pending_event_2 = PendingEvent::builder(stream_id)
-            .with_version(2)
-            .with_metadata(metadata)
-            .with_domain(domain_event)
-            .build(|domain_event| async move {
-                to_vec(&domain_event)
-                    .map_err(|err| Error::SerializationError { source: err.into() })
-            })
-            .await;
-
+        let pending_event_2 = ctx.create_pending_event(2, user_activated_event).await;
         assert!(
             pending_event_2.is_ok(),
             "pending event 2 should be deserialized"
         );
-
         let record_1 = pending_event_1.unwrap();
         let record_2 = pending_event_2.unwrap();
-        let result = store
-            .append_to_stream(&stream_id, 2, vec![record_1.clone(), record_2.clone()])
+        let result = ctx
+            .store
+            .append_to_stream(&ctx.stream_id, 2, vec![record_1.clone(), record_2.clone()])
             .await;
 
         assert!(result.is_ok());
 
-        let events = store
-            .read_stream(stream_id)
+        let events = ctx
+            .store
+            .read_stream(ctx.stream_id.clone())
             .try_collect::<Vec<_>>()
             .await
             .expect("Read stream should succeed");
 
         assert_eq!(events.len(), 2, "should have two events");
-
         let read_event_1 = &events[0];
-
-        assert_eq!(record_1.id(), &read_event_1.id, "event id should match");
-        assert_eq!(
-            record_1.stream_id(),
-            &read_event_1.stream_id,
-            "stream id should match"
-        );
-        assert_eq!(
-            record_1.version(),
-            &read_event_1.version,
-            "version should match"
-        );
-        assert_eq!(
-            record_1.event_type(),
-            &read_event_1.event_type,
-            "type should match"
-        );
-        assert_eq!(
-            record_1.payload(),
-            &read_event_1.payload,
-            "payload should match"
-        );
-        assert_eq!(
-            record_1.metadata().correlation_id(),
-            read_event_1.metadata.correlation_id(),
-            "correlation id should match"
-        );
+        assert_eq!(TestableEvent(record_1), *read_event_1);
         assert!(read_event_1.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
-
         let read_event_2 = &events[1];
-
-        assert_eq!(record_2.id(), &read_event_2.id, "event id should match");
-        assert_eq!(
-            record_2.stream_id(),
-            &read_event_2.stream_id,
-            "stream id should match"
-        );
-        assert_eq!(
-            record_2.version(),
-            &read_event_2.version,
-            "version should match"
-        );
-        assert_eq!(
-            record_2.event_type(),
-            &read_event_2.event_type,
-            "type should match"
-        );
-        assert_eq!(
-            record_2.payload(),
-            &read_event_2.payload,
-            "payload should match"
-        );
-        assert_eq!(
-            record_2.metadata().correlation_id(),
-            read_event_2.metadata.correlation_id(),
-            "correlation id should match"
-        );
+        assert_eq!(TestableEvent(record_2), *read_event_2);
         assert!(read_event_2.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
     }
 }
