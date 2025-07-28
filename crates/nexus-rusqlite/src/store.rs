@@ -255,7 +255,7 @@ mod tests {
     use nexus::{
         domain::DomainEvent,
         error::{Error, Result},
-        event::{EventMetadata, PendingEvent},
+        event::{EventMetadata, PendingEvent, PersistedEvent},
         infra::NexusId,
         store::EventStore,
     };
@@ -333,20 +333,36 @@ mod tests {
         }
     }
 
+    // This `TestableEvent` IS defined in the current crate.
+    #[derive(Debug, Clone)]
+    struct TestableEvent(PendingEvent<NexusId>);
+
+    impl PartialEq<PersistedEvent<NexusId>> for TestableEvent {
+        fn eq(&self, other: &PersistedEvent<NexusId>) -> bool {
+            self.0.id() == &other.id
+                && self.0.stream_id() == &other.stream_id
+                && self.0.event_type() == &other.event_type
+                && self.0.version() == &other.version
+                && self.0.payload() == &other.payload
+                && self.0.metadata().correlation_id() == other.metadata.correlation_id()
+        }
+    }
+
     #[tokio::test]
     async fn should_be_able_to_write_and_read_stream_events() {
         let ctx = TestContext::new();
-        let id = NexusId::default();
-        let domain_event = UserCreated { user_id: id };
+        let domain_event = UserCreated {
+            user_id: NexusId::default(),
+        };
         let pending_event = ctx.create_pending_event(1, domain_event).await;
         assert!(
             pending_event.is_ok(),
             "pending event should be deserialized"
         );
-        let record = pending_event.unwrap();
+        let expected_event = pending_event.unwrap();
 
         ctx.store
-            .append_to_stream(&ctx.stream_id, 1, vec![record.clone()])
+            .append_to_stream(&ctx.stream_id, 1, vec![expected_event.clone()])
             .await
             .unwrap();
 
@@ -358,73 +374,23 @@ mod tests {
             .expect("Read stream should succeed");
 
         assert_eq!(events.len(), 1, "there should be 1 event to read");
-        let read_event = &events[0];
-
-        assert_eq!(record.id(), &read_event.id, "event id should match");
-        assert_eq!(
-            record.stream_id(),
-            &read_event.stream_id,
-            "stream id should match"
-        );
-        assert_eq!(
-            record.version(),
-            &read_event.version,
-            "version should match"
-        );
-        assert_eq!(
-            record.event_type(),
-            &read_event.event_type,
-            "type should match"
-        );
-        assert_eq!(
-            record.payload(),
-            &read_event.payload,
-            "payload should match"
-        );
-        assert_eq!(
-            record.metadata().correlation_id(),
-            read_event.metadata.correlation_id(),
-            "correlation id should match"
-        );
-        assert!(read_event.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
+        let actual_event = &events[0];
+        assert_eq!(TestableEvent(expected_event), *actual_event);
+        assert!(actual_event.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
     }
 
     #[tokio::test]
     async fn should_not_append_event_if_version_is_same() {
-        let conn = apply_migrations();
-        let store = Store::new(conn).expect("Store should be initialized");
-        let id = NexusId::default();
-        let domain_event = UserCreated { user_id: id };
-        let metadata = EventMetadata::new("1-corr".into());
-
-        let stream_id = NexusId::default();
-        // its now a builder, figure a good fluent way that makes sense.
-
-        let pending_event_1 = PendingEvent::builder(stream_id)
-            .with_version(1)
-            .with_metadata(metadata.clone())
-            .with_domain(domain_event.clone())
-            .build(|domain_event| async move {
-                to_vec(&domain_event)
-                    .map_err(|err| Error::SerializationError { source: err.into() })
-            })
-            .await;
-
+        let ctx = TestContext::new();
+        let domain_event = UserCreated {
+            user_id: NexusId::default(),
+        };
+        let pending_event_1 = ctx.create_pending_event(1, domain_event.clone()).await;
         assert!(
             pending_event_1.is_ok(),
             "pending event should be deserialized"
         );
-
-        let pending_event_2 = PendingEvent::builder(stream_id)
-            .with_version(1)
-            .with_metadata(metadata)
-            .with_domain(domain_event)
-            .build(|domain_event| async move {
-                to_vec(&domain_event)
-                    .map_err(|err| Error::SerializationError { source: err.into() })
-            })
-            .await;
-
+        let pending_event_2 = ctx.create_pending_event(1, domain_event).await;
         assert!(
             pending_event_2.is_ok(),
             "pending event 2 should be deserialized"
@@ -432,8 +398,9 @@ mod tests {
 
         let record_1 = pending_event_1.unwrap();
         let record_2 = pending_event_2.unwrap();
-        let result = store
-            .append_to_stream(&stream_id, 2, vec![record_1, record_2])
+        let result = ctx
+            .store
+            .append_to_stream(&ctx.stream_id, 2, vec![record_1, record_2])
             .await;
 
         assert!(result.is_err());
@@ -444,7 +411,7 @@ mod tests {
                 stream_id: s,
                 expected_version,
             } => {
-                assert_eq!(s, stream_id.to_string());
+                assert_eq!(s, ctx.stream_id.to_string());
                 assert_eq!(expected_version, 2);
             }
             _ => panic!("expected Conflict error"),
