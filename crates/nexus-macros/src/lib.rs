@@ -244,3 +244,5 @@ fn parse_aggregate(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 
     Ok(expanded)
 }
+
+// TODO: write tests for these!!

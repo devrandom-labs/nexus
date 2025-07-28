@@ -253,7 +253,8 @@ mod tests {
     use events::UserCreated;
     use futures::TryStreamExt;
     use nexus::{
-        error::Error,
+        domain::DomainEvent,
+        error::{Error, Result},
         event::{EventMetadata, PendingEvent},
         infra::NexusId,
         store::EventStore,
@@ -283,41 +284,75 @@ mod tests {
         pub struct UserCreated {
             pub user_id: NexusId,
         }
+
+        #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[domain_event(name = "user_activated_v1")]
+        pub struct UserActivated {
+            pub user_id: NexusId,
+        }
+    }
+
+    // creates pending events
+    struct TestContext {
+        store: Store,
+        stream_id: NexusId,
+    }
+
+    impl TestContext {
+        pub fn new() -> Self {
+            let mut conn = Connection::open_in_memory().expect("could not open connection");
+            migrations::runner()
+                .run(&mut conn)
+                .expect("migrations could not be applied.");
+
+            TestContext {
+                store: Store::new(conn).expect("Store could not be initialized"),
+                stream_id: NexusId::default(),
+            }
+        }
+
+        async fn create_pending_event<D>(
+            &self,
+            version: u64,
+            event: D,
+        ) -> Result<PendingEvent<NexusId>>
+        where
+            D: DomainEvent,
+        {
+            let metadata = EventMetadata::new("1-corr".into());
+
+            PendingEvent::builder(self.stream_id)
+                .with_version(version)
+                .with_metadata(metadata)
+                .with_domain(event)
+                .build(|domain_event| async move {
+                    to_vec(&domain_event)
+                        .map_err(|err| Error::SerializationError { source: err.into() })
+                })
+                .await
+        }
     }
 
     #[tokio::test]
     async fn should_be_able_to_write_and_read_stream_events() {
-        let conn = apply_migrations();
-        let store = Store::new(conn).expect("Store should be initialized");
+        let ctx = TestContext::new();
         let id = NexusId::default();
         let domain_event = UserCreated { user_id: id };
-        let metadata = EventMetadata::new("1-corr".into());
-
-        let stream_id = NexusId::default();
-        // its now a builder, figure a good fluent way that makes sense.
-
-        let pending_event = PendingEvent::builder(stream_id)
-            .with_version(1)
-            .with_metadata(metadata)
-            .with_domain(domain_event)
-            .build(|domain_event| async move {
-                to_vec(&domain_event)
-                    .map_err(|err| Error::SerializationError { source: err.into() })
-            })
-            .await;
-
+        let pending_event = ctx.create_pending_event(1, domain_event).await;
         assert!(
             pending_event.is_ok(),
             "pending event should be deserialized"
         );
         let record = pending_event.unwrap();
-        store
-            .append_to_stream(&stream_id, 1, vec![record.clone()])
+
+        ctx.store
+            .append_to_stream(&ctx.stream_id, 1, vec![record.clone()])
             .await
             .unwrap();
 
-        let events = store
-            .read_stream(stream_id)
+        let events = ctx
+            .store
+            .read_stream(ctx.stream_id.clone())
             .try_collect::<Vec<_>>()
             .await
             .expect("Read stream should succeed");

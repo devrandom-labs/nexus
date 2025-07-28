@@ -105,3 +105,5 @@ pub enum Error {
     #[error("System Error: '{reason:?}'")]
     System { reason: String },
 }
+
+pub type Result<T> = std::result::Result<T, Error>;
