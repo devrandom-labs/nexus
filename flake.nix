@@ -227,12 +227,20 @@
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
+
           shellHook = ''
-            echo -e "\n\n\033[0;32mTixlys Dev Shell ready!\n\n\n"
+            #!/usr/bin/env bash
+            # Create a fancy welcome message
+            REPO_NAME=$(basename "$PWD")
+            PROPER_REPO_NAME=$(echo "$REPO_NAME" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+            figlet "$PROPER_REPO_NAME"
+            echo "Welcome to the $PROPER_REPO_NAME development environment on ${system}!"
           '';
+
           packages = [
             rust-analyzer
             bacon
+            figlet
             biscuit-cli
             dive
             cargo-hakari
