@@ -11,6 +11,7 @@ async-trait = "0.1.88"
 axum = { version = "0.8.4", features = ["macros"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 downcast-rs = "2.0.1"
+fake = { version = "4.3.0", features = ["derive", "email_address"] }
 futures = "0.3.31"
 password-hash = { version = "0.5.0", features = ["rand_core", "getrandom", "alloc"] }
 refinery = { version = "0.8.16", features = ["rusqlite"] }

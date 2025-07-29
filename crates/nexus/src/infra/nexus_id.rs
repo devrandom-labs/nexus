@@ -41,3 +41,12 @@ impl From<Uuid> for NexusId {
 }
 
 impl Id for NexusId {}
+
+#[cfg(feature = "testing")]
+impl fake::Dummy<fake::Faker> for NexusId {
+    fn dummy_with_rng<R: fake::Rng + ?Sized>(_config: &fake::Faker, rng: &mut R) -> Self {
+        let bytes = rng.random::<[u8; 16]>();
+        let uuid = uuid::Builder::from_random_bytes(bytes).into_uuid();
+        NexusId(uuid)
+    }
+}

@@ -1,3 +1,7 @@
+use fake::{
+    Dummy,
+    faker::{internet::en::SafeEmail, name::en::Name},
+};
 use nexus::{
     DomainEvent,
     domain::{AggregateState, DomainEvent as DomainEventTrait},
@@ -16,37 +20,44 @@ pub trait UserEvent: DomainEventTrait {}
 // ---
 // A variety of structs to represent different kinds of state changes.
 /// Event for when a user is first created. Contains the initial data.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent, Dummy)]
 #[domain_event(name = "user_created")]
 pub struct UserCreated {
     pub user_id: NexusId,
+    #[dummy(faker = "Name()")]
     pub name: String,
+    #[dummy(faker = "SafeEmail()")]
     pub email: String,
 }
 impl UserEvent for UserCreated {}
 
 /// Event for when a user's name is updated.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent, Dummy)]
 #[domain_event(name = "user_name_updated")]
 pub struct UserNameUpdated {
+    #[dummy(faker = "Name()")]
     pub new_name: String,
 }
 impl UserEvent for UserNameUpdated {}
 
 /// Event for when a user is activated. A simple "tag-like" event.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent, Dummy)]
 #[domain_event(name = "user_activated")]
 pub struct UserActivated;
 impl UserEvent for UserActivated {}
 
 /// Event for when a user is deactivated, which requires a reason.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, DomainEvent, Dummy)]
 #[domain_event(name = "user_deactivated")]
 pub struct UserDeactivated {
+    #[dummy(faker = "1..5")]
     pub reason: String,
 }
 
 impl UserEvent for UserDeactivated {}
+
+// get all in an order
+// get in unordered way
 
 // ---
 // 3. The Aggregate State
