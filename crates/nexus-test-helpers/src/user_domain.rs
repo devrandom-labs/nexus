@@ -1,4 +1,8 @@
-use nexus::{DomainEvent, domain::DomainEvent as DomainEventTrait, infra::NexusId};
+use nexus::{
+    DomainEvent,
+    domain::{AggregateState, DomainEvent as DomainEventTrait},
+    infra::NexusId,
+};
 use serde::{Deserialize, Serialize};
 
 // ---
@@ -43,3 +47,40 @@ pub struct UserDeactivated {
 }
 
 impl UserEvent for UserDeactivated {}
+
+// ---
+// 3. The Aggregate State
+// ---
+// The internal state of the User aggregate, built by applying events.
+
+#[derive(Debug, PartialEq, Default)]
+pub struct UserState {
+    pub id: NexusId,
+    pub name: String,
+    pub email: String,
+    pub is_active: bool,
+    pub deactivation_reason: Option<String>,
+}
+
+impl UserState {
+    pub fn handle_user_created(&mut self, event: &UserCreated) {
+        self.id = event.user_id;
+        self.name = event.name.clone();
+        self.email = event.email.clone();
+    }
+    pub fn handle_user_name_updated(&mut self, event: &UserNameUpdated) {
+        self.name = event.new_name.clone();
+    }
+    pub fn handle_user_activated(&mut self, _event: &UserActivated) {
+        self.is_active = true;
+    }
+    pub fn handle_user_deactivated(&mut self, event: &UserDeactivated) {
+        self.is_active = false;
+        self.deactivation_reason = Some(event.reason.clone());
+    }
+}
+
+impl AggregateState for UserState {
+    type Domain = dyn UserEvent;
+    fn apply(&mut self, event: &Self::Domain) {}
+}

@@ -110,7 +110,7 @@ where
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
         for event in &events {
-            self.state.apply(event);
+            self.state.apply(event.as_ref());
         }
         self.uncommitted_events.extend(events);
         Ok(result)

@@ -128,7 +128,7 @@ impl<I> PendingEventState for WithMetadata<I> where I: Id {}
 pub struct WithDomain<I, D>
 where
     I: Id,
-    D: DomainEvent,
+    D: DomainEvent + Serialize,
 {
     stream_id: I,
     event_type: String,
@@ -140,6 +140,6 @@ where
 impl<I, D> PendingEventState for WithDomain<I, D>
 where
     I: Id,
-    D: DomainEvent,
+    D: DomainEvent + Serialize,
 {
 }
