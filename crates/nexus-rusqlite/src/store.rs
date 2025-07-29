@@ -261,6 +261,7 @@ mod tests {
     };
     use refinery::embed_migrations;
     use rusqlite::Connection;
+    use serde::Serialize;
     use serde_json::to_vec;
 
     use super::Store;
@@ -308,7 +309,7 @@ mod tests {
             event: D,
         ) -> Result<PendingEvent<NexusId>>
         where
-            D: DomainEvent,
+            D: DomainEvent + Serialize,
         {
             let metadata = EventMetadata::new("1-corr".into());
 
