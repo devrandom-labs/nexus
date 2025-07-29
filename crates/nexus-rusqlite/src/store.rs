@@ -360,7 +360,7 @@ mod tests {
 
         let events = ctx
             .store
-            .read_stream(ctx.stream_id.clone())
+            .read_stream(ctx.stream_id)
             .try_collect::<Vec<_>>()
             .await
             .expect("Read stream should succeed");
@@ -437,7 +437,7 @@ mod tests {
 
         let events = ctx
             .store
-            .read_stream(ctx.stream_id.clone())
+            .read_stream(ctx.stream_id)
             .try_collect::<Vec<_>>()
             .await
             .expect("Read stream should succeed");

@@ -23,7 +23,7 @@ impl Display for PasswordRule {
             PasswordRule::MissingDigit => write!(f, "must include a digit"),
             PasswordRule::MissingSymbol => {
                 let example = &REQUIRED_SYMBOL[..std::cmp::min(5, REQUIRED_SYMBOL.len())];
-                write!(f, "must include a symbol (e.g., \"{}...\")", example)
+                write!(f, "must include a symbol (e.g., \"{example}...\")")
             }
         }
     }

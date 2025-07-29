@@ -60,12 +60,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-// cross Operating system
-
 fn get_migration_path() -> PathBuf {
-    // if let Ok(schemas_dir) = env::var("SCHEMAS_DIR") {
-    //     return PathBuf::from(schemas_dir).join("sqlite");
-    // }
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let project_root = manifest_dir.parent().unwrap().parent().unwrap();
     project_root.join("schemas").join("sqlite")

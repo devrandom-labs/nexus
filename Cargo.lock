@@ -2963,6 +2963,7 @@ dependencies = [
 name = "workspace-hack"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "chrono",
  "digest",
  "form_urlencoded",
@@ -2976,8 +2977,12 @@ dependencies = [
  "libc",
  "log",
  "memchr",
+ "num-traits",
  "percent-encoding",
+ "ppv-lite86",
  "proc-macro2",
+ "rand",
+ "rand_chacha",
  "refinery-core",
  "regex",
  "regex-automata 0.4.9",
