@@ -146,7 +146,7 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 
             Ok(expanded)
         }
-        Data::Enum(e) => Err(Error::new(name.span(), "Enums are not supported.")),
+        Data::Enum(_) => Err(Error::new(name.span(), "Enums are not supported.")),
         Data::Union(_) => Err(Error::new(name.span(), "Unions are not supported.")),
     }
 }
