@@ -1161,6 +1161,7 @@ dependencies = [
  "chrono",
  "futures",
  "nexus",
+ "nexus-test-helpers",
  "proptest",
  "refinery",
  "rusqlite",

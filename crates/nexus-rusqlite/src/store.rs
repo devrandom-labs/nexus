@@ -250,7 +250,6 @@ impl EventStore for Store {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use events::{UserActivated, UserCreated};
     use futures::TryStreamExt;
     use nexus::{
         domain::DomainEvent,
@@ -259,6 +258,7 @@ mod tests {
         infra::NexusId,
         store::EventStore,
     };
+    use nexus_test_helpers::user_domain::{UserActivated, UserCreated};
     use refinery::embed_migrations;
     use rusqlite::Connection;
     use serde::Serialize;
@@ -267,23 +267,6 @@ mod tests {
     use super::Store;
 
     embed_migrations!("migrations");
-
-    pub mod events {
-        use nexus::{DomainEvent, infra::NexusId};
-        use serde::{Deserialize, Serialize};
-
-        #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
-        #[domain_event(name = "user_created_v1")]
-        pub struct UserCreated {
-            pub user_id: NexusId,
-        }
-
-        #[derive(DomainEvent, Debug, Clone, PartialEq, Serialize, Deserialize)]
-        #[domain_event(name = "user_activated_v1")]
-        pub struct UserActivated {
-            pub user_id: NexusId,
-        }
-    }
 
     struct TestContext {
         store: Store,
@@ -333,9 +316,9 @@ mod tests {
         fn eq(&self, other: &PersistedEvent<NexusId>) -> bool {
             self.0.id() == &other.id
                 && self.0.stream_id() == &other.stream_id
-                && self.0.event_type() == &other.event_type
+                && self.0.event_type() == other.event_type
                 && self.0.version() == &other.version
-                && self.0.payload() == &other.payload
+                && self.0.payload() == other.payload
                 && self.0.metadata().correlation_id() == other.metadata.correlation_id()
         }
     }
@@ -345,6 +328,8 @@ mod tests {
         let ctx = TestContext::new();
         let domain_event = UserCreated {
             user_id: NexusId::default(),
+            name: "Joel DSouza".to_string(),
+            email: "joel@devrandom.co".to_string(),
         };
         let pending_event = ctx.create_pending_event(1, domain_event).await;
         assert!(
@@ -374,9 +359,13 @@ mod tests {
     #[tokio::test]
     async fn should_not_append_event_if_version_is_same() {
         let ctx = TestContext::new();
+
         let domain_event = UserCreated {
             user_id: NexusId::default(),
+            name: "Joel DSouza".to_string(),
+            email: "joel@devrandom.co".to_string(),
         };
+
         let pending_event_1 = ctx.create_pending_event(1, domain_event.clone()).await;
         assert!(
             pending_event_1.is_ok(),
@@ -414,8 +403,12 @@ mod tests {
     async fn should_be_able_to_stream_events_of_stream_id() {
         let ctx = TestContext::new();
         let id = NexusId::default();
-        let user_created_event = UserCreated { user_id: id };
-        let user_activated_event = UserActivated { user_id: id };
+        let user_created_event = UserCreated {
+            user_id: id,
+            name: "Joel DSouza".to_string(),
+            email: "joel@devrandom.co".to_string(),
+        };
+        let user_activated_event = UserActivated {};
         let pending_event_1 = ctx.create_pending_event(1, user_created_event).await;
         assert!(
             pending_event_1.is_ok(),

@@ -24,3 +24,4 @@ futures = "0.3.31"
 proptest = "1.7.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+nexus-test-helpers = { version = "0.1", path = "../nexus-test-helpers" }
