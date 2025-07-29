@@ -1,8 +1,6 @@
-use crate::{
-    domain::{AggregateState, Command, DomainEvent},
-    infra::events::Events,
-};
+use crate::domain::{AggregateState, Command, DomainEvent};
 use async_trait::async_trait;
+use smallvec::SmallVec;
 use std::fmt::Debug;
 
 #[derive(Debug)]
@@ -11,8 +9,7 @@ where
     E: DomainEvent + ?Sized,
     R: Debug + Send + Sync + 'static,
 {
-    pub events: Events<E>,
-
+    pub events: SmallVec<[Box<E>; 1]>,
     pub result: R,
 }
 
