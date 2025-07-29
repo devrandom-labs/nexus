@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+use serde::Serialize;
+
 use super::{metadata::EventMetadata, pending::PendingEvent};
 use crate::{
     domain::{DomainEvent, Id},
@@ -53,7 +55,7 @@ where
 {
     pub fn with_domain<D>(self, domain_event: D) -> PendingEventBuilder<WithDomain<I, D>>
     where
-        D: DomainEvent,
+        D: DomainEvent + Serialize,
     {
         let state = WithDomain {
             stream_id: self.state.stream_id,
@@ -70,7 +72,7 @@ where
 impl<I, D> PendingEventBuilder<WithDomain<I, D>>
 where
     I: Id,
-    D: DomainEvent,
+    D: DomainEvent + Serialize,
 {
     pub async fn build<F, Fut>(self, serializer: F) -> Result<PendingEvent<I>, Error>
     where
