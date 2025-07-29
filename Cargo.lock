@@ -1161,6 +1161,7 @@ name = "nexus-test-helpers"
 version = "0.1.0"
 dependencies = [
  "nexus",
+ "serde",
  "workspace-hack",
 ]
 

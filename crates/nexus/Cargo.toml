@@ -20,7 +20,6 @@ workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
 nexus-macros = { version = "0.1.0", path = "../nexus-macros" }
 
 [features]

@@ -8,4 +8,5 @@ publish = false
 
 [dependencies]
 nexus = { path = "../nexus", features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }

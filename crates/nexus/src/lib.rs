@@ -8,4 +8,4 @@ pub mod serde;
 pub mod store;
 
 #[cfg(feature = "derive")]
-pub use nexus_macros::{Aggregate, Command, DomainEvent, Query};
+pub use nexus_macros::{Command, DomainEvent, Query};
