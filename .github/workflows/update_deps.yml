@@ -41,8 +41,6 @@ jobs:
             set -e # Exit immediately if a command exits with a non-zero status.
             echo 'Updating Nix flake...'
             nix flake update
-            echo 'Upgrading cargo dependencies...'
-            cargo upgrade -i
             echo 'Updating cargo lockfile...'
             cargo update
             echo 'Generating cargo-hakari workspace...'
