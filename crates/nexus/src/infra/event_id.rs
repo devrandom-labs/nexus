@@ -46,3 +46,15 @@ impl From<EventId> for Uuid {
         value.0
     }
 }
+
+#[cfg(feature = "testing")]
+impl fake::Dummy<fake::Faker> for EventId {
+    fn dummy_with_rng<R: fake::Rng + ?Sized>(_config: &fake::Faker, rng: &mut R) -> Self {
+        let bytes = rng.random::<[u8; 16]>();
+        let uuid = uuid::Builder::from_random_bytes(bytes)
+            .with_variant(uuid::Variant::RFC4122)
+            .with_version(uuid::Version::SortRand)
+            .into_uuid();
+        EventId(uuid)
+    }
+}
