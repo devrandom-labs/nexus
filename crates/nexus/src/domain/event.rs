@@ -1,6 +1,5 @@
 use super::message::Message;
-use serde::{Serialize, de::DeserializeOwned};
 
-pub trait DomainEvent: Message + Clone + Serialize + DeserializeOwned + PartialEq {
+pub trait DomainEvent: Message {
     fn name(&self) -> &'static str;
 }

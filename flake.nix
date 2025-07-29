@@ -243,6 +243,7 @@
             figlet
             lolcat
             cowsay
+            tmux
             biscuit-cli
             dive
             cargo-hakari
