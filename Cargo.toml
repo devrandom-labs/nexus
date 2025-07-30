@@ -14,6 +14,7 @@ downcast-rs = "2.0.1"
 fake = { version = "4.3.0", features = ["derive", "email_address"] }
 futures = "0.3.31"
 password-hash = { version = "0.5.0", features = ["rand_core", "getrandom", "alloc"] }
+proptest = "1.7.0"
 refinery = { version = "0.8.16", features = ["rusqlite"] }
 reqwest = "0.12.20"
 rusqlite = { version = "0.33.0", features = ["bundled", "trace", "uuid"] }

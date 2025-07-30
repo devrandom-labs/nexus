@@ -1,6 +1,3 @@
 use nexus::{event::PendingEvent, infra::NexusId};
 
-pub mod pending_event_strategies;
-pub mod user_domain;
-
 pub type TestPendingEvent = PendingEvent<NexusId>;

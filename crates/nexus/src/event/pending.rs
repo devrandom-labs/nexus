@@ -3,6 +3,7 @@ use super::metadata::EventMetadata;
 use crate::{domain::Id, infra::EventId};
 use serde::{Deserialize, Serialize};
 
+#[cfg_attr(feature = "testing", derive(fake::Dummy))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingEvent<I>
 where

@@ -22,6 +22,6 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 async-trait = { workspace = true }
 futures = "0.3.31"
 nexus-test-helpers = { version = "0.1", path = "../nexus-test-helpers" }
-proptest = "1.7.0"
+proptest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
