@@ -1,6 +1,12 @@
+use std::num::NonZeroU64;
+
 use super::builder::{PendingEventBuilder, WithStreamId};
 use super::metadata::EventMetadata;
-use crate::{domain::Id, infra::EventId};
+use crate::{
+    domain::Id,
+    error::{Error, Result},
+    infra::EventId,
+};
 use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "testing", derive(fake::Dummy))]
@@ -11,7 +17,7 @@ where
 {
     id: EventId,
     stream_id: I,
-    version: u64,
+    version: NonZeroU64,
     event_type: String,
     metadata: EventMetadata,
     payload: Vec<u8>,
@@ -23,19 +29,27 @@ where
 {
     pub(crate) fn new(
         stream_id: I,
-        version: u64,
+        version: NonZeroU64,
         event_type: String,
         metadata: EventMetadata,
         payload: Vec<u8>,
-    ) -> Self {
-        PendingEvent {
+    ) -> Result<Self> {
+        if event_type.trim().is_empty() {
+            return Err(Error::InvalidArgument {
+                name: "event_type".to_string(),
+                reason: "must not be empty".to_string(),
+                context: "PendingEvent::new".to_string(),
+            });
+        }
+
+        Ok(PendingEvent {
             id: EventId::default(),
             stream_id,
             version,
             event_type,
             metadata,
             payload,
-        }
+        })
     }
 
     pub fn builder(stream_id: I) -> PendingEventBuilder<WithStreamId<I>> {
@@ -55,7 +69,7 @@ where
         &self.id
     }
 
-    pub fn version(&self) -> &u64 {
+    pub fn version(&self) -> &NonZeroU64 {
         &self.version
     }
 

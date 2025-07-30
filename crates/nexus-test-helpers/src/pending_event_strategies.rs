@@ -59,3 +59,7 @@ pub fn arbitrary_valid_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>
                 .collect::<Vec<_>>()
         })
 }
+
+pub fn arbitrary_shuffled_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>> {
+    arbitrary_valid_sequence().prop_shuffle()
+}

@@ -104,6 +104,13 @@ pub enum Error {
 
     #[error("System Error: '{reason:?}'")]
     System { reason: String },
+
+    #[error("{name} in {context}: {reason}")]
+    InvalidArgument {
+        name: String,
+        reason: String,
+        context: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
