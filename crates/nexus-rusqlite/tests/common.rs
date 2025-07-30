@@ -20,3 +20,9 @@ impl TestContext {
         }
     }
 }
+
+impl Default for TestContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}

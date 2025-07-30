@@ -434,4 +434,11 @@ mod tests {
         assert_eq!(TestableEvent(record_2), *read_event_2);
         assert!(read_event_2.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
     }
+
+    #[tokio::test]
+    async fn append_to_stream_with_empty_events_should_succeed() {
+        let ctx = TestContext::new();
+        let result = ctx.store.append_to_stream(&ctx.stream_id, 2, vec![]).await;
+        assert!(result.is_ok());
+    }
 }
