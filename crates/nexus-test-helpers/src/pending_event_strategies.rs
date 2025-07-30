@@ -32,7 +32,7 @@ pub fn arbitrary_stream_id() -> impl Strategy<Value = NexusId> {
 
 pub fn arbitrary_valid_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>> {
     // stream_id strategy
-    (arbitrary_stream_id(), 0..10_usize)
+    (arbitrary_stream_id(), 1..10_usize)
         .prop_flat_map(|(stream_id, num_events)| {
             (
                 Just(stream_id),

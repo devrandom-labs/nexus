@@ -249,28 +249,31 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
+    use crate::Store;
+
     use chrono::Utc;
     use futures::TryStreamExt;
     use nexus::{
         domain::DomainEvent,
         error::{Error, Result},
-        event::{EventMetadata, PendingEvent, PersistedEvent},
+        event::{EventMetadata, PendingEvent},
         infra::NexusId,
         store::EventStore,
     };
-    use nexus_test_helpers::user_domain::{UserActivated, UserCreated};
+    use nexus_test_helpers::{
+        TestableEvent,
+        user_domain::{UserActivated, UserCreated},
+    };
     use refinery::embed_migrations;
     use rusqlite::Connection;
     use serde::Serialize;
     use serde_json::to_vec;
 
-    use super::Store;
-
     embed_migrations!("migrations");
 
-    struct TestContext {
-        store: Store,
-        stream_id: NexusId,
+    pub struct TestContext {
+        pub store: Store,
+        pub stream_id: NexusId,
     }
 
     impl TestContext {
@@ -285,8 +288,7 @@ mod tests {
                 stream_id: NexusId::default(),
             }
         }
-
-        async fn create_pending_event<D>(
+        pub async fn create_pending_event<D>(
             &self,
             version: u64,
             event: D,
@@ -305,21 +307,6 @@ mod tests {
                         .map_err(|err| Error::SerializationError { source: err.into() })
                 })
                 .await
-        }
-    }
-
-    // This `TestableEvent` IS defined in the current crate.
-    #[derive(Debug, Clone)]
-    struct TestableEvent(PendingEvent<NexusId>);
-
-    impl PartialEq<PersistedEvent<NexusId>> for TestableEvent {
-        fn eq(&self, other: &PersistedEvent<NexusId>) -> bool {
-            self.0.id() == &other.id
-                && self.0.stream_id() == &other.stream_id
-                && self.0.event_type() == other.event_type
-                && self.0.version() == &other.version
-                && self.0.payload() == other.payload
-                && self.0.metadata().correlation_id() == other.metadata.correlation_id()
         }
     }
 
