@@ -15,7 +15,7 @@ impl PartialEq<PersistedEvent<NexusId>> for TestableEvent {
         self.0.id() == &other.id
             && self.0.stream_id() == &other.stream_id
             && self.0.event_type() == other.event_type
-            && self.0.version() == &other.version
+            && self.0.version().get() == other.version
             && self.0.payload() == other.payload
             && self.0.metadata().correlation_id() == other.metadata.correlation_id()
     }

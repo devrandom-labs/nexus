@@ -303,7 +303,7 @@ mod tests {
             let metadata = EventMetadata::new("1-corr".into());
 
             PendingEvent::builder(self.stream_id)
-                .with_version(version)
+                .with_version(version)?
                 .with_metadata(metadata)
                 .with_domain(event)
                 .build(|domain_event| async move {
