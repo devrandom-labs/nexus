@@ -1221,7 +1221,9 @@ version = "0.1.0"
 dependencies = [
  "fake",
  "nexus",
+ "proptest",
  "serde",
+ "uuid",
  "workspace-hack",
 ]
 

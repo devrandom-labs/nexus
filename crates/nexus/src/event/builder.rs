@@ -4,7 +4,7 @@ use serde::Serialize;
 use super::{metadata::EventMetadata, pending::PendingEvent};
 use crate::{
     domain::{DomainEvent, Id},
-    error::Error,
+    error::Result,
 };
 
 pub struct PendingEventBuilder<E>
@@ -53,6 +53,16 @@ impl<I> PendingEventBuilder<WithMetadata<I>>
 where
     I: Id,
 {
+    #[cfg(feature = "testing")]
+    pub fn build_with_payload(self, payload: Vec<u8>, event_type: String) -> PendingEvent<I> {
+        let WithMetadata {
+            stream_id,
+            version,
+            metadata,
+        } = self.state;
+        PendingEvent::new(stream_id, version, event_type, metadata, payload)
+    }
+
     pub fn with_domain<D>(self, domain_event: D) -> PendingEventBuilder<WithDomain<I, D>>
     where
         D: DomainEvent + Serialize,
@@ -74,10 +84,10 @@ where
     I: Id,
     D: DomainEvent + Serialize,
 {
-    pub async fn build<F, Fut>(self, serializer: F) -> Result<PendingEvent<I>, Error>
+    pub async fn build<F, Fut>(self, serializer: F) -> Result<PendingEvent<I>>
     where
         F: FnOnce(D) -> Fut,
-        Fut: Future<Output = Result<Vec<u8>, Error>>,
+        Fut: Future<Output = Result<Vec<u8>>>,
     {
         let WithDomain {
             stream_id,
