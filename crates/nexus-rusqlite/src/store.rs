@@ -128,6 +128,10 @@ impl EventStore for Store {
         I: Id,
     {
         debug!(?stream_id, expected_version, "appending events");
+        if event_records.is_empty() {
+            debug!("No events to append, returning Ok.");
+            return Ok(());
+        }
 
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
         let conn = Arc::clone(&self.connection);

@@ -20,7 +20,7 @@ pub fn arbitrary_correlation_id() -> impl Strategy<Value = CorrelationId> {
 }
 
 pub fn arbitrary_event_metadata() -> impl Strategy<Value = EventMetadata> {
-    arbitrary_correlation_id().prop_map(|correlation_id| EventMetadata::new(correlation_id))
+    arbitrary_correlation_id().prop_map(EventMetadata::new)
 }
 
 pub fn arbitrary_stream_id() -> impl Strategy<Value = NexusId> {
