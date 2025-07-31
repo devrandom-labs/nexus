@@ -10,7 +10,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "testing", derive(fake::Dummy))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingEvent<I>
 where
     I: Id,

@@ -2,7 +2,7 @@ use crate::infra::CorrelationId;
 use serde::{Deserialize, Serialize};
 
 #[cfg_attr(feature = "testing", derive(fake::Dummy))]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct EventMetadata {
     correlation_id: CorrelationId,
 }

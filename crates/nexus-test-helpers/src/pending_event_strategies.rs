@@ -2,11 +2,11 @@ use nexus::{
     event::{EventMetadata, PendingEvent},
     infra::{CorrelationId, NexusId},
 };
-use proptest::prelude::*;
+use proptest::{prelude::*, sample::SizeRange};
+use std::ops::RangeBounds;
 
 pub type TestPendingEvent = PendingEvent<NexusId>;
 
-// TODO: invalid_sequence
 // TODO: multiple_stream_valid_sequence
 // TODO: multiple_stream_invalid_sequence
 
@@ -30,10 +30,13 @@ pub fn arbitrary_stream_id() -> impl Strategy<Value = NexusId> {
     })
 }
 
-pub fn arbitrary_valid_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>> {
+pub fn arbitrary_valid_sequence<R>(size: R) -> impl Strategy<Value = Vec<TestPendingEvent>>
+where
+    R: RangeBounds<usize> + Strategy,
+    SizeRange: From<R::Value>,
+{
     let event_type_strategy = "[a-z0-9]{1,20}";
-    // stream_id strategy
-    (arbitrary_stream_id(), 1..10_usize)
+    (arbitrary_stream_id(), size)
         .prop_flat_map(move |(stream_id, num_events)| {
             (
                 Just(stream_id),
@@ -64,5 +67,12 @@ pub fn arbitrary_valid_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>
 }
 
 pub fn arbitrary_shuffled_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>> {
-    arbitrary_valid_sequence().prop_shuffle()
+    arbitrary_valid_sequence(2..12).prop_shuffle().prop_filter(
+        "the sequence must actually be out of order after shuffling",
+        |shuffled_events| {
+            let is_sorted = shuffled_events.is_sorted();
+
+            !is_sorted
+        },
+    )
 }

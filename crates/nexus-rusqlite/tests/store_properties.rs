@@ -9,7 +9,7 @@ mod common;
 proptest! {
 
     #[test]
-    fn prop_can_append_a_valid_sequence( events in arbitrary_valid_sequence()) {
+    fn prop_can_append_a_valid_sequence( events in arbitrary_valid_sequence(1..10)) {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let ctx = common::TestContext::new();
             let stream_id = *events[0].stream_id();
