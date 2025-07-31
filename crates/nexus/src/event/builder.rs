@@ -1,10 +1,8 @@
-#![allow(dead_code)]
-use super::{metadata::EventMetadata, pending::PendingEvent};
+use super::{BoxedEvent, metadata::EventMetadata, pending::PendingEvent};
 use crate::{
-    domain::{DomainEvent, Id},
+    domain::Id,
     error::{Error, Result},
 };
-use serde::Serialize;
 use std::num::NonZeroU64;
 
 pub struct PendingEventBuilder<E>
@@ -73,10 +71,7 @@ where
         Ok(pending_event)
     }
 
-    pub fn with_domain<D>(self, domain_event: D) -> PendingEventBuilder<WithDomain<I, D>>
-    where
-        D: DomainEvent + Serialize,
-    {
+    pub fn with_domain(self, domain_event: BoxedEvent) -> PendingEventBuilder<WithDomain<I>> {
         let state = WithDomain {
             stream_id: self.state.stream_id,
             version: self.state.version,
@@ -89,14 +84,13 @@ where
     }
 }
 
-impl<I, D> PendingEventBuilder<WithDomain<I, D>>
+impl<I> PendingEventBuilder<WithDomain<I>>
 where
     I: Id,
-    D: DomainEvent + Serialize,
 {
     pub async fn build<F, Fut>(self, serializer: F) -> Result<PendingEvent<I>>
     where
-        F: FnOnce(D) -> Fut,
+        F: FnOnce(BoxedEvent) -> Fut,
         Fut: Future<Output = Result<Vec<u8>>>,
     {
         let WithDomain {
@@ -144,21 +138,15 @@ where
 
 impl<I> PendingEventState for WithMetadata<I> where I: Id {}
 
-pub struct WithDomain<I, D>
+pub struct WithDomain<I>
 where
     I: Id,
-    D: DomainEvent + Serialize,
 {
     stream_id: I,
     event_type: String,
-    domain_event: D,
+    domain_event: BoxedEvent,
     version: NonZeroU64,
     metadata: EventMetadata,
 }
 
-impl<I, D> PendingEventState for WithDomain<I, D>
-where
-    I: Id,
-    D: DomainEvent + Serialize,
-{
-}
+impl<I> PendingEventState for WithDomain<I> where I: Id {}

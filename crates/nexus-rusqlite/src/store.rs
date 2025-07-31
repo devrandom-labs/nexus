@@ -258,9 +258,8 @@ mod tests {
     use chrono::Utc;
     use futures::TryStreamExt;
     use nexus::{
-        domain::DomainEvent,
         error::{Error, Result},
-        event::{EventMetadata, PendingEvent},
+        event::{BoxedEvent, EventMetadata, PendingEvent},
         infra::NexusId,
         store::EventStore,
     };
@@ -270,7 +269,6 @@ mod tests {
     };
     use refinery::embed_migrations;
     use rusqlite::Connection;
-    use serde::Serialize;
     use serde_json::to_vec;
 
     embed_migrations!("migrations");
@@ -292,23 +290,28 @@ mod tests {
                 stream_id: NexusId::default(),
             }
         }
-        pub async fn create_pending_event<D>(
+        pub async fn create_pending_event(
             &self,
             version: u64,
-            event: D,
-        ) -> Result<PendingEvent<NexusId>>
-        where
-            D: DomainEvent + Serialize,
-        {
+            event: BoxedEvent,
+        ) -> Result<PendingEvent<NexusId>> {
             let metadata = EventMetadata::new("1-corr".into());
-
             PendingEvent::builder(self.stream_id)
                 .with_version(version)?
                 .with_metadata(metadata)
                 .with_domain(event)
                 .build(|domain_event| async move {
-                    to_vec(&domain_event)
-                        .map_err(|err| Error::SerializationError { source: err.into() })
+                    if let Some(e) = domain_event.downcast_ref::<UserActivated>() {
+                        to_vec(e).map_err(|err| Error::SerializationError { source: err.into() })
+                    } else if let Some(e) = domain_event.downcast_ref::<UserCreated>() {
+                        to_vec(e).map_err(|err| Error::SerializationError { source: err.into() })
+                    } else {
+                        Err(Error::InvalidArgument {
+                            name: "serialization".to_string(),
+                            reason: "cannot downcast".to_string(),
+                            context: "pending_event_build".to_string(),
+                        })
+                    }
                 })
                 .await
         }
@@ -322,7 +325,7 @@ mod tests {
             name: "Joel DSouza".to_string(),
             email: "joel@devrandom.co".to_string(),
         };
-        let pending_event = ctx.create_pending_event(1, domain_event).await;
+        let pending_event = ctx.create_pending_event(1, Box::new(domain_event)).await;
         assert!(
             pending_event.is_ok(),
             "pending event should be deserialized"
@@ -357,12 +360,14 @@ mod tests {
             email: "joel@devrandom.co".to_string(),
         };
 
-        let pending_event_1 = ctx.create_pending_event(1, domain_event.clone()).await;
+        let pending_event_1 = ctx
+            .create_pending_event(1, Box::new(domain_event.clone()))
+            .await;
         assert!(
             pending_event_1.is_ok(),
             "pending event should be deserialized"
         );
-        let pending_event_2 = ctx.create_pending_event(1, domain_event).await;
+        let pending_event_2 = ctx.create_pending_event(1, Box::new(domain_event)).await;
         assert!(
             pending_event_2.is_ok(),
             "pending event 2 should be deserialized"
@@ -400,12 +405,14 @@ mod tests {
             email: "joel@devrandom.co".to_string(),
         };
         let user_activated_event = UserActivated {};
-        let pending_event_1 = ctx.create_pending_event(1, user_created_event).await;
+        let pending_event_1 = ctx.create_pending_event(1, user_created_event.into()).await;
         assert!(
             pending_event_1.is_ok(),
             "pending event should be deserialized"
         );
-        let pending_event_2 = ctx.create_pending_event(2, user_activated_event).await;
+        let pending_event_2 = ctx
+            .create_pending_event(2, user_activated_event.into())
+            .await;
         assert!(
             pending_event_2.is_ok(),
             "pending event 2 should be deserialized"

@@ -1,4 +1,4 @@
-use downcast_rs::{DowncastSync, impl_downcast};
+use downcast_rs::DowncastSync;
 /// # `Message`
 ///
 /// A common marker trait for all message types within the `nexus` system,
@@ -16,7 +16,4 @@ use downcast_rs::{DowncastSync, impl_downcast};
 /// though `nexus` primarily relies on strong typing via generics.
 ///
 use std::{any::Any, fmt::Debug};
-
 pub trait Message: DowncastSync + Any + Debug + Send + Sync + 'static {}
-
-impl_downcast!(sync Message);

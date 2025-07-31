@@ -31,7 +31,7 @@ pub fn arbitrary_stream_id() -> impl Strategy<Value = NexusId> {
 }
 
 pub fn arbitrary_valid_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>> {
-    let non_empty_string_strategy = ".+";
+    let event_type_strategy = "[a-z0-9]{1,20}";
     // stream_id strategy
     (arbitrary_stream_id(), 1..10_usize)
         .prop_flat_map(move |(stream_id, num_events)| {
@@ -40,7 +40,7 @@ pub fn arbitrary_valid_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>
                 prop::collection::vec(
                     (
                         arbitrary_event_metadata(),
-                        non_empty_string_strategy,
+                        event_type_strategy,
                         any::<Vec<u8>>(),
                     ),
                     num_events,
