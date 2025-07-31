@@ -2,7 +2,7 @@ use nexus::{
     event::{EventMetadata, PendingEvent},
     infra::{CorrelationId, NexusId},
 };
-use proptest::{prelude::*, sample::SizeRange};
+use proptest::{collection::vec as prop_vec, prelude::*, sample::SizeRange};
 use std::ops::RangeBounds;
 
 pub type TestPendingEvent = PendingEvent<NexusId>;
@@ -40,7 +40,7 @@ where
         .prop_flat_map(move |(stream_id, num_events)| {
             (
                 Just(stream_id),
-                prop::collection::vec(
+                prop_vec(
                     (
                         arbitrary_event_metadata(),
                         event_type_strategy,
@@ -66,13 +66,18 @@ where
         })
 }
 
-pub fn arbitrary_shuffled_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>> {
-    arbitrary_valid_sequence(2..12).prop_shuffle().prop_filter(
-        "the sequence must actually be out of order after shuffling",
-        |shuffled_events| {
-            let is_sorted = shuffled_events.is_sorted();
+pub fn arbitrary_conflicting_sequence() -> impl Strategy<Value = Vec<TestPendingEvent>> {
+    arbitrary_valid_sequence(2..10)
+        .prop_flat_map(|base_sequence| {
+            let indices_strategy = prop_vec(0..base_sequence.len(), 1..=base_sequence.len());
+            (Just(base_sequence), indices_strategy)
+        })
+        .prop_map(|(mut base_sequence, indices)| {
+            for index in indices {
+                base_sequence.push(base_sequence[index].clone());
+            }
 
-            !is_sorted
-        },
-    )
+            base_sequence
+        })
+        .prop_shuffle()
 }

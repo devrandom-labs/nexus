@@ -16,7 +16,7 @@ pub trait EventStore {
         event_records: Vec<PendingEvent<I>>,
     ) -> Result<(), Error>
     where
-        I: Id;
+        I: Id + Ord;
 
     fn read_stream<'a, I>(
         &'a self,

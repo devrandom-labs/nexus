@@ -1,6 +1,6 @@
 use nexus::store::EventStore;
 use nexus_test_helpers::pending_event_strategies::{
-    arbitrary_shuffled_sequence, arbitrary_valid_sequence,
+    arbitrary_conflicting_sequence, arbitrary_valid_sequence,
 };
 use proptest::prelude::*;
 
@@ -21,7 +21,7 @@ proptest! {
     }
 
     #[test]
-    fn prop_should_fail_on_shuffled_sequence( events in arbitrary_shuffled_sequence()) {
+    fn prop_should_fail_on_shuffled_sequence( events in arbitrary_conflicting_sequence()) {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let ctx = common::TestContext::new();
             let stream_id = *events[0].stream_id();

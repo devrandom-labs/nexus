@@ -125,7 +125,7 @@ impl EventStore for Store {
         event_records: Vec<PendingEvent<I>>,
     ) -> Result<(), Error>
     where
-        I: Id,
+        I: Id + Ord,
     {
         debug!(?stream_id, expected_version, "appending events");
         if event_records.is_empty() {
