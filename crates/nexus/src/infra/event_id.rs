@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{default::Default, fmt::Display, ops::Deref};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct EventId(Uuid);
 
 impl EventId {

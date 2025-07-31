@@ -125,7 +125,7 @@ impl EventStore for Store {
         event_records: Vec<PendingEvent<I>>,
     ) -> Result<(), Error>
     where
-        I: Id + Ord,
+        I: Id,
     {
         debug!(?stream_id, expected_version, "appending events");
         if event_records.is_empty() {
@@ -147,6 +147,25 @@ impl EventStore for Store {
                     .map_err(|err| Error::Store { source: err.into() })?;
 
                 {
+                    let actual_version = tx.query_row(
+                        "SELECT COALESCE(MAX(version), 0) FROM event WHERE stream_id = ?1",
+                        params![stream_id.as_ref()],
+                        |row| row.get(0),
+                    );
+
+                    let actual_version: u64 = match actual_version {
+                        Ok(version) => version,
+                        Err(rusqlite::Error::QueryReturnedNoRows) => 0,
+                        Err(err) => return Err(Error::Store { source: err.into() }),
+                    };
+
+                    if actual_version != expected_version {
+                        return Err(Error::Conflict {
+                            stream_id: stream_id.to_string(),
+                            expected_version,
+                        });
+                    }
+
                     let mut event_stmt = tx
                         .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
                         .map_err(|err| Error::Store { source: err.into() })?;

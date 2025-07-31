@@ -2,13 +2,19 @@ use nexus::{
     event::{EventMetadata, PendingEvent},
     infra::{CorrelationId, NexusId},
 };
-use proptest::{collection::vec as prop_vec, prelude::*, sample::SizeRange};
+use proptest::{
+    collection::{hash_set, vec as prop_vec},
+    prelude::*,
+    sample::SizeRange,
+    strategy::ValueTree,
+};
 use std::ops::RangeBounds;
 
 pub type TestPendingEvent = PendingEvent<NexusId>;
 
 // TODO: multiple_stream_valid_sequence
 // TODO: multiple_stream_invalid_sequence
+const EVENT_TYPE_STRATEGY: &str = "[a-z0-9]{1,20}";
 
 pub fn arbitrary_correlation_id() -> impl Strategy<Value = CorrelationId> {
     any::<[u8; 16]>().prop_map(|bytes| {
@@ -35,7 +41,6 @@ where
     R: RangeBounds<usize> + Strategy,
     SizeRange: From<R::Value>,
 {
-    let event_type_strategy = "[a-z0-9]{1,20}";
     (arbitrary_stream_id(), size)
         .prop_flat_map(move |(stream_id, num_events)| {
             (
@@ -43,7 +48,7 @@ where
                 prop_vec(
                     (
                         arbitrary_event_metadata(),
-                        event_type_strategy,
+                        EVENT_TYPE_STRATEGY,
                         any::<Vec<u8>>(),
                     ),
                     num_events,
@@ -78,6 +83,56 @@ pub fn arbitrary_conflicting_sequence() -> impl Strategy<Value = Vec<TestPending
             }
 
             base_sequence
+        })
+        .prop_shuffle()
+}
+
+// cretae multiple stream_ids and for each srteam create multiple events
+
+pub fn arbitrary_multi_stream_valid_sequence<R>() -> impl Strategy<Value = Vec<TestPendingEvent>>
+where
+    R: RangeBounds<usize> + Strategy,
+    SizeRange: From<R::Value>,
+{
+    (2..=5_usize)
+        .prop_flat_map(|num_streams| hash_set(arbitrary_stream_id(), num_streams))
+        .prop_flat_map(|stream_ids| {
+            stream_ids
+                .into_iter()
+                .map(|id| (Just(id), 1..10_usize))
+                .collect::<Vec<_>>()
+        })
+        .prop_map(|stream_configs| {
+            let all_events: Vec<TestPendingEvent> = stream_configs
+                .into_iter()
+                .flat_map(|(stream_id, num_events)| {
+                    (1..=num_events).map(move |version| {
+                        let metadata = arbitrary_event_metadata()
+                            .new_tree(&mut Default::default())
+                            .unwrap()
+                            .current();
+
+                        let event_type = EVENT_TYPE_STRATEGY
+                            .new_tree(&mut Default::default())
+                            .unwrap()
+                            .current();
+
+                        let payload = any::<Vec<u8>>()
+                            .new_tree(&mut Default::default())
+                            .unwrap()
+                            .current();
+
+                        PendingEvent::builder(stream_id)
+                            .with_version(version as u64)
+                            .unwrap()
+                            .with_metadata(metadata)
+                            .build_with_payload(payload, event_type)
+                            .unwrap()
+                    })
+                })
+                .collect();
+
+            all_events
         })
         .prop_shuffle()
 }

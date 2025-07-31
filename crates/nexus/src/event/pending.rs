@@ -90,11 +90,7 @@ where
     I: Id + Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self.stream_id != other.stream_id {
-            None
-        } else {
-            self.version.partial_cmp(&other.version)
-        }
+        Some(self.cmp(other))
     }
 }
 

@@ -1,13 +1,12 @@
 use nexus::store::EventStore;
 use nexus_test_helpers::pending_event_strategies::{
-    arbitrary_conflicting_sequence, arbitrary_valid_sequence,
+    arbitrary_conflicting_sequence, arbitrary_multi_stream_valid_sequence, arbitrary_valid_sequence,
 };
 use proptest::prelude::*;
 
 mod common;
 
 proptest! {
-
     #[test]
     fn prop_can_append_a_valid_sequence( events in arbitrary_valid_sequence(1..10)) {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
@@ -21,7 +20,7 @@ proptest! {
     }
 
     #[test]
-    fn prop_should_fail_on_shuffled_sequence( events in arbitrary_conflicting_sequence()) {
+    fn prop_should_fail_on_conflicting_sequence( events in arbitrary_conflicting_sequence()) {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let ctx = common::TestContext::new();
             let stream_id = *events[0].stream_id();
@@ -31,4 +30,16 @@ proptest! {
             Ok(())
         })?;
     }
+
+    #[test]
+    fn prop_can_append_multiple_stream_id_with_valid_sequence(events in arbitrary_multi_stream_valid_sequence()) {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let ctx = common::TestContext::new();
+            // if i have multi stream event batch how can I append??
+            Ok(())
+        })?;
+    }
+
+    // #[test]
+    // fn prop_should_fail_on_multi_stream_conflicting_sequence() {}
 }
