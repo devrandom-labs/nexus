@@ -111,6 +111,13 @@ pub enum Error {
         reason: String,
         context: String,
     },
+
+    #[error("{stream_id} pending events version sequence are invalid.")]
+    SequenceMismatch {
+        stream_id: String,
+        expected_version: u64,
+        actual_version: u64,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

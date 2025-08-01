@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use nexus::{
     domain::Id,
-    error::Error,
+    error::{Error, Result},
     event::{EventMetadata, PendingEvent, PersistedEvent},
     infra::{CorrelationId, EventId},
     store::EventStore,
@@ -20,11 +20,6 @@ use tokio_stream::{Stream, wrappers::ReceiverStream};
 use tracing::{debug, instrument};
 use uuid::Uuid;
 
-//
-// TODO: The Generalization (Property Test): Elevate the simple case to a universal law.
-// TODO: The Chaos (Fuzz Test): Attack the boundaries with invalid and malicious data.
-// TODO: The Structure (Snapshot Test): Ensure the physical data format remains stable.
-// TODO: The Audit (Mutation Test): Test the quality of our other tests.
 #[derive(Debug, Clone)]
 pub struct Store {
     #[allow(dead_code)]
@@ -33,7 +28,7 @@ pub struct Store {
 
 impl Store {
     #[instrument(level = "debug", err)]
-    pub fn new(conn: Connection) -> Result<Self, Error> {
+    pub fn new(conn: Connection) -> Result<Self> {
         debug!("Applying database connection configurations for security and integrity...");
         Self::configure_connection(&conn)
             .map_err(|err| Error::ConnectionFailed { source: err.into() })?;
@@ -113,6 +108,27 @@ impl Store {
             source: error.into(),
         }
     }
+
+    fn sequence_check<'a, I>(
+        mut version: u64,
+        events: impl IntoIterator<Item = &'a PendingEvent<I>>,
+    ) -> Result<()>
+    where
+        I: Id,
+    {
+        for event in events {
+            if version != event.version().get() {
+                return Err(Error::SequenceMismatch {
+                    stream_id: event.stream_id().to_string(),
+                    expected_version: version,
+                    actual_version: event.version().get(),
+                });
+            }
+            version += 1;
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -120,44 +136,36 @@ impl EventStore for Store {
     #[instrument(level = "debug", skip(self), err)]
     async fn append_to_stream<I>(
         &self,
-        stream_id: &I,
         expected_version: u64,
-        event_records: Vec<PendingEvent<I>>,
-    ) -> Result<(), Error>
+        pending_events: Vec<PendingEvent<I>>,
+    ) -> Result<()>
     where
         I: Id,
     {
-        debug!(?stream_id, expected_version, "appending events");
-        if event_records.is_empty() {
-            debug!("No events to append, returning Ok.");
+        let Some(first_event) = pending_events.first() else {
+            debug!("empty list of events hence, returning no-op");
             return Ok(());
-        }
-
-        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
+        };
+        let stream_id = first_event.stream_id().clone();
+        let (tx, rx) = oneshot::channel::<Result<()>>();
         let conn = Arc::clone(&self.connection);
-
         spawn_blocking(move || {
             let result = (|| {
                 let mut conn = conn.lock().map_err(|_| Error::System {
                     reason: "mutex lock poisoned..".to_string(),
                 })?;
-
                 let tx = conn
                     .transaction()
                     .map_err(|err| Error::Store { source: err.into() })?;
 
                 {
-                    let actual_version = tx.query_row(
-                        "SELECT COALESCE(MAX(version), 0) FROM event WHERE stream_id = ?1",
-                        params![stream_id.as_ref()],
-                        |row| row.get(0),
-                    );
-
-                    let actual_version: u64 = match actual_version {
-                        Ok(version) => version,
-                        Err(rusqlite::Error::QueryReturnedNoRows) => 0,
-                        Err(err) => return Err(Error::Store { source: err.into() }),
-                    };
+                    let actual_version: u64 = tx
+                        .query_row(
+                            "SELECT COALESCE(MAX(version), 0) FROM event WHERE stream_id = ?1",
+                            params![stream_id.as_ref()],
+                            |row| row.get(0),
+                        )
+                        .map_err(|err| Error::Store { source: err.into() })?;
 
                     if actual_version != expected_version {
                         return Err(Error::Conflict {
@@ -165,18 +173,17 @@ impl EventStore for Store {
                             expected_version,
                         });
                     }
-
+                    let _ = Self::sequence_check(actual_version + 1, &pending_events)?;
                     let mut event_stmt = tx
                         .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
                         .map_err(|err| Error::Store { source: err.into() })?;
-
                     let mut event_metadata_stmt = tx
                         .prepare_cached(
                             "INSERT INTO event_metadata (event_id, correlation_id) VALUES (?1, ?2)",
                         )
                         .map_err(|err| Error::Store { source: err.into() })?;
 
-                    for record in &event_records {
+                    for record in &pending_events {
                         event_stmt
                             .execute(params![
                                 record.id().as_uuid(),
@@ -220,13 +227,13 @@ impl EventStore for Store {
     fn read_stream<'a, I>(
         &'a self,
         stream_id: I,
-    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>, Error>> + Send + 'a>>
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
     where
         Self: Sync + 'a,
         I: Id,
     {
         debug!(?stream_id, "fetching events");
-        let (tx, rx) = channel::<Result<PersistedEvent<I>, Error>>(10);
+        let (tx, rx) = channel::<Result<PersistedEvent<I>>>(10);
         let conn = Arc::clone(&self.connection);
         spawn_blocking(move || {
             let result = (|| {
@@ -350,19 +357,16 @@ mod tests {
             "pending event should be deserialized"
         );
         let expected_event = pending_event.unwrap();
-
         ctx.store
-            .append_to_stream(&ctx.stream_id, 1, vec![expected_event.clone()])
+            .append_to_stream(0, vec![expected_event.clone()])
             .await
             .unwrap();
-
         let events = ctx
             .store
             .read_stream(ctx.stream_id)
             .try_collect::<Vec<_>>()
             .await
             .expect("Read stream should succeed");
-
         assert_eq!(events.len(), 1, "there should be 1 event to read");
         let actual_event = &events[0];
         assert_eq!(TestableEvent(expected_event), *actual_event);
@@ -372,45 +376,37 @@ mod tests {
     #[tokio::test]
     async fn should_not_append_event_if_version_is_same() {
         let ctx = TestContext::new();
-
         let domain_event = UserCreated {
             user_id: NexusId::default(),
             name: "Joel DSouza".to_string(),
             email: "joel@devrandom.co".to_string(),
         };
-
         let pending_event_1 = ctx
             .create_pending_event(1, Box::new(domain_event.clone()))
             .await;
-        assert!(
-            pending_event_1.is_ok(),
-            "pending event should be deserialized"
-        );
+        assert!(pending_event_1.is_ok(), "{}", pending_event_1.unwrap_err());
         let pending_event_2 = ctx.create_pending_event(1, Box::new(domain_event)).await;
-        assert!(
-            pending_event_2.is_ok(),
-            "pending event 2 should be deserialized"
-        );
-
+        assert!(pending_event_2.is_ok(), "{}", pending_event_1.unwrap_err());
         let record_1 = pending_event_1.unwrap();
         let record_2 = pending_event_2.unwrap();
         let result = ctx
             .store
-            .append_to_stream(&ctx.stream_id, 2, vec![record_1, record_2])
+            .append_to_stream(0, vec![record_1, record_2])
             .await;
-
         assert!(result.is_err());
         let err = result.unwrap_err();
 
         match err {
-            Error::Conflict {
-                stream_id: s,
+            Error::SequenceMismatch {
+                stream_id,
                 expected_version,
+                actual_version,
             } => {
-                assert_eq!(s, ctx.stream_id.to_string());
+                assert_eq!(stream_id, ctx.stream_id.to_string());
                 assert_eq!(expected_version, 2);
+                assert_eq!(actual_version, 1);
             }
-            _ => panic!("expected Conflict error"),
+            _ => panic!("expected sequence error, but got: {}", err),
         }
     }
 
@@ -425,22 +421,16 @@ mod tests {
         };
         let user_activated_event = UserActivated {};
         let pending_event_1 = ctx.create_pending_event(1, user_created_event.into()).await;
-        assert!(
-            pending_event_1.is_ok(),
-            "pending event should be deserialized"
-        );
+        assert!(pending_event_1.is_ok(),);
         let pending_event_2 = ctx
             .create_pending_event(2, user_activated_event.into())
             .await;
-        assert!(
-            pending_event_2.is_ok(),
-            "pending event 2 should be deserialized"
-        );
+        assert!(pending_event_2.is_ok(), "{}", pending_event_2.unwrap_err());
         let record_1 = pending_event_1.unwrap();
         let record_2 = pending_event_2.unwrap();
         let result = ctx
             .store
-            .append_to_stream(&ctx.stream_id, 2, vec![record_1.clone(), record_2.clone()])
+            .append_to_stream(0, vec![record_1.clone(), record_2.clone()])
             .await;
 
         assert!(result.is_ok());
@@ -461,10 +451,13 @@ mod tests {
         assert!(read_event_2.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
     }
 
+    // TODO: add events and then add more events with new expected version
+    // TODO: somehow test conflict error (should I rename sequence error to conflict?)
+
     #[tokio::test]
     async fn append_to_stream_with_empty_events_should_succeed() {
         let ctx = TestContext::new();
-        let result = ctx.store.append_to_stream(&ctx.stream_id, 2, vec![]).await;
+        let result = ctx.store.append_to_stream::<NexusId>(0, vec![]).await;
         assert!(result.is_ok());
     }
 }

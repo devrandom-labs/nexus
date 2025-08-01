@@ -14,7 +14,7 @@ where
 
 impl<I> PendingEventBuilder<WithStreamId<I>>
 where
-    I: Id + Ord,
+    I: Id,
 {
     pub fn new(stream_id: I) -> Self {
         let state = WithStreamId { stream_id };
@@ -39,7 +39,7 @@ where
 
 impl<I> PendingEventBuilder<WithVersion<I>>
 where
-    I: Id + Ord,
+    I: Id,
 {
     pub fn with_metadata(self, metadata: EventMetadata) -> PendingEventBuilder<WithMetadata<I>> {
         let state = WithMetadata {
@@ -54,7 +54,7 @@ where
 
 impl<I> PendingEventBuilder<WithMetadata<I>>
 where
-    I: Id + Ord,
+    I: Id,
 {
     #[cfg(feature = "testing")]
     pub fn build_with_payload(
@@ -86,7 +86,7 @@ where
 
 impl<I> PendingEventBuilder<WithDomain<I>>
 where
-    I: Id + Ord,
+    I: Id,
 {
     pub async fn build<F, Fut>(self, serializer: F) -> Result<PendingEvent<I>>
     where
@@ -110,37 +110,37 @@ pub trait PendingEventState {}
 
 pub struct WithStreamId<I>
 where
-    I: Id + Ord,
+    I: Id,
 {
     stream_id: I,
 }
 
-impl<I> PendingEventState for WithStreamId<I> where I: Id + Ord {}
+impl<I> PendingEventState for WithStreamId<I> where I: Id {}
 
 pub struct WithVersion<I>
 where
-    I: Id + Ord,
+    I: Id,
 {
     stream_id: I,
     version: NonZeroU64,
 }
 
-impl<I> PendingEventState for WithVersion<I> where I: Id + Ord {}
+impl<I> PendingEventState for WithVersion<I> where I: Id {}
 
 pub struct WithMetadata<I>
 where
-    I: Id + Ord,
+    I: Id,
 {
     stream_id: I,
     version: NonZeroU64,
     metadata: EventMetadata,
 }
 
-impl<I> PendingEventState for WithMetadata<I> where I: Id + Ord {}
+impl<I> PendingEventState for WithMetadata<I> where I: Id {}
 
 pub struct WithDomain<I>
 where
-    I: Id + Ord,
+    I: Id,
 {
     stream_id: I,
     event_type: String,
@@ -149,4 +149,4 @@ where
     metadata: EventMetadata,
 }
 
-impl<I> PendingEventState for WithDomain<I> where I: Id + Ord {}
+impl<I> PendingEventState for WithDomain<I> where I: Id {}

@@ -6,14 +6,11 @@ use crate::{
     infra::EventId,
 };
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 #[cfg_attr(feature = "testing", derive(fake::Dummy))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PendingEvent<I>
-where
-    I: Id + Ord,
-{
+pub struct PendingEvent<I> {
     id: EventId,
     stream_id: I,
     version: NonZeroU64,
@@ -24,7 +21,7 @@ where
 
 impl<I> PendingEvent<I>
 where
-    I: Id + Ord,
+    I: Id,
 {
     pub(crate) fn new(
         stream_id: I,
@@ -58,7 +55,7 @@ where
 
 impl<I> PendingEvent<I>
 where
-    I: Id + Ord,
+    I: Id,
 {
     pub fn stream_id(&self) -> &I {
         &self.stream_id
@@ -82,25 +79,5 @@ where
 
     pub fn payload(&self) -> &[u8] {
         &self.payload
-    }
-}
-
-impl<I> PartialOrd for PendingEvent<I>
-where
-    I: Id + Ord,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<I> Ord for PendingEvent<I>
-where
-    I: Id + Ord,
-{
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.stream_id
-            .cmp(&other.stream_id)
-            .then_with(|| self.version.cmp(&other.version))
     }
 }
