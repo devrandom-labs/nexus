@@ -95,7 +95,7 @@ mod tests {
             agree_to_terms_and_conditions: false,
         };
 
-        let debug_output = format!("{:?}", request);
+        let debug_output = format!("{request:?}");
 
         assert!(debug_output.contains("email: \"test@example.com\""));
         assert!(debug_output.contains("password: \"[REDACTED]\""));
@@ -111,7 +111,7 @@ mod tests {
             agree_to_terms_and_conditions: false,
         };
 
-        let display_output = format!("{}", request);
+        let display_output = format!("{request}");
 
         assert!(display_output.contains("test@example.com"));
         assert!(display_output.contains("[REDACTED]"));

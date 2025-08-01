@@ -1,18 +1,15 @@
-use crate::{
-    domain::{AggregateType as AT, Command, DomainEvent},
-    infra::events::Events,
-};
+use crate::domain::{AggregateState, Command, DomainEvent};
 use async_trait::async_trait;
+use smallvec::SmallVec;
 use std::fmt::Debug;
 
 #[derive(Debug)]
 pub struct CommandHandlerResponse<E, R>
 where
-    E: DomainEvent,
+    E: DomainEvent + ?Sized,
     R: Debug + Send + Sync + 'static,
 {
-    pub events: Events<E>,
-
+    pub events: SmallVec<[Box<E>; 1]>,
     pub result: R,
 }
 
@@ -22,12 +19,12 @@ where
     C: Command,
     Services: Send + Sync + ?Sized,
 {
-    type AggregateType: AT;
+    type State: AggregateState;
 
     async fn handle(
         &self,
-        state: &<Self::AggregateType as AT>::State,
+        state: &Self::State,
         command: C,
         services: &Services,
-    ) -> Result<CommandHandlerResponse<<Self::AggregateType as AT>::Event, C::Result>, C::Error>;
+    ) -> Result<CommandHandlerResponse<<Self::State as AggregateState>::Domain, C::Result>, C::Error>;
 }

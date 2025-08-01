@@ -1,11 +1,11 @@
 name: udpate dependencies
 on:
   schedule:
-    - cron: "0 9 * * MON"
+    - cron: "0 0 1 * *"
   workflow_dispatch:
 jobs:
   checks:
-    name: Update Dependencies and Create PR
+    name: Upgrade Dependencies to latest veersion and Create PR
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -39,10 +39,8 @@ jobs:
         run: |
           nix develop --command bash -c "
             set -e # Exit immediately if a command exits with a non-zero status.
-            echo 'Updating Nix flake...'
-            nix flake update
-            echo 'Updating cargo lockfile...'
-            cargo update
+            echo 'upgrading cargo deps with breaking'
+            cargo upgrade -i
             echo 'Generating cargo-hakari workspace...'
             cargo-hakari generate --diff # Adding --diff to see changes, though not strictly necessary for the script's logic
             echo 'Dependency update process complete.'
@@ -51,13 +49,12 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GH_PAT_FOR_PRS }}
-          commit-message: "chore: update dependencies"
-          title: "Update Nix and Rust Dependencies"
+          commit-message: "chore(tixlys): upgrade dependencies"
+          title: "Update Rust Dependencies"
           body: |
-            Automated weekly dependency update.
+            Automated monthly dependency upgrade.
             Please review the changes.
-            - Nix flake updated
-            - Cargo dependencies upgraded/updated
+            - Cargo dependencies upgraded
             - Cargo Hakari workspace regenerated
           branch: "chore/auto-dependency-updates"
           delete-branch: true

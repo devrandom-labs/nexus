@@ -5,10 +5,10 @@ use std::iter::{Chain, Once, once};
 #[derive(Debug)]
 pub struct Events<E>
 where
-    E: DomainEvent,
+    E: DomainEvent + ?Sized,
 {
-    pub first: E,
-    pub more: SmallVec<[E; 1]>,
+    pub first: Box<E>,
+    pub more: SmallVec<[Box<E>; 1]>,
 }
 
 impl<E> Events<E>
@@ -17,13 +17,13 @@ where
 {
     pub fn new(event: E) -> Self {
         Events {
-            first: event,
+            first: Box::new(event),
             more: SmallVec::new(),
         }
     }
 
     pub fn add(&mut self, event: E) {
-        self.more.push(event);
+        self.more.push(Box::new(event));
     }
 
     pub fn len(&self) -> usize {
@@ -46,10 +46,10 @@ where
 
 impl<E> IntoIterator for Events<E>
 where
-    E: DomainEvent,
+    E: DomainEvent + ?Sized,
 {
-    type Item = E;
-    type IntoIter = Chain<Once<E>, SmallVecIntoIter<[E; 1]>>;
+    type Item = Box<E>;
+    type IntoIter = Chain<Once<Self::Item>, SmallVecIntoIter<[Self::Item; 1]>>;
 
     fn into_iter(self) -> Self::IntoIter {
         once(self.first).chain(self.more)
@@ -58,19 +58,19 @@ where
 
 impl<'a, E> IntoIterator for &'a Events<E>
 where
-    E: DomainEvent,
+    E: DomainEvent + ?Sized,
 {
-    type Item = &'a E;
-    type IntoIter = Chain<Once<&'a E>, core::slice::Iter<'a, E>>;
+    type Item = &'a Box<E>;
+    type IntoIter = Chain<Once<Self::Item>, core::slice::Iter<'a, Box<E>>>;
 
     fn into_iter(self) -> Self::IntoIter {
         once(&self.first).chain(self.more.iter())
     }
 }
 
-impl<E> From<Events<E>> for SmallVec<[E; 1]>
+impl<E> From<Events<E>> for SmallVec<[Box<E>; 1]>
 where
-    E: DomainEvent,
+    E: DomainEvent + ?Sized,
 {
     fn from(events: Events<E>) -> Self {
         let mut vec = smallvec![events.first];

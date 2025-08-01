@@ -24,6 +24,7 @@ idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
 percent-encoding = { version = "2" }
 refinery-core = { version = "0.8", features = ["rusqlite", "toml"] }
 regex = { version = "1" }
@@ -42,6 +43,8 @@ uuid = { version = "1", features = ["fast-rng", "serde", "v4", "v7"] }
 
 [build-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+darling = { version = "0.20" }
+darling_core = { version = "0.20", default-features = false, features = ["suggestions"] }
 digest = { version = "0.10", features = ["mac", "std"] }
 form_urlencoded = { version = "1" }
 futures-channel = { version = "0.3", features = ["sink"] }
@@ -53,6 +56,7 @@ idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
+num-traits = { version = "0.2", default-features = false, features = ["std"] }
 percent-encoding = { version = "2" }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 refinery-core = { version = "0.8", features = ["rusqlite", "toml"] }
@@ -72,12 +76,14 @@ tracing-core = { version = "0.1" }
 uuid = { version = "1", features = ["fast-rng", "serde", "v4", "v7"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
+bitflags = { version = "2", default-features = false, features = ["std"] }
 futures-sink = { version = "0.3" }
 libc = { version = "0.2" }
 tower = { version = "0.5", default-features = false, features = ["timeout"] }
 tower-http = { version = "0.6", features = ["follow-redirect", "trace"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
+bitflags = { version = "2", default-features = false, features = ["std"] }
 futures-sink = { version = "0.3" }
 libc = { version = "0.2" }
 tower = { version = "0.5", default-features = false, features = ["timeout"] }

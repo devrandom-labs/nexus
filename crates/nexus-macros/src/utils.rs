@@ -21,7 +21,7 @@ pub fn get_attribute<'a>(
         .iter()
         .find(|a| a.path().is_ident(name))
         .ok_or_else(|| {
-            let msg = format!("missing required attribute `#[{}]`", name);
+            let msg = format!("missing required attribute `#[{name}]`");
             Error::new(error_span, msg)
         })
 }

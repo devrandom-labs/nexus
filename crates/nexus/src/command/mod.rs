@@ -29,4 +29,4 @@ pub mod handler;
 pub mod repository;
 
 pub use handler::{AggregateCommandHandler, CommandHandlerResponse};
-pub use repository::{EventSourceRepository, RepositoryError};
+pub use repository::EventSourceRepository;

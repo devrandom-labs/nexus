@@ -34,16 +34,6 @@ pub fn domain_event(input: TokenStream) -> TokenStream {
     .into()
 }
 
-#[proc_macro_derive(Aggregate, attributes(aggregate))]
-pub fn aggregate(input: TokenStream) -> TokenStream {
-    let ast = parse_macro_input!(input as DeriveInput);
-    match parse_aggregate(&ast) {
-        Ok(code) => code,
-        Err(e) => e.to_compile_error(),
-    }
-    .into()
-}
-
 fn parse_command(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     let attribute = utils::get_attribute(&ast.attrs, "command", name.span())?;
@@ -156,91 +146,7 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 
             Ok(expanded)
         }
-        Data::Enum(e) => {
-            let mut name_arms = Vec::new();
-            for variant in &e.variants {
-                let variant_ident = &variant.ident;
-
-                let variant_attribute =
-                    utils::get_attribute(&variant.attrs, "domain_event", variant.ident.span())?;
-
-                let mut event_name: Option<LitStr> = None;
-                variant_attribute.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("name") {
-                        event_name = Some(meta.value()?.parse()?);
-                    } else {
-                        return Err(meta.error("unrecognized key for `#[domain_event]` attribute"));
-                    }
-
-                    Ok(())
-                })?;
-
-                let event_name = event_name.ok_or_else(|| {
-                    Error::new(variant_attribute.path().span(), "`name` key is required")
-                })?;
-
-                name_arms.push(quote! {
-                    Self::#variant_ident { .. } => #event_name
-                });
-            }
-
-            let expanded = quote! {
-
-                impl ::nexus::domain::Message for #name {
-                }
-
-                impl ::nexus::domain::DomainEvent for #name {
-
-                    fn name(&self) -> &'static str {
-                        match self {
-                            #(#name_arms),*
-                        }
-                    }
-                }
-            };
-
-            Ok(expanded)
-        }
+        Data::Enum(_) => Err(Error::new(name.span(), "Enums are not supported.")),
         Data::Union(_) => Err(Error::new(name.span(), "Unions are not supported.")),
     }
-}
-
-fn parse_aggregate(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
-    let name = &ast.ident;
-    let attribute = utils::get_attribute(&ast.attrs, "aggregate", name.span())?;
-
-    let mut id: Option<Type> = None;
-    let mut event: Option<Type> = None;
-    let mut state: Option<Type> = None;
-
-    attribute.parse_nested_meta(|meta| {
-        if meta.path.is_ident("id") {
-            id = Some(meta.value()?.parse()?);
-        } else if meta.path.is_ident("event") {
-            event = Some(meta.value()?.parse()?);
-        } else if meta.path.is_ident("state") {
-            state = Some(meta.value()?.parse()?);
-        } else {
-            return Err(meta.error("unrecognized key for `#[aggregate]` attribute"));
-        }
-        Ok(())
-    })?;
-
-    let id = id.ok_or_else(|| Error::new(attribute.path().span(), "`id` key is required"))?;
-
-    let event =
-        event.ok_or_else(|| Error::new(attribute.path().span(), "`event` key is required"))?;
-
-    let state =
-        state.ok_or_else(|| Error::new(attribute.path().span(), "`state` key is required"))?;
-
-    let expanded = quote! {
-            impl ::nexus::domain::AggregateType for #name {
-                type Id = #id;
-                type Event = #event;
-                type State = #state;
-            }
-    };
-
-    Ok(expanded)
 }

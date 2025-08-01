@@ -4,7 +4,7 @@ use crate::domain::Id;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Copy, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct NexusId(Uuid);
 
 impl Default for NexusId {
@@ -15,7 +15,7 @@ impl Default for NexusId {
 
 impl Display for NexusId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", 0)
+        write!(f, "{}", &self.0)
     }
 }
 
@@ -41,3 +41,12 @@ impl From<Uuid> for NexusId {
 }
 
 impl Id for NexusId {}
+
+#[cfg(feature = "testing")]
+impl fake::Dummy<fake::Faker> for NexusId {
+    fn dummy_with_rng<R: fake::Rng + ?Sized>(_config: &fake::Faker, rng: &mut R) -> Self {
+        let bytes = rng.random::<[u8; 16]>();
+        let uuid = uuid::Builder::from_random_bytes(bytes).into_uuid();
+        NexusId(uuid)
+    }
+}

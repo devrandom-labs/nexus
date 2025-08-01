@@ -54,7 +54,7 @@ pub enum Error {
     #[error("Source '{name}' not found (e.g., Table, Collection, Document)")]
     SourceNotFound { name: String },
 
-    #[error("A stream with ID '{id}' already exists, violating a unique constraint")]
+    #[error("A stream with ID '{id}' already exists")]
     UniqueIdViolation { id: String },
 
     /// A wrapper for any other error originating from the storage layer (`store::Error`)
@@ -96,9 +96,7 @@ pub enum Error {
     /// attempting to save an aggregate, and its expected version (based on when it was loaded)
     /// does not match the current version in the event store, indicating that another
     /// process has modified the aggregate in the meantime.
-    #[error(
-        "Concurrency conflict for stream '{stream_id:?}'. Expected version {expected_version}."
-    )]
+    #[error("Concurrency conflict for stream '{stream_id}'. Expected version {expected_version}.")]
     Conflict {
         stream_id: String,
         expected_version: u64,
@@ -106,4 +104,20 @@ pub enum Error {
 
     #[error("System Error: '{reason:?}'")]
     System { reason: String },
+
+    #[error("{name} in {context}: {reason}")]
+    InvalidArgument {
+        name: String,
+        reason: String,
+        context: String,
+    },
+
+    #[error("{stream_id} pending events version sequence are invalid.")]
+    SequenceMismatch {
+        stream_id: String,
+        expected_version: u64,
+        actual_version: u64,
+    },
 }
+
+pub type Result<T> = std::result::Result<T, Error>;

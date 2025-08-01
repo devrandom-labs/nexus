@@ -192,7 +192,7 @@
             partitionType = "count";
           });
 
-          myCrateCoverage =
+          tixlys-coverage =
             craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
 
           # Ensure that cargo-hakari is up to date
@@ -221,25 +221,29 @@
             nodes = { };
             testScript = { nodes, ... }: "\n";
           });
-
-          ## FIXME: only put this for darwin? maybe
-          # tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
-          #   (commonArgs // { inherit cargoArtifacts; });
-        } // lib.optionalAttrs (!pkgs.stdenv.isDarwin) {
-          tixlys-coverage = craneLibLLvmTools.cargoLlvmCov
-            (commonArgs // { inherit cargoArtifacts; });
         };
 
         apps = { auth = mkApp "auth"; };
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
+
           shellHook = ''
-            echo -e "\n\n\033[0;32mTixlys Dev Shell ready!\n\n\n"
+            #!/usr/bin/env bash
+            # Create a fancy welcome message
+            REPO_NAME=$(basename "$PWD")
+            PROPER_REPO_NAME=$(echo "$REPO_NAME" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+            figlet -f doom "$PROPER_REPO_NAME" | lolcat -a -d 2
+            cowsay -f dragon-and-cow "Welcome to the $PROPER_REPO_NAME development environment on ${system}!" | lolcat
           '';
+
           packages = [
             rust-analyzer
             bacon
+            figlet
+            lolcat
+            cowsay
+            tmux
             biscuit-cli
             dive
             cargo-hakari

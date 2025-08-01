@@ -35,3 +35,12 @@ impl From<&str> for CorrelationId {
         Self(Arc::new(id.to_string()))
     }
 }
+
+#[cfg(feature = "testing")]
+impl fake::Dummy<fake::Faker> for CorrelationId {
+    fn dummy_with_rng<R: fake::Rng + ?Sized>(_config: &fake::Faker, rng: &mut R) -> Self {
+        let id = uuid::Builder::from_random_bytes(rng.random()).into_uuid();
+        let id_string = id.to_string().replace("-", "");
+        CorrelationId(Arc::new(id_string))
+    }
+}

@@ -4,45 +4,40 @@ use smallvec::{SmallVec, smallvec};
 use std::fmt::Debug;
 
 pub trait AggregateState: Default + Send + Sync + Debug + 'static {
-    type Event: DomainEvent;
-    fn apply(&mut self, event: &Self::Event);
-}
-
-pub trait AggregateType: Send + Sync + Debug + Copy + Clone + 'static {
-    type Id: Id;
-    type Event: DomainEvent;
-    type State: AggregateState<Event = Self::Event>;
+    type Domain: DomainEvent + ?Sized; // for marker trait for event isolation
+    fn apply(&mut self, event: &Self::Domain);
 }
 
 pub trait Aggregate: Debug + Send + Sync + 'static {
     type Id: Id;
-    type Event: DomainEvent;
-    type State: AggregateState<Event = Self::Event>;
-
+    type State: AggregateState;
     fn id(&self) -> &Self::Id;
-
     fn version(&self) -> u64;
-
     fn state(&self) -> &Self::State;
-
-    fn take_uncommitted_events(&mut self) -> SmallVec<[Self::Event; 1]>;
+    fn take_uncommitted_events(
+        &mut self,
+    ) -> SmallVec<[Box<<Self::State as AggregateState>::Domain>; 1]>;
 }
 
 #[derive(Debug)]
-pub struct AggregateRoot<AT: AggregateType> {
-    id: AT::Id,
-    state: AT::State,
+pub struct AggregateRoot<S, I>
+where
+    S: AggregateState,
+    I: Id,
+{
+    id: I,
+    state: S,
     version: u64,
-    uncommitted_events: SmallVec<[AT::Event; 1]>,
+    uncommitted_events: SmallVec<[Box<S::Domain>; 1]>,
 }
 
-impl<AT> Aggregate for AggregateRoot<AT>
+impl<S, I> Aggregate for AggregateRoot<S, I>
 where
-    AT: AggregateType,
+    S: AggregateState,
+    I: Id,
 {
-    type Id = AT::Id;
-    type Event = AT::Event;
-    type State = AT::State;
+    type Id = I;
+    type State = S;
 
     fn id(&self) -> &Self::Id {
         &self.id
@@ -56,30 +51,32 @@ where
         self.version
     }
 
-    fn take_uncommitted_events(&mut self) -> SmallVec<[Self::Event; 1]> {
+    fn take_uncommitted_events(
+        &mut self,
+    ) -> SmallVec<[Box<<Self::State as AggregateState>::Domain>; 1]> {
         std::mem::take(&mut self.uncommitted_events)
     }
 }
 
-impl<AT> AggregateRoot<AT>
+impl<S, I> AggregateRoot<S, I>
 where
-    AT: AggregateType,
+    S: AggregateState,
+    I: Id,
 {
-    pub fn new(id: AT::Id) -> Self {
+    pub fn new(id: I) -> Self {
         Self {
             id,
-            state: AT::State::default(),
+            state: S::default(),
             version: 0,
             uncommitted_events: smallvec![],
         }
     }
 
-    pub fn load_from_history<'h, H>(id: AT::Id, history: H) -> Self
+    pub fn load_from_history<'h, H>(id: I, history: H) -> Self
     where
-        H: IntoIterator<Item = &'h AT::Event>,
-        AT::Id: ToString,
+        H: IntoIterator<Item = &'h Box<S::Domain>>,
     {
-        let mut state = AT::State::default();
+        let mut state = S::default();
         let mut version = 0u64;
 
         for event in history {
@@ -107,13 +104,13 @@ where
     ) -> Result<C::Result, C::Error>
     where
         C: Command,
-        Handler: AggregateCommandHandler<C, Services, AggregateType = AT>,
+        Handler: AggregateCommandHandler<C, Services, State = S>,
         Services: Send + Sync + ?Sized,
     {
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
         for event in &events {
-            self.state.apply(event);
+            self.state.apply(event.as_ref());
         }
         self.uncommitted_events.extend(events);
         Ok(result)
