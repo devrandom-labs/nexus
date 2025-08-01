@@ -406,7 +406,7 @@ mod tests {
                 assert_eq!(expected_version, 2);
                 assert_eq!(actual_version, 1);
             }
-            _ => panic!("expected sequence error, but got: {}", err),
+            _ => panic!("expected sequence error, but got: {err}"),
         }
     }
 

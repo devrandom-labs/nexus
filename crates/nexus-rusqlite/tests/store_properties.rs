@@ -1,6 +1,6 @@
 use nexus::store::EventStore;
 use nexus_test_helpers::pending_event_strategies::{
-    arbitrary_conflicting_sequence, arbitrary_multi_stream_valid_sequence, arbitrary_valid_sequence,
+    arbitrary_conflicting_sequence, arbitrary_valid_sequence,
 };
 use proptest::prelude::*;
 
