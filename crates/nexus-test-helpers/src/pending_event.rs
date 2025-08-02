@@ -1,12 +1,13 @@
 use crate::UserEvents;
 use fake::{Fake, Faker};
 use nexus::{
+    domain::Id,
     error::Result,
     event::{BoxedEvent, EventMetadata, PendingEvent},
     infra::{CorrelationId, NexusId},
 };
 use proptest::{collection::vec as prop_vec, prelude::*, sample::SizeRange};
-use std::ops::RangeBounds;
+use std::ops::{Range, RangeBounds};
 
 pub type TestPendingEvent = PendingEvent<NexusId>;
 
@@ -85,10 +86,10 @@ pub fn arbitrary_conflicting_sequence() -> impl Strategy<Value = Vec<TestPending
         .prop_shuffle()
 }
 
-pub async fn create_pending_event(
-    stream_id: &NexusId,
-    version: u64,
-) -> Result<PendingEvent<NexusId>> {
+pub async fn create_pending_event<I>(stream_id: &I, version: u64) -> Result<PendingEvent<I>>
+where
+    I: Id,
+{
     let event: BoxedEvent = Faker.fake::<UserEvents>().into();
     let metadata: EventMetadata = Faker.fake();
     PendingEvent::builder(stream_id.clone())
@@ -99,14 +100,17 @@ pub async fn create_pending_event(
         .await
 }
 
-pub async fn create_pending_event_sequence(
-    stream_id: &NexusId,
-    range: impl RangeBounds<usize>,
-) -> Result<Vec<PendingEvent<NexusId>>> {
-    let stream_id: NexusId = Faker.fake();
-    for version in &range {
-        todo!()
+pub async fn create_pending_event_sequence<I>(
+    stream_id: I,
+    versions: Range<u64>,
+) -> Result<Vec<PendingEvent<I>>>
+where
+    I: Id,
+{
+    let mut events: Vec<PendingEvent<I>> = vec![];
+    for version in versions {
+        let pending_event = create_pending_event(&stream_id, version).await?;
+        events.push(pending_event);
     }
-
-    todo!()
+    Ok(events)
 }
