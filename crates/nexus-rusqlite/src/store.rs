@@ -280,6 +280,8 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
     use crate::Store;
 
     use chrono::Utc;
@@ -293,7 +295,7 @@ mod tests {
     };
     use nexus_test_helpers::{
         TestableEvent,
-        pending_event::create_pending_event,
+        pending_event::create_pending_event_sequence,
         user_domain::{UserActivated, UserCreated},
     };
     use refinery::embed_migrations;
@@ -464,10 +466,11 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
+    #[tokio::test]
     async fn should_give_mismatch_when_sequence_is_unordered() {
         let stream_id: NexusId = fake::Faker.fake();
         let metadata: EventMetadata = fake::Faker.fake();
-        let pending_event = create_pending_event(&stream_id, 1, metadata).await.unwrap();
+        let pending_event =
+            create_pending_event_sequence(stream_id, Range { start: 1, end: 5 }).await;
     }
 }
