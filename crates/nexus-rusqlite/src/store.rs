@@ -109,6 +109,7 @@ impl Store {
         }
     }
 
+    #[inline]
     fn sequence_check<'a, I>(
         mut version: u64,
         events: impl IntoIterator<Item = &'a PendingEvent<I>>,
@@ -282,6 +283,7 @@ mod tests {
     use crate::Store;
 
     use chrono::Utc;
+    use fake::{Fake, Faker};
     use futures::TryStreamExt;
     use nexus::{
         error::{Error, Result},
@@ -291,6 +293,7 @@ mod tests {
     };
     use nexus_test_helpers::{
         TestableEvent,
+        pending_event::create_pending_event,
         user_domain::{UserActivated, UserCreated},
     };
     use refinery::embed_migrations;
@@ -321,7 +324,7 @@ mod tests {
             version: u64,
             event: BoxedEvent,
         ) -> Result<PendingEvent<NexusId>> {
-            let metadata = EventMetadata::new("1-corr".into());
+            let metadata: EventMetadata = Faker.fake();
             PendingEvent::builder(self.stream_id)
                 .with_version(version)?
                 .with_metadata(metadata)
@@ -459,5 +462,12 @@ mod tests {
         let ctx = TestContext::new();
         let result = ctx.store.append_to_stream::<NexusId>(0, vec![]).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    async fn should_give_mismatch_when_sequence_is_unordered() {
+        let stream_id: NexusId = fake::Faker.fake();
+        let metadata: EventMetadata = fake::Faker.fake();
+        let pending_event = create_pending_event(&stream_id, 1, metadata).await.unwrap();
     }
 }

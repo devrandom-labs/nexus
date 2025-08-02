@@ -1,7 +1,5 @@
 use nexus::store::EventStore;
-use nexus_test_helpers::pending_event_strategies::{
-    arbitrary_conflicting_sequence, arbitrary_valid_sequence,
-};
+use nexus_test_helpers::pending_event::{arbitrary_conflicting_sequence, arbitrary_valid_sequence};
 use proptest::prelude::*;
 
 mod common;

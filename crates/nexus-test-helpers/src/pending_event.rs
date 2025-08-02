@@ -1,13 +1,11 @@
+use crate::UserEvents;
+use fake::{Fake, Faker};
 use nexus::{
-    event::{EventMetadata, PendingEvent},
+    error::Result,
+    event::{BoxedEvent, EventMetadata, PendingEvent},
     infra::{CorrelationId, NexusId},
 };
-use proptest::{
-    collection::{hash_set, vec as prop_vec},
-    prelude::*,
-    sample::SizeRange,
-    strategy::ValueTree,
-};
+use proptest::{collection::vec as prop_vec, prelude::*, sample::SizeRange};
 use std::ops::RangeBounds;
 
 pub type TestPendingEvent = PendingEvent<NexusId>;
@@ -87,52 +85,28 @@ pub fn arbitrary_conflicting_sequence() -> impl Strategy<Value = Vec<TestPending
         .prop_shuffle()
 }
 
-// cretae multiple stream_ids and for each srteam create multiple events
+pub async fn create_pending_event(
+    stream_id: &NexusId,
+    version: u64,
+) -> Result<PendingEvent<NexusId>> {
+    let event: BoxedEvent = Faker.fake::<UserEvents>().into();
+    let metadata: EventMetadata = Faker.fake();
+    PendingEvent::builder(stream_id.clone())
+        .with_version(version)?
+        .with_metadata(metadata)
+        .with_domain(event)
+        .build(|_domain_event| async move { Ok(fake::vec![u8; 10]) })
+        .await
+}
 
-pub fn arbitrary_multi_stream_valid_sequence<R>() -> impl Strategy<Value = Vec<TestPendingEvent>>
-where
-    R: RangeBounds<usize> + Strategy,
-    SizeRange: From<R::Value>,
-{
-    (2..=5_usize)
-        .prop_flat_map(|num_streams| hash_set(arbitrary_stream_id(), num_streams))
-        .prop_flat_map(|stream_ids| {
-            stream_ids
-                .into_iter()
-                .map(|id| (Just(id), 1..10_usize))
-                .collect::<Vec<_>>()
-        })
-        .prop_map(|stream_configs| {
-            let all_events: Vec<TestPendingEvent> = stream_configs
-                .into_iter()
-                .flat_map(|(stream_id, num_events)| {
-                    (1..=num_events).map(move |version| {
-                        let metadata = arbitrary_event_metadata()
-                            .new_tree(&mut Default::default())
-                            .unwrap()
-                            .current();
+pub async fn create_pending_event_sequence(
+    stream_id: &NexusId,
+    range: impl RangeBounds<usize>,
+) -> Result<Vec<PendingEvent<NexusId>>> {
+    let stream_id: NexusId = Faker.fake();
+    for version in &range {
+        todo!()
+    }
 
-                        let event_type = EVENT_TYPE_STRATEGY
-                            .new_tree(&mut Default::default())
-                            .unwrap()
-                            .current();
-
-                        let payload = any::<Vec<u8>>()
-                            .new_tree(&mut Default::default())
-                            .unwrap()
-                            .current();
-
-                        PendingEvent::builder(stream_id)
-                            .with_version(version as u64)
-                            .unwrap()
-                            .with_metadata(metadata)
-                            .build_with_payload(payload, event_type)
-                            .unwrap()
-                    })
-                })
-                .collect();
-
-            all_events
-        })
-        .prop_shuffle()
+    todo!()
 }
