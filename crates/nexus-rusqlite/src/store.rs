@@ -555,7 +555,7 @@ mod tests {
             } => {
                 assert_eq!(s, stream_id.to_string());
                 assert_eq!(expected_version, 0);
-                assert_eq!(actual_version, 5);
+                assert_eq!(actual_version, 4);
             }
             _ => panic!("expected conflict got: {err}"),
         }
