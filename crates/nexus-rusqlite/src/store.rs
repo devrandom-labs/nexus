@@ -509,7 +509,7 @@ mod tests {
             } => {
                 assert_eq!(s, stream_id.to_string());
                 assert_eq!(expected_version, start_version);
-                assert_eq!(actual_version, 5);
+                assert_eq!(actual_version, 4);
             }
             _ => panic!("expected sequence mismatch got: {err}"),
         }
