@@ -467,10 +467,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_give_mismatch_when_sequence_is_unordered() {
+    async fn should_be_successful_when_we_pass_valid_events() {
         let stream_id: NexusId = fake::Faker.fake();
-        let metadata: EventMetadata = fake::Faker.fake();
-        let pending_event =
-            create_pending_event_sequence(stream_id, Range { start: 1, end: 5 }).await;
+        let start_version: u64 = 1;
+        let events = create_pending_event_sequence(
+            stream_id,
+            Range {
+                start: start_version,
+                end: 5,
+            },
+        )
+        .await;
+        assert!(events.is_ok());
+        let events = events.unwrap();
+        let result = Store::sequence_check(start_version, &events);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn should_fail_when_the_sequence_mismatches() {
+        let stream_id: NexusId = fake::Faker.fake();
+        let start_version: u64 = 1;
+        let events = create_pending_event_sequence(
+            stream_id,
+            Range {
+                start: start_version,
+                end: 5,
+            },
+        )
+        .await;
+        assert!(events.is_ok());
+        let events = events.unwrap();
+        let result = Store::sequence_check(start_version, events.iter().rev());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            Error::SequenceMismatch {
+                stream_id: s,
+                expected_version,
+                actual_version,
+            } => {
+                assert_eq!(s, stream_id.to_string());
+                assert_eq!(expected_version, start_version);
+                assert_eq!(actual_version, 5);
+            }
+            _ => panic!("expected sequence mismatch got: {err}"),
+        }
     }
 }

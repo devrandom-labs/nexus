@@ -3,7 +3,6 @@ use nexus::{
     event::{BoxedEvent, PendingEvent, PersistedEvent},
     infra::NexusId,
 };
-use user_domain::UserCreated;
 
 pub mod pending_event;
 pub mod user_domain;
