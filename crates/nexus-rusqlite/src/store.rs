@@ -88,12 +88,14 @@ impl Store {
         stream_id: &impl ToString,
         event_id: &impl ToString,
         expected_version: u64,
+        actual_version: u64,
     ) -> Error {
         if let rusqlite::Error::SqliteFailure(e, _) = &error {
             return match e.extended_code {
                 ffi::SQLITE_CONSTRAINT_UNIQUE => Error::Conflict {
                     stream_id: stream_id.to_string(),
                     expected_version,
+                    actual_version,
                 },
                 ffi::SQLITE_CONSTRAINT_PRIMARYKEY => Error::UniqueIdViolation {
                     id: event_id.to_string(),
@@ -172,6 +174,7 @@ impl EventStore for Store {
                         return Err(Error::Conflict {
                             stream_id: stream_id.to_string(),
                             expected_version,
+                            actual_version,
                         });
                     }
                     let _ = Self::sequence_check(actual_version + 1, &pending_events)?;
@@ -199,6 +202,7 @@ impl EventStore for Store {
                                     record.stream_id(),
                                     record.id(),
                                     expected_version,
+                                    actual_version,
                                 )
                             })?;
 
@@ -456,9 +460,6 @@ mod tests {
         assert!(read_event_2.persisted_at > (Utc::now() - chrono::Duration::seconds(5)));
     }
 
-    // TODO: add events and then add more events with new expected version
-    // TODO: somehow test conflict error (should I rename sequence error to conflict?)
-
     #[tokio::test]
     async fn append_to_stream_with_empty_events_should_succeed() {
         let ctx = TestContext::new();
@@ -512,6 +513,51 @@ mod tests {
                 assert_eq!(actual_version, 4);
             }
             _ => panic!("expected sequence mismatch got: {err}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn should_give_conflict_error() {
+        let ctx = TestContext::new();
+        let stream_id: NexusId = fake::Faker.fake();
+        let start_version: u64 = 1;
+        let end_version: u64 = 5;
+        let events = create_pending_event_sequence(
+            stream_id,
+            Range {
+                start: start_version,
+                end: end_version,
+            },
+        )
+        .await;
+        assert!(events.is_ok());
+        let events = events.unwrap();
+        let result = ctx.store.append_to_stream(0, events).await;
+        assert!(result.is_ok());
+        let events = create_pending_event_sequence(
+            stream_id,
+            Range {
+                start: end_version,
+                end: 10,
+            },
+        )
+        .await;
+        assert!(events.is_ok());
+        let events = events.unwrap();
+        let result = ctx.store.append_to_stream(0, events).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            Error::Conflict {
+                stream_id: s,
+                expected_version,
+                actual_version,
+            } => {
+                assert_eq!(s, stream_id.to_string());
+                assert_eq!(expected_version, 0);
+                assert_eq!(actual_version, 5);
+            }
+            _ => panic!("expected conflict got: {err}"),
         }
     }
 }

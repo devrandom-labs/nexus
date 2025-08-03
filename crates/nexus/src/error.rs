@@ -100,6 +100,7 @@ pub enum Error {
     Conflict {
         stream_id: String,
         expected_version: u64,
+        actual_version: u64,
     },
 
     #[error("System Error: '{reason:?}'")]
