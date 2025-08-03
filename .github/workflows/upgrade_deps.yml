@@ -49,7 +49,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GH_PAT_FOR_PRS }}
-          commit-message: "chore(tixlys): upgrade dependencies"
+          commit-message: "chore(nexus): upgrade dependencies"
           title: "Update Rust Dependencies"
           body: |
             Automated monthly dependency upgrade.
@@ -61,7 +61,7 @@ jobs:
           labels: |
             dependencies
             automated pull request
-          committer_name: "Tixlys Bot"
-          committer_email: "bot@tixlys.com"
+          committer_name: "Devrandom Bot"
+          committer_email: "bot@devrandom.co"
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}

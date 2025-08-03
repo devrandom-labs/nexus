@@ -51,7 +51,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GH_PAT_FOR_PRS }}
-          commit-message: "chore: update dependencies"
+          commit-message: "chore(nexus): update dependencies"
           title: "Update Nix and Rust Dependencies"
           body: |
             Automated weekly dependency update.
@@ -64,7 +64,7 @@ jobs:
           labels: |
             dependencies
             automated pull request
-          committer_name: "Tixlys Bot"
-          committer_email: "bot@tixlys.com"
+          committer_name: "Devrandom Bot"
+          committer_email: "bot@devrandom.co"
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_passphrase: ${{ secrets.GPG_PASSPHRASE }}

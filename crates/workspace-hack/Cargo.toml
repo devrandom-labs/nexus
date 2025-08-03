@@ -23,6 +23,7 @@ memchr = { version = "2" }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
 refinery-core = { version = "0.8", features = ["rusqlite", "toml"] }
 rusqlite = { version = "0.33", default-features = false, features = ["bundled", "chrono", "trace", "uuid"] }
+serde = { version = "1", features = ["derive", "rc"] }
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["fast-rng", "serde", "v4", "v7"] }
@@ -40,6 +41,7 @@ num-traits = { version = "0.2", default-features = false, features = ["std"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 refinery-core = { version = "0.8", features = ["rusqlite", "toml"] }
 rusqlite = { version = "0.33", default-features = false, features = ["bundled", "chrono", "trace", "uuid"] }
+serde = { version = "1", features = ["derive", "rc"] }
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 tokio = { version = "1", features = ["full"] }

@@ -11,7 +11,7 @@ chrono = { workspace = true, features = ["serde"] }
 downcast-rs = { workspace = true }
 fake = { workspace = true, features = ["derive", "email_address"], optional = true }
 nexus-macros = { version = "0.1.0", path = "../nexus-macros", optional = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tokio-stream = { workspace = true }
