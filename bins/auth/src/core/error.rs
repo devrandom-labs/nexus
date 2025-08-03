@@ -1,5 +1,0 @@
-#![allow(dead_code)]
-use thiserror::Error as ThisError;
-
-#[derive(Debug, ThisError)]
-pub enum Error {}

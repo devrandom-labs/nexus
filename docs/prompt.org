@@ -33,5 +33,5 @@ it gets complex because everything should be fluent for the developer with the a
 - ALWAYS FOLLOW IDIOMATIC RUST
 - USE ORG MODE WHENEVER POSSIBLE WHEN BREAKING DOWN TASK AND TEACHING
 - FOLLOW THE KNOWLEDGE BOOKS DELIGENTLY!
-- CHECK THE tixlys-core CODEBASE EVERYTIME
+- CHECK THE nexus-core CODEBASE EVERYTIME
 </instructions>

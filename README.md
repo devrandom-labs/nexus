@@ -1,9 +1,9 @@
-# Tixlys Core
-[![Deploys](https://github.com/tixlys/tixlys-core/actions/workflows/deploys.yml/badge.svg?branch=main)](https://github.com/tixlys/tixlys-core/actions/workflows/deploys.yml)
-[![Checks](https://github.com/tixlys/tixlys-core/actions/workflows/checks.yml/badge.svg)](https://github.com/tixlys/tixlys-core/actions/workflows/checks.yml)
-[![Integration](https://github.com/tixlys/tixlys-core/actions/workflows/integration.yml/badge.svg)](https://github.com/tixlys/tixlys-core/actions/workflows/integration.yml)
+# Nexus Core
+[![Deploys](https://github.com/nexus/nexus-core/actions/workflows/deploys.yml/badge.svg?branch=main)](https://github.com/nexus/nexus-core/actions/workflows/deploys.yml)
+[![Checks](https://github.com/nexus/nexus-core/actions/workflows/checks.yml/badge.svg)](https://github.com/nexus/nexus-core/actions/workflows/checks.yml)
+[![Integration](https://github.com/nexus/nexus-core/actions/workflows/integration.yml/badge.svg)](https://github.com/nexus/nexus-core/actions/workflows/integration.yml)
 
-Tixlys Core is a collection of microservices built with Rust, designed for a robust and scalable architecture. This is a **closed-source** project. (As of May 2025, the project is under active development, focusing on setting up core services and deployment pipelines.)
+Nexus Core is a collection of microservices built with Rust, designed for a robust and scalable architecture. This is a **closed-source** project. (As of May 2025, the project is under active development, focusing on setting up core services and deployment pipelines.)
 
 ## Key Features
 
@@ -48,7 +48,7 @@ This project uses Nix for reproducible builds and development environments.
 1.  **Clone the repository.**
 2.  **Enter the Development Shell:**
     ```bash
-    cd tixlys-core
+    cd nexus-core
     nix develop
     ```
     If you have `direnv` installed and configured for Nix, it should automatically activate the shell when you `cd` into the directory (after running `direnv allow`).

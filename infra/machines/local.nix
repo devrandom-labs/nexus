@@ -18,5 +18,5 @@
   boot.loader.efi.canTouchEfiVariables = true;
 
   networking.useDHCP = true;
-  networking.hostName = "tixlys-local";
+  networking.hostName = "nexus-local";
 }
