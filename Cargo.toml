@@ -29,8 +29,8 @@ uuid = { version = "1.17.0", features = ["v7", "fast-rng", "serde", "v4"] }
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
-authors = ["Joel DSouza <joel@nexus.com>"]
+license = "MIT OR Apache-2.0"
+authors = ["Joel DSouza <joel@devrandom.co>"]
 repository = "https://github.com/nexus/nexus-core"
 
 [workspace.metadata.crane]
