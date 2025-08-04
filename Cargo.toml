@@ -28,7 +28,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Joel DSouza <joel@devrandom.co>"]
-repository = "https://github.com/nexus/nexus-core"
+repository = "https://github.com/devrandom-labs/nexus"
 
 [workspace.metadata.crane]
 name = "nexus"
