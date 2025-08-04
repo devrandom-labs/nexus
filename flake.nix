@@ -6,10 +6,7 @@
     crane.url = "github:ipetkov/crane";
     fenix = {
       url = "github:nix-community/fenix";
-      inputs = {
-        nixpkgs.follows = "nixpkgs";
-        rust-analyzer-src.follows = "";
-      };
+      inputs = { nixpkgs.follows = "nixpkgs"; };
     };
     advisory-db = {
       url = "github:rustsec/advisory-db";
@@ -21,7 +18,8 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
-        craneLib = crane.mkLib pkgs;
+        craneLib = (crane.mkLib pkgs).overrideToolchain
+          (fenix.packages.${system}.complete.toolchain);
 
         unfilteredSrc = ./.;
 
@@ -49,18 +47,7 @@
             ];
         };
 
-        craneLibLLvmTools = craneLib.overrideToolchain
-          (fenix.packages.${system}.default.toolchain);
-
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-        individualCrateArgs = commonArgs // {
-          inherit cargoArtifacts;
-          inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-
-          doCheck = false;
-        };
-
       in with pkgs; {
         checks = {
           nexus-clippy = craneLib.cargoClippy (commonArgs // {
@@ -133,7 +120,7 @@
           '';
 
           packages = [
-            rust-analyzer
+            fenix.packages.${system}.rust-analyzer
             bacon
             figlet
             lolcat
