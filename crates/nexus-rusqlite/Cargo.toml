@@ -27,3 +27,7 @@ nexus-test-helpers = { version = "0.1", path = "../nexus-test-helpers" }
 proptest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+
+[[bench]]
+name = "event_store_benchmark"
+harness = false
