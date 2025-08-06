@@ -17,14 +17,25 @@ pub trait EventStore {
     where
         I: Id;
 
-    fn read_stream<'a, I>(
+    fn read_stream_from<'a, I>(
         &'a self,
         stream_id: I,
+        version: u64,
+        size: u32,
     ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
     where
         Self: Sync + 'a,
         I: Id;
 }
-// TODO: append_stream_with for state and events both, outbox store
-// TODO: read_stream_from_checkpoint for snapshots reads from a given version. snapshot store
-// TODO: read_all_stream_from_checkpoint for projection store
+
+pub trait EventStreamer {
+    fn read_stream_from_checkpoint<'a, I>(
+        &'a self,
+        stream_name: &'a str,
+        version: u64,
+        size: u32,
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
+    where
+        Self: Sync + 'a,
+        I: Id;
+}
