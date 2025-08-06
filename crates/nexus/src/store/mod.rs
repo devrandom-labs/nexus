@@ -25,3 +25,6 @@ pub trait EventStore {
         Self: Sync + 'a,
         I: Id;
 }
+// TODO: append_stream_with for state and events both, outbox store
+// TODO: read_stream_from_checkpoint for snapshots reads from a given version. snapshot store
+// TODO: read_all_stream_from_checkpoint for projection store

@@ -149,7 +149,17 @@ impl EventStore for Store {
             debug!("empty list of events hence, returning no-op");
             return Ok(());
         };
-        let stream_id = first_event.stream_id().clone();
+        let first_version = first_event.version().get();
+        let stream_id = first_event.stream_id().to_string();
+        if first_version != expected_version + 1 {
+            return Err(Error::SequenceMismatch {
+                stream_id,
+                expected_version: expected_version + 1,
+                actual_version: first_version,
+            });
+        };
+        let _ = Self::sequence_check(first_event.version().get(), &pending_events)?;
+
         let (tx, rx) = oneshot::channel::<Result<()>>();
         let conn = Arc::clone(&self.connection);
         spawn_blocking(move || {
@@ -162,22 +172,6 @@ impl EventStore for Store {
                     .map_err(|err| Error::Store { source: err.into() })?;
 
                 {
-                    let actual_version: u64 = tx
-                        .query_row(
-                            "SELECT COALESCE(MAX(version), 0) FROM event WHERE stream_id = ?1",
-                            params![stream_id.as_ref()],
-                            |row| row.get(0),
-                        )
-                        .map_err(|err| Error::Store { source: err.into() })?;
-
-                    if actual_version != expected_version {
-                        return Err(Error::Conflict {
-                            stream_id: stream_id.to_string(),
-                            expected_version,
-                            actual_version,
-                        });
-                    }
-                    let _ = Self::sequence_check(actual_version + 1, &pending_events)?;
                     let mut event_stmt = tx
                         .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
                         .map_err(|err| Error::Store { source: err.into() })?;
@@ -202,7 +196,7 @@ impl EventStore for Store {
                                     record.stream_id(),
                                     record.id(),
                                     expected_version,
-                                    actual_version,
+                                    0, // TODO: conflic error does not know whats actual in unique constraits case.
                                 )
                             })?;
 
@@ -220,7 +214,6 @@ impl EventStore for Store {
 
                 Ok(())
             })();
-
             let _ = tx.send(result);
         });
 
