@@ -132,6 +132,7 @@
             cargo-edit
             sqlx-cli
             cargo-expand
+            gemini-cli
           ];
         };
       });

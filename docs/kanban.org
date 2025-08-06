@@ -1,0 +1,18 @@
+* TODO
+
+** DONE
+
+** IN PROGRESS
+
+** TODO
+   - [ ] add read_stream_from method to store repository for snapshot support
+   - [ ] benchmarking mutex rusqlite event store
+   - [ ] adding connection pooling crate like r2d2 in store_rusqlite
+   - [ ] outbox db schema for rusqlte store
+   - [ ] example store schema migration files, leave it to application migration process
+   - [ ] a unit of work feature for complex systems so an a unit_of_work woudl do the following
+     - have database connection,
+     - gives an api called save?, takes an async FnMut closure or FnOnce closure (if its rusqlite, which is sync) this closure, has one arument, which is the transaction object, and returns a result of events or Error which is my frameworks error enum, idc how the user handles and returns the events, since the aggregate object would be moved in the closure, its cool aggreagate has pending_events vec in it, it can just return that on success
+     - I will have an impl of this unit_of_work trait and it will belike this
+     - the connection would give a transaction object which would first execute the closure since its the domain side, and the result would be either events or error, if error I would just return it and if events I would commit it to the events table, (the same one whose schema I created for event store) maybe I may tweak it abit
+     - anywho, after outbox, it can return the () or error, and its on the user
