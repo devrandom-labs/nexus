@@ -39,3 +39,6 @@ pub trait EventStreamer {
         Self: Sync + 'a,
         I: Id;
 }
+
+// TODO: added event stream to pending events
+// TODO: each aggregate should have a name / type (useful for projections)

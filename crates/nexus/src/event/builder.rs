@@ -21,6 +21,22 @@ where
         PendingEventBuilder { state }
     }
 
+    pub fn with_stream_name(
+        self,
+        stream_name: String,
+    ) -> Result<PendingEventBuilder<WithStreamName<I>>> {
+        let state = WithStreamName {
+            stream_id: self.state.stream_id,
+            stream_name,
+        };
+        Ok(PendingEventBuilder { state })
+    }
+}
+
+impl<I> PendingEventBuilder<WithStreamName<I>>
+where
+    I: Id,
+{
     pub fn with_version(self, version: u64) -> Result<PendingEventBuilder<WithVersion<I>>> {
         let version = NonZeroU64::new(version).ok_or_else(|| Error::InvalidArgument {
             name: "version".to_string(),
@@ -30,6 +46,7 @@ where
 
         let state = WithVersion {
             stream_id: self.state.stream_id,
+            stream_name: self.state.stream_name,
             version,
         };
 
@@ -44,6 +61,7 @@ where
     pub fn with_metadata(self, metadata: EventMetadata) -> PendingEventBuilder<WithMetadata<I>> {
         let state = WithMetadata {
             stream_id: self.state.stream_id,
+            stream_name: self.state.stream_name,
             version: self.state.version,
             metadata,
         };
@@ -66,14 +84,23 @@ where
             stream_id,
             version,
             metadata,
+            stream_name,
         } = self.state;
-        let pending_event = PendingEvent::new(stream_id, version, event_type, metadata, payload)?;
+        let pending_event = PendingEvent::new(
+            stream_id,
+            stream_name,
+            version,
+            event_type,
+            metadata,
+            payload,
+        )?;
         Ok(pending_event)
     }
 
     pub fn with_domain(self, domain_event: BoxedEvent) -> PendingEventBuilder<WithDomain<I>> {
         let state = WithDomain {
             stream_id: self.state.stream_id,
+            stream_name: self.state.stream_name,
             version: self.state.version,
             event_type: domain_event.name().to_string(),
             domain_event,
@@ -95,13 +122,21 @@ where
     {
         let WithDomain {
             stream_id,
+            stream_name,
             domain_event,
             version,
             event_type,
             metadata,
         } = self.state;
         let payload = serializer(domain_event).await?;
-        let pending_event = PendingEvent::new(stream_id, version, event_type, metadata, payload)?;
+        let pending_event = PendingEvent::new(
+            stream_id,
+            stream_name,
+            version,
+            event_type,
+            metadata,
+            payload,
+        )?;
         Ok(pending_event)
     }
 }
@@ -117,11 +152,22 @@ where
 
 impl<I> PendingEventState for WithStreamId<I> where I: Id {}
 
+pub struct WithStreamName<I>
+where
+    I: Id,
+{
+    stream_id: I,
+    stream_name: String,
+}
+
+impl<I> PendingEventState for WithStreamName<I> where I: Id {}
+
 pub struct WithVersion<I>
 where
     I: Id,
 {
     stream_id: I,
+    stream_name: String,
     version: NonZeroU64,
 }
 
@@ -132,6 +178,7 @@ where
     I: Id,
 {
     stream_id: I,
+    stream_name: String,
     version: NonZeroU64,
     metadata: EventMetadata,
 }
@@ -143,6 +190,7 @@ where
     I: Id,
 {
     stream_id: I,
+    stream_name: String,
     event_type: String,
     domain_event: BoxedEvent,
     version: NonZeroU64,
