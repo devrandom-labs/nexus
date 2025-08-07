@@ -21,7 +21,7 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     fn state(&self) -> &Self::State;
     fn take_uncommitted_events(
         &mut self,
-    ) -> SmallVec<[Box<<Self::State as AggregateState>::Domain>; 1]>;
+    ) -> SmallVec<[VersionedEvent<Box<<Self::State as AggregateState>::Domain>>; 1]>;
 }
 
 #[derive(Debug)]
@@ -33,7 +33,7 @@ where
     id: I,
     state: S,
     version: u64,
-    uncommitted_events: SmallVec<[Box<S::Domain>; 1]>,
+    uncommitted_events: SmallVec<[VersionedEvent<Box<S::Domain>>; 1]>,
 }
 
 impl<S, I> Aggregate for AggregateRoot<S, I>
@@ -58,7 +58,7 @@ where
 
     fn take_uncommitted_events(
         &mut self,
-    ) -> SmallVec<[Box<<Self::State as AggregateState>::Domain>; 1]> {
+    ) -> SmallVec<[VersionedEvent<Box<<Self::State as AggregateState>::Domain>>; 1]> {
         std::mem::take(&mut self.uncommitted_events)
     }
 }
@@ -126,10 +126,20 @@ where
     {
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
-        for event in &events {
-            self.state.apply(event.as_ref());
-        }
-        self.uncommitted_events.extend(events);
+
+        let version_events = events
+            .into_iter()
+            .enumerate()
+            .map(|(i, event)| {
+                self.state.apply(event.as_ref());
+                VersionedEvent {
+                    version: self.version + (i as u64),
+                    event,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.uncommitted_events.extend(version_events);
         Ok(result)
     }
 }
@@ -145,10 +155,10 @@ where
 {
     while let Some(result) = history.next().await {
         let versioned_event = result?;
-        if versioned_event.version != aggregate.version() + 1 {
+        if versioned_event.version != aggregate.version + 1 {
             return Err(Error::SequenceMismatch {
                 stream_id: aggregate.id.to_string(),
-                expected_version: aggregate.version() + 1,
+                expected_version: aggregate.version + 1,
                 actual_version: versioned_event.version,
             });
         }
@@ -168,14 +178,13 @@ where
     I: Id,
 {
     for versioned_event in history {
-        if versioned_event.version != aggregate.version() + 1 {
+        if versioned_event.version != aggregate.version + 1 {
             return Err(Error::SequenceMismatch {
                 stream_id: aggregate.id().to_string(),
-                expected_version: aggregate.version() + 1,
+                expected_version: aggregate.version + 1,
                 actual_version: versioned_event.version,
             });
         }
-
         aggregate.state.apply(&versioned_event.event);
         aggregate.version = versioned_event.version;
     }
