@@ -2,10 +2,11 @@ use super::{Command, DomainEvent, Id};
 use crate::{
     command::{AggregateCommandHandler, CommandHandlerResponse},
     error::{Error, Result},
-    event::{VersionedEvent, versioned_event},
+    event::VersionedEvent,
 };
 use smallvec::{SmallVec, smallvec};
 use std::fmt::Debug;
+use tokio_stream::{Stream, StreamExt};
 
 pub trait AggregateState: Default + Send + Sync + Debug + 'static {
     type Domain: DomainEvent + ?Sized; // for marker trait for event isolation
@@ -116,6 +117,53 @@ where
                 });
             }
 
+            self.state.apply(&versioned_event.event);
+            self.version = versioned_event.version;
+        }
+        Ok(())
+    }
+
+    pub async fn load_from_stream<'a, H>(id: I, history: H) -> Result<Self>
+    where
+        H: Stream<Item = Result<&'a VersionedEvent<Box<S::Domain>>>> + Unpin,
+    {
+        let mut event_stream = history;
+        let mut state = S::default();
+        let mut last_version = 0u64;
+        while let Some(result) = event_stream.next().await {
+            let versioned_event = result?;
+            if versioned_event.version != last_version + 1 {
+                return Err(Error::SequenceMismatch {
+                    stream_id: id.to_string(),
+                    expected_version: last_version + 1,
+                    actual_version: versioned_event.version,
+                });
+            }
+            state.apply(&versioned_event.event);
+            last_version = versioned_event.version;
+        }
+        Ok(Self {
+            id,
+            state,
+            version: last_version,
+            uncommitted_events: smallvec![],
+        })
+    }
+
+    pub async fn apply_event_stream<'a, H>(&mut self, history: H) -> Result<()>
+    where
+        H: Stream<Item = Result<&'a VersionedEvent<Box<S::Domain>>>> + Unpin,
+    {
+        let mut event_stream = history;
+        while let Some(result) = event_stream.next().await {
+            let versioned_event = result?;
+            if versioned_event.version != &self.version() + 1 {
+                return Err(Error::SequenceMismatch {
+                    stream_id: self.id.to_string(),
+                    expected_version: self.version() + 1,
+                    actual_version: versioned_event.version,
+                });
+            }
             self.state.apply(&versioned_event.event);
             self.version = versioned_event.version;
         }
