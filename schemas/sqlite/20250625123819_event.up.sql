@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS event (
        id BLOB(16) PRIMARY KEY,
        stream_id BLOB(16) NOT NULL,
+       stream_name TEXT NOT NULL,
        version INTEGER NOT NULL CHECK (version > 0),
        event_type TEXT NOT NULL,
        payload BLOB NOT NULL,

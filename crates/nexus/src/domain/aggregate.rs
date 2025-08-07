@@ -1,5 +1,9 @@
 use super::{Command, DomainEvent, Id};
-use crate::command::{AggregateCommandHandler, CommandHandlerResponse};
+use crate::{
+    command::{AggregateCommandHandler, CommandHandlerResponse},
+    error::{Error, Result},
+    event::{VersionedEvent, versioned_event},
+};
 use smallvec::{SmallVec, smallvec};
 use std::fmt::Debug;
 
@@ -72,24 +76,50 @@ where
         }
     }
 
-    pub fn load_from_history<'h, H>(id: I, history: H) -> Self
+    pub fn load_from_history<'h, H>(id: I, history: H) -> Result<Self>
     where
-        H: IntoIterator<Item = &'h Box<S::Domain>>,
+        H: IntoIterator<Item = &'h VersionedEvent<Box<S::Domain>>>,
     {
         let mut state = S::default();
-        let mut version = 0u64;
+        let mut last_version = 0u64;
 
-        for event in history {
-            state.apply(event);
-            version += 1;
+        for versioned_event in history {
+            if versioned_event.version != last_version + 1 {
+                return Err(Error::SequenceMismatch {
+                    stream_id: id.to_string(),
+                    expected_version: last_version + 1,
+                    actual_version: versioned_event.version,
+                });
+            }
+            state.apply(&versioned_event.event);
+            last_version = versioned_event.version;
         }
 
-        Self {
+        Ok(Self {
             id,
             state,
-            version,
+            version: last_version,
             uncommitted_events: smallvec![],
+        })
+    }
+
+    pub fn apply_events<'a, H>(&mut self, history: H) -> Result<()>
+    where
+        H: IntoIterator<Item = &'a VersionedEvent<Box<S::Domain>>>,
+    {
+        for versioned_event in history {
+            if versioned_event.version != self.version + 1 {
+                return Err(Error::SequenceMismatch {
+                    stream_id: self.id().to_string(),
+                    expected_version: self.version + 1,
+                    actual_version: versioned_event.version,
+                });
+            }
+
+            self.state.apply(&versioned_event.event);
+            self.version = versioned_event.version;
         }
+        Ok(())
     }
 
     pub fn current_version(&self) -> u64 {
@@ -101,7 +131,7 @@ where
         command: C,
         handler: &Handler,
         services: &Services,
-    ) -> Result<C::Result, C::Error>
+    ) -> std::result::Result<C::Result, C::Error>
     where
         C: Command,
         Handler: AggregateCommandHandler<C, Services, State = S>,
