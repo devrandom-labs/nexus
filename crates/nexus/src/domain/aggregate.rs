@@ -11,6 +11,8 @@ use tokio_stream::{Stream, StreamExt};
 pub trait AggregateState: Default + Send + Sync + Debug + 'static {
     type Domain: DomainEvent + ?Sized; // for marker trait for event isolation
     fn apply(&mut self, event: &Self::Domain);
+    // to be used as stream_name
+    fn name(&self) -> &'static str;
 }
 
 pub trait Aggregate: Debug + Send + Sync + 'static {
@@ -126,19 +128,17 @@ where
     {
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
-
-        let version_events = events
-            .into_iter()
-            .enumerate()
-            .map(|(i, event)| {
-                self.state.apply(event.as_ref());
-                VersionedEvent {
-                    version: self.version + (i as u64),
-                    event,
-                }
-            })
-            .collect::<Vec<_>>();
-
+        let mut version_events =
+            SmallVec::<[VersionedEvent<Box<S::Domain>>; 1]>::with_capacity(events.len());
+        let mut current_version = self.version;
+        for event in events {
+            self.state.apply(event.as_ref());
+            current_version += 1;
+            version_events.push(VersionedEvent {
+                version: current_version,
+                event,
+            });
+        }
         self.uncommitted_events.extend(version_events);
         Ok(result)
     }
