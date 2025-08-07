@@ -77,97 +77,36 @@ where
         }
     }
 
-    pub fn load_from_history<'h, H>(id: I, history: H) -> Result<Self>
+    pub fn load_from_history<'a, H>(id: I, history: H) -> Result<Self>
     where
-        H: IntoIterator<Item = &'h VersionedEvent<Box<S::Domain>>>,
+        H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
     {
-        let mut state = S::default();
-        let mut last_version = 0u64;
-
-        for versioned_event in history {
-            if versioned_event.version != last_version + 1 {
-                return Err(Error::SequenceMismatch {
-                    stream_id: id.to_string(),
-                    expected_version: last_version + 1,
-                    actual_version: versioned_event.version,
-                });
-            }
-            state.apply(&versioned_event.event);
-            last_version = versioned_event.version;
-        }
-
-        Ok(Self {
-            id,
-            state,
-            version: last_version,
-            uncommitted_events: smallvec![],
-        })
+        let mut aggregate = Self::new(id);
+        rehydrate_from_history(&mut aggregate, history)?;
+        Ok(aggregate)
     }
 
     pub fn apply_events<'a, H>(&mut self, history: H) -> Result<()>
     where
-        H: IntoIterator<Item = &'a VersionedEvent<Box<S::Domain>>>,
+        H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
     {
-        for versioned_event in history {
-            if versioned_event.version != self.version + 1 {
-                return Err(Error::SequenceMismatch {
-                    stream_id: self.id().to_string(),
-                    expected_version: self.version + 1,
-                    actual_version: versioned_event.version,
-                });
-            }
-
-            self.state.apply(&versioned_event.event);
-            self.version = versioned_event.version;
-        }
-        Ok(())
+        rehydrate_from_history(self, history)
     }
 
-    pub async fn load_from_stream<'a, H>(id: I, history: H) -> Result<Self>
+    pub async fn load_from_stream<'a, H>(id: I, history: &'a mut H) -> Result<Self>
     where
-        H: Stream<Item = Result<&'a VersionedEvent<Box<S::Domain>>>> + Unpin,
+        H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
     {
-        let mut event_stream = history;
-        let mut state = S::default();
-        let mut last_version = 0u64;
-        while let Some(result) = event_stream.next().await {
-            let versioned_event = result?;
-            if versioned_event.version != last_version + 1 {
-                return Err(Error::SequenceMismatch {
-                    stream_id: id.to_string(),
-                    expected_version: last_version + 1,
-                    actual_version: versioned_event.version,
-                });
-            }
-            state.apply(&versioned_event.event);
-            last_version = versioned_event.version;
-        }
-        Ok(Self {
-            id,
-            state,
-            version: last_version,
-            uncommitted_events: smallvec![],
-        })
+        let mut aggregate = Self::new(id);
+        rehydrate_from_stream(&mut aggregate, history).await?;
+        Ok(aggregate)
     }
 
-    pub async fn apply_event_stream<'a, H>(&mut self, history: H) -> Result<()>
+    pub async fn apply_event_stream<'a, H>(&mut self, history: &'a mut H) -> Result<()>
     where
-        H: Stream<Item = Result<&'a VersionedEvent<Box<S::Domain>>>> + Unpin,
+        H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
     {
-        let mut event_stream = history;
-        while let Some(result) = event_stream.next().await {
-            let versioned_event = result?;
-            if versioned_event.version != &self.version() + 1 {
-                return Err(Error::SequenceMismatch {
-                    stream_id: self.id.to_string(),
-                    expected_version: self.version() + 1,
-                    actual_version: versioned_event.version,
-                });
-            }
-            self.state.apply(&versioned_event.event);
-            self.version = versioned_event.version;
-        }
-        Ok(())
+        rehydrate_from_stream(self, history).await
     }
 
     pub fn current_version(&self) -> u64 {
@@ -193,4 +132,52 @@ where
         self.uncommitted_events.extend(events);
         Ok(result)
     }
+}
+
+async fn rehydrate_from_stream<H, S, I>(
+    aggregate: &mut AggregateRoot<S, I>,
+    history: &mut H,
+) -> Result<()>
+where
+    H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
+    S: AggregateState,
+    I: Id,
+{
+    while let Some(result) = history.next().await {
+        let versioned_event = result?;
+        if versioned_event.version != aggregate.version() + 1 {
+            return Err(Error::SequenceMismatch {
+                stream_id: aggregate.id.to_string(),
+                expected_version: aggregate.version() + 1,
+                actual_version: versioned_event.version,
+            });
+        }
+        aggregate.state.apply(&versioned_event.event);
+        aggregate.version = versioned_event.version;
+    }
+    Ok(())
+}
+
+fn rehydrate_from_history<'a, H, S, I>(
+    aggregate: &'a mut AggregateRoot<S, I>,
+    history: H,
+) -> Result<()>
+where
+    H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
+    S: AggregateState,
+    I: Id,
+{
+    for versioned_event in history {
+        if versioned_event.version != aggregate.version() + 1 {
+            return Err(Error::SequenceMismatch {
+                stream_id: aggregate.id().to_string(),
+                expected_version: aggregate.version() + 1,
+                actual_version: versioned_event.version,
+            });
+        }
+
+        aggregate.state.apply(&versioned_event.event);
+        aggregate.version = versioned_event.version;
+    }
+    Ok(())
 }
