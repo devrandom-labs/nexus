@@ -36,4 +36,5 @@ pub trait Command: Message {
     ///
     /// It must implement `std::error::Error` and be `Send + Sync + Debug + 'static`.
     type Error: Error + Send + Sync + Debug + 'static;
+    fn name(&self) -> &'static str;
 }

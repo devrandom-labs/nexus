@@ -92,10 +92,8 @@
               cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
               cargo hakari verify
             '';
-
             nativeBuildInputs = [ cargo-hakari ];
           };
-
         };
 
         packages = {
