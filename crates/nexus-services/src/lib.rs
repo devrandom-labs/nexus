@@ -1,14 +1,20 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+use async_trait::async_trait;
+use nexus::{
+    command::{AggregateCommandHandler, CommandHandlerResponse},
+    domain::{Aggregate, AggregateState, Command},
+};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[async_trait]
+pub trait CommandHandlerSet<A, C, S>
+where
+    A: Aggregate,
+    C: Command,
+    S: Send + Sync + ?Sized,
+{
+    async fn handle_command(
+        &self,
+        state: &A::State,
+        command: C,
+        services: &S,
+    ) -> Result<CommandHandlerResponse<<A::State as AggregateState>::Domain, C::Result>, C::Error>;
 }

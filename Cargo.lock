@@ -893,6 +893,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-services"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "nexus",
+ "workspace-hack",
+]
+
+[[package]]
 name = "nexus-test-helpers"
 version = "0.1.0"
 dependencies = [
