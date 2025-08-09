@@ -898,6 +898,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "nexus",
+ "terrors",
  "workspace-hack",
 ]
 
@@ -1442,6 +1443,12 @@ dependencies = [
  "rustix",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "terrors"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "987fd8c678ca950df2a18b2c6e9da6ca511d449278fab3565efe0d49c0c07a5d"
 
 [[package]]
 name = "thiserror"
@@ -2070,6 +2077,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "chrono",
+ "either",
  "futures-channel",
  "futures-core",
  "futures-sink",
