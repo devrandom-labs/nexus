@@ -49,3 +49,23 @@ where
             .map_err(OneOf::new)?)
     }
 }
+
+#[async_trait]
+impl<A, C, S> Dispatch<A, C, S> for ()
+where
+    A: Aggregate,
+    C: Command,
+    S: Send + Sync + ?Sized,
+{
+    async fn dispatch(
+        &self,
+        _state: &A::State,
+        command: C,
+        _services: &S,
+    ) -> Result<
+        CommandHandlerResponse<<A::State as AggregateState>::Domain, C::Result>,
+        OneOf<(C::Error, C)>,
+    > {
+        Err(OneOf::new(command))
+    }
+}
