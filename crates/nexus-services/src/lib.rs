@@ -3,17 +3,9 @@ use nexus::{
     command::{AggregateCommandHandler, CommandHandlerResponse},
     domain::{Aggregate, AggregateState, Command},
 };
+use terrors::OneOf;
 
-pub enum DispatchOutcome<A, C>
-where
-    A: Aggregate,
-    C: Command,
-{
-    Handled(
-        Result<CommandHandlerResponse<<A::State as AggregateState>::Domain, C::Error>, C::Error>,
-    ),
-    Unhandled(C),
-}
+pub struct Handler<T>(pub T);
 
 #[async_trait]
 pub trait Dispatch<A, C, S>
@@ -22,57 +14,38 @@ where
     C: Command,
     S: Send + Sync + ?Sized,
 {
-    async fn dispatch(&self, state: &A::State, command: C, services: &S) -> DispatchOutcome<A, C>;
+    async fn dispatch(
+        &self,
+        state: &A::State,
+        command: C,
+        services: &S,
+    ) -> Result<
+        CommandHandlerResponse<<A::State as AggregateState>::Domain, C::Result>,
+        OneOf<(C::Error, C)>,
+    >;
 }
 
 #[async_trait]
-impl<A, C, S> Dispatch<A, C, S> for ()
+impl<A, C, S, H> Dispatch<A, C, S> for Handler<H>
 where
     A: Aggregate,
     C: Command,
     S: Send + Sync + ?Sized,
+    H: AggregateCommandHandler<C, S, State = A::State>,
 {
-    async fn dispatch(&self, state: &A::State, command: C, services: &S) -> DispatchOutcome<A, C> {
-        Err(command)
+    async fn dispatch(
+        &self,
+        state: &A::State,
+        command: C,
+        services: &S,
+    ) -> Result<
+        CommandHandlerResponse<<A::State as AggregateState>::Domain, C::Result>,
+        OneOf<(C::Error, C)>,
+    > {
+        Ok(self
+            .0
+            .handle(state, command, services)
+            .await
+            .map_err(OneOf::new)?)
     }
 }
-
-// #[async_trait]
-// impl<A, C, S, H, T> Dispatch<A, C, S> for (H, T)
-// where
-//     A: Aggregate,
-//     C: Command,
-//     S: Send + Sync + ?Sized,
-//     H: AggregateCommandHandler<C, S, State = A::State>,
-//     T: Send + Sync,
-// {
-//     async fn dispatch(
-//         &self,
-//         state: &A::State,
-//         command: C,
-//         services: &S,
-//     ) -> Result<CommandHandlerResponse<<A::State as AggregateState>::Domain, C::Result>, C::Error>
-//     {
-//         self.0.handle(state, command, services).await
-//     }
-// }
-
-// #[async_trait]
-// impl<A, C, S, H, T> CommandHandlerSet<A, C, S> for (H, T)
-// where
-//     A: Aggregate,
-//     C: Command,
-//     S: Send + Sync + ?Sized,
-//     T: CommandHandlerSet<A, C, S>,
-//     H: Send + Sync,
-// {
-//     async fn handle_command(
-//         &self,
-//         state: &A::State,
-//         command: C,
-//         services: &S,
-//     ) -> Result<CommandHandlerResponse<<A::State as AggregateState>::Domain, C::Result>, C::Error>
-//     {
-//         self.1.handle_command(state, command, services).await
-//     }
-// }
