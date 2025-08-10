@@ -27,12 +27,4 @@ async fn bench_write_with_faker(c: &mut Criterion) {
             .await
             .expect("event sequence generation failed")
     });
-
-    c.bench_function("append_rusqlite_store", |b| {
-        b.(|| {
-            black_box(store.append_to_stream(black_box(events.clone())))
-                .expect("append failed")
-                .await
-        });
-    })
 }

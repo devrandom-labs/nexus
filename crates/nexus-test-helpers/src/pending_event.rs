@@ -14,6 +14,7 @@ pub type TestPendingEvent = PendingEvent<NexusId>;
 // TODO: multiple_stream_valid_sequence
 // TODO: multiple_stream_invalid_sequence
 const EVENT_TYPE_STRATEGY: &str = "[a-z0-9]{1,20}";
+const STREAM_NAME_STRATEGY: &str = "[a-z0-9]";
 
 pub fn arbitrary_correlation_id() -> impl Strategy<Value = CorrelationId> {
     any::<[u8; 16]>().prop_map(|bytes| {
@@ -40,10 +41,11 @@ where
     R: RangeBounds<usize> + Strategy,
     SizeRange: From<R::Value>,
 {
-    (arbitrary_stream_id(), size)
-        .prop_flat_map(move |(stream_id, num_events)| {
+    (arbitrary_stream_id(), STREAM_NAME_STRATEGY, size)
+        .prop_flat_map(move |(stream_id, stream_name, num_events)| {
             (
                 Just(stream_id),
+                Just(stream_name),
                 prop_vec(
                     (
                         arbitrary_event_metadata(),
@@ -54,12 +56,14 @@ where
                 ),
             )
         })
-        .prop_map(|(stream_id, other_data)| {
+        .prop_map(|(stream_id, stream_name, other_data)| {
             other_data
                 .into_iter()
                 .enumerate()
                 .map(|(index, (metadata, event_type, payload))| {
                     PendingEvent::builder(stream_id)
+                        .with_stream_name(stream_name.clone())
+                        .unwrap()
                         .with_version((index + 1) as u64)
                         .unwrap()
                         .with_metadata(metadata)
@@ -86,13 +90,18 @@ pub fn arbitrary_conflicting_sequence() -> impl Strategy<Value = Vec<TestPending
         .prop_shuffle()
 }
 
-pub async fn create_pending_event<I>(stream_id: &I, version: u64) -> Result<PendingEvent<I>>
+pub async fn create_pending_event<I>(
+    stream_id: &I,
+    stream_name: String,
+    version: u64,
+) -> Result<PendingEvent<I>>
 where
     I: Id,
 {
     let event: BoxedEvent = Faker.fake::<UserEvents>().into();
     let metadata: EventMetadata = Faker.fake();
     PendingEvent::builder(stream_id.clone())
+        .with_stream_name(stream_name)?
         .with_version(version)?
         .with_metadata(metadata)
         .with_domain(event)
@@ -102,6 +111,7 @@ where
 
 pub async fn create_pending_event_sequence<I>(
     stream_id: I,
+    stream_name: String,
     versions: Range<u64>,
 ) -> Result<Vec<PendingEvent<I>>>
 where
@@ -109,7 +119,7 @@ where
 {
     let mut events: Vec<PendingEvent<I>> = vec![];
     for version in versions {
-        let pending_event = create_pending_event(&stream_id, version).await?;
+        let pending_event = create_pending_event(&stream_id, stream_name.clone(), version).await?;
         events.push(pending_event);
     }
     Ok(events)

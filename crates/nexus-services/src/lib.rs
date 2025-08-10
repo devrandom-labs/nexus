@@ -1,5 +1,5 @@
 use nexus::{command::EventSourceRepository, domain::Aggregate};
-use std::{marker::PhantomData, sync::Arc};
+use std::{any::TypeId, collections::HashMap, marker::PhantomData, sync::Arc};
 
 pub struct AggregateService<A, R, S>
 where
@@ -9,6 +9,7 @@ where
 {
     repository: Arc<R>,
     service: Option<Arc<S>>,
+
     _marker: PhantomData<A>,
 }
 

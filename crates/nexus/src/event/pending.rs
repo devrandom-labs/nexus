@@ -68,12 +68,16 @@ impl<I> PendingEvent<I>
 where
     I: Id,
 {
+    pub fn id(&self) -> &EventId {
+        &self.id
+    }
+
     pub fn stream_id(&self) -> &I {
         &self.stream_id
     }
 
-    pub fn id(&self) -> &EventId {
-        &self.id
+    pub fn stream_name(&self) -> &str {
+        &self.stream_name
     }
 
     pub fn version(&self) -> &NonZeroU64 {

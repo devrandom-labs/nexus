@@ -66,6 +66,7 @@ impl Store {
             )
         })?;
 
+        let stream_name = row.get::<_, String>("stream_id")?;
         let version = row.get::<_, u64>("version")?;
         let event_type = row.get::<_, String>("event_type")?;
         let payload = row.get::<_, Vec<u8>>("payload")?;
@@ -74,6 +75,7 @@ impl Store {
         Ok(PersistedEvent::new(
             id,
             stream_id,
+            stream_name,
             event_type,
             version,
             metadata,
@@ -173,7 +175,7 @@ impl EventStore for Store {
 
                 {
                     let mut event_stmt = tx
-                        .prepare_cached("INSERT INTO event (id, stream_id, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)")
+                        .prepare_cached("INSERT INTO event (id, stream_id, stream_name, version, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
                         .map_err(|err| Error::Store { source: err.into() })?;
                     let mut event_metadata_stmt = tx
                         .prepare_cached(
@@ -186,6 +188,7 @@ impl EventStore for Store {
                             .execute(params![
                                 record.id().as_uuid(),
                                 record.stream_id().as_ref(),
+                                record.stream_name(),
                                 record.version(),
                                 record.event_type(),
                                 record.payload()
@@ -222,9 +225,13 @@ impl EventStore for Store {
         })?
     }
 
-    fn read_stream<'a, I>(
+    // TODO: always have limit based on size
+    // TODO: start from version always
+    fn read_stream_from<'a, I>(
         &'a self,
         stream_id: I,
+        _version: u64,
+        _size: u32,
     ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
     where
         Self: Sync + 'a,
@@ -239,7 +246,7 @@ impl EventStore for Store {
                     reason: "mutex lock poisoned..".to_string(),
                 })?;
                 let sql = "
-                        SELECT e.id, e.stream_id, e.version, e.event_type, e.payload, e.persisted_at, m.correlation_id
+                        SELECT e.id, e.stream_id, e.stream_name, e.version, e.event_type, e.payload, e.persisted_at, m.correlation_id
                         FROM event AS e
                         INNER JOIN event_metadata AS m ON e.id = m.event_id
                         WHERE e.stream_id = ?1
@@ -277,10 +284,7 @@ impl EventStore for Store {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
-
     use crate::Store;
-
     use chrono::Utc;
     use fake::{Fake, Faker};
     use futures::TryStreamExt;
@@ -304,6 +308,7 @@ mod tests {
     pub struct TestContext {
         pub store: Store,
         pub stream_id: NexusId,
+        pub stream_name: String,
     }
 
     impl TestContext {
@@ -316,6 +321,7 @@ mod tests {
             TestContext {
                 store: Store::new(conn).expect("Store could not be initialized"),
                 stream_id: NexusId::default(),
+                stream_name: "test_stream".to_string(),
             }
         }
         pub async fn create_pending_event(
@@ -325,6 +331,7 @@ mod tests {
         ) -> Result<PendingEvent<NexusId>> {
             let metadata: EventMetadata = Faker.fake();
             PendingEvent::builder(self.stream_id)
+                .with_stream_name(self.stream_name.clone())?
                 .with_version(version)?
                 .with_metadata(metadata)
                 .with_domain(event)
@@ -363,12 +370,14 @@ mod tests {
             .append_to_stream(0, vec![expected_event.clone()])
             .await
             .unwrap();
+
         let events = ctx
             .store
-            .read_stream(ctx.stream_id)
+            .read_stream_from(ctx.stream_id, 0, 10)
             .try_collect::<Vec<_>>()
             .await
             .expect("Read stream should succeed");
+
         assert_eq!(events.len(), 1, "there should be 1 event to read");
         let actual_event = &events[0];
         assert_eq!(TestableEvent(expected_event), *actual_event);
@@ -439,7 +448,7 @@ mod tests {
 
         let events = ctx
             .store
-            .read_stream(ctx.stream_id)
+            .read_stream_from(ctx.stream_id, 0, 10)
             .try_collect::<Vec<_>>()
             .await
             .expect("Read stream should succeed");
@@ -463,15 +472,9 @@ mod tests {
     #[tokio::test]
     async fn should_be_successful_when_we_pass_valid_events() {
         let stream_id: NexusId = fake::Faker.fake();
+        let stream_name: String = fake::Faker.fake();
         let start_version: u64 = 1;
-        let events = create_pending_event_sequence(
-            stream_id,
-            Range {
-                start: start_version,
-                end: 5,
-            },
-        )
-        .await;
+        let events = create_pending_event_sequence(stream_id, stream_name, start_version..5).await;
         assert!(events.is_ok());
         let events = events.unwrap();
         let result = Store::sequence_check(start_version, &events);
@@ -481,15 +484,9 @@ mod tests {
     #[tokio::test]
     async fn should_fail_when_the_sequence_mismatches() {
         let stream_id: NexusId = fake::Faker.fake();
+        let stream_name: String = fake::Faker.fake();
         let start_version: u64 = 1;
-        let events = create_pending_event_sequence(
-            stream_id,
-            Range {
-                start: start_version,
-                end: 5,
-            },
-        )
-        .await;
+        let events = create_pending_event_sequence(stream_id, stream_name, start_version..5).await;
         assert!(events.is_ok());
         let events = events.unwrap();
         let result = Store::sequence_check(start_version, events.iter().rev());
@@ -513,28 +510,20 @@ mod tests {
     async fn should_give_conflict_error() {
         let ctx = TestContext::new();
         let stream_id: NexusId = fake::Faker.fake();
+        let stream_name: String = fake::Faker.fake();
         let start_version: u64 = 1;
         let end_version: u64 = 5;
         let events = create_pending_event_sequence(
             stream_id,
-            Range {
-                start: start_version,
-                end: end_version,
-            },
+            stream_name.clone(),
+            start_version..end_version,
         )
         .await;
         assert!(events.is_ok());
         let events = events.unwrap();
         let result = ctx.store.append_to_stream(0, events).await;
         assert!(result.is_ok());
-        let events = create_pending_event_sequence(
-            stream_id,
-            Range {
-                start: end_version,
-                end: 10,
-            },
-        )
-        .await;
+        let events = create_pending_event_sequence(stream_id, stream_name, end_version..10).await;
         assert!(events.is_ok());
         let events = events.unwrap();
         let result = ctx.store.append_to_stream(0, events).await;
@@ -554,3 +543,5 @@ mod tests {
         }
     }
 }
+
+// FIXME: CHECK Stream_id and stream_name constraint

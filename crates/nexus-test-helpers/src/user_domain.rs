@@ -96,4 +96,8 @@ impl AggregateState for UserState {
     fn apply(&mut self, _event: &Self::Domain) {
         todo!()
     }
+
+    fn name(&self) -> &'static str {
+        "User"
+    }
 }
