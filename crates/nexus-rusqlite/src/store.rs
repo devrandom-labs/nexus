@@ -66,7 +66,7 @@ impl Store {
             )
         })?;
 
-        let stream_name = row.get::<_, String>("stream_id")?;
+        let stream_name = row.get::<_, String>("stream_name")?;
         let version = row.get::<_, u64>("version")?;
         let event_type = row.get::<_, String>("event_type")?;
         let payload = row.get::<_, Vec<u8>>("payload")?;
@@ -530,15 +530,16 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
-            Error::Conflict {
+            Error::SequenceMismatch {
                 stream_id: s,
                 expected_version,
                 actual_version,
             } => {
                 assert_eq!(s, stream_id.to_string());
-                assert_eq!(expected_version, 0);
-                assert_eq!(actual_version, 4);
+                assert_eq!(expected_version, 1);
+                assert_eq!(actual_version, 5);
             }
+
             _ => panic!("expected conflict got: {err}"),
         }
     }
