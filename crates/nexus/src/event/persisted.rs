@@ -18,6 +18,7 @@ where
     pub persisted_at: DateTime<Utc>,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl<I> PersistedEvent<I>
 where
     I: Id,

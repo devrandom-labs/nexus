@@ -59,6 +59,6 @@ where
         services: &S,
     ) -> Result<CommandHandlerResponse<<Self::State as AggregateState>::Domain, C::Result>, C::Error>
     {
-        (self.0)(state, command, &services).await
+        (self.0)(state, command, services).await
     }
 }

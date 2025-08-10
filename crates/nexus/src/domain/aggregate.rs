@@ -21,6 +21,8 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     fn id(&self) -> &Self::Id;
     fn version(&self) -> u64;
     fn state(&self) -> &Self::State;
+
+    #[allow(clippy::type_complexity)]
     fn take_uncommitted_events(
         &mut self,
     ) -> SmallVec<[VersionedEvent<Box<<Self::State as AggregateState>::Domain>>; 1]>;
@@ -79,7 +81,7 @@ where
         }
     }
 
-    pub fn load_from_history<'a, H>(id: I, history: H) -> Result<Self>
+    pub fn load_from_history<H>(id: I, history: H) -> Result<Self>
     where
         H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
     {
@@ -88,14 +90,14 @@ where
         Ok(aggregate)
     }
 
-    pub fn apply_events<'a, H>(&mut self, history: H) -> Result<()>
+    pub fn apply_events<H>(&mut self, history: H) -> Result<()>
     where
         H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
     {
         rehydrate_from_history(self, history)
     }
 
-    pub async fn load_from_stream<'a, H>(id: I, history: &'a mut H) -> Result<Self>
+    pub async fn load_from_stream<H>(id: I, history: &mut H) -> Result<Self>
     where
         H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
     {
@@ -104,7 +106,7 @@ where
         Ok(aggregate)
     }
 
-    pub async fn apply_event_stream<'a, H>(&mut self, history: &'a mut H) -> Result<()>
+    pub async fn apply_event_stream<H>(&mut self, history: &mut H) -> Result<()>
     where
         H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
     {
@@ -168,10 +170,7 @@ where
     Ok(())
 }
 
-fn rehydrate_from_history<'a, H, S, I>(
-    aggregate: &'a mut AggregateRoot<S, I>,
-    history: H,
-) -> Result<()>
+fn rehydrate_from_history<H, S, I>(aggregate: &mut AggregateRoot<S, I>, history: H) -> Result<()>
 where
     H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
     S: AggregateState,

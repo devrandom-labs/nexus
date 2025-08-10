@@ -227,14 +227,14 @@ impl EventStore for Store {
 
     // TODO: always have limit based on size
     // TODO: start from version always
-    fn read_stream_from<'a, I>(
-        &'a self,
+    fn read_stream_from<I>(
+        &self,
         stream_id: I,
         _version: u64,
         _size: u32,
-    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send>>
     where
-        Self: Sync + 'a,
+        Self: Sync,
         I: Id,
     {
         debug!(?stream_id, "fetching events");

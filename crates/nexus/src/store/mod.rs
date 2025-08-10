@@ -17,26 +17,26 @@ pub trait EventStore {
     where
         I: Id;
 
-    fn read_stream_from<'a, I>(
-        &'a self,
+    fn read_stream_from<I>(
+        &self,
         stream_id: I,
         version: u64,
         size: u32,
-    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send>>
     where
-        Self: Sync + 'a,
+        Self: Sync,
         I: Id;
 }
 
 pub trait EventStreamer {
-    fn read_stream_from_checkpoint<'a, I>(
-        &'a self,
-        stream_name: &'a str,
+    fn read_stream_from_checkpoint<I>(
+        &self,
+        stream_name: &str,
         version: u64,
         size: u32,
-    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send>>
     where
-        Self: Sync + 'a,
+        Self: Sync,
         I: Id;
 }
 
