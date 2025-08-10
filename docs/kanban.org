@@ -1,0 +1,26 @@
+* TODO
+
+** DONE
+
+** IN PROGRESS
+
+** TODO
+   - [ ] add read_stream_from method to store repository for snapshot support
+   - [ ] benchmarking mutex rusqlite event store
+   - [ ] adding connection pooling crate like r2d2 in store_rusqlite
+   - [ ] outbox db schema for rusqlte store
+   - [ ] example store schema migration files, leave it to application migration process
+   - [ ]
+     #+begin_src rust
+      fn write_stream_with<F, T>(
+        &self,
+        aggregate_id: &str,
+        expected_version: u64,
+        events: Vec<Event>,
+        domain_logic: F,
+        ) -> Result<(), CoreStoreError>
+      where
+        F: FnOnce(&T) -> Result<(), Box<dyn Error>>,
+        // T is the generic transaction object
+      ;
+     #+end_src

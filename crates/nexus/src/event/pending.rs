@@ -12,6 +12,7 @@ use std::num::NonZeroU64;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingEvent<I> {
     id: EventId,
+    stream_name: String,
     stream_id: I,
     version: NonZeroU64,
     event_type: String,
@@ -25,6 +26,7 @@ where
 {
     pub(crate) fn new(
         stream_id: I,
+        stream_name: String,
         version: NonZeroU64,
         event_type: String,
         metadata: EventMetadata,
@@ -38,9 +40,18 @@ where
             });
         }
 
+        if stream_name.trim().is_empty() {
+            return Err(Error::InvalidArgument {
+                name: "stream_name".to_string(),
+                reason: "must not be empty".to_string(),
+                context: "PendingEvent::new".to_string(),
+            });
+        }
+
         Ok(PendingEvent {
             id: EventId::default(),
             stream_id,
+            stream_name,
             version,
             event_type,
             metadata,
@@ -57,12 +68,16 @@ impl<I> PendingEvent<I>
 where
     I: Id,
 {
+    pub fn id(&self) -> &EventId {
+        &self.id
+    }
+
     pub fn stream_id(&self) -> &I {
         &self.stream_id
     }
 
-    pub fn id(&self) -> &EventId {
-        &self.id
+    pub fn stream_name(&self) -> &str {
+        &self.stream_name
     }
 
     pub fn version(&self) -> &NonZeroU64 {

@@ -1,5 +1,10 @@
 # Nexus
 
+> **⚠️🚧 UNDER CONSTRUCTION 🚧⚠️**
+> 
+> This project is in active development—**a lot has to be done**. Expect breaking changes, missing documentation, and rapid iteration.
+
+
 > A zero-compromise, **event-sourcing** & **CQRS** framework for Rust that puts type-safety and performance first.
 
 [![crate](https://img.shields.io/crates/v/nexus.svg)](https://crates.io/crates/nexus)

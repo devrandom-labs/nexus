@@ -1,11 +1,18 @@
 use super::{Command, DomainEvent, Id};
-use crate::command::{AggregateCommandHandler, CommandHandlerResponse};
+use crate::{
+    command::{AggregateCommandHandler, CommandHandlerResponse},
+    error::{Error, Result},
+    event::VersionedEvent,
+};
 use smallvec::{SmallVec, smallvec};
 use std::fmt::Debug;
+use tokio_stream::{Stream, StreamExt};
 
 pub trait AggregateState: Default + Send + Sync + Debug + 'static {
     type Domain: DomainEvent + ?Sized; // for marker trait for event isolation
     fn apply(&mut self, event: &Self::Domain);
+    // to be used as stream_name
+    fn name(&self) -> &'static str;
 }
 
 pub trait Aggregate: Debug + Send + Sync + 'static {
@@ -14,9 +21,11 @@ pub trait Aggregate: Debug + Send + Sync + 'static {
     fn id(&self) -> &Self::Id;
     fn version(&self) -> u64;
     fn state(&self) -> &Self::State;
+
+    #[allow(clippy::type_complexity)]
     fn take_uncommitted_events(
         &mut self,
-    ) -> SmallVec<[Box<<Self::State as AggregateState>::Domain>; 1]>;
+    ) -> SmallVec<[VersionedEvent<Box<<Self::State as AggregateState>::Domain>>; 1]>;
 }
 
 #[derive(Debug)]
@@ -28,7 +37,7 @@ where
     id: I,
     state: S,
     version: u64,
-    uncommitted_events: SmallVec<[Box<S::Domain>; 1]>,
+    uncommitted_events: SmallVec<[VersionedEvent<Box<S::Domain>>; 1]>,
 }
 
 impl<S, I> Aggregate for AggregateRoot<S, I>
@@ -53,7 +62,7 @@ where
 
     fn take_uncommitted_events(
         &mut self,
-    ) -> SmallVec<[Box<<Self::State as AggregateState>::Domain>; 1]> {
+    ) -> SmallVec<[VersionedEvent<Box<<Self::State as AggregateState>::Domain>>; 1]> {
         std::mem::take(&mut self.uncommitted_events)
     }
 }
@@ -72,24 +81,36 @@ where
         }
     }
 
-    pub fn load_from_history<'h, H>(id: I, history: H) -> Self
+    pub fn load_from_history<H>(id: I, history: H) -> Result<Self>
     where
-        H: IntoIterator<Item = &'h Box<S::Domain>>,
+        H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
     {
-        let mut state = S::default();
-        let mut version = 0u64;
+        let mut aggregate = Self::new(id);
+        rehydrate_from_history(&mut aggregate, history)?;
+        Ok(aggregate)
+    }
 
-        for event in history {
-            state.apply(event);
-            version += 1;
-        }
+    pub fn apply_events<H>(&mut self, history: H) -> Result<()>
+    where
+        H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
+    {
+        rehydrate_from_history(self, history)
+    }
 
-        Self {
-            id,
-            state,
-            version,
-            uncommitted_events: smallvec![],
-        }
+    pub async fn load_from_stream<H>(id: I, history: &mut H) -> Result<Self>
+    where
+        H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
+    {
+        let mut aggregate = Self::new(id);
+        rehydrate_from_stream(&mut aggregate, history).await?;
+        Ok(aggregate)
+    }
+
+    pub async fn apply_event_stream<H>(&mut self, history: &mut H) -> Result<()>
+    where
+        H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
+    {
+        rehydrate_from_stream(self, history).await
     }
 
     pub fn current_version(&self) -> u64 {
@@ -101,7 +122,7 @@ where
         command: C,
         handler: &Handler,
         services: &Services,
-    ) -> Result<C::Result, C::Error>
+    ) -> std::result::Result<C::Result, C::Error>
     where
         C: Command,
         Handler: AggregateCommandHandler<C, Services, State = S>,
@@ -109,10 +130,62 @@ where
     {
         let CommandHandlerResponse { events, result } =
             handler.handle(&self.state, command, services).await?;
-        for event in &events {
+        let mut version_events =
+            SmallVec::<[VersionedEvent<Box<S::Domain>>; 1]>::with_capacity(events.len());
+        let mut current_version = self.version;
+        for event in events {
             self.state.apply(event.as_ref());
+            current_version += 1;
+            version_events.push(VersionedEvent {
+                version: current_version,
+                event,
+            });
         }
-        self.uncommitted_events.extend(events);
+        self.uncommitted_events.extend(version_events);
         Ok(result)
     }
+}
+
+async fn rehydrate_from_stream<H, S, I>(
+    aggregate: &mut AggregateRoot<S, I>,
+    history: &mut H,
+) -> Result<()>
+where
+    H: Stream<Item = Result<VersionedEvent<Box<S::Domain>>>> + Unpin,
+    S: AggregateState,
+    I: Id,
+{
+    while let Some(result) = history.next().await {
+        let versioned_event = result?;
+        if versioned_event.version != aggregate.version + 1 {
+            return Err(Error::SequenceMismatch {
+                stream_id: aggregate.id.to_string(),
+                expected_version: aggregate.version + 1,
+                actual_version: versioned_event.version,
+            });
+        }
+        aggregate.state.apply(&versioned_event.event);
+        aggregate.version = versioned_event.version;
+    }
+    Ok(())
+}
+
+fn rehydrate_from_history<H, S, I>(aggregate: &mut AggregateRoot<S, I>, history: H) -> Result<()>
+where
+    H: IntoIterator<Item = VersionedEvent<Box<S::Domain>>>,
+    S: AggregateState,
+    I: Id,
+{
+    for versioned_event in history {
+        if versioned_event.version != aggregate.version + 1 {
+            return Err(Error::SequenceMismatch {
+                stream_id: aggregate.id().to_string(),
+                expected_version: aggregate.version + 1,
+                actual_version: versioned_event.version,
+            });
+        }
+        aggregate.state.apply(&versioned_event.event);
+        aggregate.version = versioned_event.version;
+    }
+    Ok(())
 }

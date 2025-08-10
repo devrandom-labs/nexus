@@ -17,11 +17,28 @@ pub trait EventStore {
     where
         I: Id;
 
-    fn read_stream<'a, I>(
-        &'a self,
+    fn read_stream_from<I>(
+        &self,
         stream_id: I,
-    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send + 'a>>
+        version: u64,
+        size: u32,
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send>>
     where
-        Self: Sync + 'a,
+        Self: Sync,
         I: Id;
 }
+
+pub trait EventStreamer {
+    fn read_stream_from_checkpoint<I>(
+        &self,
+        stream_name: &str,
+        version: u64,
+        size: u32,
+    ) -> Pin<Box<dyn Stream<Item = Result<PersistedEvent<I>>> + Send>>
+    where
+        Self: Sync,
+        I: Id;
+}
+
+// TODO: added event stream to pending events
+// TODO: each aggregate should have a name / type (useful for projections)

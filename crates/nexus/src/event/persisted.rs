@@ -10,6 +10,7 @@ where
 {
     pub id: EventId,
     pub stream_id: I,
+    pub stream_name: String,
     pub version: u64,
     pub event_type: String,
     pub metadata: EventMetadata,
@@ -17,14 +18,15 @@ where
     pub persisted_at: DateTime<Utc>,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl<I> PersistedEvent<I>
 where
     I: Id,
 {
-    // do not want people to directly create EventRecord
     pub fn new(
         id: EventId,
         stream_id: I,
+        stream_name: String,
         event_type: String,
         version: u64,
         metadata: EventMetadata,
@@ -35,6 +37,7 @@ where
             id,
             event_type,
             stream_id,
+            stream_name,
             metadata,
             version,
             payload,
