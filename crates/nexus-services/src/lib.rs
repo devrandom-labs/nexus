@@ -7,6 +7,8 @@ use nexus::{
 use std::{marker::PhantomData, sync::Arc};
 use terrors::OneOf;
 
+pub mod generic;
+
 pub struct AggregateService<A, R, S>
 where
     A: Aggregate,
