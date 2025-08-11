@@ -52,3 +52,6 @@ where
         unimplemented!()
     }
 }
+
+// TODO: phase 1: pipeline constructions using warp like filters
+// TODO: phase 2: mediatR which takes these pipelines
