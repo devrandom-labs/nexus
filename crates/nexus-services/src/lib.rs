@@ -8,6 +8,7 @@ use std::{marker::PhantomData, sync::Arc};
 use terrors::OneOf;
 
 pub mod generic;
+pub mod reject;
 
 pub struct AggregateService<A, R, S>
 where

@@ -25,6 +25,7 @@ pub trait Tuple: Sized {
 
     fn hlist(self) -> Self::HList;
 
+    #[inline]
     fn combine<T>(self, other: T) -> CombinedTuples<Self, T>
     where
         Self: Sized,
@@ -44,12 +45,19 @@ pub trait Combine<T: HList> {
     fn combine(self, others: T) -> Self::Output;
 }
 
+pub trait Func<Args> {
+    type Output;
+
+    fn call(&self, args: Args) -> Self::Output;
+}
+
 // ===== Impl Combine ====
 //
 
 impl<T: HList> Combine<T> for () {
     type Output = T;
 
+    #[inline]
     fn combine(self, other: T) -> Self::Output {
         other
     }
@@ -65,5 +73,30 @@ where
     #[inline]
     fn combine(self, other: U) -> Self::Output {
         Product(self.0, self.1.combine(other))
+    }
+}
+
+impl HList for () {
+    type Tuple = ();
+    #[inline]
+    fn flatten(self) -> Self::Tuple {}
+}
+
+impl Tuple for () {
+    type HList = ();
+
+    #[inline]
+    fn hlist(self) -> Self::HList {}
+}
+
+impl<F, R> Func<()> for F
+where
+    F: Fn() -> R,
+{
+    type Output = R;
+
+    #[inline]
+    fn call(&self, _args: ()) -> Self::Output {
+        (*self)()
     }
 }
