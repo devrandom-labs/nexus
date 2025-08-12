@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::reject::Rejection;
 
 #[derive(Debug)]
