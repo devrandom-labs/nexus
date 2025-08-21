@@ -8,5 +8,6 @@ authors.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 nexus = { path = "../nexus" }
+pin-project = "1.1.10"
 terrors = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
