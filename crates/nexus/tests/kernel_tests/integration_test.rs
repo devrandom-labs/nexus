@@ -115,12 +115,9 @@ fn full_aggregate_lifecycle() {
 fn rehydrate_then_continue() {
     let history = vec![VersionedEvent {
         version: Version::from(1u64),
-        event: UserEvent::Created(UserCreated {
-            name: "Bob".into(),
-        }),
+        event: UserEvent::Created(UserCreated { name: "Bob".into() }),
     }];
-    let mut user =
-        AggregateRoot::<UserAggregate>::load_from_events(UserId(2), history).unwrap();
+    let mut user = AggregateRoot::<UserAggregate>::load_from_events(UserId(2), history).unwrap();
 
     assert_eq!(user.version(), Version::from(1u64));
     assert_eq!(user.state().name, "Bob");
