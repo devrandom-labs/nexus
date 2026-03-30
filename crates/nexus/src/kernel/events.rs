@@ -1,0 +1,54 @@
+use super::event::DomainEvent;
+use smallvec::{IntoIter as SmallVecIntoIter, SmallVec};
+use std::iter::{once, Chain, Once};
+
+#[derive(Debug)]
+pub struct Events<E: DomainEvent> {
+    first: E,
+    more: SmallVec<[E; 1]>,
+}
+
+impl<E: DomainEvent> Events<E> {
+    pub fn new(event: E) -> Self {
+        Events {
+            first: event,
+            more: SmallVec::new(),
+        }
+    }
+
+    pub fn add(&mut self, event: E) {
+        self.more.push(event);
+    }
+
+    pub fn len(&self) -> usize {
+        self.more.len() + 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+impl<E: DomainEvent> From<E> for Events<E> {
+    fn from(event: E) -> Self {
+        Events::new(event)
+    }
+}
+
+impl<E: DomainEvent> IntoIterator for Events<E> {
+    type Item = E;
+    type IntoIter = Chain<Once<E>, SmallVecIntoIter<[E; 1]>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        once(self.first).chain(self.more)
+    }
+}
+
+impl<'a, E: DomainEvent> IntoIterator for &'a Events<E> {
+    type Item = &'a E;
+    type IntoIter = Chain<Once<&'a E>, core::slice::Iter<'a, E>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        once(&self.first).chain(self.more.iter())
+    }
+}
