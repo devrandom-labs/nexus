@@ -5,3 +5,5 @@ pub mod events;
 pub mod id;
 pub mod message;
 pub mod version;
+
+pub use version::Version;
