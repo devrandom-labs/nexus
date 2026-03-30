@@ -60,3 +60,18 @@ fn events_from_single() {
     let events = Events::from(TestEvent::Created(Created));
     assert_eq!(events.len(), 1);
 }
+
+#[test]
+fn events_macro_single() {
+    let events = nexus::events![TestEvent::Created(Created)];
+    assert_eq!(events.len(), 1);
+}
+
+#[test]
+fn events_macro_multiple() {
+    let events = nexus::events![
+        TestEvent::Created(Created),
+        TestEvent::Activated(Activated),
+    ];
+    assert_eq!(events.len(), 2);
+}
