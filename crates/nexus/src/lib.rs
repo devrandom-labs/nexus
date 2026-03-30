@@ -3,6 +3,7 @@ pub mod domain;
 pub mod error;
 pub mod event;
 pub mod infra;
+pub mod kernel;
 pub mod query;
 pub mod serde;
 pub mod store;
