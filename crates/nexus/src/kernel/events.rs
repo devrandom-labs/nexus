@@ -1,6 +1,6 @@
 use super::event::DomainEvent;
 use smallvec::{IntoIter as SmallVecIntoIter, SmallVec};
-use std::iter::{once, Chain, Once};
+use std::iter::{Chain, Once, once};
 
 #[derive(Debug)]
 pub struct Events<E: DomainEvent> {

@@ -1,3 +1,5 @@
+#[path = "kernel_tests/aggregate_root_tests.rs"]
+mod aggregate_root_tests;
 #[path = "kernel_tests/error_tests.rs"]
 mod error_tests;
 #[path = "kernel_tests/events_tests.rs"]
