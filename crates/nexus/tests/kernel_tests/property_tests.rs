@@ -5,6 +5,13 @@
 //! with different random data and automatically shrinks to minimal failing cases.
 //!
 //! Each property is a universal law about the kernel's behavior.
+//!
+//! Skipped under Miri: proptest uses filesystem I/O (getcwd) which Miri's
+//! isolation blocks, and interpreting hundreds of iterations is impractical.
+//! Miri and proptest serve different purposes — Miri catches UB, proptest
+//! catches logic bugs.
+
+#![cfg(not(miri))]
 
 use nexus::kernel::*;
 use nexus::kernel::aggregate::AggregateRoot;
