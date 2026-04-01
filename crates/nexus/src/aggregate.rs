@@ -104,6 +104,11 @@ pub trait Aggregate: Sized {
     type State: AggregateState;
     type Error: Error + Send + Sync + Debug + 'static;
     type Id: Id;
+
+    /// Maximum uncommitted events before `apply_event` panics.
+    /// Override this for aggregates that produce many events per operation.
+    /// Default: 1024.
+    const MAX_UNCOMMITTED: usize = DEFAULT_MAX_UNCOMMITTED;
 }
 
 /// Trait for user-defined aggregate newtypes wrapping `AggregateRoot`.
@@ -164,11 +169,16 @@ pub trait AggregateEntity: Aggregate {
 /// write `EventOf<A>`.
 pub type EventOf<A> = <<A as Aggregate>::State as AggregateState>::Event;
 
+/// Default maximum uncommitted events before `apply_event` panics.
+/// Override per-aggregate via `Aggregate::MAX_UNCOMMITTED`.
+pub const DEFAULT_MAX_UNCOMMITTED: usize = 1024;
+
 /// The core event-sourced aggregate container.
 ///
 /// Holds state, tracks version, and collects uncommitted events.
-/// Business logic is added by implementing methods on
-/// `AggregateRoot<YourAggregate>` in your own crate.
+/// The maximum number of uncommitted events is bounded by
+/// `Aggregate::MAX_UNCOMMITTED` (default: 1024) to prevent
+/// unbounded memory growth on constrained devices.
 ///
 /// # Example
 ///
@@ -288,7 +298,17 @@ impl<A: Aggregate> AggregateRoot<A> {
     }
 
     /// Apply a single event: mutates state, increments version, tracks as uncommitted.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of uncommitted events reaches `Aggregate::MAX_UNCOMMITTED`.
+    /// Call `take_uncommitted_events()` to drain before hitting the limit.
     pub fn apply_event(&mut self, event: EventOf<A>) {
+        assert!(
+            self.uncommitted_events.len() < A::MAX_UNCOMMITTED,
+            "Uncommitted event limit reached ({}). Call take_uncommitted_events() to drain.",
+            A::MAX_UNCOMMITTED,
+        );
         let next_version = self.current_version().next();
         self.state.apply(&event);
         self.uncommitted_events

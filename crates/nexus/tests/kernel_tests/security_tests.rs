@@ -91,6 +91,53 @@ fn c2_uncommitted_count_fits_in_u64() {
 }
 
 // =============================================================================
+// C3: Unbounded memory growth — uncommitted event limit
+// =============================================================================
+
+// Aggregate with tiny limit for testing
+#[derive(Debug)]
+struct LimitedAgg;
+impl Aggregate for LimitedAgg {
+    type State = SState;
+    type Error = SError;
+    type Id = SId;
+    const MAX_UNCOMMITTED: usize = 3;
+}
+
+#[test]
+#[should_panic(expected = "Uncommitted event limit reached")]
+fn c3_apply_event_panics_at_limit() {
+    let mut agg = AggregateRoot::<LimitedAgg>::new(SId(1));
+    agg.apply_event(SEvent::Tick); // 1
+    agg.apply_event(SEvent::Tick); // 2
+    agg.apply_event(SEvent::Tick); // 3 — at limit
+    agg.apply_event(SEvent::Tick); // 4 — MUST panic
+}
+
+#[test]
+fn c3_take_resets_count_allowing_more() {
+    let mut agg = AggregateRoot::<LimitedAgg>::new(SId(1));
+    agg.apply_event(SEvent::Tick);
+    agg.apply_event(SEvent::Tick);
+    agg.apply_event(SEvent::Tick);
+
+    // At limit, but take resets
+    let events = agg.take_uncommitted_events();
+    assert_eq!(events.len(), 3);
+
+    // Can apply again
+    agg.apply_event(SEvent::Tick);
+    agg.apply_event(SEvent::Tick);
+    assert_eq!(agg.current_version(), Version::from_persisted(5));
+}
+
+#[test]
+fn c3_default_limit_is_1024() {
+    assert_eq!(SAgg::MAX_UNCOMMITTED, nexus::DEFAULT_MAX_UNCOMMITTED);
+    assert_eq!(nexus::DEFAULT_MAX_UNCOMMITTED, 1024);
+}
+
+// =============================================================================
 // C4: from_persisted bypass — document that it accepts any value
 // =============================================================================
 

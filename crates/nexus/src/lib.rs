@@ -6,7 +6,9 @@ mod id;
 mod message;
 mod version;
 
-pub use aggregate::{Aggregate, AggregateEntity, AggregateRoot, AggregateState, EventOf};
+pub use aggregate::{
+    Aggregate, AggregateEntity, AggregateRoot, AggregateState, EventOf, DEFAULT_MAX_UNCOMMITTED,
+};
 pub use error::KernelError;
 pub use event::DomainEvent;
 pub use events::Events;
