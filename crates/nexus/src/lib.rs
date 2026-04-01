@@ -16,3 +16,5 @@ pub use version::{Version, VersionedEvent};
 
 #[cfg(feature = "derive")]
 pub use nexus_macros::DomainEvent;
+#[cfg(feature = "derive")]
+pub use nexus_macros::aggregate;

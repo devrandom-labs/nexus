@@ -33,7 +33,11 @@
       "Bash(git checkout:*)",
       "Bash(nix log:*)",
       "Bash(git push:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:rust-lang.github.io)",
+      "WebFetch(domain:docs.rs)"
     ]
   }
 }
