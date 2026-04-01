@@ -757,6 +757,7 @@ dependencies = [
  "quote",
  "syn",
  "thiserror 2.0.18",
+ "trybuild",
  "workspace-hack",
 ]
 

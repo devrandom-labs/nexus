@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `u64: Id` is not satisfied
+  --> tests/macro_compile_fail/aggregate_bad_id.rs:23:54
+   |
+23 | #[nexus::aggregate(state = St, error = MyError, id = u64)]
+   |                                                      ^^^ the trait `Id` is not implemented for `u64`
+   |
+note: required by a bound in `nexus::Aggregate::Id`
+  --> $WORKSPACE/crates/nexus/src/aggregate.rs
+   |
+   |     type Id: Id;
+   |              ^^ required by this bound in `Aggregate::Id`
