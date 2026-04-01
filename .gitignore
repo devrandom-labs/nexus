@@ -7,3 +7,5 @@ target
 .env
 .envrc.local
 .worktrees/
+mutants.out/
+mutants.out.old/

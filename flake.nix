@@ -125,6 +125,7 @@
             cowsay
             tmux
             cargo-hakari
+            cargo-mutants
             tree
             cloc
             cargo-edit
