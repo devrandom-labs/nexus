@@ -1,0 +1,112 @@
+use nexus::kernel::*;
+use std::fmt;
+
+// --- Test ID type ---
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct TestId(String);
+impl fmt::Display for TestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl Id for TestId {}
+
+// --- Test Events ---
+#[derive(Debug, Clone)]
+struct ThingCreated {
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct ThingActivated;
+
+#[derive(Debug, Clone)]
+enum ThingEvent {
+    Created(ThingCreated),
+    Activated(ThingActivated),
+}
+
+impl Message for ThingEvent {}
+impl DomainEvent for ThingEvent {
+    fn name(&self) -> &'static str {
+        match self {
+            ThingEvent::Created(_) => "ThingCreated",
+            ThingEvent::Activated(_) => "ThingActivated",
+        }
+    }
+}
+
+// --- Test State ---
+#[derive(Default, Debug)]
+struct ThingState {
+    name: String,
+    active: bool,
+}
+
+impl AggregateState for ThingState {
+    type Event = ThingEvent;
+    fn apply(&mut self, event: &ThingEvent) {
+        match event {
+            ThingEvent::Created(e) => self.name = e.name.clone(),
+            ThingEvent::Activated(_) => self.active = true,
+        }
+    }
+    fn name(&self) -> &'static str {
+        "Thing"
+    }
+}
+
+// --- Test Aggregate ---
+struct ThingAggregate;
+
+#[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
+enum ThingError {
+    #[error("already exists")]
+    AlreadyExists,
+}
+
+impl Aggregate for ThingAggregate {
+    type State = ThingState;
+    type Error = ThingError;
+    type Id = TestId;
+}
+
+// --- Tests ---
+#[test]
+fn event_of_resolves_correctly() {
+    fn assert_event_type<A: Aggregate>()
+    where
+        EventOf<A>: DomainEvent,
+    {
+    }
+    assert_event_type::<ThingAggregate>();
+}
+
+#[test]
+fn domain_event_name_works() {
+    let event = ThingEvent::Created(ThingCreated {
+        name: "test".into(),
+    });
+    assert_eq!(event.name(), "ThingCreated");
+    let event = ThingEvent::Activated(ThingActivated);
+    assert_eq!(event.name(), "ThingActivated");
+}
+
+#[test]
+fn aggregate_state_apply_mutates() {
+    let mut state = ThingState::default();
+    state.apply(&ThingEvent::Created(ThingCreated {
+        name: "hello".into(),
+    }));
+    assert_eq!(state.name, "hello");
+    assert!(!state.active);
+    state.apply(&ThingEvent::Activated(ThingActivated));
+    assert!(state.active);
+}
+
+#[test]
+fn aggregate_state_name() {
+    let state = ThingState::default();
+    assert_eq!(state.name(), "Thing");
+}

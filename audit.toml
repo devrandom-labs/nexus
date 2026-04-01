@@ -1,0 +1,10 @@
+# cargo-audit configuration
+# https://docs.rs/cargo-audit/latest/cargo_audit/config/
+
+[advisories]
+ignore = [
+    # time 0.3.x DoS via stack exhaustion — transitive dep from refinery 0.8.x
+    # Cannot fix until refinery upgrades to rusqlite 0.39+ (blocked by libsqlite3-sys links conflict)
+    # Tracked: will resolve when upgrading refinery
+    "RUSTSEC-2026-0009",
+]

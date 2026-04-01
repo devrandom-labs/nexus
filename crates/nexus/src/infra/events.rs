@@ -78,21 +78,3 @@ where
         vec
     }
 }
-
-#[macro_export]
-macro_rules! events {
-    [$head:expr] => {
-        {
-             $crate::infra::events::Events::new($head)
-        }
-    };
-    [$head:expr, $($tail:expr),+ $(,)?] => {
-        {
-            let mut events = $crate::infra::events::Events::new($head);
-            $(
-                events.add($tail);
-            )*
-                events
-        }
-    }
-}

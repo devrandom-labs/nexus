@@ -115,7 +115,43 @@ fn parse_query(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     match &ast.data {
+        Data::Enum(data_enum) => {
+            let variant_arms: Vec<_> = data_enum
+                .variants
+                .iter()
+                .map(|variant| {
+                    let variant_ident = &variant.ident;
+                    let variant_name = variant_ident.to_string();
+                    match &variant.fields {
+                        syn::Fields::Unit => {
+                            quote! { #name::#variant_ident => #variant_name }
+                        }
+                        syn::Fields::Unnamed(_) => {
+                            quote! { #name::#variant_ident(..) => #variant_name }
+                        }
+                        syn::Fields::Named(_) => {
+                            quote! { #name::#variant_ident { .. } => #variant_name }
+                        }
+                    }
+                })
+                .collect();
+
+            let expanded = quote! {
+                impl ::nexus::kernel::Message for #name {}
+
+                impl ::nexus::kernel::DomainEvent for #name {
+                    fn name(&self) -> &'static str {
+                        match self {
+                            #(#variant_arms),*
+                        }
+                    }
+                }
+            };
+
+            Ok(expanded)
+        }
         Data::Struct(_) => {
+            // Legacy path: struct-based DomainEvent (generates domain:: impls)
             let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
 
             let mut event_name: Option<LitStr> = None;
@@ -125,7 +161,6 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 } else {
                     return Err(meta.error("unrecognized key for `#[domain_event]` attribute"));
                 }
-
                 Ok(())
             })?;
 
@@ -133,9 +168,7 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 .ok_or_else(|| Error::new(attribute.path().span(), "`name` key is required"))?;
 
             let expanded = quote! {
-                impl ::nexus::domain::Message for #name {
-
-                }
+                impl ::nexus::domain::Message for #name {}
 
                 impl ::nexus::domain::DomainEvent for #name {
                     fn name(&self) -> &'static str {
@@ -146,7 +179,6 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 
             Ok(expanded)
         }
-        Data::Enum(_) => Err(Error::new(name.span(), "Enums are not supported.")),
         Data::Union(_) => Err(Error::new(name.span(), "Unions are not supported.")),
     }
 }

@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+description = "A zero-compromise event-sourcing and CQRS kernel for Rust with maximum compile-time type safety"
+readme = "README.md"
+keywords = ["event-sourcing", "cqrs", "ddd", "aggregate", "domain-driven-design"]
+categories = ["data-structures"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -21,10 +26,21 @@ uuid = { workspace = true, features = ["v7", "fast-rng", "serde", "v4"] }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
+criterion = { workspace = true }
 nexus-macros = { version = "0.1.0", path = "../nexus-macros" }
+proptest = { workspace = true }
+static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+trybuild = "1"
 
 [features]
 default = []
 derive = ["dep:nexus-macros"]
 testing = ["dep:fake", "derive"]
+
+[[bench]]
+name = "kernel_bench"
+harness = false
+
+[lints]
+workspace = true

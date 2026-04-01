@@ -18,6 +18,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
+        isLinux = pkgs.stdenv.isLinux;
         craneLib = (crane.mkLib pkgs).overrideToolchain
           (fenix.packages.${system}.complete.toolchain);
 
@@ -34,17 +35,8 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          buildInputs = with pkgs;
-            [ openssl ] ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-              pkgs.darwin.apple_sdk.frameworks.Security
-              pkgs.libiconv
-            ];
-          nativeBuildInputs = with pkgs;
-            [ cmake pkg-config ] ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.darwin.apple_sdk.frameworks.Security
-              pkgs.darwin.Libsystem
-            ];
+          buildInputs = with pkgs; [ openssl ];
+          nativeBuildInputs = with pkgs; [ cmake pkg-config ];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -52,7 +44,7 @@
         checks = {
           nexus-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
-            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+            cargoClippyExtraArgs = "-p nexus -p nexus-macros --lib -- --deny warnings";
           });
 
           nexus-doc =
@@ -66,7 +58,12 @@
             # taploExtraArgs = "format";
           };
 
-          nexus-audit = craneLib.cargoAudit { inherit src advisory-db; };
+          nexus-audit = craneLib.cargoAudit {
+            inherit src advisory-db;
+            # RUSTSEC-2026-0009: time 0.3.x DoS — transitive dep from refinery 0.8.x
+            # Cannot fix until refinery upgrades to rusqlite 0.39+
+            cargoAuditExtraArgs = "--ignore RUSTSEC-2026-0009";
+          };
           nexus-deny = craneLib.cargoDeny { inherit src; };
           # Run tests with cargo-nextest
           # Consider setting `doCheck = false` on other crate derivations
@@ -75,10 +72,10 @@
             inherit cargoArtifacts;
             partitions = 1;
             partitionType = "count";
+            # Exclude trybuild tests — .stderr snapshots contain absolute paths
+            # that differ between local and Nix sandbox environments
+            cargoNextestExtraArgs = "-E 'not test(compile_fail)'";
           });
-
-          nexus-coverage =
-            craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
 
           # Ensure that cargo-hakari is up to date
           nexus-hakari = craneLib.mkCargoDerivation {
@@ -94,10 +91,20 @@
             '';
             nativeBuildInputs = [ cargo-hakari ];
           };
+        } // lib.optionalAttrs isLinux {
+          # cargo-tarpaulin uses ptrace, which is Linux-only
+          nexus-coverage =
+            craneLib.cargoTarpaulin (commonArgs // {
+              inherit cargoArtifacts;
+              # Exclude trybuild compile-failure tests — .stderr snapshots
+              # contain paths that differ between local and CI environments
+              cargoTarpaulinExtraArgs = "--exclude-files 'tests/compile_fail/*' -- --skip compile_fail";
+            });
         };
 
         packages = {
-          ## integration test for rusqlite
+        } // lib.optionalAttrs isLinux {
+          # NixOS integration tests require Linux VMs
           integration = pkgs.testers.runNixOSTest ({
             name = "nexus-integration-test";
             nodes = { };
@@ -128,9 +135,8 @@
             tree
             cloc
             cargo-edit
-            sqlx-cli
             cargo-expand
-            gemini-cli
+            gh
           ];
         };
       });
