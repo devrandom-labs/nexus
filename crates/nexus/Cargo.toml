@@ -26,11 +26,11 @@ uuid = { workspace = true, features = ["v7", "fast-rng", "serde", "v4"] }
 workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
+criterion = { workspace = true }
 nexus-macros = { version = "0.1.0", path = "../nexus-macros" }
 proptest = { workspace = true }
 static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-criterion = { workspace = true }
 trybuild = "1"
 
 [features]

@@ -18,6 +18,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
+        isLinux = pkgs.stdenv.isLinux;
         craneLib = (crane.mkLib pkgs).overrideToolchain
           (fenix.packages.${system}.complete.toolchain);
 
@@ -34,17 +35,8 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          buildInputs = with pkgs;
-            [ openssl ] ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-              pkgs.darwin.apple_sdk.frameworks.Security
-              pkgs.libiconv
-            ];
-          nativeBuildInputs = with pkgs;
-            [ cmake pkg-config ] ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.darwin.apple_sdk.frameworks.Security
-              pkgs.darwin.Libsystem
-            ];
+          buildInputs = with pkgs; [ openssl ];
+          nativeBuildInputs = with pkgs; [ cmake pkg-config ];
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -66,7 +58,7 @@
             # taploExtraArgs = "format";
           };
 
-          nexus-audit = craneLib.cargoAudit { inherit src advisory-db; };
+          nexus-audit = craneLib.cargoAudit { src = unfilteredSrc; inherit advisory-db; };
           nexus-deny = craneLib.cargoDeny { inherit src; };
           # Run tests with cargo-nextest
           # Consider setting `doCheck = false` on other crate derivations
@@ -76,9 +68,6 @@
             partitions = 1;
             partitionType = "count";
           });
-
-          nexus-coverage =
-            craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
 
           # Ensure that cargo-hakari is up to date
           nexus-hakari = craneLib.mkCargoDerivation {
@@ -94,10 +83,15 @@
             '';
             nativeBuildInputs = [ cargo-hakari ];
           };
+        } // lib.optionalAttrs isLinux {
+          # cargo-tarpaulin uses ptrace, which is Linux-only
+          nexus-coverage =
+            craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
         };
 
         packages = {
-          ## integration test for rusqlite
+        } // lib.optionalAttrs isLinux {
+          # NixOS integration tests require Linux VMs
           integration = pkgs.testers.runNixOSTest ({
             name = "nexus-integration-test";
             nodes = { };
@@ -106,7 +100,8 @@
         };
 
         devShells.default = craneLib.devShell {
-          checks = self.checks.${system};
+          # Only pass checks that are available on this system
+          checks = lib.filterAttrs (name: _: builtins.tryEval (self.checks.${system}.${name}) != false) self.checks.${system};
 
           shellHook = ''
             #!/usr/bin/env bash
@@ -125,13 +120,11 @@
             cowsay
             tmux
             cargo-hakari
-            cargo-mutants
             tree
             cloc
             cargo-edit
-            sqlx-cli
             cargo-expand
-            gemini-cli
+            gh
           ];
         };
       });
