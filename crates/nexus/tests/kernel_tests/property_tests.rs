@@ -107,10 +107,19 @@ proptest! {
     ///
     /// Loading the same event sequence twice must produce identical state.
     /// This is fundamental to event sourcing — state is a pure function of events.
+    /// We test by applying the same raw events via two different paths.
     #[test]
-    fn prop_replay_is_deterministic(events in arb_versioned_events(50)) {
-        let agg1 = AggregateRoot::<CountAgg>::load_from_events(PId(1), events.clone()).unwrap();
-        let agg2 = AggregateRoot::<CountAgg>::load_from_events(PId(1), events).unwrap();
+    fn prop_replay_is_deterministic(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
+        // Build the versioned sequence twice from the same raw events
+        let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
+            events.iter().enumerate().map(|(i, e)| VersionedEvent {
+                version: Version::from((i + 1) as u64),
+                event: e.clone(),
+            }).collect()
+        };
+
+        let agg1 = AggregateRoot::<CountAgg>::load_from_events(PId(1), make_versioned(&raw_events)).unwrap();
+        let agg2 = AggregateRoot::<CountAgg>::load_from_events(PId(1), make_versioned(&raw_events)).unwrap();
 
         prop_assert_eq!(agg1.state(), agg2.state());
         prop_assert_eq!(agg1.version(), agg2.version());
@@ -157,17 +166,24 @@ proptest! {
     /// creating a new aggregate and applying the raw events.
     /// This proves load_from_events is equivalent to sequential apply.
     #[test]
-    fn prop_rehydrate_equals_sequential_apply(events in arb_versioned_events(50)) {
+    fn prop_rehydrate_equals_sequential_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
+        let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
+            events.iter().enumerate().map(|(i, e)| VersionedEvent {
+                version: Version::from((i + 1) as u64),
+                event: e.clone(),
+            }).collect()
+        };
+
         // Path A: load_from_events
         let agg_loaded = AggregateRoot::<CountAgg>::load_from_events(
             PId(1),
-            events.clone(),
+            make_versioned(&raw_events),
         ).unwrap();
 
         // Path B: new() + apply_events()
         let mut agg_applied = AggregateRoot::<CountAgg>::new(PId(1));
-        for ve in &events {
-            agg_applied.apply_event(ve.event.clone());
+        for event in &raw_events {
+            agg_applied.apply_event(event.clone());
         }
 
         prop_assert_eq!(agg_loaded.state(), agg_applied.state());
