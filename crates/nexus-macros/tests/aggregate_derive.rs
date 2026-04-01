@@ -133,8 +133,22 @@ fn derive_aggregate_id() {
 }
 
 #[test]
-fn derive_aggregate_debug() {
+fn derive_aggregate_debug_shows_name_and_version() {
     let todo = TodoAggregate::new(TodoId(1));
     let debug = format!("{todo:?}");
     assert!(debug.contains("TodoAggregate"));
+    assert!(debug.contains("version"));
+    assert!(debug.contains("id"));
+}
+
+#[test]
+fn derive_aggregate_debug_does_not_leak_state() {
+    let mut todo = TodoAggregate::new(TodoId(1));
+    todo.create("SECRET_TITLE".into()).unwrap();
+    let debug = format!("{todo:?}");
+    // State must NOT appear in debug output
+    assert!(
+        !debug.contains("SECRET_TITLE"),
+        "Debug output leaked internal state: {debug}"
+    );
 }

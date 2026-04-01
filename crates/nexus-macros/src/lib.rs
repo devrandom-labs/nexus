@@ -180,7 +180,13 @@ fn parse_aggregate(ast: &DeriveInput, args: proc_macro2::TokenStream) -> Result<
 
         impl ::std::fmt::Debug for #name {
             fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                f.debug_tuple(stringify!(#name)).field(&self.0).finish()
+                // Redacted: only shows aggregate name, id, and version.
+                // Internal state is NOT exposed to prevent information leakage
+                // in logs, error messages, and panic output.
+                f.debug_struct(stringify!(#name))
+                    .field("id", self.root().id())
+                    .field("version", &self.root().version())
+                    .finish_non_exhaustive()
             }
         }
     };
