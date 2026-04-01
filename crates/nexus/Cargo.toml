@@ -25,9 +25,14 @@ nexus-macros = { version = "0.1.0", path = "../nexus-macros" }
 proptest = { workspace = true }
 static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+criterion = { workspace = true }
 trybuild = "1"
 
 [features]
 default = []
 derive = ["dep:nexus-macros"]
 testing = ["dep:fake", "derive"]
+
+[[bench]]
+name = "kernel_bench"
+harness = false
