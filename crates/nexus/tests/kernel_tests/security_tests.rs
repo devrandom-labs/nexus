@@ -185,8 +185,8 @@ fn h2_error_contains_stream_id() {
     let err = AggregateRoot::<SAgg>::load_from_events(SId(42), events).unwrap_err();
     match err {
         KernelError::VersionMismatch { stream_id, .. } => {
-            // Verify the ID is captured — this allocates a String on the error path
-            assert_eq!(stream_id, "42");
+            // Verify the ID is captured — NO heap allocation (ErrorId is stack-based)
+            assert_eq!(format!("{stream_id}"), "42");
         }
         other => panic!("expected VersionMismatch, got {other:?}"),
     }
@@ -270,7 +270,7 @@ fn l2_kernel_error_variants_are_known() {
     // If a new variant is added to KernelError, this match must be updated.
     // This forces us to consider the impact on downstream code.
     let err = KernelError::VersionMismatch {
-        stream_id: "test".into(),
+        stream_id: nexus::ErrorId::from_display(&"test"),
         expected: Version::INITIAL,
         actual: Version::from_persisted(1),
     };

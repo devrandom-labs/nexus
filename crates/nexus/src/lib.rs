@@ -10,7 +10,7 @@ pub use aggregate::{
     Aggregate, AggregateEntity, AggregateRoot, AggregateState, EventOf,
     DEFAULT_MAX_REHYDRATION_EVENTS, DEFAULT_MAX_UNCOMMITTED,
 };
-pub use error::KernelError;
+pub use error::{ErrorId, KernelError};
 pub use event::DomainEvent;
 pub use events::Events;
 pub use id::Id;

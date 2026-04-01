@@ -1,4 +1,4 @@
-use crate::error::KernelError;
+use crate::error::{ErrorId, KernelError};
 use crate::event::DomainEvent;
 use crate::id::Id;
 use crate::version::{Version, VersionedEvent};
@@ -360,7 +360,7 @@ impl<A: Aggregate> AggregateRoot<A> {
             count += 1;
             if count > A::MAX_REHYDRATION_EVENTS {
                 return Err(KernelError::RehydrationLimitExceeded {
-                    stream_id: aggregate.id.to_string(),
+                    stream_id: ErrorId::from_display(&aggregate.id),
                     max: A::MAX_REHYDRATION_EVENTS,
                 });
             }
@@ -368,7 +368,7 @@ impl<A: Aggregate> AggregateRoot<A> {
             let (version, event) = versioned_event.into_parts();
             if version != expected {
                 return Err(KernelError::VersionMismatch {
-                    stream_id: aggregate.id.to_string(),
+                    stream_id: ErrorId::from_display(&aggregate.id),
                     expected,
                     actual: version,
                 });
