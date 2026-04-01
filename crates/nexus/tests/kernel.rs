@@ -8,5 +8,7 @@ mod events_tests;
 mod integration_test;
 #[path = "kernel_tests/traits_tests.rs"]
 mod traits_tests;
+#[path = "kernel_tests/static_assertion_tests.rs"]
+mod static_assertion_tests;
 #[path = "kernel_tests/version_tests.rs"]
 mod version_tests;
