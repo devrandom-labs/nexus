@@ -120,8 +120,8 @@ fn take_uncommitted_events_drains() {
 
     let events = agg.take_uncommitted_events();
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0].version, Version::from(1u64));
-    assert_eq!(events[1].version, Version::from(2u64));
+    assert_eq!(events[0].version(), Version::from(1u64));
+    assert_eq!(events[1].version(), Version::from(2u64));
 
     let events2 = agg.take_uncommitted_events();
     assert!(events2.is_empty());
@@ -130,16 +130,8 @@ fn take_uncommitted_events_drains() {
 #[test]
 fn load_from_events_rehydrates() {
     let events = vec![
-        VersionedEvent {
-            version: Version::from(1u64),
-            event: ItemEvent::Created(ItemCreated {
-                name: "loaded".into(),
-            }),
-        },
-        VersionedEvent {
-            version: Version::from(2u64),
-            event: ItemEvent::Done(ItemDone),
-        },
+        VersionedEvent::from_persisted(Version::from(1u64), ItemEvent::Created(ItemCreated { name: "loaded".into() })),
+        VersionedEvent::from_persisted(Version::from(2u64), ItemEvent::Done(ItemDone)),
     ];
     let agg = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events).unwrap();
     assert_eq!(agg.version(), Version::from(2u64));
@@ -150,16 +142,8 @@ fn load_from_events_rehydrates() {
 #[test]
 fn load_from_events_rejects_version_gap() {
     let events = vec![
-        VersionedEvent {
-            version: Version::from(1u64),
-            event: ItemEvent::Created(ItemCreated {
-                name: "test".into(),
-            }),
-        },
-        VersionedEvent {
-            version: Version::from(3u64),
-            event: ItemEvent::Done(ItemDone),
-        },
+        VersionedEvent::from_persisted(Version::from(1u64), ItemEvent::Created(ItemCreated { name: "test".into() })),
+        VersionedEvent::from_persisted(Version::from(3u64), ItemEvent::Done(ItemDone)),
     ];
     let result = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events);
     assert!(result.is_err());

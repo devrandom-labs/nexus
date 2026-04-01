@@ -90,10 +90,10 @@ fn arb_versioned_events(max_len: usize) -> impl Strategy<Value = Vec<VersionedEv
         events
             .into_iter()
             .enumerate()
-            .map(|(i, event)| VersionedEvent {
-                version: Version::from((i + 1) as u64),
+            .map(|(i, event)| VersionedEvent::from_persisted(
+                Version::from((i + 1) as u64),
                 event,
-            })
+            ))
             .collect()
     })
 }
@@ -112,10 +112,10 @@ proptest! {
     fn prop_replay_is_deterministic(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         // Build the versioned sequence twice from the same raw events
         let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
-            events.iter().enumerate().map(|(i, e)| VersionedEvent {
-                version: Version::from((i + 1) as u64),
-                event: e.clone(),
-            }).collect()
+            events.iter().enumerate().map(|(i, e)| VersionedEvent::from_persisted(
+                Version::from((i + 1) as u64),
+                e.clone(),
+            )).collect()
         };
 
         let agg1 = AggregateRoot::<CountAgg>::load_from_events(PId(1), make_versioned(&raw_events)).unwrap();
@@ -168,10 +168,10 @@ proptest! {
     #[test]
     fn prop_rehydrate_equals_sequential_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
-            events.iter().enumerate().map(|(i, e)| VersionedEvent {
-                version: Version::from((i + 1) as u64),
-                event: e.clone(),
-            }).collect()
+            events.iter().enumerate().map(|(i, e)| VersionedEvent::from_persisted(
+                Version::from((i + 1) as u64),
+                e.clone(),
+            )).collect()
         };
 
         // Path A: load_from_events
@@ -204,9 +204,9 @@ proptest! {
         for (i, ve) in uncommitted.iter().enumerate() {
             let expected = Version::from((i + 1) as u64);
             prop_assert_eq!(
-                ve.version, expected,
+                ve.version(), expected,
                 "Event at index {} has version {:?}, expected {:?}",
-                i, ve.version, expected,
+                i, ve.version(), expected,
             );
         }
     }
@@ -226,8 +226,9 @@ proptest! {
         let corrupt_idx = corrupt_idx % (events.len() - 1) + 1; // ensure valid index > 0
         let mut corrupted = events;
         // Add 1 to create a gap (skip a version)
-        corrupted[corrupt_idx].version = Version::from(
-            corrupted[corrupt_idx].version.as_u64() + 1
+        corrupted[corrupt_idx] = VersionedEvent::from_persisted(
+            Version::from(corrupted[corrupt_idx].version().as_u64() + 1),
+            corrupted[corrupt_idx].event().clone(),
         );
 
         let result = AggregateRoot::<CountAgg>::load_from_events(PId(1), corrupted);
@@ -265,13 +266,13 @@ proptest! {
             agg.apply_event(event.clone());
         }
         let taken1 = agg.take_uncommitted_events();
-        let last_v1 = taken1.last().unwrap().version;
+        let last_v1 = taken1.last().unwrap().version();
 
         for event in &batch2 {
             agg.apply_event(event.clone());
         }
         let taken2 = agg.take_uncommitted_events();
-        let first_v2 = taken2.first().unwrap().version;
+        let first_v2 = taken2.first().unwrap().version();
 
         prop_assert_eq!(
             first_v2,

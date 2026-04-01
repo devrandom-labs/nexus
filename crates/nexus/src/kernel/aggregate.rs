@@ -59,7 +59,7 @@ impl<A: Aggregate> AggregateRoot<A> {
         self.state.apply(&event);
         let version = self.current_version().next();
         self.uncommitted_events
-            .push(VersionedEvent { version, event });
+            .push(VersionedEvent::new(version, event));
     }
 
     pub fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<A>>) {
@@ -75,15 +75,16 @@ impl<A: Aggregate> AggregateRoot<A> {
         let mut aggregate = Self::new(id);
         for versioned_event in events {
             let expected = aggregate.version.next();
-            if versioned_event.version != expected {
+            if versioned_event.version() != expected {
                 return Err(KernelError::VersionMismatch {
                     stream_id: aggregate.id.to_string(),
                     expected,
-                    actual: versioned_event.version,
+                    actual: versioned_event.version(),
                 });
             }
-            aggregate.state.apply(&versioned_event.event);
-            aggregate.version = versioned_event.version;
+            let (version, event) = versioned_event.into_parts();
+            aggregate.state.apply(&event);
+            aggregate.version = version;
         }
         Ok(aggregate)
     }
