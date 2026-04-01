@@ -1,5 +1,7 @@
 #[path = "kernel_tests/aggregate_root_tests.rs"]
 mod aggregate_root_tests;
+#[path = "kernel_tests/architecture_tests.rs"]
+mod architecture_tests;
 #[path = "kernel_tests/edge_case_tests.rs"]
 mod edge_case_tests;
 #[path = "kernel_tests/error_tests.rs"]
