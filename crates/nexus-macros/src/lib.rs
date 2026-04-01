@@ -61,14 +61,23 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
                 })
                 .collect();
 
+            let name_body = if variant_arms.is_empty() {
+                // Empty enum — uninhabited, but &EmptyEnum is technically inhabited
+                quote! { unreachable!() }
+            } else {
+                quote! {
+                    match self {
+                        #(#variant_arms),*
+                    }
+                }
+            };
+
             let expanded = quote! {
                 impl ::nexus::Message for #name {}
 
                 impl ::nexus::DomainEvent for #name {
                     fn name(&self) -> &'static str {
-                        match self {
-                            #(#variant_arms),*
-                        }
+                        #name_body
                     }
                 }
             };
