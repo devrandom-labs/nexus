@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
+use syn::{Data, DeriveInput, Error, Result, Type, parse_macro_input};
 
 /// Attribute macro that transforms a unit struct into an aggregate newtype.
 ///
