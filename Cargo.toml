@@ -6,25 +6,25 @@ members = [
 ]
 
 [workspace.dependencies]
-async-trait = "0.1.88"
-chrono = { version = "0.4.41", features = ["serde"] }
-downcast-rs = "2.0.1"
+async-trait = "0.1.89"
+chrono = { version = "0.4.44", features = ["serde"] }
+downcast-rs = "2.0.2"
 fake = { version = "4.3.0", features = ["derive", "email_address"] }
-proptest = "1.7.0"
+proptest = "1.11.0"
 refinery = { version = "0.8.16", features = ["rusqlite"] }
 rusqlite = { version = "0.33.0", features = ["bundled", "trace", "uuid"] }
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.140"
-criterion = { version = "0.5", features = ["html_reports"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_json = "1.0.149"
+criterion = { version = "0.8", features = ["html_reports"] }
 smallvec = "1.15.1"
 static_assertions = "1.1.0"
 terrors = "0.3.3"
-thiserror = "2.0.12"
-tokio = { version = "1.45.1", features = ["full"] }
-tokio-stream = "0.1.17"
-tower = { version = "0.5.2", features = ["util"] }
-tracing = "0.1.41"
-uuid = { version = "1.17.0", features = ["v7", "fast-rng", "serde", "v4"] }
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", features = ["full"] }
+tokio-stream = "0.1.18"
+tower = { version = "0.5.3", features = ["util"] }
+tracing = "0.1.44"
+uuid = { version = "1.23.0", features = ["v7", "fast-rng", "serde", "v4"] }
 
 [workspace.package]
 version = "0.1.0"
