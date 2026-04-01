@@ -271,14 +271,20 @@ impl<A: Aggregate> AggregateRoot<A> {
     }
 
     /// Persisted version + uncommitted event count.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the total version count overflows `u64`.
     #[must_use]
     pub fn current_version(&self) -> Version {
-        #[allow(
-            clippy::as_conversions,
-            reason = "usize is at most 64 bits on all supported platforms, so this cast is lossless"
-        )]
-        let uncommitted_count = self.uncommitted_events.len() as u64;
-        Version::new(self.version.as_u64() + uncommitted_count)
+        let uncommitted_count = u64::try_from(self.uncommitted_events.len())
+            .expect("uncommitted event count exceeds u64");
+        let total = self
+            .version
+            .as_u64()
+            .checked_add(uncommitted_count)
+            .expect("Version overflow: version + uncommitted count exceeds u64::MAX");
+        Version::new(total)
     }
 
     /// Apply a single event: mutates state, increments version, tracks as uncommitted.

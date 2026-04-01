@@ -26,9 +26,17 @@ impl Version {
     pub const INITIAL: Self = Self(0);
 
     /// The next version in sequence.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the version is `u64::MAX` (overflow). This is a hard limit —
+    /// an aggregate cannot have more than `u64::MAX` events.
     #[must_use]
     pub const fn next(self) -> Self {
-        Self(self.0 + 1)
+        match self.0.checked_add(1) {
+            Some(v) => Self(v),
+            None => panic!("Version overflow: cannot increment past u64::MAX"),
+        }
     }
 
     /// The underlying integer value.

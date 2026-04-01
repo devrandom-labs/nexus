@@ -30,5 +30,7 @@ mod static_assertion_tests;
 mod traits_tests;
 #[path = "kernel_tests/newtype_aggregate_tests.rs"]
 mod newtype_aggregate_tests;
+#[path = "kernel_tests/security_tests.rs"]
+mod security_tests;
 #[path = "kernel_tests/version_tests.rs"]
 mod version_tests;
