@@ -82,6 +82,23 @@ pub struct VersionedEvent<E> {
     event: E,
 }
 
+impl<E: Clone> Clone for VersionedEvent<E> {
+    fn clone(&self) -> Self {
+        Self {
+            version: self.version,
+            event: self.event.clone(),
+        }
+    }
+}
+
+impl<E: PartialEq> PartialEq for VersionedEvent<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version && self.event == other.event
+    }
+}
+
+impl<E: Eq> Eq for VersionedEvent<E> {}
+
 impl<E> VersionedEvent<E> {
     /// The version (sequence number) of this event in the aggregate's history.
     #[must_use]

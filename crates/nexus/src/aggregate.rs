@@ -259,6 +259,36 @@ pub struct AggregateRoot<A: Aggregate> {
     uncommitted_events: SmallVec<[VersionedEvent<EventOf<A>>; 1]>,
 }
 
+impl<A: Aggregate> Clone for AggregateRoot<A>
+where
+    A::Id: Clone,
+    A::State: Clone,
+    EventOf<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            state: self.state.clone(),
+            version: self.version,
+            uncommitted_events: self.uncommitted_events.clone(),
+        }
+    }
+}
+
+impl<A: Aggregate> PartialEq for AggregateRoot<A>
+where
+    A::Id: PartialEq,
+    A::State: PartialEq,
+    EventOf<A>: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.state == other.state
+            && self.version == other.version
+            && self.uncommitted_events == other.uncommitted_events
+    }
+}
+
 impl<A: Aggregate> AggregateRoot<A> {
     /// Create a new aggregate with default state at version 0.
     pub fn new(id: A::Id) -> Self {

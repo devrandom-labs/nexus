@@ -17,7 +17,7 @@ impl fmt::Display for SId {
 }
 impl Id for SId {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum SEvent {
     Tick,
 }
@@ -28,7 +28,7 @@ impl DomainEvent for SEvent {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct SState {
     count: u64,
 }
@@ -332,6 +332,54 @@ fn l2_kernel_error_variants_are_known() {
         KernelError::RehydrationLimitExceeded { .. } => {}
         // If you add a variant, add it here and consider #[non_exhaustive]
     }
+}
+
+// =============================================================================
+// M3: Clone and PartialEq on AggregateRoot
+// =============================================================================
+
+#[test]
+fn m3_aggregate_root_clone() {
+    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    agg.apply_event(SEvent::Tick);
+    agg.apply_event(SEvent::Tick);
+
+    let cloned = agg.clone();
+    assert_eq!(cloned.version(), agg.version());
+    assert_eq!(cloned.current_version(), agg.current_version());
+    assert_eq!(cloned.id(), agg.id());
+    assert_eq!(cloned.state().count, agg.state().count);
+}
+
+#[test]
+fn m3_aggregate_root_partial_eq() {
+    let mut agg1 = AggregateRoot::<SAgg>::new(SId(1));
+    let mut agg2 = AggregateRoot::<SAgg>::new(SId(1));
+
+    // Same state
+    assert_eq!(agg1, agg2);
+
+    // Different after event
+    agg1.apply_event(SEvent::Tick);
+    assert_ne!(agg1, agg2);
+
+    // Same again
+    agg2.apply_event(SEvent::Tick);
+    assert_eq!(agg1, agg2);
+}
+
+#[test]
+fn m3_clone_is_independent() {
+    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    agg.apply_event(SEvent::Tick);
+
+    let mut cloned = agg.clone();
+    cloned.apply_event(SEvent::Tick);
+
+    // Original unchanged
+    assert_eq!(agg.current_version(), Version::from_persisted(1));
+    // Clone advanced
+    assert_eq!(cloned.current_version(), Version::from_persisted(2));
 }
 
 // =============================================================================
