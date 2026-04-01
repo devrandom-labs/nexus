@@ -94,7 +94,12 @@
         } // lib.optionalAttrs isLinux {
           # cargo-tarpaulin uses ptrace, which is Linux-only
           nexus-coverage =
-            craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
+            craneLib.cargoTarpaulin (commonArgs // {
+              inherit cargoArtifacts;
+              # Exclude trybuild compile-failure tests — .stderr snapshots
+              # contain paths that differ between local and CI environments
+              cargoTarpaulinExtraArgs = "--exclude-files 'tests/compile_fail/*' -- --skip compile_fail";
+            });
         };
 
         packages = {
