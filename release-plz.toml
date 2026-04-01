@@ -1,0 +1,19 @@
+[workspace]
+git_release_enable = true
+git_tag_enable = true
+
+# Crates that should not be published to crates.io
+[[package]]
+name = "workspace-hack"
+publish = false
+release = false
+
+[[package]]
+name = "nexus-test-helpers"
+publish = false
+release = false
+
+[[package]]
+name = "todo-rusqlite"
+publish = false
+release = false

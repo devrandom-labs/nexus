@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+description = "A zero-compromise event-sourcing and CQRS kernel for Rust with maximum compile-time type safety"
+readme = "README.md"
+keywords = ["event-sourcing", "cqrs", "ddd", "aggregate", "domain-driven-design"]
+categories = ["data-structures"]
 
 [dependencies]
 async-trait = { workspace = true }
