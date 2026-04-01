@@ -369,3 +369,30 @@ fn m5_apply_events_with_lying_size_hint() {
     agg.apply_events(iter);
     assert_eq!(agg.current_version(), Version::from_persisted(3));
 }
+
+#[test]
+fn m5_apply_events_with_huge_size_hint_does_not_oom() {
+    // An iterator that claims usize::MAX elements but actually has 2.
+    // Without the cap, reserve(usize::MAX) would OOM instantly.
+    struct HugeHintIterator {
+        remaining: u8,
+    }
+    impl Iterator for HugeHintIterator {
+        type Item = SEvent;
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.remaining > 0 {
+                self.remaining -= 1;
+                Some(SEvent::Tick)
+            } else {
+                None
+            }
+        }
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (usize::MAX, None) // malicious — claims usize::MAX elements
+        }
+    }
+
+    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    agg.apply_events(HugeHintIterator { remaining: 2 });
+    assert_eq!(agg.current_version(), Version::from_persisted(2));
+}

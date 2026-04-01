@@ -336,11 +336,15 @@ impl<A: Aggregate> AggregateRoot<A> {
         );
     }
 
-    /// Apply multiple events. Pre-allocates if the iterator provides a size hint.
+    /// Apply multiple events. Pre-allocates if the iterator provides a size hint,
+    /// capped at `MAX_UNCOMMITTED` to prevent malicious iterators from causing OOM.
     pub fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<A>>) {
         let iter = events.into_iter();
         let (lower, _) = iter.size_hint();
-        self.uncommitted_events.reserve(lower);
+        // Cap reservation to MAX_UNCOMMITTED — a lying iterator claiming
+        // usize::MAX elements must not cause an OOM allocation.
+        let safe_reserve = lower.min(A::MAX_UNCOMMITTED);
+        self.uncommitted_events.reserve(safe_reserve);
         for event in iter {
             self.apply_event(event);
         }
