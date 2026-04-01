@@ -1,3 +1,15 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::shadow_reuse,
+    clippy::shadow_same,
+    clippy::shadow_unrelated,
+    clippy::as_conversions,
+    clippy::str_to_string,
+    reason = "test harness — relaxed lints for test code"
+)]
+
 #[path = "kernel_tests/aggregate_root_tests.rs"]
 mod aggregate_root_tests;
 #[path = "kernel_tests/architecture_tests.rs"]
@@ -12,9 +24,9 @@ mod events_tests;
 mod integration_test;
 #[path = "kernel_tests/property_tests.rs"]
 mod property_tests;
-#[path = "kernel_tests/traits_tests.rs"]
-mod traits_tests;
 #[path = "kernel_tests/static_assertion_tests.rs"]
 mod static_assertion_tests;
+#[path = "kernel_tests/traits_tests.rs"]
+mod traits_tests;
 #[path = "kernel_tests/version_tests.rs"]
 mod version_tests;

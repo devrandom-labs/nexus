@@ -15,15 +15,16 @@ impl Message for TestEvent {}
 impl DomainEvent for TestEvent {
     fn name(&self) -> &'static str {
         match self {
-            TestEvent::Created(_) => "Created",
-            TestEvent::Activated(_) => "Activated",
+            Self::Created(_) => "Created",
+            Self::Activated(_) => "Activated",
         }
     }
 }
 
 #[test]
 fn versioned_event_holds_version_and_event() {
-    let ve = VersionedEvent::from_persisted(Version::from_persisted(1), TestEvent::Created(Created));
+    let ve =
+        VersionedEvent::from_persisted(Version::from_persisted(1), TestEvent::Created(Created));
     assert_eq!(ve.version(), Version::from_persisted(1));
     assert_eq!(ve.event(), &TestEvent::Created(Created));
 }

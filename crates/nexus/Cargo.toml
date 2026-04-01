@@ -41,3 +41,6 @@ testing = ["dep:fake", "derive"]
 [[bench]]
 name = "kernel_bench"
 harness = false
+
+[lints]
+workspace = true

@@ -78,7 +78,12 @@ impl Aggregate for BAgg {
 
 fn make_versioned_events(n: usize) -> Vec<VersionedEvent<BEvent>> {
     (0..n)
-        .map(|i| VersionedEvent::from_persisted(Version::from_persisted((i + 1) as u64), BEvent::Incremented))
+        .map(|i| {
+            VersionedEvent::from_persisted(
+                Version::from_persisted((i + 1) as u64),
+                BEvent::Incremented,
+            )
+        })
         .collect()
 }
 
@@ -104,9 +109,12 @@ fn bench_load_from_events(c: &mut Criterion) {
         let events = make_versioned_events(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &events, |b, events| {
             b.iter_with_setup(
-                || events.iter().map(|ve| {
-                    VersionedEvent::from_persisted(ve.version(), ve.event().clone())
-                }).collect::<Vec<_>>(),
+                || {
+                    events
+                        .iter()
+                        .map(|ve| VersionedEvent::from_persisted(ve.version(), ve.event().clone()))
+                        .collect::<Vec<_>>()
+                },
                 |events| {
                     AggregateRoot::<BAgg>::load_from_events(black_box(BId(1)), events).unwrap()
                 },
@@ -135,5 +143,10 @@ fn bench_apply_then_take(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_apply_event, bench_load_from_events, bench_apply_then_take);
+criterion_group!(
+    benches,
+    bench_apply_event,
+    bench_load_from_events,
+    bench_apply_then_take
+);
 criterion_main!(benches);

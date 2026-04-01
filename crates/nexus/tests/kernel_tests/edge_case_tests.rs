@@ -1,17 +1,17 @@
 //! Edge case tests for the kernel.
 //!
 //! These cover the gaps identified in our testing audit:
-//! - apply_events() (multi-event variant)
-//! - load_from_events with empty iterator
-//! - load_from_events starting from wrong version
-//! - current_version after rehydrate + new events
+//! - `apply_events()` (multi-event variant)
+//! - `load_from_events` with empty iterator
+//! - `load_from_events` starting from wrong version
+//! - `current_version` after rehydrate + new events
 //! - take, apply, take again pattern
-//! - Events ref iteration
+//! - `Events` ref iteration
 
-use nexus::kernel::*;
 use nexus::kernel::aggregate::AggregateRoot;
 use nexus::kernel::events::Events;
 use nexus::kernel::version::VersionedEvent;
+use nexus::kernel::*;
 use std::fmt;
 
 // --- Minimal test domain ---
@@ -38,8 +38,8 @@ impl Message for TEvent {}
 impl DomainEvent for TEvent {
     fn name(&self) -> &'static str {
         match self {
-            TEvent::Added(_) => "Added",
-            TEvent::Removed(_) => "Removed",
+            Self::Added(_) => "Added",
+            Self::Removed(_) => "Removed",
         }
     }
 }
@@ -86,7 +86,7 @@ fn apply_events_multiple() {
         TEvent::Added(Added("b".into())),
         TEvent::Removed(Removed),
     ]);
-    assert_eq!(agg.state().items, vec!["a".to_string()]);
+    assert_eq!(agg.state().items, vec![String::from("a")]);
     assert_eq!(agg.current_version(), Version::from_persisted(3));
 }
 
@@ -231,7 +231,7 @@ fn events_ref_iteration() {
     events.add(TEvent::Removed(Removed));
 
     // Iterate by reference (non-consuming)
-    let names: Vec<&str> = (&events).into_iter().map(|e| e.name()).collect();
+    let names: Vec<&str> = (&events).into_iter().map(DomainEvent::name).collect();
     assert_eq!(names, vec!["Added", "Removed"]);
 
     // Original still usable

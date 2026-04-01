@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Error, Result, Type, parse_macro_input, spanned::Spanned};
+use syn::{Data, DeriveInput, Error, LitStr, Result, Type, parse_macro_input, spanned::Spanned};
 
 mod utils;
 
@@ -150,10 +150,35 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 
             Ok(expanded)
         }
-        Data::Struct(_) => Err(Error::new(
-            name.span(),
-            "DomainEvent derive now requires an enum. Wrap event structs in an enum: `enum MyEvent { Created(Created), ... }`",
-        )),
+        Data::Struct(_) => {
+            // Legacy path: struct-based DomainEvent (generates domain:: impls)
+            let attribute = utils::get_attribute(&ast.attrs, "domain_event", name.span())?;
+
+            let mut event_name: Option<LitStr> = None;
+            attribute.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    event_name = Some(meta.value()?.parse()?);
+                } else {
+                    return Err(meta.error("unrecognized key for `#[domain_event]` attribute"));
+                }
+                Ok(())
+            })?;
+
+            let event_name = event_name
+                .ok_or_else(|| Error::new(attribute.path().span(), "`name` key is required"))?;
+
+            let expanded = quote! {
+                impl ::nexus::domain::Message for #name {}
+
+                impl ::nexus::domain::DomainEvent for #name {
+                    fn name(&self) -> &'static str {
+                        #event_name
+                    }
+                }
+            };
+
+            Ok(expanded)
+        }
         Data::Union(_) => Err(Error::new(name.span(), "Unions are not supported.")),
     }
 }

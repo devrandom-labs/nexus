@@ -4,10 +4,10 @@
 //! If any assertion fails, the crate won't compile.
 //! If they all pass, it's as if this file doesn't exist at runtime.
 
-use nexus::kernel::*;
 use nexus::kernel::aggregate::AggregateRoot;
 use nexus::kernel::events::Events;
 use nexus::kernel::version::VersionedEvent;
+use nexus::kernel::*;
 use static_assertions::*;
 use std::fmt;
 

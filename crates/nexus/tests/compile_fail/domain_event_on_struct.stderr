@@ -1,4 +1,4 @@
-error: DomainEvent derive now requires an enum. Wrap event structs in an enum: `enum MyEvent { Created(Created), ... }`
+error: missing required attribute `#[domain_event]`
  --> tests/compile_fail/domain_event_on_struct.rs:5:8
   |
 5 | struct NotAnEnum {

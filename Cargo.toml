@@ -33,5 +33,37 @@ license = "MIT OR Apache-2.0"
 authors = ["Joel DSouza <joel@devrandom.co>"]
 repository = "https://github.com/devrandom-labs/nexus"
 
+[workspace.lints.clippy]
+# 1. THE FOUNDATION
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+
+# 2. THE RUTHLESS RESTRICTIONS
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"
+
+# 3. MEMORY & PERFORMANCE STRICTNESS
+clone_on_ref_ptr = "deny"
+as_conversions = "deny"
+str_to_string = "deny"
+implicit_clone = "deny"
+
+# 4. VARIABLE HYGIENE
+shadow_reuse = "deny"
+shadow_same = "deny"
+shadow_unrelated = "deny"
+
+# 5. THE "NO CHEATING" RULE
+allow_attributes_without_reason = "deny"
+
 [workspace.metadata.crane]
 name = "nexus"

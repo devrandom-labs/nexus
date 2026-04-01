@@ -13,9 +13,9 @@
 
 #![cfg(not(miri))]
 
-use nexus::kernel::*;
 use nexus::kernel::aggregate::AggregateRoot;
 use nexus::kernel::version::VersionedEvent;
+use nexus::kernel::*;
 use proptest::prelude::*;
 use std::fmt;
 
@@ -42,9 +42,9 @@ impl Message for CountEvent {}
 impl DomainEvent for CountEvent {
     fn name(&self) -> &'static str {
         match self {
-            CountEvent::Incremented => "Incremented",
-            CountEvent::Decremented => "Decremented",
-            CountEvent::Set(_) => "Set",
+            Self::Incremented => "Incremented",
+            Self::Decremented => "Decremented",
+            Self::Set(_) => "Set",
         }
     }
 }
@@ -97,10 +97,9 @@ fn arb_versioned_events(max_len: usize) -> impl Strategy<Value = Vec<VersionedEv
         events
             .into_iter()
             .enumerate()
-            .map(|(i, event)| VersionedEvent::from_persisted(
-                Version::from_persisted((i + 1) as u64),
-                event,
-            ))
+            .map(|(i, event)| {
+                VersionedEvent::from_persisted(Version::from_persisted((i + 1) as u64), event)
+            })
             .collect()
     })
 }

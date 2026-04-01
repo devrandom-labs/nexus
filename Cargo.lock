@@ -2435,14 +2435,21 @@ dependencies = [
  "libsqlite3-sys",
  "memchr",
  "num-traits",
+ "ppv-lite86",
  "proc-macro2",
+ "rand 0.9.2",
+ "rand_chacha",
  "refinery-core",
+ "regex",
+ "regex-automata",
  "rusqlite",
  "serde",
+ "serde_core",
  "smallvec",
  "syn",
  "tokio",
  "uuid",
+ "winnow 0.7.13",
 ]
 
 [[package]]

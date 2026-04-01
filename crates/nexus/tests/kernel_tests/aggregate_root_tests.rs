@@ -28,8 +28,8 @@ impl Message for ItemEvent {}
 impl DomainEvent for ItemEvent {
     fn name(&self) -> &'static str {
         match self {
-            ItemEvent::Created(_) => "ItemCreated",
-            ItemEvent::Done(_) => "ItemDone",
+            Self::Created(_) => "ItemCreated",
+            Self::Done(_) => "ItemDone",
         }
     }
 }
@@ -43,7 +43,7 @@ impl AggregateState for ItemState {
     type Event = ItemEvent;
     fn apply(&mut self, event: &ItemEvent) {
         match event {
-            ItemEvent::Created(e) => self.name = e.name.clone(),
+            ItemEvent::Created(e) => self.name.clone_from(&e.name),
             ItemEvent::Done(_) => self.done = true,
         }
     }
@@ -130,7 +130,12 @@ fn take_uncommitted_events_drains() {
 #[test]
 fn load_from_events_rehydrates() {
     let events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), ItemEvent::Created(ItemCreated { name: "loaded".into() })),
+        VersionedEvent::from_persisted(
+            Version::from_persisted(1),
+            ItemEvent::Created(ItemCreated {
+                name: "loaded".into(),
+            }),
+        ),
         VersionedEvent::from_persisted(Version::from_persisted(2), ItemEvent::Done(ItemDone)),
     ];
     let agg = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events).unwrap();
@@ -142,7 +147,12 @@ fn load_from_events_rehydrates() {
 #[test]
 fn load_from_events_rejects_version_gap() {
     let events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), ItemEvent::Created(ItemCreated { name: "test".into() })),
+        VersionedEvent::from_persisted(
+            Version::from_persisted(1),
+            ItemEvent::Created(ItemCreated {
+                name: "test".into(),
+            }),
+        ),
         VersionedEvent::from_persisted(Version::from_persisted(3), ItemEvent::Done(ItemDone)),
     ];
     let result = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events);
