@@ -187,6 +187,41 @@ fn take_then_apply_then_take_again() {
 }
 
 // =============================================================================
+// version increments exactly by 1 per apply_event, even with many uncommitted
+// =============================================================================
+
+#[test]
+fn version_increments_by_one_each_apply_with_many_uncommitted() {
+    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+
+    for i in 0..5 {
+        let pre = agg.current_version();
+        agg.apply_event(TEvent::Added(Added(format!("item-{i}"))));
+        let post = agg.current_version();
+        assert_eq!(
+            post.as_u64(),
+            pre.as_u64() + 1,
+            "After apply_event #{i}, current_version should be exactly pre + 1"
+        );
+    }
+
+    assert_eq!(agg.current_version(), Version::from_persisted(5));
+    assert_eq!(agg.version(), Version::INITIAL); // persisted version unchanged
+
+    let events = agg.take_uncommitted_events();
+    assert_eq!(events.len(), 5);
+    // Each event's version should be strictly sequential
+    for (i, ve) in events.iter().enumerate() {
+        assert_eq!(
+            ve.version(),
+            Version::from_persisted((i + 1) as u64),
+            "Event {i} should have version {}",
+            i + 1,
+        );
+    }
+}
+
+// =============================================================================
 // Events<E> ref iteration — was untested
 // =============================================================================
 
