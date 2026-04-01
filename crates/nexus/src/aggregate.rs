@@ -51,18 +51,18 @@ pub trait AggregateState: Default + Send + Sync + Debug + 'static {
     fn name(&self) -> &'static str;
 }
 
-/// Type-level specification that binds an aggregate's state, error, and ID types.
+/// The aggregate trait — binds state, error, and ID types together
+/// and provides default method implementations via `root()`/`root_mut()`.
 ///
-/// Implement this on a marker struct. The `AggregateRoot<A>` machinery
-/// uses these associated types to wire everything together.
+/// Users implement this on a newtype wrapping `AggregateRoot<Self>`.
+/// The `#[derive(Aggregate)]` macro generates this boilerplate.
+/// Only `root()` and `root_mut()` need implementing — all other
+/// methods are provided as defaults.
 ///
-/// # Example
+/// # Manual Example (what the derive macro generates)
 ///
 /// ```
-/// use nexus::{Aggregate, AggregateState};
-/// use nexus::DomainEvent;
-/// use nexus::Id;
-/// use nexus::Message;
+/// use nexus::*;
 ///
 /// # #[derive(Debug, Clone)] enum Ev { A }
 /// # impl Message for Ev {}
@@ -72,19 +72,90 @@ pub trait AggregateState: Default + Send + Sync + Debug + 'static {
 /// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct MyId(u64);
 /// # impl std::fmt::Display for MyId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
 /// # impl Id for MyId {}
+/// # #[derive(Debug, thiserror::Error)] #[error("e")] struct MyError;
 ///
-/// struct MyAggregate;
+/// struct MyAggregate(AggregateRoot<Self>);
 ///
 /// impl Aggregate for MyAggregate {
 ///     type State = St;
-///     type Error = std::io::Error; // any std::error::Error
+///     type Error = MyError;
 ///     type Id = MyId;
 /// }
+///
+/// impl AggregateEntity for MyAggregate {
+///     fn root(&self) -> &AggregateRoot<Self> { &self.0 }
+///     fn root_mut(&mut self) -> &mut AggregateRoot<Self> { &mut self.0 }
+/// }
+///
+/// impl MyAggregate {
+///     fn new(id: MyId) -> Self { Self(AggregateRoot::new(id)) }
+/// }
+///
+/// let mut agg = MyAggregate::new(MyId(1));
+/// agg.apply_event(Ev::A);
+/// assert_eq!(agg.version(), Version::INITIAL);
+/// assert_eq!(agg.current_version(), Version::from_persisted(1));
 /// ```
-pub trait Aggregate {
+/// Type-level specification binding state, error, and ID types.
+///
+/// This is the marker trait — just associated types, no methods.
+/// `AggregateRoot<A: Aggregate>` uses these types internally.
+pub trait Aggregate: Sized {
     type State: AggregateState;
     type Error: Error + Send + Sync + Debug + 'static;
     type Id: Id;
+}
+
+/// Trait for user-defined aggregate newtypes wrapping `AggregateRoot`.
+///
+/// Provides default method implementations so users get `state()`,
+/// `apply_event()`, etc. on their own type. Only `root()` and
+/// `root_mut()` must be implemented — typically via `#[derive(Aggregate)]`.
+pub trait AggregateEntity: Aggregate {
+    /// Access the inner `AggregateRoot`.
+    fn root(&self) -> &AggregateRoot<Self>;
+
+    /// Mutably access the inner `AggregateRoot`.
+    fn root_mut(&mut self) -> &mut AggregateRoot<Self>;
+
+    /// The aggregate's identity.
+    #[must_use]
+    fn id(&self) -> &Self::Id {
+        self.root().id()
+    }
+
+    /// The current state (read-only).
+    #[must_use]
+    fn state(&self) -> &Self::State {
+        self.root().state()
+    }
+
+    /// The last persisted version.
+    #[must_use]
+    fn version(&self) -> Version {
+        self.root().version()
+    }
+
+    /// Persisted version + uncommitted event count.
+    #[must_use]
+    fn current_version(&self) -> Version {
+        self.root().current_version()
+    }
+
+    /// Apply a single event.
+    fn apply_event(&mut self, event: EventOf<Self>) {
+        self.root_mut().apply_event(event);
+    }
+
+    /// Apply multiple events.
+    fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<Self>>) {
+        self.root_mut().apply_events(events);
+    }
+
+    /// Drain uncommitted events for persistence.
+    fn take_uncommitted_events(&mut self) -> SmallVec<[VersionedEvent<EventOf<Self>>; 1]> {
+        self.root_mut().take_uncommitted_events()
+    }
 }
 
 /// Shorthand for accessing the event type of an aggregate.

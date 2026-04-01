@@ -28,5 +28,7 @@ mod property_tests;
 mod static_assertion_tests;
 #[path = "kernel_tests/traits_tests.rs"]
 mod traits_tests;
+#[path = "kernel_tests/newtype_aggregate_tests.rs"]
+mod newtype_aggregate_tests;
 #[path = "kernel_tests/version_tests.rs"]
 mod version_tests;
