@@ -762,6 +762,7 @@ version = "0.1.0"
 dependencies = [
  "nexus",
  "proc-macro2",
+ "proptest",
  "quote",
  "syn",
  "thiserror 2.0.18",
