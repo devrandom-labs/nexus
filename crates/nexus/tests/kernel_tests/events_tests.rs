@@ -23,8 +23,8 @@ impl DomainEvent for TestEvent {
 
 #[test]
 fn versioned_event_holds_version_and_event() {
-    let ve = VersionedEvent::from_persisted(Version::from(1u64), TestEvent::Created(Created));
-    assert_eq!(ve.version(), Version::from(1u64));
+    let ve = VersionedEvent::from_persisted(Version::from_persisted(1), TestEvent::Created(Created));
+    assert_eq!(ve.version(), Version::from_persisted(1));
     assert_eq!(ve.event(), &TestEvent::Created(Created));
 }
 

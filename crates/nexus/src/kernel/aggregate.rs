@@ -52,7 +52,7 @@ impl<A: Aggregate> AggregateRoot<A> {
 
     pub fn current_version(&self) -> Version {
         let uncommitted_count = self.uncommitted_events.len() as u64;
-        Version::from(self.version.as_u64() + uncommitted_count)
+        Version::new(self.version.as_u64() + uncommitted_count)
     }
 
     pub fn apply_event(&mut self, event: EventOf<A>) {

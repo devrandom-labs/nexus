@@ -14,33 +14,33 @@ fn next_increments_by_one() {
 
 #[test]
 fn version_from_u64() {
-    let v = Version::from(42u64);
+    let v = Version::from_persisted(42);
     assert_eq!(v.as_u64(), 42);
 }
 
 #[test]
 fn version_display() {
-    let v = Version::from(7u64);
+    let v = Version::from_persisted(7);
     assert_eq!(format!("{v}"), "7");
 }
 
 #[test]
 fn version_ordering() {
-    let v1 = Version::from(1u64);
-    let v2 = Version::from(2u64);
+    let v1 = Version::from_persisted(1);
+    let v2 = Version::from_persisted(2);
     assert!(v1 < v2);
 }
 
 #[test]
 fn version_equality() {
-    let v1 = Version::from(5u64);
-    let v2 = Version::from(5u64);
+    let v1 = Version::from_persisted(5);
+    let v2 = Version::from_persisted(5);
     assert_eq!(v1, v2);
 }
 
 #[test]
 fn version_copy_semantics() {
-    let v1 = Version::from(3u64);
+    let v1 = Version::from_persisted(3);
     let v2 = v1;
     assert_eq!(v1, v2);
 }

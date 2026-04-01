@@ -87,7 +87,7 @@ fn apply_events_multiple() {
         TEvent::Removed(Removed),
     ]);
     assert_eq!(agg.state().items, vec!["a".to_string()]);
-    assert_eq!(agg.current_version(), Version::from(3u64));
+    assert_eq!(agg.current_version(), Version::from_persisted(3));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn load_from_events_empty_iterator_returns_default() {
 #[test]
 fn load_from_events_rejects_first_event_not_version_1() {
     let events = vec![VersionedEvent::from_persisted(
-        Version::from(5u64), // should be 1!
+        Version::from_persisted(5), // should be 1!
         TEvent::Added(Added("x".into())),
     )];
     let err = AggregateRoot::<TAgg>::load_from_events(TId(1), events).unwrap_err();
@@ -121,8 +121,8 @@ fn load_from_events_rejects_first_event_not_version_1() {
         KernelError::VersionMismatch {
             expected, actual, ..
         } => {
-            assert_eq!(expected, Version::from(1u64));
-            assert_eq!(actual, Version::from(5u64));
+            assert_eq!(expected, Version::from_persisted(1));
+            assert_eq!(actual, Version::from_persisted(5));
         }
     }
 }
@@ -135,32 +135,32 @@ fn load_from_events_rejects_first_event_not_version_1() {
 fn current_version_after_rehydrate_plus_new_events() {
     let history = vec![
         VersionedEvent::from_persisted(
-            Version::from(1u64),
+            Version::from_persisted(1),
             TEvent::Added(Added("a".into())),
         ),
         VersionedEvent::from_persisted(
-            Version::from(2u64),
+            Version::from_persisted(2),
             TEvent::Added(Added("b".into())),
         ),
         VersionedEvent::from_persisted(
-            Version::from(3u64),
+            Version::from_persisted(3),
             TEvent::Added(Added("c".into())),
         ),
     ];
     let mut agg = AggregateRoot::<TAgg>::load_from_events(TId(1), history).unwrap();
 
-    assert_eq!(agg.version(), Version::from(3u64)); // persisted
-    assert_eq!(agg.current_version(), Version::from(3u64)); // no uncommitted yet
+    assert_eq!(agg.version(), Version::from_persisted(3)); // persisted
+    assert_eq!(agg.current_version(), Version::from_persisted(3)); // no uncommitted yet
 
     agg.apply_event(TEvent::Added(Added("d".into())));
     agg.apply_event(TEvent::Removed(Removed));
 
-    assert_eq!(agg.version(), Version::from(3u64)); // persisted unchanged
-    assert_eq!(agg.current_version(), Version::from(5u64)); // 3 + 2 uncommitted
+    assert_eq!(agg.version(), Version::from_persisted(3)); // persisted unchanged
+    assert_eq!(agg.current_version(), Version::from_persisted(5)); // 3 + 2 uncommitted
 
     let events = agg.take_uncommitted_events();
-    assert_eq!(events[0].version(), Version::from(4u64));
-    assert_eq!(events[1].version(), Version::from(5u64));
+    assert_eq!(events[0].version(), Version::from_persisted(4));
+    assert_eq!(events[1].version(), Version::from_persisted(5));
 }
 
 // =============================================================================
@@ -175,15 +175,15 @@ fn take_then_apply_then_take_again() {
     agg.apply_event(TEvent::Added(Added("first".into())));
     let batch1 = agg.take_uncommitted_events();
     assert_eq!(batch1.len(), 1);
-    assert_eq!(batch1[0].version(), Version::from(1u64));
+    assert_eq!(batch1[0].version(), Version::from_persisted(1));
 
     // Second batch — versions should continue from where we left off
     agg.apply_event(TEvent::Added(Added("second".into())));
     agg.apply_event(TEvent::Added(Added("third".into())));
     let batch2 = agg.take_uncommitted_events();
     assert_eq!(batch2.len(), 2);
-    assert_eq!(batch2[0].version(), Version::from(2u64));
-    assert_eq!(batch2[1].version(), Version::from(3u64));
+    assert_eq!(batch2[0].version(), Version::from_persisted(2));
+    assert_eq!(batch2[1].version(), Version::from_persisted(3));
 }
 
 // =============================================================================

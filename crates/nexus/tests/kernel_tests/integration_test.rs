@@ -101,12 +101,12 @@ fn full_aggregate_lifecycle() {
 
     assert_eq!(user.state().name, "Alice");
     assert!(user.state().active);
-    assert_eq!(user.current_version(), Version::from(2u64));
+    assert_eq!(user.current_version(), Version::from_persisted(2));
 
     let events = user.take_uncommitted_events();
     assert_eq!(events.len(), 2);
-    assert_eq!(events[0].version(), Version::from(1u64));
-    assert_eq!(events[1].version(), Version::from(2u64));
+    assert_eq!(events[0].version(), Version::from_persisted(1));
+    assert_eq!(events[1].version(), Version::from_persisted(2));
     assert_eq!(events[0].event().name(), "Created");
     assert_eq!(events[1].event().name(), "Activated");
 }
@@ -114,18 +114,18 @@ fn full_aggregate_lifecycle() {
 #[test]
 fn rehydrate_then_continue() {
     let history = vec![VersionedEvent::from_persisted(
-        Version::from(1u64),
+        Version::from_persisted(1),
         UserEvent::Created(UserCreated { name: "Bob".into() }),
     )];
     let mut user = AggregateRoot::<UserAggregate>::load_from_events(UserId(2), history).unwrap();
 
-    assert_eq!(user.version(), Version::from(1u64));
+    assert_eq!(user.version(), Version::from_persisted(1));
     assert_eq!(user.state().name, "Bob");
 
     activate_user(&mut user).unwrap();
     let events = user.take_uncommitted_events();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].version(), Version::from(2u64));
+    assert_eq!(events[0].version(), Version::from_persisted(2));
 }
 
 #[test]

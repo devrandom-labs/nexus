@@ -13,17 +13,28 @@ impl Version {
     pub fn as_u64(self) -> u64 {
         self.0
     }
+
+    /// Construct a Version from a raw u64.
+    ///
+    /// This is `pub(crate)` — only the kernel creates versions internally.
+    /// Store adapters use `from_persisted()` to reconstruct versions
+    /// from database rows.
+    pub(crate) fn new(v: u64) -> Self {
+        Version(v)
+    }
+
+    /// Reconstruct a Version from persisted data.
+    ///
+    /// For store adapters that read version numbers from a database.
+    /// This is the only public way to construct a Version from a raw number.
+    pub fn from_persisted(v: u64) -> Self {
+        Version(v)
+    }
 }
 
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl From<u64> for Version {
-    fn from(v: u64) -> Self {
-        Version(v)
     }
 }
 

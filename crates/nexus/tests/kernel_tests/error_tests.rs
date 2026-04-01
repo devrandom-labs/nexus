@@ -4,8 +4,8 @@ use nexus::kernel::{KernelError, Version};
 fn version_mismatch_display() {
     let err = KernelError::VersionMismatch {
         stream_id: "user-123".to_string(),
-        expected: Version::from(3u64),
-        actual: Version::from(5u64),
+        expected: Version::from_persisted(3),
+        actual: Version::from_persisted(5),
     };
     let msg = format!("{err}");
     assert!(msg.contains("user-123"));
@@ -18,7 +18,7 @@ fn kernel_error_is_std_error() {
     let err = KernelError::VersionMismatch {
         stream_id: "test".to_string(),
         expected: Version::INITIAL,
-        actual: Version::from(1u64),
+        actual: Version::from_persisted(1),
     };
     let _: &dyn std::error::Error = &err;
 }

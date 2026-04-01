@@ -91,7 +91,7 @@ fn arb_versioned_events(max_len: usize) -> impl Strategy<Value = Vec<VersionedEv
             .into_iter()
             .enumerate()
             .map(|(i, event)| VersionedEvent::from_persisted(
-                Version::from((i + 1) as u64),
+                Version::from_persisted((i + 1) as u64),
                 event,
             ))
             .collect()
@@ -113,7 +113,7 @@ proptest! {
         // Build the versioned sequence twice from the same raw events
         let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
             events.iter().enumerate().map(|(i, e)| VersionedEvent::from_persisted(
-                Version::from((i + 1) as u64),
+                Version::from_persisted((i + 1) as u64),
                 e.clone(),
             )).collect()
         };
@@ -138,7 +138,7 @@ proptest! {
             agg.apply_event(event);
         }
 
-        prop_assert_eq!(agg.current_version(), Version::from(n));
+        prop_assert_eq!(agg.current_version(), Version::from_persisted(n));
     }
 
     /// Property 3: Uncommitted count matches version delta
@@ -169,7 +169,7 @@ proptest! {
     fn prop_rehydrate_equals_sequential_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
             events.iter().enumerate().map(|(i, e)| VersionedEvent::from_persisted(
-                Version::from((i + 1) as u64),
+                Version::from_persisted((i + 1) as u64),
                 e.clone(),
             )).collect()
         };
@@ -202,7 +202,7 @@ proptest! {
 
         let uncommitted = agg.take_uncommitted_events();
         for (i, ve) in uncommitted.iter().enumerate() {
-            let expected = Version::from((i + 1) as u64);
+            let expected = Version::from_persisted((i + 1) as u64);
             prop_assert_eq!(
                 ve.version(), expected,
                 "Event at index {} has version {:?}, expected {:?}",
@@ -227,7 +227,7 @@ proptest! {
         let mut corrupted = events;
         // Add 1 to create a gap (skip a version)
         corrupted[corrupt_idx] = VersionedEvent::from_persisted(
-            Version::from(corrupted[corrupt_idx].version().as_u64() + 1),
+            Version::from_persisted(corrupted[corrupt_idx].version().as_u64() + 1),
             corrupted[corrupt_idx].event().clone(),
         );
 
