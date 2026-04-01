@@ -23,6 +23,7 @@ impl DomainEvent for AttrEvent {
 struct AttrState;
 impl AggregateState for AttrState {
     type Event = AttrEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, _: &AttrEvent) {}
     fn name(&self) -> &'static str { "Attr" }
 }

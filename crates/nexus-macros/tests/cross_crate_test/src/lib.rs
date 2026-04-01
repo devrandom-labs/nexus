@@ -40,6 +40,7 @@ pub struct TaskState {
 
 impl AggregateState for TaskState {
     type Event = TaskEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::Created(e) => self.title = e.title.clone(),

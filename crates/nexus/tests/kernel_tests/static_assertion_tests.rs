@@ -70,6 +70,7 @@ impl DomainEvent for StaticEvent {
 struct StaticState;
 impl AggregateState for StaticState {
     type Event = StaticEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, _event: &StaticEvent) {}
     fn name(&self) -> &'static str {
         "Static"

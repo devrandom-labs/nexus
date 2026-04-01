@@ -18,6 +18,7 @@ struct OrderState {
 
 impl AggregateState for OrderState {
     type Event = OrderEvent;
+    fn initial() -> Self { Self::default() }
 
     fn apply(&mut self, event: &OrderEvent) {
         match event {

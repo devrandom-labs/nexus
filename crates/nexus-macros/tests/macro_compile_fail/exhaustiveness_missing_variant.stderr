@@ -1,7 +1,7 @@
 error[E0004]: non-exhaustive patterns: `&OrderEvent::Cancelled` not covered
-  --> tests/macro_compile_fail/exhaustiveness_missing_variant.rs:23:15
+  --> tests/macro_compile_fail/exhaustiveness_missing_variant.rs:24:15
    |
-23 |         match event {
+24 |         match event {
    |               ^^^^^ pattern `&OrderEvent::Cancelled` not covered
    |
 note: `OrderEvent` defined here
@@ -15,6 +15,6 @@ note: `OrderEvent` defined here
    = note: the matched value is of type `&OrderEvent`
 help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
    |
-25 ~             OrderEvent::Shipped => self.status = "shipped".into(),
-26 ~             &OrderEvent::Cancelled => todo!(),
+26 ~             OrderEvent::Shipped => self.status = "shipped".into(),
+27 ~             &OrderEvent::Cancelled => todo!(),
    |

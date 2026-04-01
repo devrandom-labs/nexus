@@ -35,6 +35,7 @@ use std::fmt::Debug;
 /// struct CounterState { value: i64 }
 ///
 /// impl AggregateState for CounterState {
+///     fn initial() -> Self { Self::default() }
 ///     type Event = CounterEvent;
 ///     fn apply(&mut self, event: &CounterEvent) {
 ///         match event {
@@ -45,8 +46,17 @@ use std::fmt::Debug;
 ///     fn name(&self) -> &'static str { "Counter" }
 /// }
 /// ```
-pub trait AggregateState: Default + Send + Sync + Debug + 'static {
+pub trait AggregateState: Send + Sync + Debug + 'static {
     type Event: DomainEvent;
+
+    /// The initial state of a new aggregate.
+    ///
+    /// This replaces `Default` — use this when the zero-valued state
+    /// is invalid for your domain. For simple cases, just return
+    /// `Self { field: 0, ... }` or derive `Default` and call
+    /// `Self::default()`.
+    fn initial() -> Self;
+
     fn apply(&mut self, event: &Self::Event);
     fn name(&self) -> &'static str;
 }
@@ -68,7 +78,7 @@ pub trait AggregateState: Default + Send + Sync + Debug + 'static {
 /// # impl Message for Ev {}
 /// # impl DomainEvent for Ev { fn name(&self) -> &'static str { "A" } }
 /// # #[derive(Default, Debug)] struct St;
-/// # impl AggregateState for St { type Event = Ev; fn apply(&mut self, _: &Ev) {} fn name(&self) -> &'static str { "S" } }
+/// # impl AggregateState for St { type Event = Ev; fn initial() -> Self { Self::default() } fn apply(&mut self, _: &Ev) {} fn name(&self) -> &'static str { "S" } }
 /// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct MyId(u64);
 /// # impl std::fmt::Display for MyId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
 /// # impl Id for MyId {}
@@ -212,6 +222,7 @@ pub const DEFAULT_MAX_REHYDRATION_EVENTS: usize = 1_000_000;
 /// struct TodoState { title: String, done: bool }
 /// impl AggregateState for TodoState {
 ///     type Event = TodoEvent;
+///     fn initial() -> Self { Self::default() }
 ///     fn apply(&mut self, event: &TodoEvent) {
 ///         match event {
 ///             TodoEvent::Created(t) => self.title = t.clone(),
@@ -294,7 +305,7 @@ impl<A: Aggregate> AggregateRoot<A> {
     pub fn new(id: A::Id) -> Self {
         Self {
             id,
-            state: A::State::default(),
+            state: A::State::initial(),
             version: Version::INITIAL,
             uncommitted_events: smallvec![],
         }

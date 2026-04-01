@@ -16,6 +16,7 @@ impl DomainEvent for UserEvent {
 struct UserState;
 impl AggregateState for UserState {
     type Event = UserEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, _: &UserEvent) {}
     fn name(&self) -> &'static str { "User" }
 }

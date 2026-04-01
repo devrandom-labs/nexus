@@ -32,6 +32,7 @@ struct SingleState {
 }
 impl AggregateState for SingleState {
     type Event = SingleEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, event: &SingleEvent) {
         match event {
             SingleEvent::Only => self.triggered = true,
@@ -103,6 +104,7 @@ struct VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacro {
 
 impl AggregateState for VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacro {
     type Event = VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro;
+    fn initial() -> Self { Self::default() }
     fn apply(
         &mut self,
         event: &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro,
@@ -156,6 +158,7 @@ mod inner {
 
     impl AggregateState for InnerState {
         type Event = InnerEvent;
+    fn initial() -> Self { Self::default() }
         fn apply(&mut self, _: &InnerEvent) {
             self.pings += 1;
         }

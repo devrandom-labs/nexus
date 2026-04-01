@@ -37,7 +37,9 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:rust-lang.github.io)",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "Bash(sed -i '' 's/impl AggregateState for CounterState {/impl AggregateState for CounterState {\\\\n\\\\/\\\\/\\\\/     fn initial\\(\\) -> Self { Self::default\\(\\) }/' crates/nexus/src/aggregate.rs)",
+      "Bash(sed -i '' \"s/# impl AggregateState for St { type Event = Ev; fn apply\\(\\\\&mut self, _: \\\\&Ev\\) {} fn name\\(\\\\&self\\) -> \\\\&''static str { \"\"S\"\" } }/# impl AggregateState for St { type Event = Ev; fn initial\\(\\) -> Self { Self::default\\(\\) } fn apply\\(\\\\&mut self, _: \\\\&Ev\\) {} fn name\\(\\\\&self\\) -> \\\\&''static str { \"\"S\"\" } }/\" crates/nexus/src/aggregate.rs)"
     ]
   }
 }

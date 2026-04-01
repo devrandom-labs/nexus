@@ -34,6 +34,7 @@ struct SState {
 }
 impl AggregateState for SState {
     type Event = SEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, _: &SEvent) {
         self.count = self.count.wrapping_add(1);
     }
@@ -228,6 +229,7 @@ fn h5_event_survives_panic_in_apply() {
     struct BombState { count: u64 }
     impl AggregateState for BombState {
         type Event = BombEvent;
+    fn initial() -> Self { Self::default() }
         fn apply(&mut self, event: &BombEvent) {
             match event {
                 BombEvent::Safe => self.count += 1,

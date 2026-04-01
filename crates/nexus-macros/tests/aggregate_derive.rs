@@ -34,6 +34,7 @@ struct TodoState {
 }
 impl AggregateState for TodoState {
     type Event = TodoEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, event: &TodoEvent) {
         match event {
             TodoEvent::Created(e) => self.title = e.title.clone(),
