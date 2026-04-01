@@ -196,23 +196,76 @@ fn h2_error_contains_stream_id() {
 // H5: apply() panic leaves aggregate inconsistent
 // =============================================================================
 
-// We can't easily test a panicking apply() without catch_unwind,
-// so we document the concern and test the ordering guarantee.
+// Event is recorded BEFORE state mutation.
+// If apply() panics, the event survives (recoverable via replay).
 
 #[test]
-fn h5_event_pushed_after_state_apply() {
-    // Currently, state.apply() is called BEFORE push to uncommitted_events.
-    // If apply() panics, the event is lost but state may be partially mutated.
-    // This test verifies the current ordering so any change is intentional.
+fn h5_event_recorded_before_state_mutation() {
     let mut agg = AggregateRoot::<SAgg>::new(SId(1));
     agg.apply_event(SEvent::Tick);
 
-    // State was mutated
+    // Both happened in the non-panic path
     assert_eq!(agg.state().count, 1);
-    // Event was tracked
     let events = agg.take_uncommitted_events();
     assert_eq!(events.len(), 1);
-    // Both happened — no inconsistency in the non-panic path
+}
+
+#[test]
+fn h5_event_survives_panic_in_apply() {
+    use std::panic;
+
+    // Aggregate with a panicking apply
+    #[derive(Debug, Clone)]
+    enum BombEvent { Safe, Explode }
+    impl Message for BombEvent {}
+    impl DomainEvent for BombEvent {
+        fn name(&self) -> &'static str {
+            match self { Self::Safe => "Safe", Self::Explode => "Explode" }
+        }
+    }
+
+    #[derive(Default, Debug)]
+    struct BombState { count: u64 }
+    impl AggregateState for BombState {
+        type Event = BombEvent;
+        fn apply(&mut self, event: &BombEvent) {
+            match event {
+                BombEvent::Safe => self.count += 1,
+                BombEvent::Explode => panic!("state apply panicked"),
+            }
+        }
+        fn name(&self) -> &'static str { "Bomb" }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("e")]
+    struct BombError;
+
+    #[derive(Debug)]
+    struct BombAgg;
+    impl Aggregate for BombAgg {
+        type State = BombState;
+        type Error = BombError;
+        type Id = SId;
+    }
+
+    let mut agg = AggregateRoot::<BombAgg>::new(SId(1));
+    agg.apply_event(BombEvent::Safe); // works fine
+
+    // Panicking apply — event should still be in uncommitted
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        agg.apply_event(BombEvent::Explode);
+    }));
+    assert!(result.is_err(), "apply should have panicked");
+
+    // The event that caused the panic IS recorded (push happened first)
+    let events = agg.take_uncommitted_events();
+    assert_eq!(events.len(), 2, "both events should be recorded, including the one that caused panic");
+    assert_eq!(events[0].event().name(), "Safe");
+    assert_eq!(events[1].event().name(), "Explode");
+
+    // State only reflects the first event (second apply panicked before completing)
+    assert_eq!(agg.state().count, 1);
 }
 
 // =============================================================================

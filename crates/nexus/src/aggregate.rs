@@ -306,7 +306,11 @@ impl<A: Aggregate> AggregateRoot<A> {
         Version::new(total)
     }
 
-    /// Apply a single event: mutates state, increments version, tracks as uncommitted.
+    /// Apply a single event: tracks as uncommitted, then mutates state.
+    ///
+    /// The event is recorded BEFORE state mutation. If `AggregateState::apply()`
+    /// panics, the event is preserved (recoverable via replay). The reverse
+    /// (state mutated, event lost) would be unrecoverable data loss.
     ///
     /// # Panics
     ///
@@ -319,9 +323,12 @@ impl<A: Aggregate> AggregateRoot<A> {
             A::MAX_UNCOMMITTED,
         );
         let next_version = self.current_version().next();
-        self.state.apply(&event);
+        // Record the event FIRST — survives panics in state.apply()
         self.uncommitted_events
             .push(VersionedEvent::new(next_version, event));
+        // Then mutate state — if this panics, the event is still recorded
+        self.state
+            .apply(self.uncommitted_events.last().expect("just pushed").event());
         debug_assert_eq!(
             self.current_version(),
             next_version,
