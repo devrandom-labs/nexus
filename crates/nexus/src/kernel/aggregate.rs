@@ -56,10 +56,16 @@ impl<A: Aggregate> AggregateRoot<A> {
     }
 
     pub fn apply_event(&mut self, event: EventOf<A>) {
+        let pre_version = self.current_version();
         self.state.apply(&event);
         let version = self.current_version().next();
         self.uncommitted_events
             .push(VersionedEvent::new(version, event));
+        debug_assert_eq!(
+            self.current_version().as_u64(),
+            pre_version.as_u64() + 1,
+            "Invariant violated: apply_event must increment current_version by exactly 1"
+        );
     }
 
     pub fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<A>>) {
@@ -86,11 +92,24 @@ impl<A: Aggregate> AggregateRoot<A> {
             aggregate.state.apply(&event);
             aggregate.version = version;
         }
+        debug_assert!(
+            aggregate.uncommitted_events.is_empty(),
+            "Invariant violated: load_from_events must not produce uncommitted events"
+        );
         Ok(aggregate)
     }
 
     pub fn take_uncommitted_events(&mut self) -> SmallVec<[VersionedEvent<EventOf<A>>; 1]> {
         self.version = self.current_version();
-        std::mem::take(&mut self.uncommitted_events)
+        let events = std::mem::take(&mut self.uncommitted_events);
+        debug_assert_eq!(
+            self.version, self.current_version(),
+            "Invariant violated: after take, version must equal current_version"
+        );
+        debug_assert!(
+            self.uncommitted_events.is_empty(),
+            "Invariant violated: after take, uncommitted_events must be empty"
+        );
+        events
     }
 }
