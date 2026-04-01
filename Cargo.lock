@@ -741,6 +741,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-cross-crate-test"
+version = "0.0.0"
+dependencies = [
+ "nexus",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "nexus-example-inmemory"
 version = "0.0.0"
 dependencies = [

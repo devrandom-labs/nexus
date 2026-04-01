@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/nexus",
     "crates/nexus-macros",
+    "crates/nexus-macros/tests/cross_crate_test",
     "crates/workspace-hack",
     "examples/inmemory",
 ]
