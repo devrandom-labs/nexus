@@ -89,6 +89,7 @@ impl<A: Aggregate> AggregateRoot<A> {
     }
 
     pub fn take_uncommitted_events(&mut self) -> SmallVec<[VersionedEvent<EventOf<A>>; 1]> {
+        self.version = self.current_version();
         std::mem::take(&mut self.uncommitted_events)
     }
 }
