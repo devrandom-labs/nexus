@@ -22,6 +22,7 @@ workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 nexus-macros = { version = "0.1.0", path = "../nexus-macros" }
+proptest = { workspace = true }
 static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 

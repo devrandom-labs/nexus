@@ -27,7 +27,7 @@ impl From<u64> for Version {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VersionedEvent<E> {
     pub version: Version,
     pub event: E,
