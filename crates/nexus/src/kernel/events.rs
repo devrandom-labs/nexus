@@ -25,8 +25,9 @@ pub struct Events<E: DomainEvent> {
 }
 
 impl<E: DomainEvent> Events<E> {
+    #[must_use]
     pub fn new(event: E) -> Self {
-        Events {
+        Self {
             first: event,
             more: SmallVec::new(),
         }
@@ -36,18 +37,25 @@ impl<E: DomainEvent> Events<E> {
         self.more.push(event);
     }
 
+    /// Returns an iterator over references to the events.
+    pub fn iter(&self) -> Chain<Once<&E>, core::slice::Iter<'_, E>> {
+        once(&self.first).chain(self.more.iter())
+    }
+
+    #[must_use]
     pub fn len(&self) -> usize {
         self.more.len() + 1
     }
 
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         false
     }
 }
 
 impl<E: DomainEvent> From<E> for Events<E> {
     fn from(event: E) -> Self {
-        Events::new(event)
+        Self::new(event)
     }
 }
 

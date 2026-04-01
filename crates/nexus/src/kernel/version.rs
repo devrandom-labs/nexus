@@ -23,15 +23,17 @@ pub struct Version(u64);
 
 impl Version {
     /// The starting version for a new aggregate.
-    pub const INITIAL: Version = Version(0);
+    pub const INITIAL: Self = Self(0);
 
     /// The next version in sequence.
-    pub fn next(self) -> Version {
-        Version(self.0 + 1)
+    #[must_use]
+    pub const fn next(self) -> Self {
+        Self(self.0 + 1)
     }
 
     /// The underlying integer value.
-    pub fn as_u64(self) -> u64 {
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
         self.0
     }
 
@@ -40,16 +42,17 @@ impl Version {
     /// This is `pub(crate)` — only the kernel creates versions internally.
     /// Store adapters use `from_persisted()` to reconstruct versions
     /// from database rows.
-    pub(crate) fn new(v: u64) -> Self {
-        Version(v)
+    pub(crate) const fn new(v: u64) -> Self {
+        Self(v)
     }
 
     /// Reconstruct a Version from persisted data.
     ///
     /// For store adapters that read version numbers from a database.
     /// This is the only public way to construct a Version from a raw number.
-    pub fn from_persisted(v: u64) -> Self {
-        Version(v)
+    #[must_use]
+    pub const fn from_persisted(v: u64) -> Self {
+        Self(v)
     }
 }
 
@@ -73,16 +76,19 @@ pub struct VersionedEvent<E> {
 
 impl<E> VersionedEvent<E> {
     /// The version (sequence number) of this event in the aggregate's history.
-    pub fn version(&self) -> Version {
+    #[must_use]
+    pub const fn version(&self) -> Version {
         self.version
     }
 
     /// The domain event payload.
-    pub fn event(&self) -> &E {
+    #[must_use]
+    pub const fn event(&self) -> &E {
         &self.event
     }
 
     /// Consume the versioned event, returning the version and event separately.
+    #[must_use]
     pub fn into_parts(self) -> (Version, E) {
         (self.version, self.event)
     }
@@ -93,7 +99,7 @@ impl<E> VersionedEvent<E> {
     /// Store adapters use `into_parts()` and `from_parts()` to
     /// serialize/deserialize, but cannot forge arbitrary version numbers
     /// from user code.
-    pub(crate) fn new(version: Version, event: E) -> Self {
+    pub(crate) const fn new(version: Version, event: E) -> Self {
         Self { version, event }
     }
 }
@@ -105,7 +111,8 @@ impl<E> VersionedEvent<E> {
 /// separate crates, but the name `from_persisted` signals intent —
 /// this is for rehydration, not for creating new events.
 impl<E> VersionedEvent<E> {
-    pub fn from_persisted(version: Version, event: E) -> Self {
+    #[must_use]
+    pub const fn from_persisted(version: Version, event: E) -> Self {
         Self { version, event }
     }
 }

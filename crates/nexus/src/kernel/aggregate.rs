@@ -181,23 +181,31 @@ impl<A: Aggregate> AggregateRoot<A> {
     }
 
     /// The aggregate's identity.
-    pub fn id(&self) -> &A::Id {
+    #[must_use]
+    pub const fn id(&self) -> &A::Id {
         &self.id
     }
 
     /// The current state (read-only). Use this in business logic
     /// methods to check invariants before producing events.
-    pub fn state(&self) -> &A::State {
+    #[must_use]
+    pub const fn state(&self) -> &A::State {
         &self.state
     }
 
     /// The last persisted version. Does not include uncommitted events.
-    pub fn version(&self) -> Version {
+    #[must_use]
+    pub const fn version(&self) -> Version {
         self.version
     }
 
     /// Persisted version + uncommitted event count.
+    #[must_use]
     pub fn current_version(&self) -> Version {
+        #[allow(
+            clippy::as_conversions,
+            reason = "usize is at most 64 bits on all supported platforms, so this cast is lossless"
+        )]
         let uncommitted_count = self.uncommitted_events.len() as u64;
         Version::new(self.version.as_u64() + uncommitted_count)
     }
@@ -228,7 +236,11 @@ impl<A: Aggregate> AggregateRoot<A> {
     /// Rehydrate an aggregate from persisted versioned events.
     ///
     /// Validates that version numbers are strictly sequential starting from 1.
-    /// Returns `KernelError::VersionMismatch` if any gap is found.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KernelError::VersionMismatch`] if any event version is not
+    /// strictly sequential (i.e., there is a gap or duplicate).
     pub fn load_from_events(
         id: A::Id,
         events: impl IntoIterator<Item = VersionedEvent<EventOf<A>>>,
@@ -262,7 +274,8 @@ impl<A: Aggregate> AggregateRoot<A> {
         self.version = self.current_version();
         let events = std::mem::take(&mut self.uncommitted_events);
         debug_assert_eq!(
-            self.version, self.current_version(),
+            self.version,
+            self.current_version(),
             "Invariant violated: after take, version must equal current_version"
         );
         debug_assert!(
