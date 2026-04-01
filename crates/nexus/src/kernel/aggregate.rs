@@ -56,20 +56,24 @@ impl<A: Aggregate> AggregateRoot<A> {
     }
 
     pub fn apply_event(&mut self, event: EventOf<A>) {
-        let pre_version = self.current_version();
+        // Compute version once — avoid 3x recomputation of current_version()
+        let next_version = self.current_version().next();
         self.state.apply(&event);
-        let version = self.current_version().next();
         self.uncommitted_events
-            .push(VersionedEvent::new(version, event));
+            .push(VersionedEvent::new(next_version, event));
         debug_assert_eq!(
-            self.current_version().as_u64(),
-            pre_version.as_u64() + 1,
+            self.current_version(),
+            next_version,
             "Invariant violated: apply_event must increment current_version by exactly 1"
         );
     }
 
     pub fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<A>>) {
-        for event in events {
+        // Pre-allocate if the iterator has a size hint (Vec, slice, etc.)
+        let iter = events.into_iter();
+        let (lower, _) = iter.size_hint();
+        self.uncommitted_events.reserve(lower);
+        for event in iter {
             self.apply_event(event);
         }
     }
@@ -81,14 +85,14 @@ impl<A: Aggregate> AggregateRoot<A> {
         let mut aggregate = Self::new(id);
         for versioned_event in events {
             let expected = aggregate.version.next();
-            if versioned_event.version() != expected {
+            let (version, event) = versioned_event.into_parts();
+            if version != expected {
                 return Err(KernelError::VersionMismatch {
                     stream_id: aggregate.id.to_string(),
                     expected,
-                    actual: versioned_event.version(),
+                    actual: version,
                 });
             }
-            let (version, event) = versioned_event.into_parts();
             aggregate.state.apply(&event);
             aggregate.version = version;
         }
