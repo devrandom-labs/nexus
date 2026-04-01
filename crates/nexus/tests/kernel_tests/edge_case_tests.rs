@@ -124,6 +124,7 @@ fn load_from_events_rejects_first_event_not_version_1() {
             assert_eq!(expected, Version::from_persisted(1));
             assert_eq!(actual, Version::from_persisted(5));
         }
+        other => panic!("expected VersionMismatch, got {other:?}"),
     }
 }
 

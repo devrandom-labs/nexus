@@ -188,6 +188,7 @@ fn h2_error_contains_stream_id() {
             // Verify the ID is captured — this allocates a String on the error path
             assert_eq!(stream_id, "42");
         }
+        other => panic!("expected VersionMismatch, got {other:?}"),
     }
 }
 
@@ -218,18 +219,46 @@ fn h5_event_pushed_after_state_apply() {
 // H1: Unbounded rehydration — large event count
 // =============================================================================
 
+// Aggregate with tiny rehydration limit for testing
+#[derive(Debug)]
+struct TinyRehydrationAgg;
+impl Aggregate for TinyRehydrationAgg {
+    type State = SState;
+    type Error = SError;
+    type Id = SId;
+    const MAX_REHYDRATION_EVENTS: usize = 5;
+}
+
 #[test]
-fn h1_load_from_large_event_count() {
-    // Verify load_from_events works with a large but reasonable count.
-    // On a constrained device, this should be bounded.
-    let n = 10_000;
-    let events: Vec<_> = (1..=n)
+fn h1_load_from_events_enforces_rehydration_limit() {
+    let events: Vec<_> = (1..=6)
         .map(|i| VersionedEvent::from_persisted(Version::from_persisted(i), SEvent::Tick))
         .collect();
 
-    let agg = AggregateRoot::<SAgg>::load_from_events(SId(1), events).unwrap();
-    assert_eq!(agg.version(), Version::from_persisted(n));
-    assert_eq!(agg.state().count, n);
+    let result = AggregateRoot::<TinyRehydrationAgg>::load_from_events(SId(1), events);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        KernelError::RehydrationLimitExceeded { max, .. } => {
+            assert_eq!(max, 5);
+        }
+        other => panic!("expected RehydrationLimitExceeded, got {other:?}"),
+    }
+}
+
+#[test]
+fn h1_load_within_limit_succeeds() {
+    let events: Vec<_> = (1..=5)
+        .map(|i| VersionedEvent::from_persisted(Version::from_persisted(i), SEvent::Tick))
+        .collect();
+
+    let agg = AggregateRoot::<TinyRehydrationAgg>::load_from_events(SId(1), events).unwrap();
+    assert_eq!(agg.version(), Version::from_persisted(5));
+}
+
+#[test]
+fn h1_default_rehydration_limit_is_one_million() {
+    assert_eq!(SAgg::MAX_REHYDRATION_EVENTS, nexus::DEFAULT_MAX_REHYDRATION_EVENTS);
+    assert_eq!(nexus::DEFAULT_MAX_REHYDRATION_EVENTS, 1_000_000);
 }
 
 // =============================================================================
@@ -247,6 +276,7 @@ fn l2_kernel_error_variants_are_known() {
     };
     match err {
         KernelError::VersionMismatch { .. } => {}
+        KernelError::RehydrationLimitExceeded { .. } => {}
         // If you add a variant, add it here and consider #[non_exhaustive]
     }
 }

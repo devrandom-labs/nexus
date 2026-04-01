@@ -164,6 +164,7 @@ fn load_from_events_rejects_version_gap() {
             assert_eq!(expected, Version::from_persisted(2));
             assert_eq!(actual, Version::from_persisted(3));
         }
+        other => panic!("expected VersionMismatch, got {other:?}"),
     }
 }
 

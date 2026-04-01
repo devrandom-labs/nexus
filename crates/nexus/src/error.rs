@@ -9,4 +9,10 @@ pub enum KernelError {
         expected: Version,
         actual: Version,
     },
+
+    #[error("Rehydration limit exceeded on '{stream_id}': max {max} events")]
+    RehydrationLimitExceeded {
+        stream_id: String,
+        max: usize,
+    },
 }

@@ -7,7 +7,8 @@ mod message;
 mod version;
 
 pub use aggregate::{
-    Aggregate, AggregateEntity, AggregateRoot, AggregateState, EventOf, DEFAULT_MAX_UNCOMMITTED,
+    Aggregate, AggregateEntity, AggregateRoot, AggregateState, EventOf,
+    DEFAULT_MAX_REHYDRATION_EVENTS, DEFAULT_MAX_UNCOMMITTED,
 };
 pub use error::KernelError;
 pub use event::DomainEvent;

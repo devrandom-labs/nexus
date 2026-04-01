@@ -109,6 +109,11 @@ pub trait Aggregate: Sized {
     /// Override this for aggregates that produce many events per operation.
     /// Default: 1024.
     const MAX_UNCOMMITTED: usize = DEFAULT_MAX_UNCOMMITTED;
+
+    /// Maximum events during rehydration via `load_from_events`.
+    /// Prevents a corrupted or malicious store from feeding unbounded events.
+    /// Default: 1,000,000.
+    const MAX_REHYDRATION_EVENTS: usize = DEFAULT_MAX_REHYDRATION_EVENTS;
 }
 
 /// Trait for user-defined aggregate newtypes wrapping `AggregateRoot`.
@@ -172,6 +177,10 @@ pub type EventOf<A> = <<A as Aggregate>::State as AggregateState>::Event;
 /// Default maximum uncommitted events before `apply_event` panics.
 /// Override per-aggregate via `Aggregate::MAX_UNCOMMITTED`.
 pub const DEFAULT_MAX_UNCOMMITTED: usize = 1024;
+
+/// Default maximum events during rehydration via `load_from_events`.
+/// Override per-aggregate via `Aggregate::MAX_REHYDRATION_EVENTS`.
+pub const DEFAULT_MAX_REHYDRATION_EVENTS: usize = 1_000_000;
 
 /// The core event-sourced aggregate container.
 ///
@@ -338,12 +347,23 @@ impl<A: Aggregate> AggregateRoot<A> {
     ///
     /// Returns [`KernelError::VersionMismatch`] if any event version is not
     /// strictly sequential (i.e., there is a gap or duplicate).
+    ///
+    /// Returns [`KernelError::RehydrationLimitExceeded`] if the event count
+    /// exceeds `Aggregate::MAX_REHYDRATION_EVENTS`.
     pub fn load_from_events(
         id: A::Id,
         events: impl IntoIterator<Item = VersionedEvent<EventOf<A>>>,
     ) -> Result<Self, KernelError> {
         let mut aggregate = Self::new(id);
+        let mut count: usize = 0;
         for versioned_event in events {
+            count += 1;
+            if count > A::MAX_REHYDRATION_EVENTS {
+                return Err(KernelError::RehydrationLimitExceeded {
+                    stream_id: aggregate.id.to_string(),
+                    max: A::MAX_REHYDRATION_EVENTS,
+                });
+            }
             let expected = aggregate.version.next();
             let (version, event) = versioned_event.into_parts();
             if version != expected {
