@@ -1,5 +1,5 @@
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::*;
 use std::fmt;
 
 // --- Self-contained test domain ---

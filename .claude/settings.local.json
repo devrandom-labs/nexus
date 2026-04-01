@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rustup show:*)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Read(//Users/joel/.cargo/bin/**)",
+      "Read(//Users/joel/.nix-profile/bin/**)",
+      "Bash(nix develop:*)",
+      "Bash(nix eval:*)",
+      "Bash(nix build:*)",
+      "Bash(nix flake:*)",
+      "Bash(python3:*)",
+      "Bash(git remote:*)",
+      "Bash(gh milestone:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"chore: add .worktrees/ to gitignore:*)",
+      "Bash(git worktree:*)",
+      "Bash(cargo test:*)",
+      "Bash(git commit:*)",
+      "Bash(xxd /Users/joel/Code/devrandom/nexus/.worktrees/kernel/crates/nexus/src/kernel/id.rs)",
+      "Bash(git stash:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(MIRIFLAGS=\"-Zmiri-disable-isolation\" nix develop /Users/joel/Code/devrandom/nexus -c cargo miri test -p nexus --test kernel)",
+      "Bash(kill %1)",
+      "Bash(MIRIFLAGS=\"-Zmiri-strict-provenance\" nix develop /Users/joel/Code/devrandom/nexus -c cargo miri test -p nexus --test kernel)",
+      "Bash(git rm:*)",
+      "Bash(nix search:*)",
+      "Bash(grep -r \"criterion\" /Users/joel/Code/devrandom/nexus/crates/*/Cargo.toml)",
+      "Bash(grep -rn \"rusqlite\\\\|sqlite\" examples/*/Cargo.toml crates/*/Cargo.toml)",
+      "Bash(git checkout:*)",
+      "Bash(nix log:*)",
+      "Bash(git push:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

@@ -8,10 +8,10 @@
 //! - take, apply, take again pattern
 //! - `Events` ref iteration
 
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::events::Events;
-use nexus::kernel::version::VersionedEvent;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::Events;
+use nexus::VersionedEvent;
+use nexus::*;
 use std::fmt;
 
 // --- Minimal test domain ---

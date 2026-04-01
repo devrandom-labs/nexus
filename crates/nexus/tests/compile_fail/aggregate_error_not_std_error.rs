@@ -1,7 +1,7 @@
 /// Aggregate::Error must implement std::error::Error.
 /// A plain enum without #[derive(Error)] should fail.
 
-use nexus::kernel::*;
+use nexus::*;
 
 #[derive(Debug, Clone)]
 enum MyEvent { A }

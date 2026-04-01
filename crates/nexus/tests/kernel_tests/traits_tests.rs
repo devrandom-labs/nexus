@@ -1,4 +1,4 @@
-use nexus::kernel::*;
+use nexus::*;
 use std::fmt;
 
 // --- Test ID type ---

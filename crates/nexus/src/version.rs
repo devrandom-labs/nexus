@@ -11,7 +11,7 @@ use std::fmt;
 /// # Example
 ///
 /// ```
-/// use nexus::kernel::version::Version;
+/// use nexus::Version;
 ///
 /// let v = Version::INITIAL;
 /// assert_eq!(v.as_u64(), 0);

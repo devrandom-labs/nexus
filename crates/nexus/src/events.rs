@@ -1,15 +1,15 @@
-use super::event::DomainEvent;
+use crate::event::DomainEvent;
 use smallvec::{IntoIter as SmallVecIntoIter, SmallVec};
 use std::iter::{Chain, Once, once};
 
 #[macro_export]
 macro_rules! events {
     [$head:expr] => {
-        $crate::kernel::events::Events::new($head)
+        $crate::Events::new($head)
     };
     [$head:expr, $($tail:expr),+ $(,)?] => {
         {
-            let mut events = $crate::kernel::events::Events::new($head);
+            let mut events = $crate::Events::new($head);
             $(
                 events.add($tail);
             )*

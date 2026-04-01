@@ -1,4 +1,4 @@
-use nexus::kernel::Version;
+use nexus::Version;
 
 #[test]
 fn initial_version_is_zero() {

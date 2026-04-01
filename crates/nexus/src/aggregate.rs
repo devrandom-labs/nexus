@@ -1,7 +1,7 @@
-use super::error::KernelError;
-use super::event::DomainEvent;
-use super::id::Id;
-use super::version::{Version, VersionedEvent};
+use crate::error::KernelError;
+use crate::event::DomainEvent;
+use crate::id::Id;
+use crate::version::{Version, VersionedEvent};
 use smallvec::{SmallVec, smallvec};
 use std::error::Error;
 use std::fmt::Debug;
@@ -15,9 +15,9 @@ use std::fmt::Debug;
 /// # Example
 ///
 /// ```
-/// use nexus::kernel::aggregate::AggregateState;
-/// use nexus::kernel::event::DomainEvent;
-/// use nexus::kernel::message::Message;
+/// use nexus::AggregateState;
+/// use nexus::DomainEvent;
+/// use nexus::Message;
 ///
 /// #[derive(Debug, Clone)]
 /// enum CounterEvent { Incremented, Decremented }
@@ -59,10 +59,10 @@ pub trait AggregateState: Default + Send + Sync + Debug + 'static {
 /// # Example
 ///
 /// ```
-/// use nexus::kernel::aggregate::{Aggregate, AggregateState};
-/// use nexus::kernel::event::DomainEvent;
-/// use nexus::kernel::id::Id;
-/// use nexus::kernel::message::Message;
+/// use nexus::{Aggregate, AggregateState};
+/// use nexus::DomainEvent;
+/// use nexus::Id;
+/// use nexus::Message;
 ///
 /// # #[derive(Debug, Clone)] enum Ev { A }
 /// # impl Message for Ev {}
@@ -102,11 +102,11 @@ pub type EventOf<A> = <<A as Aggregate>::State as AggregateState>::Event;
 /// # Example
 ///
 /// ```
-/// use nexus::kernel::aggregate::{Aggregate, AggregateRoot, AggregateState};
-/// use nexus::kernel::event::DomainEvent;
-/// use nexus::kernel::id::Id;
-/// use nexus::kernel::message::Message;
-/// use nexus::kernel::version::Version;
+/// use nexus::{Aggregate, AggregateRoot, AggregateState};
+/// use nexus::DomainEvent;
+/// use nexus::Id;
+/// use nexus::Message;
+/// use nexus::Version;
 ///
 /// // Define event, state, aggregate (minimal)
 /// #[derive(Debug, Clone)]

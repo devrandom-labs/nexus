@@ -9,11 +9,11 @@
 //! Reports: target/criterion/report/index.html
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use nexus::kernel::aggregate::{Aggregate, AggregateRoot, AggregateState, EventOf};
-use nexus::kernel::event::DomainEvent;
-use nexus::kernel::id::Id;
-use nexus::kernel::message::Message;
-use nexus::kernel::version::{Version, VersionedEvent};
+use nexus::DomainEvent;
+use nexus::Id;
+use nexus::Message;
+use nexus::{Aggregate, AggregateRoot, AggregateState, EventOf};
+use nexus::{Version, VersionedEvent};
 use std::fmt;
 
 // =============================================================================

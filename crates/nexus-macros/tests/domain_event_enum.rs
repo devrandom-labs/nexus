@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use nexus::kernel::{DomainEvent, Message};
+use nexus::{DomainEvent, Message};
 
 // Test with all variant shapes: tuple, struct, and unit
 #[derive(Debug, Clone, nexus::DomainEvent)]

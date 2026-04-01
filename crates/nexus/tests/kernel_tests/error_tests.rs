@@ -1,4 +1,4 @@
-use nexus::kernel::{KernelError, Version};
+use nexus::{KernelError, Version};
 
 #[test]
 fn version_mismatch_display() {

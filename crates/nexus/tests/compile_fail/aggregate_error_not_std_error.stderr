@@ -9,8 +9,8 @@ help: the trait `std::error::Error` is not implemented for `BadError`
    |
 23 | enum BadError {
    | ^^^^^^^^^^^^^
-note: required by a bound in `nexus::kernel::Aggregate::Error`
-  --> src/kernel/aggregate.rs
+note: required by a bound in `nexus::Aggregate::Error`
+  --> src/aggregate.rs
    |
    |     type Error: Error + Send + Sync + Debug + 'static;
    |                 ^^^^^ required by this bound in `Aggregate::Error`

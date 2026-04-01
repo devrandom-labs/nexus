@@ -13,9 +13,9 @@
 
 #![cfg(not(miri))]
 
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::version::VersionedEvent;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::VersionedEvent;
+use nexus::*;
 use proptest::prelude::*;
 use std::fmt;
 
