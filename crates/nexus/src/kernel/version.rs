@@ -1,15 +1,36 @@
 use std::fmt;
 
+/// A monotonically increasing sequence number for aggregate event history.
+///
+/// Versions are assigned by the kernel — user code cannot construct
+/// arbitrary versions. The only public entry points are:
+/// - `Version::INITIAL` — the starting version (0)
+/// - `Version::from_persisted()` — for store adapters rehydrating from a database
+/// - `version.next()` — derives the next version from an existing one
+///
+/// # Example
+///
+/// ```
+/// use nexus::kernel::version::Version;
+///
+/// let v = Version::INITIAL;
+/// assert_eq!(v.as_u64(), 0);
+/// assert_eq!(v.next().as_u64(), 1);
+/// assert!(v < v.next());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version(u64);
 
 impl Version {
+    /// The starting version for a new aggregate.
     pub const INITIAL: Version = Version(0);
 
+    /// The next version in sequence.
     pub fn next(self) -> Version {
         Version(self.0 + 1)
     }
 
+    /// The underlying integer value.
     pub fn as_u64(self) -> u64 {
         self.0
     }

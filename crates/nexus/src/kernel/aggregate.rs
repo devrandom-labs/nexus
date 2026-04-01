@@ -6,20 +6,161 @@ use smallvec::{SmallVec, smallvec};
 use std::error::Error;
 use std::fmt::Debug;
 
+/// State of an event-sourced aggregate. Mutated by applying domain events.
+///
+/// Implement this on your state struct. The `Event` associated type binds
+/// this state to its event enum — the compiler enforces that only matching
+/// events can be applied.
+///
+/// # Example
+///
+/// ```
+/// use nexus::kernel::aggregate::AggregateState;
+/// use nexus::kernel::event::DomainEvent;
+/// use nexus::kernel::message::Message;
+///
+/// #[derive(Debug, Clone)]
+/// enum CounterEvent { Incremented, Decremented }
+/// impl Message for CounterEvent {}
+/// impl DomainEvent for CounterEvent {
+///     fn name(&self) -> &'static str {
+///         match self {
+///             CounterEvent::Incremented => "Incremented",
+///             CounterEvent::Decremented => "Decremented",
+///         }
+///     }
+/// }
+///
+/// #[derive(Default, Debug)]
+/// struct CounterState { value: i64 }
+///
+/// impl AggregateState for CounterState {
+///     type Event = CounterEvent;
+///     fn apply(&mut self, event: &CounterEvent) {
+///         match event {
+///             CounterEvent::Incremented => self.value += 1,
+///             CounterEvent::Decremented => self.value -= 1,
+///         }
+///     }
+///     fn name(&self) -> &'static str { "Counter" }
+/// }
+/// ```
 pub trait AggregateState: Default + Send + Sync + Debug + 'static {
     type Event: DomainEvent;
     fn apply(&mut self, event: &Self::Event);
     fn name(&self) -> &'static str;
 }
 
+/// Type-level specification that binds an aggregate's state, error, and ID types.
+///
+/// Implement this on a marker struct. The `AggregateRoot<A>` machinery
+/// uses these associated types to wire everything together.
+///
+/// # Example
+///
+/// ```
+/// use nexus::kernel::aggregate::{Aggregate, AggregateState};
+/// use nexus::kernel::event::DomainEvent;
+/// use nexus::kernel::id::Id;
+/// use nexus::kernel::message::Message;
+///
+/// # #[derive(Debug, Clone)] enum Ev { A }
+/// # impl Message for Ev {}
+/// # impl DomainEvent for Ev { fn name(&self) -> &'static str { "A" } }
+/// # #[derive(Default, Debug)] struct St;
+/// # impl AggregateState for St { type Event = Ev; fn apply(&mut self, _: &Ev) {} fn name(&self) -> &'static str { "S" } }
+/// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct MyId(u64);
+/// # impl std::fmt::Display for MyId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
+/// # impl Id for MyId {}
+///
+/// struct MyAggregate;
+///
+/// impl Aggregate for MyAggregate {
+///     type State = St;
+///     type Error = std::io::Error; // any std::error::Error
+///     type Id = MyId;
+/// }
+/// ```
 pub trait Aggregate {
     type State: AggregateState;
     type Error: Error + Send + Sync + Debug + 'static;
     type Id: Id;
 }
 
+/// Shorthand for accessing the event type of an aggregate.
+///
+/// Instead of writing `<<A as Aggregate>::State as AggregateState>::Event`,
+/// write `EventOf<A>`.
 pub type EventOf<A> = <<A as Aggregate>::State as AggregateState>::Event;
 
+/// The core event-sourced aggregate container.
+///
+/// Holds state, tracks version, and collects uncommitted events.
+/// Business logic is added by implementing methods on
+/// `AggregateRoot<YourAggregate>` in your own crate.
+///
+/// # Example
+///
+/// ```
+/// use nexus::kernel::aggregate::{Aggregate, AggregateRoot, AggregateState};
+/// use nexus::kernel::event::DomainEvent;
+/// use nexus::kernel::id::Id;
+/// use nexus::kernel::message::Message;
+/// use nexus::kernel::version::Version;
+///
+/// // Define event, state, aggregate (minimal)
+/// #[derive(Debug, Clone)]
+/// enum TodoEvent { Created(String), Done }
+/// impl Message for TodoEvent {}
+/// impl DomainEvent for TodoEvent {
+///     fn name(&self) -> &'static str {
+///         match self { TodoEvent::Created(_) => "Created", TodoEvent::Done => "Done" }
+///     }
+/// }
+///
+/// #[derive(Default, Debug)]
+/// struct TodoState { title: String, done: bool }
+/// impl AggregateState for TodoState {
+///     type Event = TodoEvent;
+///     fn apply(&mut self, event: &TodoEvent) {
+///         match event {
+///             TodoEvent::Created(t) => self.title = t.clone(),
+///             TodoEvent::Done => self.done = true,
+///         }
+///     }
+///     fn name(&self) -> &'static str { "Todo" }
+/// }
+///
+/// #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+/// struct TodoId(u64);
+/// impl std::fmt::Display for TodoId {
+///     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) }
+/// }
+/// impl Id for TodoId {}
+///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("todo error")]
+/// struct TodoError;
+///
+/// struct TodoAggregate;
+/// impl Aggregate for TodoAggregate {
+///     type State = TodoState;
+///     type Error = TodoError;
+///     type Id = TodoId;
+/// }
+///
+/// // Use it
+/// let mut todo = AggregateRoot::<TodoAggregate>::new(TodoId(1));
+/// todo.apply_event(TodoEvent::Created("Buy milk".into()));
+/// todo.apply_event(TodoEvent::Done);
+///
+/// assert_eq!(todo.state().title, "Buy milk");
+/// assert!(todo.state().done);
+/// assert_eq!(todo.current_version(), Version::from_persisted(2));
+///
+/// let events = todo.take_uncommitted_events();
+/// assert_eq!(events.len(), 2);
+/// ```
 #[derive(Debug)]
 pub struct AggregateRoot<A: Aggregate> {
     id: A::Id,
@@ -29,6 +170,7 @@ pub struct AggregateRoot<A: Aggregate> {
 }
 
 impl<A: Aggregate> AggregateRoot<A> {
+    /// Create a new aggregate with default state at version 0.
     pub fn new(id: A::Id) -> Self {
         Self {
             id,
@@ -38,25 +180,30 @@ impl<A: Aggregate> AggregateRoot<A> {
         }
     }
 
+    /// The aggregate's identity.
     pub fn id(&self) -> &A::Id {
         &self.id
     }
 
+    /// The current state (read-only). Use this in business logic
+    /// methods to check invariants before producing events.
     pub fn state(&self) -> &A::State {
         &self.state
     }
 
+    /// The last persisted version. Does not include uncommitted events.
     pub fn version(&self) -> Version {
         self.version
     }
 
+    /// Persisted version + uncommitted event count.
     pub fn current_version(&self) -> Version {
         let uncommitted_count = self.uncommitted_events.len() as u64;
         Version::new(self.version.as_u64() + uncommitted_count)
     }
 
+    /// Apply a single event: mutates state, increments version, tracks as uncommitted.
     pub fn apply_event(&mut self, event: EventOf<A>) {
-        // Compute version once — avoid 3x recomputation of current_version()
         let next_version = self.current_version().next();
         self.state.apply(&event);
         self.uncommitted_events
@@ -68,8 +215,8 @@ impl<A: Aggregate> AggregateRoot<A> {
         );
     }
 
+    /// Apply multiple events. Pre-allocates if the iterator provides a size hint.
     pub fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<A>>) {
-        // Pre-allocate if the iterator has a size hint (Vec, slice, etc.)
         let iter = events.into_iter();
         let (lower, _) = iter.size_hint();
         self.uncommitted_events.reserve(lower);
@@ -78,6 +225,10 @@ impl<A: Aggregate> AggregateRoot<A> {
         }
     }
 
+    /// Rehydrate an aggregate from persisted versioned events.
+    ///
+    /// Validates that version numbers are strictly sequential starting from 1.
+    /// Returns `KernelError::VersionMismatch` if any gap is found.
     pub fn load_from_events(
         id: A::Id,
         events: impl IntoIterator<Item = VersionedEvent<EventOf<A>>>,
@@ -103,6 +254,10 @@ impl<A: Aggregate> AggregateRoot<A> {
         Ok(aggregate)
     }
 
+    /// Drain uncommitted events for persistence.
+    ///
+    /// Advances the persisted version to include the drained events.
+    /// Subsequent `apply_event` calls will continue from the new version.
     pub fn take_uncommitted_events(&mut self) -> SmallVec<[VersionedEvent<EventOf<A>>; 1]> {
         self.version = self.current_version();
         let events = std::mem::take(&mut self.uncommitted_events);
