@@ -93,6 +93,8 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 fn parse_aggregate(ast: &DeriveInput, args: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     let vis = &ast.vis;
+    // Preserve user attributes (#[cfg(...)], #[doc = "..."], etc.)
+    let user_attrs = &ast.attrs;
 
     // Only unit structs allowed
     match &ast.data {
@@ -140,6 +142,7 @@ fn parse_aggregate(ast: &DeriveInput, args: proc_macro2::TokenStream) -> Result<
         .ok_or_else(|| Error::new(name.span(), "`id` is required"))?;
 
     let expanded = quote! {
+        #(#user_attrs)*
         #vis struct #name(::nexus::AggregateRoot<#name>);
 
         impl ::nexus::Aggregate for #name {
