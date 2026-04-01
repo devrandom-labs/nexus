@@ -18,36 +18,6 @@ impl Id for AId {}
 struct AError;
 
 // =============================================================================
-// Test: empty event enum (no variants)
-// =============================================================================
-
-#[derive(Debug, Clone, DomainEvent)]
-enum EmptyEvent {}
-
-#[derive(Default, Debug)]
-struct EmptyState;
-impl AggregateState for EmptyState {
-    type Event = EmptyEvent;
-    fn apply(&mut self, event: &EmptyEvent) {
-        match *event {} // exhaustive on empty enum
-    }
-    fn name(&self) -> &'static str {
-        "Empty"
-    }
-}
-
-#[nexus::aggregate(state = EmptyState, error = AError, id = AId)]
-struct EmptyAggregate;
-
-#[test]
-fn empty_event_enum_compiles() {
-    let agg = EmptyAggregate::new(AId(1));
-    assert_eq!(agg.version(), Version::INITIAL);
-    // Can't apply any events — the enum has no variants
-    // But the aggregate is valid and usable
-}
-
-// =============================================================================
 // Test: single-variant event enum
 // =============================================================================
 
@@ -247,7 +217,7 @@ fn mixed_shape_event_names() {
 // Test: aggregate name that is a Rust keyword contextual identifier
 // =============================================================================
 
-#[nexus::aggregate(state = EmptyState, error = AError, id = AId)]
+#[nexus::aggregate(state = SingleState, error = AError, id = AId)]
 struct r#Type; // `Type` is not a keyword but r# prefix works
 
 #[test]

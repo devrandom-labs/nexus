@@ -1,0 +1,5 @@
+error: DomainEvent enum must have at least one variant.
+ --> tests/macro_compile_fail/domain_event_empty_enum.rs:4:6
+  |
+4 | enum EmptyEvent {}
+  |      ^^^^^^^^^^
