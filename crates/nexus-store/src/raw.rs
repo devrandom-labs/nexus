@@ -20,6 +20,13 @@ pub trait RawEventStore<M = ()>: Send + Sync {
     /// `expected_version` is the version the aggregate was at before
     /// new events were applied. The adapter checks this against the
     /// current stream version and rejects if they don't match.
+    ///
+    /// # Implementor contract
+    ///
+    /// Envelopes **must** have strictly sequential versions starting from
+    /// `expected_version + 1`. Implementations **must** reject batches
+    /// where versions are out of order, have gaps, or contain duplicates.
+    /// Accepting malformed batches corrupts the event stream.
     fn append(
         &self,
         stream_id: &str,
