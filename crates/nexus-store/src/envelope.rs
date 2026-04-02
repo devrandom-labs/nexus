@@ -63,27 +63,18 @@ impl<M> PendingEnvelope<M> {
 // Typestate builder — compile-time enforced construction
 // =============================================================================
 
-// Phantom state types — zero-sized, exist only at compile time
-mod builder_state {
-    pub struct NeedsVersion;
-    pub struct NeedsEventType;
-    pub struct NeedsPayload;
-    pub struct NeedsMetadata;
-    pub struct Ready;
-}
-
-/// Step 1: has stream_id, needs version.
+/// Step 1: has `stream_id`, needs version.
 pub struct WithStreamId {
     stream_id: String,
 }
 
-/// Step 2: has stream_id + version, needs event_type.
+/// Step 2: has `stream_id` + `version`, needs `event_type`.
 pub struct WithVersion {
     stream_id: String,
     version: Version,
 }
 
-/// Step 3: has stream_id + version + event_type, needs payload.
+/// Step 3: has `stream_id` + `version` + `event_type`, needs payload.
 pub struct WithEventType {
     stream_id: String,
     version: Version,
@@ -101,7 +92,7 @@ pub struct WithPayload {
 impl WithStreamId {
     /// Start building a `PendingEnvelope` with the stream ID.
     #[must_use]
-    pub fn new(stream_id: String) -> Self {
+    pub const fn new(stream_id: String) -> Self {
         Self { stream_id }
     }
 
@@ -180,7 +171,7 @@ impl WithPayload {
 ///     .build(metadata)
 /// ```
 #[must_use]
-pub fn pending_envelope(stream_id: String) -> WithStreamId {
+pub const fn pending_envelope(stream_id: String) -> WithStreamId {
     WithStreamId::new(stream_id)
 }
 

@@ -40,7 +40,7 @@ use proptest::prelude::*;
 // In-memory adapter (same pattern as raw_store_tests.rs)
 // ============================================================================
 
-/// Row stored per event: (version, event_type, payload).
+/// Row stored per event: (version, `event_type`, payload).
 type StoredRow = (u64, String, Vec<u8>);
 
 /// Minimal in-memory adapter for testing `RawEventStore`.
@@ -141,7 +141,7 @@ impl RawEventStore for InMemoryRawStore {
 // Helper: build envelopes from payloads
 // ============================================================================
 
-/// Leaked static str for event_type (proptest generates many values; we leak
+/// Leaked static str for `event_type` (proptest generates many values; we leak
 /// to satisfy the `&'static str` requirement on `PendingEnvelope`).
 fn leak_event_type(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())

@@ -1,14 +1,14 @@
-//! nexus-store benchmarks.
+//! `nexus-store` benchmarks.
 //!
 //! Measures the hot paths in the store layer:
-//! - PendingEnvelope builder throughput
-//! - PersistedEnvelope construction (zero-alloc)
+//! - `PendingEnvelope` builder throughput
+//! - `PersistedEnvelope` construction (zero-alloc)
 //! - append throughput at various batch sizes
-//! - read_stream throughput at various sizes
+//! - `read_stream` throughput at various sizes
 //! - upcaster chain throughput
 //!
-//! Run: cargo bench --bench store_bench -p nexus-store
-//! Reports: target/criterion/report/index.html
+//! Run: `cargo bench --bench store_bench -p nexus-store`
+//! Reports: `target/criterion/report/index.html`
 #![allow(clippy::unwrap_used, reason = "benchmarks use unwrap for brevity")]
 #![allow(
     clippy::as_conversions,

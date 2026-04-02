@@ -248,6 +248,10 @@ fn persisted_envelope_binary_payload() {
 
     assert_eq!(persisted.payload().len(), 256);
     for (i, &byte) in persisted.payload().iter().enumerate() {
-        assert_eq!(byte, i as u8, "byte at index {i} should be {i}");
+        assert_eq!(
+            byte,
+            u8::try_from(i).unwrap(),
+            "byte at index {i} should be {i}"
+        );
     }
 }

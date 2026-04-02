@@ -1,4 +1,4 @@
-//! Codec roundtrip tests using serde_json.
+//! Codec roundtrip tests using `serde_json`.
 //!
 //! These tests demonstrate the encode/decode identity property: for any event `e`,
 //! `decode(encode(e)) == e`.
@@ -46,6 +46,10 @@ use serde::{Deserialize, Serialize};
 
 /// A test event enum with three variant shapes to exercise serde's enum representation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(
+    clippy::enum_variant_names,
+    reason = "test enum uses Variant suffix for clarity"
+)]
 enum TestEvent {
     /// Unit variant — no payload.
     UnitVariant,

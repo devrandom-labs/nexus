@@ -1,7 +1,34 @@
-//! Security & reliability tests for nexus-store.
+//! Security & reliability tests for `nexus-store`.
 //!
 //! Reproduces vulnerabilities found during mission-critical audit.
 //! Each test documents a specific threat and verifies the store handles it safely.
+
+#![allow(
+    clippy::unwrap_used,
+    reason = "tests use unwrap for clarity and brevity"
+)]
+#![allow(
+    clippy::significant_drop_tightening,
+    reason = "lock guard lifetime is fine in test adapters"
+)]
+#![allow(
+    clippy::shadow_unrelated,
+    reason = "tests shadow variables for readability"
+)]
+#![allow(
+    clippy::match_same_arms,
+    reason = "exhaustive match documents known variants"
+)]
+#![allow(
+    clippy::explicit_counter_loop,
+    reason = "counter loop is clearer for version validation"
+)]
+#![allow(clippy::panic, reason = "tests use panic for assertions")]
+#![allow(
+    clippy::drop_non_drop,
+    reason = "explicit drops for lending iterator documentation"
+)]
+#![allow(clippy::str_to_string, reason = "tests use to_string/to_owned freely")]
 
 use nexus::Version;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};

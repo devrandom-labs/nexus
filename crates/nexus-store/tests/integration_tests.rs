@@ -15,6 +15,11 @@
     clippy::shadow_unrelated,
     reason = "tests shadow variables for readability"
 )]
+#![allow(clippy::panic, reason = "tests use panic for error propagation")]
+#![allow(
+    clippy::significant_drop_tightening,
+    reason = "lock guard lifetime is fine in test adapters"
+)]
 
 use nexus::Version;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
