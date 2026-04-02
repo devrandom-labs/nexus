@@ -413,8 +413,11 @@ dependencies = [
 name = "nexus-store"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "nexus",
  "proptest",
+ "serde",
+ "serde_json",
  "static_assertions",
  "thiserror",
  "tokio",
@@ -1221,6 +1224,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
+ "serde_core",
  "syn",
  "trybuild",
 ]

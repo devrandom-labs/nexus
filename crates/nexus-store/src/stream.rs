@@ -8,6 +8,14 @@ use crate::envelope::PersistedEnvelope;
 ///
 /// Used during aggregate rehydration where events are processed
 /// one at a time (apply to state, drop, advance cursor).
+///
+/// # Implementor contract
+///
+/// Implementations **must** yield events with monotonically increasing
+/// versions. That is, for consecutive calls to `next()` that return
+/// `Some(Ok(envelope))`, each envelope's `version()` must be strictly
+/// greater than the previous one's. Violating this invariant will cause
+/// incorrect aggregate rehydration (events applied out of order).
 pub trait EventStream<M = ()> {
     /// The error type for stream operations.
     type Error: std::error::Error + Send + Sync + 'static;

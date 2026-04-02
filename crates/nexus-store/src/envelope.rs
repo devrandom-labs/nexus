@@ -142,6 +142,14 @@ impl WithEventType {
 
 impl WithPayload {
     /// Build with user-defined metadata.
+    ///
+    /// # Validation contract
+    ///
+    /// The builder deliberately accepts empty `stream_id` and `event_type`.
+    /// Content validation (e.g. rejecting empty strings) is the responsibility
+    /// of the `EventStore` facade, not the envelope builder. This keeps the
+    /// builder simple and composable while deferring policy to the layer that
+    /// owns it. See `security_tests.rs` C2 tests for the documented contract.
     #[must_use]
     pub fn build<M>(self, metadata: M) -> PendingEnvelope<M> {
         PendingEnvelope {
@@ -154,6 +162,8 @@ impl WithPayload {
     }
 
     /// Build with no metadata (`M = ()`).
+    ///
+    /// See [`Self::build`] for the validation contract — the same rules apply.
     #[must_use]
     pub fn build_without_metadata(self) -> PendingEnvelope<()> {
         self.build(())
@@ -191,15 +201,32 @@ pub struct PersistedEnvelope<'a, M = ()> {
 }
 
 impl<'a, M> PersistedEnvelope<'a, M> {
-    /// Construct a new persisted envelope.
+    /// Construct a new persisted envelope from database row data.
+    ///
+    /// # Debug assertions
+    ///
+    /// In debug/test builds, asserts that `stream_id` and `event_type` are
+    /// non-empty. These are invariants of the read path — database adapters
+    /// must never store or return empty identifiers. The assertions are
+    /// zero-cost in release builds.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         stream_id: &'a str,
         version: Version,
         event_type: &'a str,
         payload: &'a [u8],
         metadata: M,
     ) -> Self {
+        debug_assert!(
+            !stream_id.is_empty(),
+            "PersistedEnvelope should not be constructed with empty stream_id \
+             — database adapters must validate"
+        );
+        debug_assert!(
+            !event_type.is_empty(),
+            "PersistedEnvelope should not be constructed with empty event_type \
+             — database adapters must validate"
+        );
         Self {
             stream_id,
             version,

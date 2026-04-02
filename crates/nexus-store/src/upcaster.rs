@@ -13,6 +13,14 @@ pub trait EventUpcaster: Send + Sync {
     ///
     /// Returns `(new_event_type, new_schema_version, new_payload)`.
     /// Only called when `can_upcast` returned true.
+    ///
+    /// # Implementor contract
+    ///
+    /// The returned `new_schema_version` **must** be strictly greater than
+    /// the input `schema_version`. Upcasting is a forward migration — it
+    /// must never produce the same or a lower version. The `EventStore`
+    /// facade will validate this at runtime, but implementations should
+    /// uphold this invariant to avoid silent data corruption.
     fn upcast(
         &self,
         event_type: &str,
