@@ -1,15 +1,14 @@
 use nexus::Version;
-use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
+use nexus_store::envelope::PersistedEnvelope;
+use nexus_store::pending_envelope;
 
 #[test]
 fn pending_envelope_accessors() {
-    let envelope = PendingEnvelope::<()>::new(
-        "user-123".to_owned(),
-        Version::from_persisted(1),
-        "UserCreated",
-        vec![1, 2, 3],
-        (),
-    );
+    let envelope = pending_envelope("user-123".into())
+        .version(Version::from_persisted(1))
+        .event_type("UserCreated")
+        .payload(vec![1, 2, 3])
+        .build_without_metadata();
 
     assert_eq!(envelope.stream_id(), "user-123");
     assert_eq!(envelope.version(), Version::from_persisted(1));
@@ -27,26 +26,22 @@ fn pending_envelope_with_metadata() {
     let meta = Meta {
         correlation_id: "corr-1".into(),
     };
-    let envelope = PendingEnvelope::new(
-        "order-1".to_owned(),
-        Version::from_persisted(1),
-        "OrderPlaced",
-        vec![4, 5, 6],
-        meta.clone(),
-    );
+    let envelope = pending_envelope("order-1".into())
+        .version(Version::from_persisted(1))
+        .event_type("OrderPlaced")
+        .payload(vec![4, 5, 6])
+        .build(meta.clone());
 
     assert_eq!(envelope.metadata(), &meta);
 }
 
 #[test]
 fn pending_envelope_unit_metadata_default() {
-    let envelope = PendingEnvelope::new(
-        "stream".to_owned(),
-        Version::from_persisted(1),
-        "Event",
-        vec![],
-        (),
-    );
+    let envelope = pending_envelope("stream".into())
+        .version(Version::from_persisted(1))
+        .event_type("Event")
+        .payload(vec![])
+        .build_without_metadata();
     assert_eq!(envelope.metadata(), &());
 }
 

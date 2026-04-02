@@ -1,12 +1,23 @@
 use nexus::Version;
 
+// =============================================================================
+// PendingEnvelope — typestate builder ensures compile-time valid construction
+// =============================================================================
+
 /// Event envelope for the write path — fully owned, going to the database.
 ///
-/// Constructed internally by the `EventStore` facade from typed events
-/// and codec output. All fields are private with read-only accessors.
+/// Cannot be constructed directly. Use the typestate builder:
+/// ```ignore
+/// PendingEnvelopeBuilder::new("stream-1")
+///     .version(version)
+///     .event_type("UserCreated")
+///     .payload(bytes)
+///     .metadata(meta)
+///     .build()
+/// ```
 ///
-/// `M` is user-defined metadata (correlation ID, tenant ID, timestamps, etc.).
-/// Default is `()` for bare minimum storage.
+/// Each step returns a different type — the compiler enforces that all
+/// required fields are set before `build()` is callable.
 #[derive(Debug)]
 pub struct PendingEnvelope<M = ()> {
     stream_id: String,
@@ -17,34 +28,6 @@ pub struct PendingEnvelope<M = ()> {
 }
 
 impl<M> PendingEnvelope<M> {
-    /// Construct a new pending envelope.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `stream_id` is empty or `event_type` is empty.
-    #[must_use]
-    #[allow(
-        clippy::panic,
-        reason = "invalid envelope construction must crash — silent corruption is worse"
-    )]
-    pub fn new(
-        stream_id: String,
-        version: Version,
-        event_type: &'static str,
-        payload: Vec<u8>,
-        metadata: M,
-    ) -> Self {
-        assert!(!stream_id.is_empty(), "stream_id must not be empty");
-        assert!(!event_type.is_empty(), "event_type must not be empty");
-        Self {
-            stream_id,
-            version,
-            event_type,
-            payload,
-            metadata,
-        }
-    }
-
     /// The event stream identifier.
     #[must_use]
     pub fn stream_id(&self) -> &str {
@@ -74,6 +57,121 @@ impl<M> PendingEnvelope<M> {
     pub const fn metadata(&self) -> &M {
         &self.metadata
     }
+}
+
+// =============================================================================
+// Typestate builder — compile-time enforced construction
+// =============================================================================
+
+// Phantom state types — zero-sized, exist only at compile time
+mod builder_state {
+    pub struct NeedsVersion;
+    pub struct NeedsEventType;
+    pub struct NeedsPayload;
+    pub struct NeedsMetadata;
+    pub struct Ready;
+}
+
+/// Step 1: has stream_id, needs version.
+pub struct WithStreamId {
+    stream_id: String,
+}
+
+/// Step 2: has stream_id + version, needs event_type.
+pub struct WithVersion {
+    stream_id: String,
+    version: Version,
+}
+
+/// Step 3: has stream_id + version + event_type, needs payload.
+pub struct WithEventType {
+    stream_id: String,
+    version: Version,
+    event_type: &'static str,
+}
+
+/// Step 4: has all core fields, needs metadata.
+pub struct WithPayload {
+    stream_id: String,
+    version: Version,
+    event_type: &'static str,
+    payload: Vec<u8>,
+}
+
+impl WithStreamId {
+    /// Start building a `PendingEnvelope` with the stream ID.
+    #[must_use]
+    pub fn new(stream_id: String) -> Self {
+        Self { stream_id }
+    }
+
+    /// Set the event version.
+    #[must_use]
+    pub fn version(self, version: Version) -> WithVersion {
+        WithVersion {
+            stream_id: self.stream_id,
+            version,
+        }
+    }
+}
+
+impl WithVersion {
+    /// Set the event type name (from `DomainEvent::name()`).
+    #[must_use]
+    pub fn event_type(self, event_type: &'static str) -> WithEventType {
+        WithEventType {
+            stream_id: self.stream_id,
+            version: self.version,
+            event_type,
+        }
+    }
+}
+
+impl WithEventType {
+    /// Set the serialized event payload.
+    #[must_use]
+    pub fn payload(self, payload: Vec<u8>) -> WithPayload {
+        WithPayload {
+            stream_id: self.stream_id,
+            version: self.version,
+            event_type: self.event_type,
+            payload,
+        }
+    }
+}
+
+impl WithPayload {
+    /// Build with user-defined metadata.
+    #[must_use]
+    pub fn build<M>(self, metadata: M) -> PendingEnvelope<M> {
+        PendingEnvelope {
+            stream_id: self.stream_id,
+            version: self.version,
+            event_type: self.event_type,
+            payload: self.payload,
+            metadata,
+        }
+    }
+
+    /// Build with no metadata (`M = ()`).
+    #[must_use]
+    pub fn build_without_metadata(self) -> PendingEnvelope<()> {
+        self.build(())
+    }
+}
+
+/// Start building a `PendingEnvelope`.
+///
+/// ```ignore
+/// pending_envelope("stream-1".into())
+///     .version(version)
+///     .event_type("UserCreated")
+///     .payload(bytes)
+///     .build(metadata)
+/// ```
+#[must_use]
+pub fn pending_envelope(stream_id: String) -> WithStreamId {
+    WithStreamId::new(stream_id)
 }
 
 /// Event envelope for the read path — borrows from database row buffer.

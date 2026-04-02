@@ -1,5 +1,6 @@
 use nexus::Version;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
+use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use std::collections::HashMap;
@@ -107,20 +108,16 @@ async fn raw_store_append_and_read() {
     let store = InMemoryRawStore::new();
 
     let envelopes = vec![
-        PendingEnvelope::new(
-            "s1".into(),
-            Version::from_persisted(1),
-            "Created",
-            vec![1],
-            (),
-        ),
-        PendingEnvelope::new(
-            "s1".into(),
-            Version::from_persisted(2),
-            "Updated",
-            vec![2],
-            (),
-        ),
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(1))
+            .event_type("Created")
+            .payload(vec![1])
+            .build_without_metadata(),
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(2))
+            .event_type("Updated")
+            .payload(vec![2])
+            .build_without_metadata(),
     ];
 
     store
@@ -147,23 +144,23 @@ async fn raw_store_append_and_read() {
 async fn raw_store_optimistic_concurrency() {
     let store = InMemoryRawStore::new();
 
-    let e1 = vec![PendingEnvelope::new(
-        "s1".into(),
-        Version::from_persisted(1),
-        "E",
-        vec![],
-        (),
-    )];
+    let e1 = vec![
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(1))
+            .event_type("E")
+            .payload(vec![])
+            .build_without_metadata(),
+    ];
     store.append("s1", Version::INITIAL, &e1).await.unwrap();
 
     // Wrong expected version -- should fail.
-    let e2 = vec![PendingEnvelope::new(
-        "s1".into(),
-        Version::from_persisted(2),
-        "E",
-        vec![],
-        (),
-    )];
+    let e2 = vec![
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(2))
+            .event_type("E")
+            .payload(vec![])
+            .build_without_metadata(),
+    ];
     let result = store.append("s1", Version::INITIAL, &e2).await;
     assert!(result.is_err());
 }

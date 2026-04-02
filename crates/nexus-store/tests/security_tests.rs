@@ -6,6 +6,7 @@
 use nexus::Version;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
+use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::upcaster::EventUpcaster;
@@ -118,25 +119,32 @@ impl RawEventStore for TestStore {
 }
 
 // =============================================================================
-// C2: No validation on PendingEnvelope construction
+// C2: Builder accepts any String — content validation is the facade's job
 // =============================================================================
 
 #[test]
-#[should_panic(expected = "stream_id must not be empty")]
-fn c2_pending_envelope_rejects_empty_stream_id() {
-    PendingEnvelope::<()>::new(
-        String::new(),
-        Version::from_persisted(1),
-        "Event",
-        vec![1],
-        (),
-    );
+fn c2_builder_accepts_empty_stream_id() {
+    // The typestate builder ensures all fields are SET but cannot validate
+    // string CONTENT at compile time. Empty-string validation is deferred
+    // to the EventStore facade.
+    let envelope = pending_envelope(String::new())
+        .version(Version::from_persisted(1))
+        .event_type("Event")
+        .payload(vec![1])
+        .build_without_metadata();
+    assert_eq!(envelope.stream_id(), "");
 }
 
 #[test]
-#[should_panic(expected = "event_type must not be empty")]
-fn c2_pending_envelope_rejects_empty_event_type() {
-    PendingEnvelope::<()>::new("stream".into(), Version::from_persisted(1), "", vec![1], ());
+fn c2_builder_accepts_empty_event_type() {
+    // Same rationale: the builder takes &'static str, so "" is valid.
+    // The EventStore facade must reject empty event_type at runtime.
+    let envelope = pending_envelope("stream".into())
+        .version(Version::from_persisted(1))
+        .event_type("")
+        .payload(vec![1])
+        .build_without_metadata();
+    assert_eq!(envelope.event_type(), "");
 }
 
 // =============================================================================
@@ -225,9 +233,21 @@ async fn h5_append_with_non_sequential_versions() {
 
     // Envelopes with non-sequential versions: v3, v1, v5
     let envelopes = vec![
-        PendingEnvelope::new("s1".into(), Version::from_persisted(3), "E", vec![], ()),
-        PendingEnvelope::new("s1".into(), Version::from_persisted(1), "E", vec![], ()),
-        PendingEnvelope::new("s1".into(), Version::from_persisted(5), "E", vec![], ()),
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(3))
+            .event_type("E")
+            .payload(vec![])
+            .build_without_metadata(),
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(1))
+            .event_type("E")
+            .payload(vec![])
+            .build_without_metadata(),
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(5))
+            .event_type("E")
+            .payload(vec![])
+            .build_without_metadata(),
     ];
 
     // This should fail — versions must be sequential
@@ -249,8 +269,16 @@ async fn h5_append_with_duplicate_versions() {
     let store = TestStore::new();
 
     let envelopes = vec![
-        PendingEnvelope::new("s1".into(), Version::from_persisted(1), "E", vec![], ()),
-        PendingEnvelope::new("s1".into(), Version::from_persisted(1), "E", vec![], ()), // dup!
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(1))
+            .event_type("E")
+            .payload(vec![])
+            .build_without_metadata(),
+        pending_envelope("s1".into())
+            .version(Version::from_persisted(1))
+            .event_type("E")
+            .payload(vec![])
+            .build_without_metadata(), // dup!
     ];
 
     let result = store.append("s1", Version::INITIAL, &envelopes).await;
@@ -281,8 +309,16 @@ fn h4_store_error_size() {
 fn m2_pending_envelope_no_partial_eq() {
     // Currently PendingEnvelope doesn't implement PartialEq.
     // This test documents the gap — can't easily compare envelopes in tests.
-    let e1 = PendingEnvelope::<()>::new("s1".into(), Version::from_persisted(1), "E", vec![1], ());
-    let e2 = PendingEnvelope::<()>::new("s1".into(), Version::from_persisted(1), "E", vec![1], ());
+    let e1 = pending_envelope("s1".into())
+        .version(Version::from_persisted(1))
+        .event_type("E")
+        .payload(vec![1])
+        .build_without_metadata();
+    let e2 = pending_envelope("s1".into())
+        .version(Version::from_persisted(1))
+        .event_type("E")
+        .payload(vec![1])
+        .build_without_metadata();
     // Can't do assert_eq!(e1, e2) — no PartialEq
     // So we compare field by field
     assert_eq!(e1.stream_id(), e2.stream_id());
@@ -316,20 +352,20 @@ async fn read_nonexistent_stream_returns_empty() {
 async fn streams_are_isolated() {
     let store = TestStore::new();
 
-    let e1 = vec![PendingEnvelope::new(
-        "stream-a".into(),
-        Version::from_persisted(1),
-        "EventA",
-        vec![1],
-        (),
-    )];
-    let e2 = vec![PendingEnvelope::new(
-        "stream-b".into(),
-        Version::from_persisted(1),
-        "EventB",
-        vec![2],
-        (),
-    )];
+    let e1 = vec![
+        pending_envelope("stream-a".into())
+            .version(Version::from_persisted(1))
+            .event_type("EventA")
+            .payload(vec![1])
+            .build_without_metadata(),
+    ];
+    let e2 = vec![
+        pending_envelope("stream-b".into())
+            .version(Version::from_persisted(1))
+            .event_type("EventB")
+            .payload(vec![2])
+            .build_without_metadata(),
+    ];
 
     store
         .append("stream-a", Version::INITIAL, &e1)
