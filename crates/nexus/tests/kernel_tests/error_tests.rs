@@ -35,6 +35,6 @@ fn error_id_no_heap_allocation() {
 fn error_id_truncates_long_values() {
     let long = "a".repeat(200);
     let id = ErrorId::from_display(&long);
-    // Truncated to 128 bytes
-    assert_eq!(format!("{id}").len(), 128);
+    // Truncated to 64 bytes
+    assert_eq!(format!("{id}").len(), 64);
 }

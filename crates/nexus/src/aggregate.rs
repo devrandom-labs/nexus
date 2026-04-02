@@ -336,6 +336,10 @@ impl<A: Aggregate> AggregateRoot<A> {
     ///
     /// Panics if the total version count overflows `u64`.
     #[must_use]
+    #[allow(
+        clippy::expect_used,
+        reason = "critical safety invariant — overflow must crash, not silently wrap"
+    )]
     pub fn current_version(&self) -> Version {
         let uncommitted_count = u64::try_from(self.uncommitted_events.len())
             .expect("uncommitted event count exceeds u64");
@@ -357,6 +361,11 @@ impl<A: Aggregate> AggregateRoot<A> {
     ///
     /// Panics if the number of uncommitted events reaches `Aggregate::MAX_UNCOMMITTED`.
     /// Call `take_uncommitted_events()` to drain before hitting the limit.
+    #[allow(
+        clippy::panic,
+        clippy::expect_used,
+        reason = "critical safety invariants — exceeding limits or panicking apply must crash explicitly"
+    )]
     pub fn apply_event(&mut self, event: EventOf<A>) {
         assert!(
             self.uncommitted_events.len() < A::MAX_UNCOMMITTED,

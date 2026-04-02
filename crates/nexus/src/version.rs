@@ -32,6 +32,10 @@ impl Version {
     /// Panics if the version is `u64::MAX` (overflow). This is a hard limit —
     /// an aggregate cannot have more than `u64::MAX` events.
     #[must_use]
+    #[allow(
+        clippy::panic,
+        reason = "version overflow must crash, not silently wrap"
+    )]
     pub const fn next(self) -> Self {
         match self.0.checked_add(1) {
             Some(v) => Self(v),
@@ -66,7 +70,7 @@ impl Version {
 
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        self.0.fmt(f)
     }
 }
 
