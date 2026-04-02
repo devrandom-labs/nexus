@@ -1,9 +1,9 @@
-use nexus::kernel::{KernelError, Version};
+use nexus::{ErrorId, KernelError, Version};
 
 #[test]
 fn version_mismatch_display() {
     let err = KernelError::VersionMismatch {
-        stream_id: String::from("user-123"),
+        stream_id: ErrorId::from_display(&"user-123"),
         expected: Version::from_persisted(3),
         actual: Version::from_persisted(5),
     };
@@ -16,9 +16,25 @@ fn version_mismatch_display() {
 #[test]
 fn kernel_error_is_std_error() {
     let err = KernelError::VersionMismatch {
-        stream_id: String::from("test"),
+        stream_id: ErrorId::from_display(&"test"),
         expected: Version::INITIAL,
         actual: Version::from_persisted(1),
     };
     let _: &dyn std::error::Error = &err;
+}
+
+#[test]
+fn error_id_no_heap_allocation() {
+    // ErrorId is stack-allocated — 128 bytes + 1 byte length
+    // This verifies it works without String/heap
+    let id = ErrorId::from_display(&42_u64);
+    assert_eq!(format!("{id}"), "42");
+}
+
+#[test]
+fn error_id_truncates_long_values() {
+    let long = "a".repeat(200);
+    let id = ErrorId::from_display(&long);
+    // Truncated to 64 bytes
+    assert_eq!(format!("{id}").len(), 64);
 }

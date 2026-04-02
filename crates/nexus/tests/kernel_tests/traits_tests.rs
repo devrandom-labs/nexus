@@ -1,4 +1,4 @@
-use nexus::kernel::*;
+use nexus::*;
 use std::fmt;
 
 // --- Test ID type ---
@@ -45,6 +45,9 @@ struct ThingState {
 
 impl AggregateState for ThingState {
     type Event = ThingEvent;
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &ThingEvent) {
         match event {
             ThingEvent::Created(e) => self.name = e.name.clone(),

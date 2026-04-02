@@ -1,0 +1,5 @@
+error: `id` is required
+ --> tests/macro_compile_fail/aggregate_missing_id.rs:4:8
+  |
+4 | struct MissingId;
+  |        ^^^^^^^^^

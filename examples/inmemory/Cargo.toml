@@ -1,0 +1,10 @@
+[package]
+name = "nexus-example-inmemory"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+nexus = { path = "../../crates/nexus", features = ["derive"] }
+thiserror = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../crates/workspace-hack" }

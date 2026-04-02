@@ -1,0 +1,5 @@
+error: aggregate macro requires a unit struct (no fields).
+ --> tests/macro_compile_fail/aggregate_with_fields.rs:4:8
+  |
+4 | struct HasFields {
+  |        ^^^^^^^^^

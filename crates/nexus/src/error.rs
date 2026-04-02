@@ -1,124 +1,71 @@
+use crate::version::Version;
 use thiserror::Error;
-use tower::BoxError;
 
-/// The primary, top-level error type for the `nexus` crate.
-///
-/// This enum serves as the main error contract for high-level operations,
-/// providing a unified interface for failures that can occur across different
-/// architectural layers (e.g., storage, repository logic, serialization).
-///
-/// # Architectural Approach: The Hierarchical Facade
-///
-/// This enum follows a "Hierarchical Facade" or "Error Promotion" pattern.
-/// The goal is to provide a user-friendly API that avoids forcing consumers
-/// into verbose nested `match` statements for common, actionable errors, while
-/// still maintaining a clean, modular, and decoupled internal error structure.
-///
-/// This is achieved by having two categories of variants:
-///
-/// 1.  **Promoted Variants**: These are for the most common and actionable errors
-///     that a consumer would likely want to handle programmatically (e.g.,
-///     `ConnectionFailed`, `ConcurrencyConflict`). These errors are "promoted"
-///     from lower-level, co-located error enums (like `store::Error`) into
-///     first-class variants here.
-///
-/// 2.  **Wrapper Variants**: These act as a "catch-all" for less common or more
-///     technical errors from a specific architectural layer (e.g., `Store`).
-///     This prevents the top-level `Error` from becoming a bloated "God Object"
-///     that knows about every possible failure in the system, preserving modularity.
-///
-/// The `From` trait is implemented to intelligently triage errors from lower
-/// layers, mapping them to either a promoted variant or a wrapper variant as
-/// appropriate. This makes error propagation with the `?` operator seamless.
-#[derive(Debug, Error)]
-pub enum Error {
-    /// A fundamental infrastructure error indicating that a connection to the
-    /// underlying data store could not be established or was lost.
-    ///
-    /// This is a **promoted** error from the storage layer, elevated to the top
-    /// level because it represents a common, actionable failure that consumers
-    /// may wish to handle with specific logic, such as a retry policy or a
-    /// circuit breaker.
-    #[error("A connection to the data store could not be established")]
-    ConnectionFailed {
-        #[source]
-        source: BoxError,
-    },
-
-    /// A required source for data was not found.
-    ///
-    /// This is a **promoted** error from the storage layer, typically indicating
-    /// that a required database table, collection, or document store does not
-    /// exist. It is considered an actionable failure, as a consumer might handle
-    /// it by triggering a setup routine or database migrations.
-    #[error("Source '{name}' not found (e.g., Table, Collection, Document)")]
-    SourceNotFound { name: String },
-
-    #[error("A stream with ID '{id}' already exists")]
-    UniqueIdViolation { id: String },
-
-    /// A wrapper for any other error originating from the storage layer (`store::Error`)
-    /// that has not been promoted to a first-class variant on this top-level enum.
-    ///
-    /// This variant acts as a "catch-all" for less common or purely technical
-    /// storage errors. This preserves the full error detail for logging and
-    /// debugging without bloating the top-level API. Consumers will typically
-    /// log this error rather than matching on its inner content.
-    #[error(transparent)]
-    Store {
-        #[from]
-        source: BoxError,
-    },
-
-    /// An error occurred while deserializing event data from a raw format (e.g., JSON)
-    /// into a structured `EventRecord`.
-    ///
-    /// This is treated as a top-level, cross-cutting concern because deserialization
-    /// can occur at multiple points when interacting with infrastructure.
-    #[error("Failed to deserialize event data")]
-    DeserializationError {
-        #[source]
-        source: BoxError,
-    },
-
-    /// An error occurred while serializing an `EventRecord` into a raw format for persistence.
-    ///
-    /// Like deserialization, this is a top-level concern as it is a fundamental
-    /// infrastructure operation.
-    #[error("Failed to serialize event data")]
-    SerializationError {
-        #[source]
-        source: BoxError,
-    },
-
-    /// ## Variant: `Conflict`
-    /// Signals an optimistic concurrency control violation. This typically happens when
-    /// attempting to save an aggregate, and its expected version (based on when it was loaded)
-    /// does not match the current version in the event store, indicating that another
-    /// process has modified the aggregate in the meantime.
-    #[error("Concurrency conflict for stream '{stream_id}'. Expected version {expected_version}.")]
-    Conflict {
-        stream_id: String,
-        expected_version: u64,
-        actual_version: u64,
-    },
-
-    #[error("System Error: '{reason:?}'")]
-    System { reason: String },
-
-    #[error("{name} in {context}: {reason}")]
-    InvalidArgument {
-        name: String,
-        reason: String,
-        context: String,
-    },
-
-    #[error("{stream_id} pending events version sequence are invalid.")]
-    SequenceMismatch {
-        stream_id: String,
-        expected_version: u64,
-        actual_version: u64,
-    },
+/// Fixed-size stack-allocated string for error messages.
+/// No heap allocation — safe to construct on error paths under OOM.
+/// Truncates at 64 bytes if the formatted value is longer.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ErrorId {
+    buf: [u8; 64],
+    len: u8,
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+impl ErrorId {
+    /// Create from any `Display` type — no heap allocation.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::as_conversions,
+        reason = "to_copy is capped at 64 which fits in u8"
+    )]
+    pub fn from_display(value: &impl std::fmt::Display) -> Self {
+        use std::fmt::Write;
+        let mut id = Self {
+            buf: [0; 64],
+            len: 0,
+        };
+        let _ = write!(id, "{value}");
+        id
+    }
+}
+
+impl std::fmt::Write for ErrorId {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::as_conversions,
+        reason = "len and to_copy are bounded to 64, which fits in u8 and usize"
+    )]
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let remaining = 64 - usize::from(self.len);
+        let to_copy = s.len().min(remaining);
+        let start = usize::from(self.len);
+        self.buf[start..start + to_copy].copy_from_slice(&s.as_bytes()[..to_copy]);
+        self.len += to_copy as u8;
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for ErrorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = std::str::from_utf8(&self.buf[..usize::from(self.len)]).unwrap_or("<invalid utf8>");
+        f.write_str(s)
+    }
+}
+
+impl std::fmt::Debug for ErrorId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "\"{self}\"")
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum KernelError {
+    #[error("Version mismatch on '{stream_id}': expected {expected}, got {actual}")]
+    VersionMismatch {
+        stream_id: ErrorId,
+        expected: Version,
+        actual: Version,
+    },
+
+    #[error("Rehydration limit exceeded on '{stream_id}': max {max} events")]
+    RehydrationLimitExceeded { stream_id: ErrorId, max: usize },
+}

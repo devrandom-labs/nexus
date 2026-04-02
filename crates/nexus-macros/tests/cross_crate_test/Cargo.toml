@@ -1,0 +1,10 @@
+[package]
+name = "nexus-cross-crate-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+nexus = { path = "../../../nexus", features = ["derive"] }
+thiserror = "2"
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }

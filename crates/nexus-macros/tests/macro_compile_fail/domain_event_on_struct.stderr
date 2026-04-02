@@ -1,0 +1,5 @@
+error: DomainEvent derive requires an enum. Wrap event structs in an enum: `enum MyEvent { Created(Created), ... }`
+ --> tests/macro_compile_fail/domain_event_on_struct.rs:4:8
+  |
+4 | struct NotAnEnum {
+  |        ^^^^^^^^^

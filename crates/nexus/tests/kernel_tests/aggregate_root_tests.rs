@@ -1,5 +1,5 @@
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::*;
 use std::fmt;
 
 // --- Self-contained test domain ---
@@ -41,6 +41,9 @@ struct ItemState {
 }
 impl AggregateState for ItemState {
     type Event = ItemEvent;
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &ItemEvent) {
         match event {
             ItemEvent::Created(e) => self.name.clone_from(&e.name),
@@ -164,6 +167,7 @@ fn load_from_events_rejects_version_gap() {
             assert_eq!(expected, Version::from_persisted(2));
             assert_eq!(actual, Version::from_persisted(3));
         }
+        other => panic!("expected VersionMismatch, got {other:?}"),
     }
 }
 

@@ -1,16 +1,16 @@
 error[E0277]: the trait bound `BadError: std::error::Error` is not satisfied
-  --> tests/compile_fail/aggregate_error_not_std_error.rs:32:18
+  --> tests/compile_fail/aggregate_error_not_std_error.rs:33:18
    |
-32 |     type Error = BadError; // should fail: BadError doesn't impl Error
+33 |     type Error = BadError; // should fail: BadError doesn't impl Error
    |                  ^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `std::error::Error` is not implemented for `BadError`
-  --> tests/compile_fail/aggregate_error_not_std_error.rs:23:1
+  --> tests/compile_fail/aggregate_error_not_std_error.rs:24:1
    |
-23 | enum BadError {
+24 | enum BadError {
    | ^^^^^^^^^^^^^
-note: required by a bound in `nexus::kernel::Aggregate::Error`
-  --> src/kernel/aggregate.rs
+note: required by a bound in `nexus::Aggregate::Error`
+  --> src/aggregate.rs
    |
    |     type Error: Error + Send + Sync + Debug + 'static;
    |                 ^^^^^ required by this bound in `Aggregate::Error`

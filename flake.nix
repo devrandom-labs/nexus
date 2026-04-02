@@ -96,8 +96,6 @@
           nexus-coverage =
             craneLib.cargoTarpaulin (commonArgs // {
               inherit cargoArtifacts;
-              # Exclude trybuild compile-failure tests — .stderr snapshots
-              # contain paths that differ between local and CI environments
               cargoTarpaulinExtraArgs = "--exclude-files 'tests/compile_fail/*' -- --skip compile_fail";
             });
         };
@@ -117,6 +115,8 @@
 
           shellHook = ''
             #!/usr/bin/env bash
+            # Set git hooks path to tracked .githooks/ directory
+            git config core.hooksPath .githooks
             # Create a fancy welcome message
             REPO_NAME=$(basename "$PWD")
             PROPER_REPO_NAME=$(echo "$REPO_NAME" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')

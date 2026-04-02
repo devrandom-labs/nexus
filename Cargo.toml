@@ -1,8 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/*",
-    "examples/*",
+    "crates/nexus",
+    "crates/nexus-macros",
+    "crates/nexus-macros/tests/cross_crate_test",
+    "crates/workspace-hack",
+    "examples/inmemory",
+]
+exclude = [
+    "crates/nexus-rusqlite",
+    "crates/nexus-services",
+    "crates/nexus-test-helpers",
+    "examples/todo-rusqlite",
 ]
 
 [workspace.dependencies]

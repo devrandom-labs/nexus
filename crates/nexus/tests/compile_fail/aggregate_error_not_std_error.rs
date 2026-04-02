@@ -1,7 +1,7 @@
 /// Aggregate::Error must implement std::error::Error.
 /// A plain enum without #[derive(Error)] should fail.
 
-use nexus::kernel::*;
+use nexus::*;
 
 #[derive(Debug, Clone)]
 enum MyEvent { A }
@@ -14,6 +14,7 @@ impl DomainEvent for MyEvent {
 struct MyState;
 impl AggregateState for MyState {
     type Event = MyEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, _: &MyEvent) {}
     fn name(&self) -> &'static str { "My" }
 }

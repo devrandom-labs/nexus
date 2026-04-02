@@ -6,9 +6,9 @@
 //! defining crate. In production, `#[derive(Aggregate)]` generates
 //! a wrapper type that users own.
 
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::version::VersionedEvent;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::VersionedEvent;
+use nexus::*;
 use std::fmt;
 
 // --- ID ---
@@ -45,6 +45,9 @@ struct UserState {
 
 impl AggregateState for UserState {
     type Event = UserEvent;
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &UserEvent) {
         match event {
             UserEvent::Created(e) => self.name.clone_from(&e.name),

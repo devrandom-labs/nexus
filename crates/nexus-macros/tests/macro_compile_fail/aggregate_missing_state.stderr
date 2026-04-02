@@ -1,0 +1,5 @@
+error: `state` is required
+ --> tests/macro_compile_fail/aggregate_missing_state.rs:4:8
+  |
+4 | struct MissingState;
+  |        ^^^^^^^^^^^^

@@ -1,8 +1,8 @@
 /// Applying an event from one aggregate to a different aggregate's state
 /// must fail at compile time. This is the core type safety guarantee.
 
-use nexus::kernel::*;
-use nexus::kernel::aggregate::AggregateRoot;
+use nexus::*;
+use nexus::AggregateRoot;
 
 // --- User domain ---
 #[derive(Debug, Clone)]
@@ -16,6 +16,7 @@ impl DomainEvent for UserEvent {
 struct UserState;
 impl AggregateState for UserState {
     type Event = UserEvent;
+    fn initial() -> Self { Self::default() }
     fn apply(&mut self, _: &UserEvent) {}
     fn name(&self) -> &'static str { "User" }
 }

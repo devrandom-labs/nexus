@@ -4,10 +4,10 @@
 //! If any assertion fails, the crate won't compile.
 //! If they all pass, it's as if this file doesn't exist at runtime.
 
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::events::Events;
-use nexus::kernel::version::VersionedEvent;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::Events;
+use nexus::VersionedEvent;
+use nexus::*;
 use static_assertions::*;
 use std::fmt;
 
@@ -70,6 +70,9 @@ impl DomainEvent for StaticEvent {
 struct StaticState;
 impl AggregateState for StaticState {
     type Event = StaticEvent;
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, _event: &StaticEvent) {}
     fn name(&self) -> &'static str {
         "Static"

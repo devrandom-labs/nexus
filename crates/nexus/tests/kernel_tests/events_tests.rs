@@ -1,5 +1,5 @@
-use nexus::kernel::events::Events;
-use nexus::kernel::*;
+use nexus::Events;
+use nexus::*;
 
 #[derive(Debug, Clone, PartialEq)]
 struct Created;

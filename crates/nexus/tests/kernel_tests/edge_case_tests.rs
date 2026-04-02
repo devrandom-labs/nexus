@@ -8,10 +8,10 @@
 //! - take, apply, take again pattern
 //! - `Events` ref iteration
 
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::events::Events;
-use nexus::kernel::version::VersionedEvent;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::Events;
+use nexus::VersionedEvent;
+use nexus::*;
 use std::fmt;
 
 // --- Minimal test domain ---
@@ -50,6 +50,9 @@ struct TState {
 }
 impl AggregateState for TState {
     type Event = TEvent;
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &TEvent) {
         match event {
             TEvent::Added(e) => self.items.push(e.0.clone()),
@@ -124,6 +127,7 @@ fn load_from_events_rejects_first_event_not_version_1() {
             assert_eq!(expected, Version::from_persisted(1));
             assert_eq!(actual, Version::from_persisted(5));
         }
+        other => panic!("expected VersionMismatch, got {other:?}"),
     }
 }
 

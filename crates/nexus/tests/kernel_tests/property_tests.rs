@@ -13,9 +13,9 @@
 
 #![cfg(not(miri))]
 
-use nexus::kernel::aggregate::AggregateRoot;
-use nexus::kernel::version::VersionedEvent;
-use nexus::kernel::*;
+use nexus::AggregateRoot;
+use nexus::VersionedEvent;
+use nexus::*;
 use proptest::prelude::*;
 use std::fmt;
 
@@ -55,6 +55,9 @@ struct CountState {
 }
 impl AggregateState for CountState {
     type Event = CountEvent;
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &CountEvent) {
         match event {
             CountEvent::Incremented => self.value += 1,

@@ -22,8 +22,12 @@ mod error_tests;
 mod events_tests;
 #[path = "kernel_tests/integration_test.rs"]
 mod integration_test;
+#[path = "kernel_tests/newtype_aggregate_tests.rs"]
+mod newtype_aggregate_tests;
 #[path = "kernel_tests/property_tests.rs"]
 mod property_tests;
+#[path = "kernel_tests/security_tests.rs"]
+mod security_tests;
 #[path = "kernel_tests/static_assertion_tests.rs"]
 mod static_assertion_tests;
 #[path = "kernel_tests/traits_tests.rs"]

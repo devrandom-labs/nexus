@@ -1,0 +1,5 @@
+error: `error` is required
+  --> tests/macro_compile_fail/aggregate_missing_error.rs:27:8
+   |
+27 | struct MissingError;
+   |        ^^^^^^^^^^^^
