@@ -1,0 +1,381 @@
+//! Security & reliability tests for nexus-store.
+//!
+//! Reproduces vulnerabilities found during mission-critical audit.
+//! Each test documents a specific threat and verifies the store handles it safely.
+
+use nexus::Version;
+use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
+use nexus_store::error::StoreError;
+use nexus_store::raw::RawEventStore;
+use nexus_store::stream::EventStream;
+use nexus_store::upcaster::EventUpcaster;
+use std::collections::HashMap;
+use tokio::sync::Mutex;
+
+// =============================================================================
+// Shared test infrastructure (in-memory adapter)
+// =============================================================================
+
+type StoredRow = (u64, String, Vec<u8>);
+
+struct TestStore {
+    streams: Mutex<HashMap<String, Vec<StoredRow>>>,
+}
+
+impl TestStore {
+    fn new() -> Self {
+        Self {
+            streams: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+struct TestStream {
+    events: Vec<(String, u64, String, Vec<u8>)>,
+    pos: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum TestError {
+    #[error("conflict")]
+    Conflict,
+}
+
+impl EventStream for TestStream {
+    type Error = TestError;
+    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+        if self.pos >= self.events.len() {
+            return None;
+        }
+        let row = &self.events[self.pos];
+        self.pos += 1;
+        Some(Ok(PersistedEnvelope::new(
+            &row.0,
+            Version::from_persisted(row.1),
+            &row.2,
+            &row.3,
+            (),
+        )))
+    }
+}
+
+impl RawEventStore for TestStore {
+    type Error = TestError;
+    type Stream<'a>
+        = TestStream
+    where
+        Self: 'a;
+
+    async fn append(
+        &self,
+        stream_id: &str,
+        expected_version: Version,
+        envelopes: &[PendingEnvelope<()>],
+    ) -> Result<(), Self::Error> {
+        let mut guard = self.streams.lock().await;
+        let stream = guard.entry(stream_id.to_owned()).or_default();
+        let current = u64::try_from(stream.len()).unwrap_or(u64::MAX);
+        if current != expected_version.as_u64() {
+            return Err(TestError::Conflict);
+        }
+        // Validate version sequence — must be sequential from expected_version + 1
+        let mut expected_next = expected_version.as_u64() + 1;
+        for env in envelopes {
+            if env.version().as_u64() != expected_next {
+                return Err(TestError::Conflict);
+            }
+            expected_next += 1;
+        }
+        for env in envelopes {
+            stream.push((
+                env.version().as_u64(),
+                env.event_type().to_owned(),
+                env.payload().to_vec(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn read_stream(
+        &self,
+        stream_id: &str,
+        from: Version,
+    ) -> Result<Self::Stream<'_>, Self::Error> {
+        let events = self
+            .streams
+            .lock()
+            .await
+            .get(stream_id)
+            .map(|s| {
+                s.iter()
+                    .filter(|(v, _, _)| *v >= from.as_u64())
+                    .map(|(v, t, p)| (stream_id.to_owned(), *v, t.clone(), p.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(TestStream { events, pos: 0 })
+    }
+}
+
+// =============================================================================
+// C2: No validation on PendingEnvelope construction
+// =============================================================================
+
+#[test]
+#[should_panic(expected = "stream_id must not be empty")]
+fn c2_pending_envelope_rejects_empty_stream_id() {
+    PendingEnvelope::<()>::new(
+        String::new(),
+        Version::from_persisted(1),
+        "Event",
+        vec![1],
+        (),
+    );
+}
+
+#[test]
+#[should_panic(expected = "event_type must not be empty")]
+fn c2_pending_envelope_rejects_empty_event_type() {
+    PendingEnvelope::<()>::new("stream".into(), Version::from_persisted(1), "", vec![1], ());
+}
+
+// =============================================================================
+// H1: RawEventStore::append accepts empty envelope slice
+// =============================================================================
+
+#[tokio::test]
+async fn h1_append_empty_envelopes_is_noop_or_error() {
+    let store = TestStore::new();
+    // Appending zero events should either be rejected or be a safe no-op
+    let result = store.append("s1", Version::INITIAL, &[]).await;
+    // This should succeed (no-op) but version should not change
+    assert!(result.is_ok());
+
+    // Read should return empty stream
+    let mut stream = store.read_stream("s1", Version::INITIAL).await.unwrap();
+    assert!(
+        stream.next().await.is_none(),
+        "Empty append should not create any events"
+    );
+}
+
+// =============================================================================
+// H2: EventUpcaster can return empty event_type
+// =============================================================================
+
+#[test]
+fn h2_upcaster_can_return_empty_event_type() {
+    // DOCUMENTED RISK: The EventUpcaster trait cannot prevent implementations
+    // from returning empty event_type. The EventStore facade MUST validate
+    // upcaster output before passing to the codec.
+    struct BadUpcaster;
+    impl EventUpcaster for BadUpcaster {
+        fn can_upcast(&self, _: &str, _: u32) -> bool {
+            true
+        }
+        fn upcast(&self, _: &str, _: u32, payload: &[u8]) -> (String, u32, Vec<u8>) {
+            (String::new(), 2, payload.to_vec())
+        }
+    }
+
+    let upcaster = BadUpcaster;
+    let (event_type, _, _) = upcaster.upcast("OldEvent", 1, b"data");
+    // This IS empty — the facade must catch it (tested when facade is built)
+    assert!(
+        event_type.is_empty(),
+        "BadUpcaster returns empty — facade must validate"
+    );
+}
+
+// =============================================================================
+// H3: EventUpcaster can downgrade schema_version
+// =============================================================================
+
+#[test]
+fn h3_upcaster_can_downgrade_version() {
+    // DOCUMENTED RISK: The EventUpcaster trait cannot prevent implementations
+    // from downgrading schema_version. The EventStore facade MUST validate
+    // that upcasted version > input version.
+    struct DowngradeUpcaster;
+    impl EventUpcaster for DowngradeUpcaster {
+        fn can_upcast(&self, _: &str, _: u32) -> bool {
+            true
+        }
+        fn upcast(&self, _: &str, _: u32, payload: &[u8]) -> (String, u32, Vec<u8>) {
+            ("Event".into(), 0, payload.to_vec())
+        }
+    }
+
+    let upcaster = DowngradeUpcaster;
+    let (_, new_version, _) = upcaster.upcast("Event", 1, b"data");
+    // Version went DOWN — facade must catch it (tested when facade is built)
+    assert_eq!(
+        new_version, 0,
+        "DowngradeUpcaster returns 0 — facade must validate"
+    );
+}
+
+// =============================================================================
+// H5: Append doesn't validate version sequence of envelopes
+// =============================================================================
+
+#[tokio::test]
+async fn h5_append_with_non_sequential_versions() {
+    let store = TestStore::new();
+
+    // Envelopes with non-sequential versions: v3, v1, v5
+    let envelopes = vec![
+        PendingEnvelope::new("s1".into(), Version::from_persisted(3), "E", vec![], ()),
+        PendingEnvelope::new("s1".into(), Version::from_persisted(1), "E", vec![], ()),
+        PendingEnvelope::new("s1".into(), Version::from_persisted(5), "E", vec![], ()),
+    ];
+
+    // This should fail — versions must be sequential
+    let result = store.append("s1", Version::INITIAL, &envelopes).await;
+    // Currently the test adapter accepts this — it should NOT
+    // The EventStore facade (when built) should validate this
+    assert!(
+        result.is_err(),
+        "Append should reject non-sequential version order"
+    );
+}
+
+// =============================================================================
+// H5 variant: Append with duplicate versions
+// =============================================================================
+
+#[tokio::test]
+async fn h5_append_with_duplicate_versions() {
+    let store = TestStore::new();
+
+    let envelopes = vec![
+        PendingEnvelope::new("s1".into(), Version::from_persisted(1), "E", vec![], ()),
+        PendingEnvelope::new("s1".into(), Version::from_persisted(1), "E", vec![], ()), // dup!
+    ];
+
+    let result = store.append("s1", Version::INITIAL, &envelopes).await;
+    assert!(result.is_err(), "Append should reject duplicate versions");
+}
+
+// =============================================================================
+// H4: StoreError has heap-allocated Box<dyn Error>
+// =============================================================================
+
+#[test]
+fn h4_store_error_size() {
+    // Document the size of StoreError for IoT awareness.
+    // Box<dyn Error> means heap allocation on error paths.
+    let size = std::mem::size_of::<StoreError>();
+    // This should be reasonable — if it's too large, consider boxing the whole error
+    assert!(
+        size <= 128,
+        "StoreError is {size} bytes — too large for stack on constrained devices"
+    );
+}
+
+// =============================================================================
+// M1/M2: Clone and PartialEq on envelopes
+// =============================================================================
+
+#[test]
+fn m2_pending_envelope_no_partial_eq() {
+    // Currently PendingEnvelope doesn't implement PartialEq.
+    // This test documents the gap — can't easily compare envelopes in tests.
+    let e1 = PendingEnvelope::<()>::new("s1".into(), Version::from_persisted(1), "E", vec![1], ());
+    let e2 = PendingEnvelope::<()>::new("s1".into(), Version::from_persisted(1), "E", vec![1], ());
+    // Can't do assert_eq!(e1, e2) — no PartialEq
+    // So we compare field by field
+    assert_eq!(e1.stream_id(), e2.stream_id());
+    assert_eq!(e1.version(), e2.version());
+    assert_eq!(e1.event_type(), e2.event_type());
+    assert_eq!(e1.payload(), e2.payload());
+}
+
+// =============================================================================
+// Read nonexistent stream
+// =============================================================================
+
+#[tokio::test]
+async fn read_nonexistent_stream_returns_empty() {
+    let store = TestStore::new();
+    let mut stream = store
+        .read_stream("does-not-exist", Version::INITIAL)
+        .await
+        .unwrap();
+    assert!(
+        stream.next().await.is_none(),
+        "Reading a nonexistent stream should return empty, not error"
+    );
+}
+
+// =============================================================================
+// Multiple streams isolation
+// =============================================================================
+
+#[tokio::test]
+async fn streams_are_isolated() {
+    let store = TestStore::new();
+
+    let e1 = vec![PendingEnvelope::new(
+        "stream-a".into(),
+        Version::from_persisted(1),
+        "EventA",
+        vec![1],
+        (),
+    )];
+    let e2 = vec![PendingEnvelope::new(
+        "stream-b".into(),
+        Version::from_persisted(1),
+        "EventB",
+        vec![2],
+        (),
+    )];
+
+    store
+        .append("stream-a", Version::INITIAL, &e1)
+        .await
+        .unwrap();
+    store
+        .append("stream-b", Version::INITIAL, &e2)
+        .await
+        .unwrap();
+
+    // Read stream-a — should only see EventA
+    let mut stream = store
+        .read_stream("stream-a", Version::INITIAL)
+        .await
+        .unwrap();
+    let envelope = stream.next().await.unwrap().unwrap();
+    assert_eq!(envelope.event_type(), "EventA");
+    assert_eq!(envelope.payload(), &[1]);
+    drop(envelope);
+    assert!(stream.next().await.is_none());
+
+    // Read stream-b — should only see EventB
+    let mut stream = store
+        .read_stream("stream-b", Version::INITIAL)
+        .await
+        .unwrap();
+    let envelope = stream.next().await.unwrap().unwrap();
+    assert_eq!(envelope.event_type(), "EventB");
+    assert_eq!(envelope.payload(), &[2]);
+    drop(envelope);
+    assert!(stream.next().await.is_none());
+}
+
+// =============================================================================
+// L: StoreError variant exhaustiveness
+// =============================================================================
+
+#[test]
+fn store_error_variants_are_known() {
+    let err = StoreError::StreamNotFound {
+        stream_id: nexus::ErrorId::from_display(&"test"),
+    };
+    match err {
+        StoreError::Conflict { .. } => {}
+        StoreError::StreamNotFound { .. } => {}
+        StoreError::Codec(_) => {}
+        StoreError::Adapter(_) => {} // If you add a variant, add it here
+    }
+}

@@ -42,7 +42,8 @@
       "Bash(sed -i '' \"s/# impl AggregateState for St { type Event = Ev; fn apply\\(\\\\&mut self, _: \\\\&Ev\\) {} fn name\\(\\\\&self\\) -> \\\\&''static str { \"\"S\"\" } }/# impl AggregateState for St { type Event = Ev; fn initial\\(\\) -> Self { Self::default\\(\\) } fn apply\\(\\\\&mut self, _: \\\\&Ev\\) {} fn name\\(\\\\&self\\) -> \\\\&''static str { \"\"S\"\" } }/\" crates/nexus/src/aggregate.rs)",
       "Bash(chmod:*)",
       "Bash(git config:*)",
-      "Bash(git -c:*)"
+      "Bash(git -c:*)",
+      "Bash(git:*)"
     ]
   }
 }

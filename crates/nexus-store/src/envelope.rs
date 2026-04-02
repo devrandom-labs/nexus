@@ -18,14 +18,24 @@ pub struct PendingEnvelope<M = ()> {
 
 impl<M> PendingEnvelope<M> {
     /// Construct a new pending envelope.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stream_id` is empty or `event_type` is empty.
     #[must_use]
-    pub const fn new(
+    #[allow(
+        clippy::panic,
+        reason = "invalid envelope construction must crash — silent corruption is worse"
+    )]
+    pub fn new(
         stream_id: String,
         version: Version,
         event_type: &'static str,
         payload: Vec<u8>,
         metadata: M,
     ) -> Self {
+        assert!(!stream_id.is_empty(), "stream_id must not be empty");
+        assert!(!event_type.is_empty(), "event_type must not be empty");
         Self {
             stream_id,
             version,
