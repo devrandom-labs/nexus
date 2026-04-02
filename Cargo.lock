@@ -211,6 +211,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "dissimilar"
+version = "1.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aeda16ab4059c5fd2a83f2b9c9e9c981327b18aa8e3b313f7e6563799d4f093e"
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -412,6 +418,7 @@ dependencies = [
  "static_assertions",
  "thiserror",
  "tokio",
+ "trybuild",
  "workspace-hack",
 ]
 
@@ -935,6 +942,7 @@ version = "1.0.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f614c21bd3a61bad9501d75cbb7686f00386c806d7f456778432c25cf86948a"
 dependencies = [
+ "dissimilar",
  "glob",
  "serde",
  "serde_derive",
@@ -1214,6 +1222,7 @@ dependencies = [
  "quote",
  "serde",
  "syn",
+ "trybuild",
 ]
 
 [[package]]

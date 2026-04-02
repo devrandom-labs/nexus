@@ -19,6 +19,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 proptest = { workspace = true }
 static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+trybuild = { version = "1", features = ["diff"] }
 
 [lints]
 workspace = true
