@@ -1,16 +1,12 @@
-use nexus::DomainEvent;
-
 /// Pluggable serialization for domain events.
 ///
-/// Converts between typed events and byte payloads. Monomorphized via
-/// type parameter on `EventStore` for zero-cost at the call site.
+/// Converts between typed events and byte payloads. The type parameter
+/// `E` is the concrete event enum — implementors add whatever bounds
+/// they need (e.g. `Serialize + DeserializeOwned` for JSON codecs).
 ///
 /// Knows nothing about envelopes, streams, versions, or metadata.
 /// Just bytes in, bytes out.
-///
-/// Users implement this for their chosen format (`serde_json`, postcard,
-/// musli, protobuf, rkyv, etc.).
-pub trait Codec: Send + Sync + 'static {
+pub trait Codec<E>: Send + Sync + 'static {
     /// The error type for serialization/deserialization failures.
     type Error: std::error::Error + Send + Sync + 'static;
 
@@ -19,7 +15,7 @@ pub trait Codec: Send + Sync + 'static {
     /// # Errors
     ///
     /// Returns `Self::Error` if the event cannot be serialized.
-    fn encode<E: DomainEvent>(&self, event: &E) -> Result<Vec<u8>, Self::Error>;
+    fn encode(&self, event: &E) -> Result<Vec<u8>, Self::Error>;
 
     /// Deserialize bytes back to a typed domain event.
     ///
@@ -30,5 +26,5 @@ pub trait Codec: Send + Sync + 'static {
     ///
     /// Returns `Self::Error` if the payload cannot be deserialized into
     /// the target event type.
-    fn decode<E: DomainEvent>(&self, event_type: &str, payload: &[u8]) -> Result<E, Self::Error>;
+    fn decode(&self, event_type: &str, payload: &[u8]) -> Result<E, Self::Error>;
 }

@@ -20,14 +20,14 @@ impl DomainEvent for TestEvent {
     }
 }
 
-impl Codec for DebugCodec {
+impl Codec<TestEvent> for DebugCodec {
     type Error = std::io::Error;
 
-    fn encode<E: DomainEvent>(&self, event: &E) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &TestEvent) -> Result<Vec<u8>, Self::Error> {
         Ok(format!("{event:?}").into_bytes())
     }
 
-    fn decode<E: DomainEvent>(&self, _event_type: &str, _payload: &[u8]) -> Result<E, Self::Error> {
+    fn decode(&self, _event_type: &str, _payload: &[u8]) -> Result<TestEvent, Self::Error> {
         Err(std::io::Error::other("DebugCodec can only encode"))
     }
 }

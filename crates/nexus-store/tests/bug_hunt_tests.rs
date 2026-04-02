@@ -252,7 +252,7 @@ fn bug_probe_codec_not_object_safe() {
     // We can verify the trait itself compiles with concrete types
     use nexus_store::codec::Codec;
 
-    fn _takes_codec<C: Codec>(c: &C) {
+    fn _takes_codec<C: Codec<()>>(c: &C) {
         // Fine — generic parameter
         let _ = c;
     }
