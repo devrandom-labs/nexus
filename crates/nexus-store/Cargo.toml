@@ -1,0 +1,24 @@
+[package]
+name = "nexus-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Event store edge layer for the Nexus event-sourcing framework"
+readme = "../../README.md"
+keywords = ["event-sourcing", "event-store", "cqrs", "persistence"]
+categories = ["data-structures"]
+
+[dependencies]
+nexus = { version = "0.1.0", path = "../nexus" }
+thiserror = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+proptest = { workspace = true }
+static_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
