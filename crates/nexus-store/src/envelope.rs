@@ -65,3 +65,69 @@ impl<M> PendingEnvelope<M> {
         &self.metadata
     }
 }
+
+/// Event envelope for the read path — borrows from database row buffer.
+///
+/// Zero allocation for core fields (`stream_id`, `event_type`, `payload`).
+/// Metadata `M` is always owned (small data like UUIDs, timestamps).
+///
+/// The lifetime `'a` ties the envelope to the row buffer — the envelope
+/// must be dropped before the cursor advances to the next row.
+#[derive(Debug)]
+pub struct PersistedEnvelope<'a, M = ()> {
+    stream_id: &'a str,
+    version: Version,
+    event_type: &'a str,
+    payload: &'a [u8],
+    metadata: M,
+}
+
+impl<'a, M> PersistedEnvelope<'a, M> {
+    /// Construct a new persisted envelope.
+    #[must_use]
+    pub const fn new(
+        stream_id: &'a str,
+        version: Version,
+        event_type: &'a str,
+        payload: &'a [u8],
+        metadata: M,
+    ) -> Self {
+        Self {
+            stream_id,
+            version,
+            event_type,
+            payload,
+            metadata,
+        }
+    }
+
+    /// The event stream identifier.
+    #[must_use]
+    pub const fn stream_id(&self) -> &str {
+        self.stream_id
+    }
+
+    /// The event version in the stream.
+    #[must_use]
+    pub const fn version(&self) -> Version {
+        self.version
+    }
+
+    /// The event type name.
+    #[must_use]
+    pub const fn event_type(&self) -> &str {
+        self.event_type
+    }
+
+    /// The serialized event payload.
+    #[must_use]
+    pub const fn payload(&self) -> &[u8] {
+        self.payload
+    }
+
+    /// User-defined metadata.
+    #[must_use]
+    pub const fn metadata(&self) -> &M {
+        &self.metadata
+    }
+}
