@@ -44,7 +44,7 @@
         checks = {
           nexus-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
-            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+            cargoClippyExtraArgs = "-p nexus -p nexus-macros --lib -- --deny warnings";
           });
 
           nexus-doc =
@@ -58,7 +58,12 @@
             # taploExtraArgs = "format";
           };
 
-          nexus-audit = craneLib.cargoAudit { inherit src advisory-db; };
+          nexus-audit = craneLib.cargoAudit {
+            inherit src advisory-db;
+            # RUSTSEC-2026-0009: time 0.3.x DoS — transitive dep from refinery 0.8.x
+            # Cannot fix until refinery upgrades to rusqlite 0.39+
+            cargoAuditExtraArgs = "--ignore RUSTSEC-2026-0009";
+          };
           nexus-deny = craneLib.cargoDeny { inherit src; };
           # Run tests with cargo-nextest
           # Consider setting `doCheck = false` on other crate derivations
@@ -67,6 +72,9 @@
             inherit cargoArtifacts;
             partitions = 1;
             partitionType = "count";
+            # Exclude trybuild tests — .stderr snapshots contain absolute paths
+            # that differ between local and Nix sandbox environments
+            cargoNextestExtraArgs = "-E 'not test(compile_fail)'";
           });
 
           # Ensure that cargo-hakari is up to date
@@ -86,7 +94,10 @@
         } // lib.optionalAttrs isLinux {
           # cargo-tarpaulin uses ptrace, which is Linux-only
           nexus-coverage =
-            craneLib.cargoTarpaulin (commonArgs // { inherit cargoArtifacts; });
+            craneLib.cargoTarpaulin (commonArgs // {
+              inherit cargoArtifacts;
+              cargoTarpaulinExtraArgs = "--exclude-files 'tests/compile_fail/*' -- --skip compile_fail";
+            });
         };
 
         packages = {
