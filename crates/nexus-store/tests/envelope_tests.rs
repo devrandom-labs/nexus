@@ -119,3 +119,61 @@ fn persisted_envelope_zero_allocation_for_core_fields() {
         source_payload.as_ptr()
     ));
 }
+
+#[test]
+fn pending_envelope_debug_output() {
+    let envelope = pending_envelope("user-abc".into())
+        .version(Version::from_persisted(7))
+        .event_type("UserCreated")
+        .payload(vec![1, 2, 3])
+        .build_without_metadata();
+    let debug = format!("{envelope:?}");
+    assert!(
+        debug.contains("PendingEnvelope"),
+        "Debug should contain type name"
+    );
+    assert!(
+        debug.contains("user-abc"),
+        "Debug should contain stream_id value"
+    );
+}
+
+#[test]
+fn persisted_envelope_debug_output() {
+    let stream_id = "order-99";
+    let event_type = "OrderPlaced";
+    let payload = [10u8, 20];
+    let envelope = PersistedEnvelope::<()>::new(
+        stream_id,
+        Version::from_persisted(2),
+        event_type,
+        &payload,
+        (),
+    );
+    let debug = format!("{envelope:?}");
+    assert!(
+        debug.contains("PersistedEnvelope"),
+        "Debug should contain type name"
+    );
+}
+
+#[test]
+fn build_without_metadata_equals_build_unit() {
+    let without = pending_envelope("stream-1".into())
+        .version(Version::from_persisted(5))
+        .event_type("Evt")
+        .payload(vec![9, 8, 7])
+        .build_without_metadata();
+
+    let with_unit = pending_envelope("stream-1".into())
+        .version(Version::from_persisted(5))
+        .event_type("Evt")
+        .payload(vec![9, 8, 7])
+        .build(());
+
+    assert_eq!(without.stream_id(), with_unit.stream_id());
+    assert_eq!(without.version(), with_unit.version());
+    assert_eq!(without.event_type(), with_unit.event_type());
+    assert_eq!(without.payload(), with_unit.payload());
+    assert_eq!(without.metadata(), with_unit.metadata());
+}
