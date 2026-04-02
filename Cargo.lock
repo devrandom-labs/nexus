@@ -396,6 +396,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-example-store-and-kernel"
+version = "0.0.0"
+dependencies = [
+ "nexus",
+ "nexus-store",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "nexus-example-store-inmemory"
+version = "0.0.0"
+dependencies = [
+ "nexus",
+ "nexus-store",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "nexus-macros"
 version = "0.1.0"
 dependencies = [

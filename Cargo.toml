@@ -7,6 +7,8 @@ members = [
     "crates/nexus-store",
     "crates/workspace-hack",
     "examples/inmemory",
+    "examples/store-and-kernel",
+    "examples/store-inmemory",
 ]
 exclude = [
     "crates/nexus-rusqlite",
