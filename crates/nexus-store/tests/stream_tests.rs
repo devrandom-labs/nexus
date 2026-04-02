@@ -9,7 +9,7 @@ struct VecStream {
 }
 
 impl VecStream {
-    fn new(rows: Vec<(String, u64, String, Vec<u8>)>) -> Self {
+    const fn new(rows: Vec<(String, u64, String, Vec<u8>)>) -> Self {
         Self { rows, pos: 0 }
     }
 }
@@ -40,16 +40,18 @@ async fn event_stream_yields_envelopes() {
         ("s1".into(), 2, "Updated".into(), vec![2]),
     ]);
 
-    let e1 = stream.next().await.unwrap().unwrap();
-    assert_eq!(e1.stream_id(), "s1");
-    assert_eq!(e1.version(), Version::from_persisted(1));
-    assert_eq!(e1.event_type(), "Created");
-    drop(e1);
+    {
+        let e1 = stream.next().await.unwrap().unwrap();
+        assert_eq!(e1.stream_id(), "s1");
+        assert_eq!(e1.version(), Version::from_persisted(1));
+        assert_eq!(e1.event_type(), "Created");
+    }
 
-    let e2 = stream.next().await.unwrap().unwrap();
-    assert_eq!(e2.version(), Version::from_persisted(2));
-    assert_eq!(e2.event_type(), "Updated");
-    drop(e2);
+    {
+        let e2 = stream.next().await.unwrap().unwrap();
+        assert_eq!(e2.version(), Version::from_persisted(2));
+        assert_eq!(e2.event_type(), "Updated");
+    }
 
     assert!(stream.next().await.is_none());
 }
@@ -64,9 +66,10 @@ async fn event_stream_empty() {
 async fn event_stream_envelope_borrows_from_cursor() {
     let mut stream = VecStream::new(vec![("stream".into(), 1, "Event".into(), vec![42])]);
 
-    let envelope = stream.next().await.unwrap().unwrap();
-    assert_eq!(envelope.payload(), &[42]);
-    drop(envelope);
+    {
+        let envelope = stream.next().await.unwrap().unwrap();
+        assert_eq!(envelope.payload(), &[42]);
+    }
 
     assert!(stream.next().await.is_none());
 }

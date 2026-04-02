@@ -28,10 +28,7 @@ impl Codec for DebugCodec {
     }
 
     fn decode<E: DomainEvent>(&self, _event_type: &str, _payload: &[u8]) -> Result<E, Self::Error> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "DebugCodec can only encode",
-        ))
+        Err(std::io::Error::other("DebugCodec can only encode"))
     }
 }
 

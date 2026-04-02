@@ -4,7 +4,7 @@ use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 #[test]
 fn pending_envelope_accessors() {
     let envelope = PendingEnvelope::<()>::new(
-        "user-123".to_string(),
+        "user-123".to_owned(),
         Version::from_persisted(1),
         "UserCreated",
         vec![1, 2, 3],
@@ -28,7 +28,7 @@ fn pending_envelope_with_metadata() {
         correlation_id: "corr-1".into(),
     };
     let envelope = PendingEnvelope::new(
-        "order-1".to_string(),
+        "order-1".to_owned(),
         Version::from_persisted(1),
         "OrderPlaced",
         vec![4, 5, 6],
@@ -41,7 +41,7 @@ fn pending_envelope_with_metadata() {
 #[test]
 fn pending_envelope_unit_metadata_default() {
     let envelope = PendingEnvelope::new(
-        "stream".to_string(),
+        "stream".to_owned(),
         Version::from_persisted(1),
         "Event",
         vec![],
