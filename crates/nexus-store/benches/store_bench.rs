@@ -25,7 +25,7 @@
     reason = "benchmark functions do not need panic docs"
 )]
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::Version;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
@@ -33,6 +33,7 @@ use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::upcaster::EventUpcaster;
 use std::collections::HashMap;
+use std::hint::black_box;
 use tokio::sync::Mutex;
 
 // =============================================================================
