@@ -1,1 +1,23 @@
-// Event stream types and utilities.
+use crate::envelope::PersistedEnvelope;
+
+/// GAT lending cursor for zero-allocation event streaming.
+///
+/// Each call to `next()` returns a `PersistedEnvelope` that borrows
+/// from the cursor's internal buffer. The previous envelope must be
+/// dropped before calling `next()` again — enforced by the lifetime.
+///
+/// Used during aggregate rehydration where events are processed
+/// one at a time (apply to state, drop, advance cursor).
+pub trait EventStream<M = ()> {
+    /// The error type for stream operations.
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Advance the cursor and return the next event envelope.
+    ///
+    /// Returns `None` when the stream is exhausted.
+    /// The returned envelope borrows from `self` — drop it before
+    /// calling `next()` again.
+    fn next(
+        &mut self,
+    ) -> impl std::future::Future<Output = Option<Result<PersistedEnvelope<'_, M>, Self::Error>>> + Send;
+}
