@@ -13,19 +13,27 @@ impl fmt::Display for AttrId {
 impl Id for AttrId {}
 
 #[derive(Debug, Clone)]
-enum AttrEvent { A }
+enum AttrEvent {
+    A,
+}
 impl Message for AttrEvent {}
 impl DomainEvent for AttrEvent {
-    fn name(&self) -> &'static str { "A" }
+    fn name(&self) -> &'static str {
+        "A"
+    }
 }
 
 #[derive(Default, Debug)]
 struct AttrState;
 impl AggregateState for AttrState {
     type Event = AttrEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, _: &AttrEvent) {}
-    fn name(&self) -> &'static str { "Attr" }
+    fn name(&self) -> &'static str {
+        "Attr"
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -41,7 +41,9 @@ struct CountState {
 }
 impl AggregateState for CountState {
     type Event = CountEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &CountEvent) {
         match event {
             CountEvent::Incremented => self.value += 1,

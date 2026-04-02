@@ -37,8 +37,7 @@ impl std::fmt::Write for ErrorId {
 
 impl std::fmt::Display for ErrorId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = std::str::from_utf8(&self.buf[..self.len as usize])
-            .unwrap_or("<invalid utf8>");
+        let s = std::str::from_utf8(&self.buf[..self.len as usize]).unwrap_or("<invalid utf8>");
         f.write_str(s)
     }
 }
@@ -59,8 +58,5 @@ pub enum KernelError {
     },
 
     #[error("Rehydration limit exceeded on '{stream_id}': max {max} events")]
-    RehydrationLimitExceeded {
-        stream_id: ErrorId,
-        max: usize,
-    },
+    RehydrationLimitExceeded { stream_id: ErrorId, max: usize },
 }

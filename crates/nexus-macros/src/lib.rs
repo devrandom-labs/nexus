@@ -90,7 +90,10 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
     }
 }
 
-fn parse_aggregate(ast: &DeriveInput, args: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream> {
+fn parse_aggregate(
+    ast: &DeriveInput,
+    args: proc_macro2::TokenStream,
+) -> Result<proc_macro2::TokenStream> {
     let name = &ast.ident;
     let vis = &ast.vis;
     // Preserve user attributes (#[cfg(...)], #[doc = "..."], etc.)
@@ -134,12 +137,9 @@ fn parse_aggregate(ast: &DeriveInput, args: proc_macro2::TokenStream) -> Result<
 
     syn::parse::Parser::parse2(parser, args)?;
 
-    let state_type = state_type
-        .ok_or_else(|| Error::new(name.span(), "`state` is required"))?;
-    let error_type = error_type
-        .ok_or_else(|| Error::new(name.span(), "`error` is required"))?;
-    let id_type = id_type
-        .ok_or_else(|| Error::new(name.span(), "`id` is required"))?;
+    let state_type = state_type.ok_or_else(|| Error::new(name.span(), "`state` is required"))?;
+    let error_type = error_type.ok_or_else(|| Error::new(name.span(), "`error` is required"))?;
+    let id_type = id_type.ok_or_else(|| Error::new(name.span(), "`id` is required"))?;
 
     let expanded = quote! {
         #(#user_attrs)*

@@ -50,7 +50,9 @@ struct TState {
 }
 impl AggregateState for TState {
     type Event = TEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &TEvent) {
         match event {
             TEvent::Added(e) => self.items.push(e.0.clone()),

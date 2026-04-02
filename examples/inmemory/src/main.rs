@@ -67,7 +67,9 @@ struct AccountState {
 
 impl AggregateState for AccountState {
     type Event = AccountEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
 
     fn apply(&mut self, event: &AccountEvent) {
         match event {

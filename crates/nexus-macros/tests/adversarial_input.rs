@@ -32,7 +32,9 @@ struct SingleState {
 }
 impl AggregateState for SingleState {
     type Event = SingleEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &SingleEvent) {
         match event {
             SingleEvent::Only => self.triggered = true,
@@ -104,11 +106,10 @@ struct VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacro {
 
 impl AggregateState for VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacro {
     type Event = VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro;
-    fn initial() -> Self { Self::default() }
-    fn apply(
-        &mut self,
-        event: &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro,
-    ) {
+    fn initial() -> Self {
+        Self::default()
+    }
+    fn apply(&mut self, event: &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro) {
         match event {
             VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(s) => {
                 self.data = s.clone();
@@ -129,8 +130,7 @@ struct VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro;
 
 #[test]
 fn very_long_type_names() {
-    let mut agg =
-        VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro::new(AId(1));
+    let mut agg = VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro::new(AId(1));
     agg.apply_event(
         VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(
             "hello".into(),
@@ -158,7 +158,9 @@ mod inner {
 
     impl AggregateState for InnerState {
         type Event = InnerEvent;
-    fn initial() -> Self { Self::default() }
+        fn initial() -> Self {
+            Self::default()
+        }
         fn apply(&mut self, _: &InnerEvent) {
             self.pings += 1;
         }
@@ -198,10 +200,7 @@ enum MixedShapeEvent {
 #[test]
 fn mixed_shape_event_names() {
     assert_eq!(MixedShapeEvent::Unit.name(), "Unit");
-    assert_eq!(
-        MixedShapeEvent::Tuple("a".into(), 1).name(),
-        "Tuple"
-    );
+    assert_eq!(MixedShapeEvent::Tuple("a".into(), 1).name(), "Tuple");
     assert_eq!(
         MixedShapeEvent::Struct {
             name: "b".into(),

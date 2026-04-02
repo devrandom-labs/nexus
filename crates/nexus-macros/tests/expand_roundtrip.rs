@@ -45,7 +45,9 @@ struct RtState {
 }
 impl AggregateState for RtState {
     type Event = RtEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &RtEvent) {
         match event {
             RtEvent::Added(s) => self.items.push(s.clone()),

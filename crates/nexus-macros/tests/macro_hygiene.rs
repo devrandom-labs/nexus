@@ -30,7 +30,9 @@ struct HState {
 }
 impl AggregateState for HState {
     type Event = HEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, _: &HEvent) {
         self.count += 1;
     }
@@ -109,7 +111,9 @@ fn aggregate_inside_function_body() {
     }
     impl AggregateState for LocalState {
         type Event = LocalEvent;
-    fn initial() -> Self { Self::default() }
+        fn initial() -> Self {
+            Self::default()
+        }
         fn apply(&mut self, _: &LocalEvent) {
             self.ticks += 1;
         }

@@ -34,7 +34,9 @@ struct SState {
 }
 impl AggregateState for SState {
     type Event = SEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, _: &SEvent) {
         self.count = self.count.wrapping_add(1);
     }
@@ -160,7 +162,10 @@ fn c4_from_persisted_versioned_event_no_validation() {
         VersionedEvent::from_persisted(Version::from_persisted(3), SEvent::Tick), // backwards!
     ];
     let result = AggregateRoot::<SAgg>::load_from_events(SId(1), bad_events);
-    assert!(result.is_err(), "load_from_events must reject non-sequential versions");
+    assert!(
+        result.is_err(),
+        "load_from_events must reject non-sequential versions"
+    );
 }
 
 #[test]
@@ -170,7 +175,10 @@ fn c4_from_persisted_duplicate_versions_rejected() {
         VersionedEvent::from_persisted(Version::from_persisted(1), SEvent::Tick), // duplicate!
     ];
     let result = AggregateRoot::<SAgg>::load_from_events(SId(1), bad_events);
-    assert!(result.is_err(), "load_from_events must reject duplicate versions");
+    assert!(
+        result.is_err(),
+        "load_from_events must reject duplicate versions"
+    );
 }
 
 // =============================================================================
@@ -217,26 +225,38 @@ fn h5_event_survives_panic_in_apply() {
 
     // Aggregate with a panicking apply
     #[derive(Debug, Clone)]
-    enum BombEvent { Safe, Explode }
+    enum BombEvent {
+        Safe,
+        Explode,
+    }
     impl Message for BombEvent {}
     impl DomainEvent for BombEvent {
         fn name(&self) -> &'static str {
-            match self { Self::Safe => "Safe", Self::Explode => "Explode" }
+            match self {
+                Self::Safe => "Safe",
+                Self::Explode => "Explode",
+            }
         }
     }
 
     #[derive(Default, Debug)]
-    struct BombState { count: u64 }
+    struct BombState {
+        count: u64,
+    }
     impl AggregateState for BombState {
         type Event = BombEvent;
-    fn initial() -> Self { Self::default() }
+        fn initial() -> Self {
+            Self::default()
+        }
         fn apply(&mut self, event: &BombEvent) {
             match event {
                 BombEvent::Safe => self.count += 1,
                 BombEvent::Explode => panic!("state apply panicked"),
             }
         }
-        fn name(&self) -> &'static str { "Bomb" }
+        fn name(&self) -> &'static str {
+            "Bomb"
+        }
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -262,7 +282,11 @@ fn h5_event_survives_panic_in_apply() {
 
     // The event that caused the panic IS recorded (push happened first)
     let events = agg.take_uncommitted_events();
-    assert_eq!(events.len(), 2, "both events should be recorded, including the one that caused panic");
+    assert_eq!(
+        events.len(),
+        2,
+        "both events should be recorded, including the one that caused panic"
+    );
     assert_eq!(events[0].event().name(), "Safe");
     assert_eq!(events[1].event().name(), "Explode");
 
@@ -312,7 +336,10 @@ fn h1_load_within_limit_succeeds() {
 
 #[test]
 fn h1_default_rehydration_limit_is_one_million() {
-    assert_eq!(SAgg::MAX_REHYDRATION_EVENTS, nexus::DEFAULT_MAX_REHYDRATION_EVENTS);
+    assert_eq!(
+        SAgg::MAX_REHYDRATION_EVENTS,
+        nexus::DEFAULT_MAX_REHYDRATION_EVENTS
+    );
     assert_eq!(nexus::DEFAULT_MAX_REHYDRATION_EVENTS, 1_000_000);
 }
 
@@ -331,8 +358,7 @@ fn l2_kernel_error_variants_are_known() {
     };
     match err {
         KernelError::VersionMismatch { .. } => {}
-        KernelError::RehydrationLimitExceeded { .. } => {}
-        // If you add a variant, add it here and consider #[non_exhaustive]
+        KernelError::RehydrationLimitExceeded { .. } => {} // If you add a variant, add it here and consider #[non_exhaustive]
     }
 }
 

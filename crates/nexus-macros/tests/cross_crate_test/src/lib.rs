@@ -40,7 +40,9 @@ pub struct TaskState {
 
 impl AggregateState for TaskState {
     type Event = TaskEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &TaskEvent) {
         match event {
             TaskEvent::Created(e) => self.title = e.title.clone(),
@@ -119,14 +121,12 @@ mod tests {
 
     #[test]
     fn cross_crate_rehydrate() {
-        let history = vec![
-            VersionedEvent::from_persisted(
-                Version::from_persisted(1),
-                TaskEvent::Created(TaskCreated {
-                    title: "Loaded".into(),
-                }),
-            ),
-        ];
+        let history = vec![VersionedEvent::from_persisted(
+            Version::from_persisted(1),
+            TaskEvent::Created(TaskCreated {
+                title: "Loaded".into(),
+            }),
+        )];
         let task = TaskAggregate::load_from_events(TaskId(3), history).unwrap();
         assert_eq!(task.state().title, "Loaded");
         assert_eq!(task.version(), Version::from_persisted(1));

@@ -41,7 +41,9 @@ struct ItemState {
 }
 impl AggregateState for ItemState {
     type Event = ItemEvent;
-    fn initial() -> Self { Self::default() }
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &ItemEvent) {
         match event {
             ItemEvent::Created(e) => self.name.clone_from(&e.name),
