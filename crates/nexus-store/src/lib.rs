@@ -2,6 +2,7 @@ pub mod codec;
 pub mod envelope;
 pub mod error;
 pub mod raw;
+pub mod repository;
 pub mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -11,5 +12,6 @@ pub use codec::Codec;
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::StoreError;
 pub use raw::RawEventStore;
+pub use repository::Repository;
 pub use stream::EventStream;
 pub use upcaster::EventUpcaster;
