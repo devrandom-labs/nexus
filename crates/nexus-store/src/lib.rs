@@ -3,6 +3,8 @@ pub mod envelope;
 pub mod error;
 pub mod raw;
 pub mod stream;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod upcaster;
 
 pub use codec::Codec;

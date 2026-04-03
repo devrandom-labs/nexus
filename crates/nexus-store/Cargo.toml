@@ -10,9 +10,13 @@ readme = "../../README.md"
 keywords = ["event-sourcing", "event-store", "cqrs", "persistence"]
 categories = ["data-structures"]
 
+[features]
+testing = ["dep:tokio"]
+
 [dependencies]
 nexus = { version = "0.1.0", path = "../nexus" }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"], optional = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
