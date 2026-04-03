@@ -66,12 +66,12 @@ DB buffer (owned by cursor)
   → drop reference, advance cursor, buffer reused
 ```
 
-### 2. Rename `apply_event` to `apply`
+### 2. Rename `apply_event` to `apply`, remove `apply_events`
 
-- `apply(event)` — new event, records as uncommitted, for command handling
-- `replay(version, event)` — historical event, for rehydration
+- `apply(event)` — new uncommitted event, takes ownership
+- `replay(version, &event)` — streaming rehydration, borrows, zero-copy
 
-`apply_events` becomes `apply_all` or is removed (callers can loop).
+`apply_events` is removed. Callers loop.
 
 ### 3. `schema_version` on `PersistedEnvelope` (read path only)
 
@@ -169,7 +169,7 @@ Examples and test suites switch to importing this.
 ## Migration Impact
 
 - `apply_event()` → `apply()` — rename across all call sites
-- `apply_events()` → decide: `apply_all()` or remove
+- `apply_events()` → removed, callers loop with `apply()`
 - `load_from_events()` → removed, use `replay()` loop or repository
 - `PersistedEnvelope::new()` — gains `schema_version` parameter
 - Test suites — switch to `InMemoryStore` from `testing` feature

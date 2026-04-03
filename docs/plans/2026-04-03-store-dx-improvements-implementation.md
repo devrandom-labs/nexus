@@ -12,25 +12,23 @@
 
 ---
 
-### Task 1: Rename `apply_event` to `apply` and `apply_events` to `apply_all` on `AggregateRoot`
+### Task 1: Rename `apply_event` to `apply`, remove `apply_events`
 
 **Files:**
 - Modify: `crates/nexus/src/aggregate.rs` (definitions at lines 166, 171, 369, 391)
 
-**Step 1: Rename methods in `AggregateRoot` impl**
+**Step 1: Rename and remove methods in `AggregateRoot` impl**
 
-In `crates/nexus/src/aggregate.rs`, rename:
+In `crates/nexus/src/aggregate.rs`:
 - `pub fn apply_event(` → `pub fn apply(`
-- `pub fn apply_events(` → `pub fn apply_all(`
-- Update internal call in `apply_all`: `self.apply_event(event)` → `self.apply(event)`
+- Delete `pub fn apply_events(` entirely — callers loop
 
-**Step 2: Rename methods in `AggregateEntity` trait**
+**Step 2: Rename and remove methods in `AggregateEntity` trait**
 
-Same file, rename:
+Same file:
 - `fn apply_event(` → `fn apply(`
-- `fn apply_events(` → `fn apply_all(`
+- Delete `fn apply_events(` entirely
 - Update delegation: `self.root_mut().apply_event(event)` → `self.root_mut().apply(event)`
-- Update delegation: `self.root_mut().apply_events(events)` → `self.root_mut().apply_all(events)`
 
 **Step 3: Update all doc comments and doctests in aggregate.rs**
 
@@ -43,7 +41,7 @@ Expected: Many compile errors showing every call site that needs updating.
 
 **Step 5: Fix all kernel test call sites**
 
-Files to update (replace `apply_event` → `apply`, `apply_events` → `apply_all`):
+Files to update (`apply_event` → `apply`, `apply_events` calls → loop with `apply`):
 - `crates/nexus/tests/kernel_tests/aggregate_root_tests.rs`
 - `crates/nexus/tests/kernel_tests/edge_case_tests.rs`
 - `crates/nexus/tests/kernel_tests/security_tests.rs`
