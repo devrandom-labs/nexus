@@ -13,16 +13,29 @@ use std::future::Future;
 /// enabling zero-allocation rehydration with zero-copy codecs (rkyv,
 /// flatbuffers). No intermediate `Vec` allocation is needed.
 ///
+/// # Error handling
+///
+/// Implementations must bridge errors from three sources:
+/// - [`RawEventStore`](crate::RawEventStore) errors (I/O, conflicts)
+/// - [`Codec`](crate::Codec) errors (serialization failures)
+/// - [`KernelError`](nexus::KernelError) (version mismatch during replay)
+///
+/// [`StoreError`](crate::StoreError) can represent all three via its
+/// `Adapter`, `Codec`, and `Kernel` variants. Use `StoreError` as
+/// `Self::Error` or define a custom error with `From` impls.
+///
 /// # Example Implementation Pattern
 ///
 /// ```ignore
-/// async fn load(&self, stream_id: &str, id: A::Id) -> Result<AggregateRoot<A>, Self::Error> {
-///     let mut stream = self.store.read_stream(stream_id, Version::INITIAL).await?;
+/// async fn load(&self, stream_id: &str, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+///     let mut stream = self.store.read_stream(stream_id, Version::INITIAL).await
+///         .map_err(|e| StoreError::Adapter(Box::new(e)))?;
 ///     let mut root = AggregateRoot::<A>::new(id);
 ///     while let Some(result) = stream.next().await {
-///         let env = result?;
-///         let event = self.codec.decode(env.event_type(), env.payload())?;
-///         root.replay(env.version(), &event)?;
+///         let env = result.map_err(|e| StoreError::Adapter(Box::new(e)))?;
+///         let event = self.codec.decode(env.event_type(), env.payload())
+///             .map_err(|e| StoreError::Codec(Box::new(e)))?;
+///         root.replay(env.version(), &event)?; // KernelError auto-converts via From
 ///     }
 ///     Ok(root)
 /// }

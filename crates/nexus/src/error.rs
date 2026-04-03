@@ -4,6 +4,13 @@ use thiserror::Error;
 /// Fixed-size stack-allocated string for error messages.
 /// No heap allocation — safe to construct on error paths under OOM.
 /// Truncates at 64 bytes if the formatted value is longer.
+///
+/// # Truncation
+///
+/// IDs longer than 64 bytes are silently truncated. This keeps error
+/// construction allocation-free (safe under OOM) but means very long
+/// aggregate IDs will be cut off in error messages. Keep `Id::Display`
+/// output reasonably short (< 64 bytes) for best diagnostics.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ErrorId {
     buf: [u8; 64],

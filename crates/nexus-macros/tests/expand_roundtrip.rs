@@ -48,13 +48,14 @@ impl AggregateState for RtState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &RtEvent) {
+    fn apply(mut self, event: &RtEvent) -> Self {
         match event {
             RtEvent::Added(s) => self.items.push(s.clone()),
             RtEvent::Removed => {
                 self.items.pop();
             }
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Rt"

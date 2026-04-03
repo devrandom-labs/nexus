@@ -44,12 +44,13 @@ impl AggregateState for CountState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &CountEvent) {
+    fn apply(mut self, event: &CountEvent) -> Self {
         match event {
             CountEvent::Incremented => self.value += 1,
             CountEvent::Decremented => self.value -= 1,
             CountEvent::Set(v) => self.value = *v as i64,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Counter"

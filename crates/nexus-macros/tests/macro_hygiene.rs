@@ -33,8 +33,9 @@ impl AggregateState for HState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, _: &HEvent) {
+    fn apply(mut self, _: &HEvent) -> Self {
         self.count += 1;
+        self
     }
     fn name(&self) -> &'static str {
         "H"
@@ -114,8 +115,9 @@ fn aggregate_inside_function_body() {
         fn initial() -> Self {
             Self::default()
         }
-        fn apply(&mut self, _: &LocalEvent) {
+        fn apply(mut self, _: &LocalEvent) -> Self {
             self.ticks += 1;
+            self
         }
         fn name(&self) -> &'static str {
             "Local"

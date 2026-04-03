@@ -61,11 +61,12 @@ impl AggregateState for BState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &BEvent) {
+    fn apply(mut self, event: &BEvent) -> Self {
         match event {
             BEvent::Incremented => self.count += 1,
             BEvent::Set(v) => self.count = *v,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Bench"

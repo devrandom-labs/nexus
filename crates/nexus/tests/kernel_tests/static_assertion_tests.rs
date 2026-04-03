@@ -74,7 +74,9 @@ impl AggregateState for StaticState {
     fn initial() -> Self {
         Self
     }
-    fn apply(&mut self, _event: &StaticEvent) {}
+    fn apply(self, _event: &StaticEvent) -> Self {
+        self
+    }
     fn name(&self) -> &'static str {
         "Static"
     }

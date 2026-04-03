@@ -47,11 +47,12 @@ impl AggregateState for UserState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &UserEvent) {
+    fn apply(mut self, event: &UserEvent) -> Self {
         match event {
             UserEvent::Created(e) => self.name.clone_from(&e.name),
             UserEvent::Activated(_) => self.active = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "User"

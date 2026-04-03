@@ -1,6 +1,8 @@
 //! Unit tests for `StoreError` Display output and `source()` chain.
 
-use nexus::{ErrorId, Version};
+#![allow(clippy::unwrap_used, reason = "tests")]
+
+use nexus::{ErrorId, KernelError, Version};
 use nexus_store::StoreError;
 
 #[test]
@@ -69,4 +71,29 @@ fn adapter_display_contains_inner_message() {
         source_msg.contains("db offline"),
         "source should contain inner message"
     );
+}
+
+#[test]
+fn kernel_error_converts_to_store_error() {
+    let kernel_err = KernelError::VersionMismatch {
+        stream_id: ErrorId::from_display(&"test-stream"),
+        expected: Version::INITIAL,
+        actual: Version::from_persisted(1),
+    };
+    let store_err: StoreError = kernel_err.into();
+    assert!(matches!(store_err, StoreError::Kernel(_)));
+    let msg = format!("{store_err}");
+    assert!(msg.contains("Kernel"), "should mention Kernel");
+    assert!(msg.contains("test-stream"), "should contain stream_id");
+}
+
+#[test]
+fn kernel_error_has_source_chain() {
+    let kernel_err = KernelError::RehydrationLimitExceeded {
+        stream_id: ErrorId::from_display(&"s1"),
+        max: 100,
+    };
+    let store_err: StoreError = kernel_err.into();
+    let source = std::error::Error::source(&store_err);
+    assert!(source.is_some(), "Kernel variant should have a source");
 }

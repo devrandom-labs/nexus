@@ -20,12 +20,13 @@ impl AggregateState for OrderState {
     type Event = OrderEvent;
     fn initial() -> Self { Self::default() }
 
-    fn apply(&mut self, event: &OrderEvent) {
+    fn apply(mut self, event: &OrderEvent) -> Self {
         match event {
             OrderEvent::Created(name) => self.status = name.clone(),
             OrderEvent::Shipped => self.status = "shipped".into(),
             // Missing: OrderEvent::Cancelled — MUST fail
         }
+        self
     }
 
     fn name(&self) -> &'static str {

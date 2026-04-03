@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, reason = "tests")]
+
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::pending_envelope;
@@ -180,4 +182,34 @@ fn build_without_metadata_equals_build_unit() {
     assert_eq!(without.event_type(), with_unit.event_type());
     assert_eq!(without.payload(), with_unit.payload());
     assert_eq!(without.metadata(), with_unit.metadata());
+}
+
+// =============================================================================
+// PersistedEnvelope::try_new() tests
+// =============================================================================
+
+#[test]
+fn try_new_rejects_zero_schema_version() {
+    let result =
+        PersistedEnvelope::<()>::try_new("s1", Version::from_persisted(1), "E", 0, &[], ());
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("schema version"), "should describe the error");
+}
+
+#[test]
+fn try_new_accepts_valid_schema_version() {
+    let result =
+        PersistedEnvelope::<()>::try_new("s1", Version::from_persisted(1), "E", 1, &[], ());
+    assert!(result.is_ok());
+    let env = result.unwrap();
+    assert_eq!(env.schema_version(), 1);
+}
+
+#[test]
+fn try_new_accepts_max_schema_version() {
+    let result =
+        PersistedEnvelope::<()>::try_new("s1", Version::from_persisted(1), "E", u32::MAX, &[], ());
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().schema_version(), u32::MAX);
 }

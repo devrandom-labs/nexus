@@ -328,6 +328,7 @@ fn store_error_variants_are_known() {
         StoreError::Conflict { .. } => {}
         StoreError::StreamNotFound { .. } => {}
         StoreError::Codec(_) => {}
-        StoreError::Adapter(_) => {} // If you add a variant, add it here
+        StoreError::Adapter(_) => {}
+        StoreError::Kernel(_) => {} // If you add a variant, add it here
     }
 }

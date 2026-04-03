@@ -27,6 +27,7 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::Version;
+use nexus_store::AppendError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
@@ -94,12 +95,12 @@ impl RawEventStore for InMemoryRawStore {
         stream_id: &str,
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
         let stream = guard.entry(stream_id.to_owned()).or_default();
         let current_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
         if current_version != expected_version.as_u64() {
-            return Err(BenchError::Conflict);
+            return Err(AppendError::Store(BenchError::Conflict));
         }
         for env in envelopes {
             stream.push((

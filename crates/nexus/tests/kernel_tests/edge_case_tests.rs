@@ -51,13 +51,14 @@ impl AggregateState for TState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &TEvent) {
+    fn apply(mut self, event: &TEvent) -> Self {
         match event {
             TEvent::Added(e) => self.items.push(e.0.clone()),
             TEvent::Removed(_) => {
                 self.items.pop();
             }
         }
+        self
     }
     fn name(&self) -> &'static str {
         "T"

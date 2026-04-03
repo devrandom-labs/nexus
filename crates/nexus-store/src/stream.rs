@@ -22,7 +22,10 @@ pub trait EventStream<M = ()> {
 
     /// Advance the cursor and return the next event envelope.
     ///
-    /// Returns `None` when the stream is exhausted.
+    /// Returns `None` when the stream is exhausted. Once this method
+    /// returns `None`, all subsequent calls must also return `None`
+    /// (fused behavior).
+    ///
     /// The returned envelope borrows from `self` — drop it before
     /// calling `next()` again.
     fn next(

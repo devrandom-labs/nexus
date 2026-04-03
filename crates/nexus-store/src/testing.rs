@@ -1,6 +1,7 @@
 //! Test utilities for nexus-store. Gated behind the `testing` feature.
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
+use crate::error::AppendError;
 use crate::error::StoreError;
 use crate::raw::RawEventStore;
 use crate::stream::EventStream;
@@ -21,6 +22,21 @@ struct StoredRow {
 ///
 /// Backed by `tokio::sync::Mutex<HashMap<String, Vec<StoredRow>>>`.
 /// Includes optimistic concurrency and sequential version validation.
+///
+/// # Limitations vs real adapters
+///
+/// `InMemoryStore` is useful for testing business logic but cannot
+/// catch the following classes of bugs:
+///
+/// - **Row ordering**: Events are always returned in insertion order.
+///   A real database may return rows out of order without an explicit
+///   `ORDER BY`, violating the monotonic version contract.
+/// - **Partial writes**: Appends are atomic (Mutex). A real database
+///   may crash mid-batch, leaving a stream in an inconsistent state.
+/// - **Payload size limits**: No limit on payload size. Real databases
+///   have row/column size constraints.
+/// - **Distributed concurrency**: Single-process only. Cannot simulate
+///   multiple writers on different machines racing on the same stream.
 pub struct InMemoryStore {
     streams: Mutex<HashMap<String, Vec<StoredRow>>>,
 }
@@ -54,6 +70,8 @@ struct ReadRow {
 pub struct InMemoryStream {
     events: Vec<ReadRow>,
     pos: usize,
+    #[cfg(debug_assertions)]
+    prev_version: Option<u64>,
 }
 
 impl EventStream for InMemoryStream {
@@ -65,6 +83,18 @@ impl EventStream for InMemoryStream {
         }
         let row = &self.events[self.pos];
         self.pos += 1;
+        #[cfg(debug_assertions)]
+        {
+            if let Some(prev) = self.prev_version {
+                debug_assert!(
+                    row.version > prev,
+                    "EventStream monotonicity violated: version {} is not greater than previous {}",
+                    row.version,
+                    prev,
+                );
+            }
+            self.prev_version = Some(row.version);
+        }
         Some(Ok(PersistedEnvelope::new(
             &row.stream_id,
             Version::from_persisted(row.version),
@@ -89,14 +119,14 @@ impl RawEventStore for InMemoryStore {
         stream_id: &str,
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
         let stream = guard.entry(stream_id.to_owned()).or_default();
 
         // Optimistic concurrency check.
         let actual_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
         if actual_version != expected_version.as_u64() {
-            return Err(StoreError::Conflict {
+            return Err(AppendError::Conflict {
                 stream_id: ErrorId::from_display(&stream_id),
                 expected: expected_version,
                 actual: Version::from_persisted(actual_version),
@@ -109,7 +139,7 @@ impl RawEventStore for InMemoryStore {
             let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
             let expected_env_version = expected_version.as_u64() + 1 + i_u64;
             if env.version().as_u64() != expected_env_version {
-                return Err(StoreError::Conflict {
+                return Err(AppendError::Conflict {
                     stream_id: ErrorId::from_display(&stream_id),
                     expected: Version::from_persisted(expected_env_version),
                     actual: env.version(),
@@ -122,7 +152,7 @@ impl RawEventStore for InMemoryStore {
             stream.push(StoredRow {
                 version: env.version().as_u64(),
                 event_type: env.event_type().to_owned(),
-                schema_version: 1,
+                schema_version: env.schema_version(),
                 payload: env.payload().to_vec(),
             });
         }
@@ -153,6 +183,11 @@ impl RawEventStore for InMemoryStore {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(InMemoryStream { events, pos: 0 })
+        Ok(InMemoryStream {
+            events,
+            pos: 0,
+            #[cfg(debug_assertions)]
+            prev_version: None,
+        })
     }
 }

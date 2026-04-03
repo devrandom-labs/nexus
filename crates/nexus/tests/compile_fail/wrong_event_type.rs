@@ -17,7 +17,7 @@ struct UserState;
 impl AggregateState for UserState {
     type Event = UserEvent;
     fn initial() -> Self { Self::default() }
-    fn apply(&mut self, _: &UserEvent) {}
+    fn apply(self, _: &UserEvent) -> Self { self }
     fn name(&self) -> &'static str { "User" }
 }
 

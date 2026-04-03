@@ -1,3 +1,4 @@
+use crate::error::InvalidSchemaVersion;
 use nexus::Version;
 
 // =============================================================================
@@ -23,6 +24,7 @@ pub struct PendingEnvelope<M = ()> {
     stream_id: String,
     version: Version,
     event_type: &'static str,
+    schema_version: u32,
     payload: Vec<u8>,
     metadata: M,
 }
@@ -57,6 +59,16 @@ impl<M> PendingEnvelope<M> {
     pub const fn metadata(&self) -> &M {
         &self.metadata
     }
+
+    /// The schema version of the event.
+    ///
+    /// Defaults to 1 when not explicitly set via the builder.
+    /// The `EventStore` save path sets this based on the upcaster chain
+    /// to prevent upcasters from double-transforming new events.
+    #[must_use]
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
 }
 
 // =============================================================================
@@ -87,6 +99,7 @@ pub struct WithPayload {
     version: Version,
     event_type: &'static str,
     payload: Vec<u8>,
+    schema_version: u32,
 }
 
 impl WithStreamId {
@@ -127,11 +140,23 @@ impl WithEventType {
             version: self.version,
             event_type: self.event_type,
             payload,
+            schema_version: 1,
         }
     }
 }
 
 impl WithPayload {
+    /// Override the schema version (default: 1).
+    ///
+    /// The `EventStore` save path uses this to stamp new events at the
+    /// current schema version, preventing upcasters from re-transforming
+    /// events that are already in the latest format.
+    #[must_use]
+    pub const fn schema_version(mut self, schema_version: u32) -> Self {
+        self.schema_version = schema_version;
+        self
+    }
+
     /// Build with user-defined metadata.
     ///
     /// # Validation contract
@@ -147,6 +172,7 @@ impl WithPayload {
             stream_id: self.stream_id,
             version: self.version,
             event_type: self.event_type,
+            schema_version: self.schema_version,
             payload: self.payload,
             metadata,
         }
@@ -227,6 +253,39 @@ impl<'a, M> PersistedEnvelope<'a, M> {
             payload,
             metadata,
         }
+    }
+
+    /// Fallible constructor — returns `Err` if `schema_version` is 0.
+    ///
+    /// Prefer this over [`new()`](Self::new) in adapter code where you
+    /// want to surface the error instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidSchemaVersion`] if `schema_version` is 0.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors new() — flat constructor for DB row data"
+    )]
+    pub fn try_new(
+        stream_id: &'a str,
+        version: Version,
+        event_type: &'a str,
+        schema_version: u32,
+        payload: &'a [u8],
+        metadata: M,
+    ) -> Result<Self, InvalidSchemaVersion> {
+        if schema_version == 0 {
+            return Err(InvalidSchemaVersion);
+        }
+        Ok(Self {
+            stream_id,
+            version,
+            event_type,
+            schema_version,
+            payload,
+            metadata,
+        })
     }
 
     /// The event stream identifier.

@@ -85,7 +85,7 @@ impl AggregateState for AccountState {
         Self::default()
     }
 
-    fn apply(&mut self, event: &AccountEvent) {
+    fn apply(mut self, event: &AccountEvent) -> Self {
         match event {
             AccountEvent::Opened(e) => {
                 self.owner = e.owner.clone();
@@ -98,6 +98,7 @@ impl AggregateState for AccountState {
                 self.balance -= e.amount;
             }
         }
+        self
     }
 
     fn name(&self) -> &'static str {

@@ -37,8 +37,9 @@ impl AggregateState for SState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, _: &SEvent) {
+    fn apply(mut self, _: &SEvent) -> Self {
         self.count = self.count.wrapping_add(1);
+        self
     }
     fn name(&self) -> &'static str {
         "S"
@@ -248,11 +249,12 @@ fn h5_event_survives_panic_in_apply() {
         fn initial() -> Self {
             Self::default()
         }
-        fn apply(&mut self, event: &BombEvent) {
+        fn apply(mut self, event: &BombEvent) -> Self {
             match event {
                 BombEvent::Safe => self.count += 1,
                 BombEvent::Explode => panic!("state apply panicked"),
             }
+            self
         }
         fn name(&self) -> &'static str {
             "Bomb"
@@ -290,8 +292,9 @@ fn h5_event_survives_panic_in_apply() {
     assert_eq!(events[0].event().name(), "Safe");
     assert_eq!(events[1].event().name(), "Explode");
 
-    // State only reflects the first event (second apply panicked before completing)
-    assert_eq!(agg.state().count, 1);
+    // With by-value apply, state was mem::replaced with initial() before calling apply.
+    // The panic prevented the new state from being written back, so state is initial().
+    assert_eq!(agg.state().count, 0);
 }
 
 // =============================================================================

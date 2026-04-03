@@ -34,7 +34,9 @@ impl AggregateState for AttrState {
     fn initial() -> Self {
         Self
     }
-    fn apply(&mut self, _: &AttrEvent) {}
+    fn apply(self, _: &AttrEvent) -> Self {
+        self
+    }
     fn name(&self) -> &'static str {
         "Attr"
     }

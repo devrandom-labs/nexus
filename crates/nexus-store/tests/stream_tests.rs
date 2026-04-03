@@ -74,3 +74,28 @@ async fn event_stream_envelope_borrows_from_cursor() {
 
     assert!(stream.next().await.is_none());
 }
+
+#[tokio::test]
+async fn event_stream_fused_after_none() {
+    let mut stream = VecStream::new(vec![("s".into(), 1, "E".into(), vec![])]);
+
+    // Consume the one event
+    let _ = stream.next().await.unwrap().unwrap();
+
+    // First None
+    assert!(stream.next().await.is_none());
+    // Calling again must also return None (fused)
+    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn event_stream_single_event() {
+    let mut stream = VecStream::new(vec![("s".into(), 1, "OnlyEvent".into(), vec![99])]);
+    {
+        let env = stream.next().await.unwrap().unwrap();
+        assert_eq!(env.event_type(), "OnlyEvent");
+        assert_eq!(env.payload(), &[99]);
+    }
+    assert!(stream.next().await.is_none());
+}

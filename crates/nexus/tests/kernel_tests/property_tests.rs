@@ -57,12 +57,13 @@ impl AggregateState for CountState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &CountEvent) {
+    fn apply(mut self, event: &CountEvent) -> Self {
         match event {
             CountEvent::Incremented => self.value += 1,
             CountEvent::Decremented => self.value -= 1,
             CountEvent::Set(v) => self.value = (*v).cast_signed(),
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Counter"
@@ -255,10 +256,42 @@ proptest! {
         prop_assert!(second.is_empty(), "Second take should return empty");
     }
 
-    /// Property 8: Version continuity across take cycles
+    /// Property 8: State is a pure function of events
+    ///
+    /// Building state from the same events via different paths
+    /// (apply vs replay vs apply-take-replay) must all converge.
+    /// This proves apply() behaves as a pure state transition.
+    #[test]
+    fn prop_state_is_pure_function_of_events(events in proptest::collection::vec(arb_event(), 1..50)) {
+        // Path A: apply all
+        let mut a = AggregateRoot::<CountAgg>::new(PId(1));
+        for e in &events { a.apply(e.clone()); }
+
+        // Path B: replay all
+        let mut b = AggregateRoot::<CountAgg>::new(PId(1));
+        for (i, e) in events.iter().enumerate() {
+            b.replay(Version::from_persisted((i + 1) as u64), e).unwrap();
+        }
+
+        // Path C: apply first half, take, then replay second half
+        let mid = events.len() / 2;
+        let mut c = AggregateRoot::<CountAgg>::new(PId(1));
+        for e in &events[..mid] { c.apply(e.clone()); }
+        let _ = c.take_uncommitted_events();
+        for (i, e) in events[mid..].iter().enumerate() {
+            let v = (mid + i + 1) as u64;
+            c.replay(Version::from_persisted(v), e).unwrap();
+        }
+
+        prop_assert_eq!(a.state(), b.state(), "apply vs replay diverged");
+        prop_assert_eq!(b.state(), c.state(), "replay vs apply-take-replay diverged");
+    }
+
+    /// Property 9: Version continuity across take cycles
     ///
     /// After take + more events, new event versions continue from
     /// where the previous batch ended. No version reuse.
+    #[allow(clippy::expect_used, reason = "property test needs unwrap")]
     #[test]
     fn prop_version_continuity_across_takes(
         batch1 in proptest::collection::vec(arb_event(), 1..20),

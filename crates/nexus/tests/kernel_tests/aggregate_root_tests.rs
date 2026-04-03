@@ -44,11 +44,12 @@ impl AggregateState for ItemState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &ItemEvent) {
+    fn apply(mut self, event: &ItemEvent) -> Self {
         match event {
             ItemEvent::Created(e) => self.name.clone_from(&e.name),
             ItemEvent::Done(_) => self.done = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Item"

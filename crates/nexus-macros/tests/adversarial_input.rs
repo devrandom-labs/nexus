@@ -35,10 +35,11 @@ impl AggregateState for SingleState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &SingleEvent) {
+    fn apply(mut self, event: &SingleEvent) -> Self {
         match event {
             SingleEvent::Only => self.triggered = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Single"
@@ -113,12 +114,13 @@ impl AggregateState for VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacr
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro) {
+    fn apply(mut self, event: &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro) -> Self {
         match event {
             VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(s) => {
                 self.data = s.clone();
             }
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Long"
@@ -165,8 +167,9 @@ mod inner {
         fn initial() -> Self {
             Self::default()
         }
-        fn apply(&mut self, _: &InnerEvent) {
+        fn apply(mut self, _: &InnerEvent) -> Self {
             self.pings += 1;
+            self
         }
         fn name(&self) -> &'static str {
             "Inner"

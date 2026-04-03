@@ -1,4 +1,5 @@
 use crate::envelope::PendingEnvelope;
+use crate::error::AppendError;
 use crate::stream::EventStream;
 use nexus::Version;
 
@@ -21,6 +22,13 @@ pub trait RawEventStore<M = ()>: Send + Sync {
     /// new events were applied. The adapter checks this against the
     /// current stream version and rejects if they don't match.
     ///
+    /// # Atomicity
+    ///
+    /// The version check and event insertion **must** be atomic. If they
+    /// are separate operations (e.g. SELECT then INSERT), a concurrent
+    /// writer can slip in between, corrupting the stream. Use
+    /// transactions, CAS operations, or a lock to prevent this.
+    ///
     /// # Implementor contract
     ///
     /// Envelopes **must** have strictly sequential versions starting from
@@ -32,7 +40,7 @@ pub trait RawEventStore<M = ()>: Send + Sync {
         stream_id: &str,
         expected_version: Version,
         envelopes: &[PendingEnvelope<M>],
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), AppendError<Self::Error>>> + Send;
 
     /// Open a lending cursor to read events from a stream.
     ///

@@ -4,4 +4,4 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc 7bd0c4c43cf65bfa43f4d6025f503dbe210b251077dad949d1dcd0566f24773a # shrinks to events = []
+cc dc92672459c34795301e997ec0f17935026a3957eddd47e20aaebb44807e6b4a # shrinks to versions = [2]

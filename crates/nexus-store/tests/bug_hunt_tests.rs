@@ -27,6 +27,7 @@
 )]
 
 use nexus::Version;
+use nexus_store::AppendError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
@@ -96,18 +97,18 @@ impl RawEventStore for ProbeStore {
         stream_id: &str,
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
-    ) -> Result<(), Self::Error> {
+    ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
         let stream = guard.entry(stream_id.to_owned()).or_default();
         let current = u64::try_from(stream.len()).unwrap_or(u64::MAX);
         if current != expected_version.as_u64() {
-            return Err(ProbeError::Conflict);
+            return Err(AppendError::Store(ProbeError::Conflict));
         }
         // Enforce implementor contract: versions must be sequential
         // from expected_version + 1
         for (expected_next, env) in (expected_version.as_u64() + 1..).zip(envelopes.iter()) {
             if env.version().as_u64() != expected_next {
-                return Err(ProbeError::Conflict);
+                return Err(AppendError::Store(ProbeError::Conflict));
             }
         }
         for env in envelopes {

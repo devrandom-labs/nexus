@@ -6,6 +6,13 @@
 ///
 /// Knows nothing about envelopes, streams, versions, or metadata.
 /// Just bytes in, bytes out.
+///
+/// # When to use
+///
+/// Use `Codec<E>` for serde-based formats (JSON, bincode, postcard)
+/// where deserialization produces an owned value. For zero-copy formats
+/// (rkyv, flatbuffers) where the serialized bytes can be reinterpreted
+/// in-place, use [`BorrowingCodec<E>`](crate::BorrowingCodec) instead.
 pub trait Codec<E>: Send + Sync + 'static {
     /// The error type for serialization/deserialization failures.
     type Error: std::error::Error + Send + Sync + 'static;

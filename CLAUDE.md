@@ -19,11 +19,11 @@ cargo test --all
 
 # Run tests for a specific crate
 cargo test -p nexus
-cargo test -p nexus-rusqlite
+cargo test -p nexus-store
 cargo test -p nexus-macros
 
 # Run a single test by name
-cargo test -p nexus-rusqlite -- should_be_able_to_write_and_read
+cargo test -p nexus-store -- envelope_tests
 
 # Check formatting
 cargo fmt --all --check
@@ -48,11 +48,8 @@ cargo hakari verify
 ### Crate Dependency Graph
 
 ```
-nexus-services --> nexus (core)
-nexus-rusqlite --> nexus (core)
-nexus-macros   <-- nexus (core, optional via "derive" feature)
-nexus-test-helpers --> nexus (with "testing" feature)
-examples/todo-rusqlite --> nexus, nexus-rusqlite
+nexus-store  --> nexus (core)
+nexus-macros <-- nexus (core, optional via "derive" feature)
 ```
 
 ### Core Crate (`nexus`) - Layered by Module
@@ -79,26 +76,12 @@ Proc macros for `Command`, `Query`, and `DomainEvent`. Usage:
 - `#[derive(Query)] #[query(result = "ResultType", error = "ErrorType")]`
 - `#[derive(DomainEvent)] #[domain_event(name = "EventName")]` (structs only, no enums/unions)
 
-### `nexus-rusqlite` - SQLite Event Store Adapter
-
-Implements `EventStore` for SQLite via `rusqlite`. Uses `Arc<Mutex<Connection>>` with `spawn_blocking` for async. The `build.rs` copies migration SQL files from the workspace-level `schemas/sqlite/` directory into a local `migrations/` dir at build time (refinery format: `V{n}__name.sql`). Schema has `event` and `event_metadata` tables with optimistic concurrency via unique `(stream_id, version)` constraint.
-
-### `nexus-services` - Aggregate Service Layer
-
-`AggregateService<A, R, S>` orchestrates command dispatch (currently WIP/unimplemented).
-
-### `nexus-test-helpers` - Test Utilities
-
-Shared test domain (`UserCreated`, `UserActivated`, etc.), `TestableEvent` wrapper for comparing pending vs persisted events, and `create_pending_event_sequence` for generating test event batches. Uses `fake` crate for randomized test data.
-
 ## Key Conventions
 
 - **Rust edition 2024** with `rustfmt` edition 2024
 - **Workspace dependencies**: all dependency versions declared in root `Cargo.toml` `[workspace.dependencies]`; crate-level Cargo.toml files use `workspace = true`
 - **workspace-hack crate**: managed by `cargo-hakari` for build optimization; run `cargo hakari generate` after dependency changes
-- **Migrations live in `schemas/sqlite/`** (not inside crate dirs); `nexus-rusqlite/build.rs` copies them
-- **Naming**: `{timestamp}_{name}.up.sql` / `{timestamp}_{name}.down.sql` for migration files
 - **Commit style**: conventional commits (`feat:`, `fix:`, `docs:`)
 - **Dual license**: MIT OR Apache-2.0
-- **Property-based tests** via `proptest` in `nexus-rusqlite/tests/`
+- **Property-based tests** via `proptest` in kernel and store tests
 - **CI checks** (via Nix flake): clippy (deny warnings), fmt, taplo fmt, cargo-audit, cargo-deny, nextest, tarpaulin coverage, hakari verification

@@ -188,3 +188,85 @@ async fn large_batch_append_and_sequential_readback() {
     let expected_versions: Vec<u64> = (1..=count).collect();
     assert_eq!(versions, expected_versions, "versions should be 1..=1000");
 }
+
+// =============================================================================
+// Lifecycle edge cases
+// =============================================================================
+
+/// Calling `next()` repeatedly after stream is exhausted always returns `None`.
+#[tokio::test]
+async fn next_after_none_returns_none() {
+    let store = InMemoryStore::new();
+    let sid = "fused-stream";
+    let envelopes = make_envelopes(sid, 1, 2);
+    store
+        .append(sid, Version::INITIAL, &envelopes)
+        .await
+        .unwrap();
+
+    let mut stream = store.read_stream(sid, Version::INITIAL).await.unwrap();
+    let _ = collect_stream(&mut stream).await;
+
+    // Stream exhausted — subsequent calls must return None
+    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.is_none());
+}
+
+/// Reading from a version beyond the stream end yields empty.
+#[tokio::test]
+async fn read_from_future_version_returns_empty() {
+    let store = InMemoryStore::new();
+    let sid = "future-version-stream";
+    let envelopes = make_envelopes(sid, 1, 3);
+    store
+        .append(sid, Version::INITIAL, &envelopes)
+        .await
+        .unwrap();
+
+    // Read from version 100 — no events exist at that version
+    let mut stream = store
+        .read_stream(sid, Version::from_persisted(100))
+        .await
+        .unwrap();
+    assert!(
+        stream.next().await.is_none(),
+        "should return empty for future version"
+    );
+}
+
+/// Single event append and readback.
+#[tokio::test]
+async fn single_event_lifecycle() {
+    let store = InMemoryStore::new();
+    let sid = "single-event";
+    let envelopes = make_envelopes(sid, 1, 1);
+    store
+        .append(sid, Version::INITIAL, &envelopes)
+        .await
+        .unwrap();
+
+    let mut stream = store.read_stream(sid, Version::INITIAL).await.unwrap();
+    let events = collect_stream(&mut stream).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, 1);
+}
+
+/// Appending to one stream and reading a different one returns empty.
+#[tokio::test]
+async fn read_different_stream_returns_empty() {
+    let store = InMemoryStore::new();
+    let envelopes = make_envelopes("stream-a", 1, 3);
+    store
+        .append("stream-a", Version::INITIAL, &envelopes)
+        .await
+        .unwrap();
+
+    let mut stream = store
+        .read_stream("stream-b", Version::INITIAL)
+        .await
+        .unwrap();
+    assert!(
+        stream.next().await.is_none(),
+        "different stream should be empty"
+    );
+}

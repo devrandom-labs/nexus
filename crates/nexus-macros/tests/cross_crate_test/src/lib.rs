@@ -43,11 +43,12 @@ impl AggregateState for TaskState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &TaskEvent) {
+    fn apply(mut self, event: &TaskEvent) -> Self {
         match event {
             TaskEvent::Created(e) => self.title = e.title.clone(),
             TaskEvent::Completed(_) => self.done = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Task"

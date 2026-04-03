@@ -37,11 +37,12 @@ impl AggregateState for TodoState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &TodoEvent) {
+    fn apply(mut self, event: &TodoEvent) -> Self {
         match event {
             TodoEvent::Created(e) => self.title = e.title.clone(),
             TodoEvent::Completed(_) => self.done = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Todo"

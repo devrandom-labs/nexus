@@ -36,10 +36,11 @@ impl AggregateState for RState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &REvent) {
+    fn apply(mut self, event: &REvent) -> Self {
         match event {
             REvent::Added(s) => self.items.push(s.clone()),
         }
+        self
     }
     fn name(&self) -> &'static str {
         "R"
