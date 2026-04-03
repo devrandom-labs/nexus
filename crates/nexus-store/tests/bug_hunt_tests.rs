@@ -69,6 +69,7 @@ impl EventStream for ProbeStream {
             &row.0,
             Version::from_persisted(row.1),
             &row.2,
+            1,
             &row.3,
             (),
         )))
@@ -473,6 +474,7 @@ fn bug_probe_persisted_envelope_public_constructor() {
         "fake-stream",
         Version::from_persisted(999),
         "ForgedEvent",
+        1,
         b"malicious payload",
         (),
     );

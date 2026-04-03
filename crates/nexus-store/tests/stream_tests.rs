@@ -27,6 +27,7 @@ impl EventStream for VecStream {
             &row.0,
             Version::from_persisted(row.1),
             &row.2,
+            1,
             &row.3,
             (),
         )))

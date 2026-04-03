@@ -40,6 +40,7 @@ impl EventStream for InMemoryStream {
             &row.0,
             Version::from_persisted(row.1),
             &row.2,
+            1,
             &row.3,
             (),
         )))

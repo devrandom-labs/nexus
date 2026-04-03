@@ -72,6 +72,7 @@ impl EventStream for InMemoryStream {
             &row.0,
             Version::from_persisted(row.1),
             &row.2,
+            1,
             &row.3,
             (),
         )))
@@ -205,6 +206,7 @@ fn bench_persisted_envelope_construction(c: &mut Criterion) {
                 black_box(stream_id),
                 Version::from_persisted(1),
                 black_box(event_type),
+                1,
                 black_box(&payload),
                 (),
             ))

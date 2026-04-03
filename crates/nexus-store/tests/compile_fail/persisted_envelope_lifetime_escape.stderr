@@ -6,20 +6,20 @@ error[E0597]: `stream_id` does not live long enough
 6 |         let stream_id = String::from("s1");
   |             --------- binding `stream_id` declared here
 7 |         let payload = vec![1, 2, 3];
-8 |         PersistedEnvelope::<()>::new(&stream_id, Version::from_persisted(1), "E", &payload, ())
+8 |         PersistedEnvelope::<()>::new(&stream_id, Version::from_persisted(1), "E", 1, &payload, ())
   |                                      ^^^^^^^^^^ borrowed value does not live long enough
 9 |     };
   |     - `stream_id` dropped here while still borrowed
 
 error[E0597]: `payload` does not live long enough
- --> tests/compile_fail/persisted_envelope_lifetime_escape.rs:8:83
+ --> tests/compile_fail/persisted_envelope_lifetime_escape.rs:8:86
   |
 5 |     let envelope = {
   |         -------- borrow later stored here
 6 |         let stream_id = String::from("s1");
 7 |         let payload = vec![1, 2, 3];
   |             ------- binding `payload` declared here
-8 |         PersistedEnvelope::<()>::new(&stream_id, Version::from_persisted(1), "E", &payload, ())
-  |                                                                                   ^^^^^^^^ borrowed value does not live long enough
+8 |         PersistedEnvelope::<()>::new(&stream_id, Version::from_persisted(1), "E", 1, &payload, ())
+  |                                                                                      ^^^^^^^^ borrowed value does not live long enough
 9 |     };
   |     - `payload` dropped here while still borrowed

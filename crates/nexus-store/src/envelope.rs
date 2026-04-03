@@ -187,6 +187,7 @@ pub struct PersistedEnvelope<'a, M = ()> {
     stream_id: &'a str,
     version: Version,
     event_type: &'a str,
+    schema_version: u32,
     payload: &'a [u8],
     metadata: M,
 }
@@ -197,18 +198,32 @@ impl<'a, M> PersistedEnvelope<'a, M> {
     /// Adapters call this to wrap raw row data. Once constructed, the
     /// envelope is frozen — all access is through `const` borrowing
     /// accessors. No mutation path exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `schema_version` is 0 — schema versions start at 1.
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "flat constructor mirrors DB row; a builder would add needless complexity for a read-path type"
+    )]
     pub const fn new(
         stream_id: &'a str,
         version: Version,
         event_type: &'a str,
+        schema_version: u32,
         payload: &'a [u8],
         metadata: M,
     ) -> Self {
+        assert!(
+            schema_version > 0,
+            "schema_version must be > 0: a schema version of 0 is invalid"
+        );
         Self {
             stream_id,
             version,
             event_type,
+            schema_version,
             payload,
             metadata,
         }
@@ -230,6 +245,15 @@ impl<'a, M> PersistedEnvelope<'a, M> {
     #[must_use]
     pub const fn event_type(&self) -> &str {
         self.event_type
+    }
+
+    /// The schema version of the persisted event.
+    ///
+    /// Used by `EventUpcaster` to decide which events need upgrading.
+    /// Always >= 1.
+    #[must_use]
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
     }
 
     /// The serialized event payload.

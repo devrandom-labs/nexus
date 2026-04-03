@@ -252,6 +252,7 @@ impl EventStream for VecStream {
             &row.stream_id,
             Version::from_persisted(row.version),
             &row.event_type,
+            1,
             &row.payload,
             (),
         )))

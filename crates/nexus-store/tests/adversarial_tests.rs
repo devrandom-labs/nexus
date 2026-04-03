@@ -52,6 +52,7 @@ fn unicode_stream_id() {
         &owned_id,
         envelope.version(),
         envelope.event_type(),
+        1,
         envelope.payload(),
         (),
     );
@@ -100,6 +101,7 @@ fn max_version_envelope() {
         "stream",
         Version::from_persisted(u64::MAX),
         "Event",
+        1,
         &[],
         (),
     );
@@ -242,6 +244,7 @@ fn persisted_envelope_binary_payload() {
         "binary-stream",
         Version::from_persisted(1),
         "BinaryEvent",
+        1,
         &payload,
         (),
     );

@@ -55,6 +55,7 @@ fn persisted_envelope_borrows_from_source() {
         &stream_id,
         Version::from_persisted(3),
         &event_type,
+        1,
         &payload,
         (),
     );
@@ -80,6 +81,7 @@ fn persisted_envelope_metadata_is_owned() {
         stream_id,
         Version::from_persisted(1),
         event_type,
+        1,
         &payload,
         Meta {
             tenant: "acme".into(),
@@ -104,6 +106,7 @@ fn persisted_envelope_zero_allocation_for_core_fields() {
         source_stream,
         Version::from_persisted(1),
         source_type,
+        1,
         &source_payload,
         (),
     );
@@ -147,6 +150,7 @@ fn persisted_envelope_debug_output() {
         stream_id,
         Version::from_persisted(2),
         event_type,
+        1,
         &payload,
         (),
     );
