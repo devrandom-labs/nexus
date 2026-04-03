@@ -130,7 +130,7 @@ impl BankAccount {
         if self.state().is_open {
             return Err(AccountError::AlreadyOpen);
         }
-        self.apply_event(AccountEvent::Opened(AccountOpened { owner }));
+        self.apply(AccountEvent::Opened(AccountOpened { owner }));
         Ok(())
     }
 
@@ -138,7 +138,7 @@ impl BankAccount {
         if !self.state().is_open {
             return Err(AccountError::Closed);
         }
-        self.apply_event(AccountEvent::Deposited(MoneyDeposited { amount }));
+        self.apply(AccountEvent::Deposited(MoneyDeposited { amount }));
         Ok(())
     }
 
@@ -152,7 +152,7 @@ impl BankAccount {
                 amount,
             });
         }
-        self.apply_event(AccountEvent::Withdrawn(MoneyWithdrawn { amount }));
+        self.apply(AccountEvent::Withdrawn(MoneyWithdrawn { amount }));
         Ok(())
     }
 }

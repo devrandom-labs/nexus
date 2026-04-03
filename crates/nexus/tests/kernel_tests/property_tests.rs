@@ -144,7 +144,7 @@ proptest! {
         let n = events.len() as u64;
 
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         prop_assert_eq!(agg.current_version(), Version::from_persisted(n));
@@ -158,7 +158,7 @@ proptest! {
     fn prop_uncommitted_count_matches_version_delta(events in proptest::collection::vec(arb_event(), 0..50)) {
         let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         let uncommitted = agg.take_uncommitted_events();
@@ -189,10 +189,10 @@ proptest! {
             make_versioned(&raw_events),
         ).unwrap();
 
-        // Path B: new() + apply_events()
+        // Path B: new() + apply()
         let mut agg_applied = AggregateRoot::<CountAgg>::new(PId(1));
         for event in &raw_events {
-            agg_applied.apply_event(event.clone());
+            agg_applied.apply(event.clone());
         }
 
         prop_assert_eq!(agg_loaded.state(), agg_applied.state());
@@ -206,7 +206,7 @@ proptest! {
     fn prop_uncommitted_versions_are_contiguous(events in proptest::collection::vec(arb_event(), 1..50)) {
         let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         let uncommitted = agg.take_uncommitted_events();
@@ -252,7 +252,7 @@ proptest! {
     fn prop_take_twice_second_is_empty(events in proptest::collection::vec(arb_event(), 0..50)) {
         let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         let _first = agg.take_uncommitted_events();
@@ -272,13 +272,13 @@ proptest! {
         let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
 
         for event in &batch1 {
-            agg.apply_event(event.clone());
+            agg.apply(event.clone());
         }
         let taken1 = agg.take_uncommitted_events();
         let last_v1 = taken1.last().unwrap().version();
 
         for event in &batch2 {
-            agg.apply_event(event.clone());
+            agg.apply(event.clone());
         }
         let taken2 = agg.take_uncommitted_events();
         let first_v2 = taken2.first().unwrap().version();

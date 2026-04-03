@@ -73,7 +73,7 @@ impl TaskAggregate {
         if !self.state().title.is_empty() {
             return Err(TaskError::AlreadyExists);
         }
-        self.apply_event(TaskEvent::Created(TaskCreated { title }));
+        self.apply(TaskEvent::Created(TaskCreated { title }));
         Ok(())
     }
 
@@ -81,7 +81,7 @@ impl TaskAggregate {
         if self.state().done {
             return Err(TaskError::AlreadyDone);
         }
-        self.apply_event(TaskEvent::Completed(TaskCompleted));
+        self.apply(TaskEvent::Completed(TaskCompleted));
         Ok(())
     }
 }

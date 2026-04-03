@@ -102,7 +102,7 @@ pub trait AggregateState: Send + Sync + Debug + 'static {
 /// }
 ///
 /// let mut agg = MyAggregate::new(MyId(1));
-/// agg.apply_event(Ev::A);
+/// agg.apply(Ev::A);
 /// assert_eq!(agg.version(), Version::INITIAL);
 /// assert_eq!(agg.current_version(), Version::from_persisted(1));
 /// ```
@@ -115,7 +115,7 @@ pub trait Aggregate: Sized {
     type Error: Error + Send + Sync + Debug + 'static;
     type Id: Id;
 
-    /// Maximum uncommitted events before `apply_event` panics.
+    /// Maximum uncommitted events before `apply` panics.
     /// Override this for aggregates that produce many events per operation.
     /// Default: 1024.
     const MAX_UNCOMMITTED: usize = DEFAULT_MAX_UNCOMMITTED;
@@ -129,7 +129,7 @@ pub trait Aggregate: Sized {
 /// Trait for user-defined aggregate newtypes wrapping `AggregateRoot`.
 ///
 /// Provides default method implementations so users get `state()`,
-/// `apply_event()`, etc. on their own type. Only `root()` and
+/// `apply()`, etc. on their own type. Only `root()` and
 /// `root_mut()` must be implemented — typically via `#[derive(Aggregate)]`.
 pub trait AggregateEntity: Aggregate {
     /// Access the inner `AggregateRoot`.
@@ -163,13 +163,8 @@ pub trait AggregateEntity: Aggregate {
     }
 
     /// Apply a single event.
-    fn apply_event(&mut self, event: EventOf<Self>) {
-        self.root_mut().apply_event(event);
-    }
-
-    /// Apply multiple events.
-    fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<Self>>) {
-        self.root_mut().apply_events(events);
+    fn apply(&mut self, event: EventOf<Self>) {
+        self.root_mut().apply(event);
     }
 
     /// Drain uncommitted events for persistence.
@@ -184,7 +179,7 @@ pub trait AggregateEntity: Aggregate {
 /// write `EventOf<A>`.
 pub type EventOf<A> = <<A as Aggregate>::State as AggregateState>::Event;
 
-/// Default maximum uncommitted events before `apply_event` panics.
+/// Default maximum uncommitted events before `apply` panics.
 /// Override per-aggregate via `Aggregate::MAX_UNCOMMITTED`.
 pub const DEFAULT_MAX_UNCOMMITTED: usize = 1024;
 
@@ -252,8 +247,8 @@ pub const DEFAULT_MAX_REHYDRATION_EVENTS: usize = 1_000_000;
 ///
 /// // Use it
 /// let mut todo = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-/// todo.apply_event(TodoEvent::Created("Buy milk".into()));
-/// todo.apply_event(TodoEvent::Done);
+/// todo.apply(TodoEvent::Created("Buy milk".into()));
+/// todo.apply(TodoEvent::Done);
 ///
 /// assert_eq!(todo.state().title, "Buy milk");
 /// assert!(todo.state().done);
@@ -366,7 +361,7 @@ impl<A: Aggregate> AggregateRoot<A> {
         clippy::expect_used,
         reason = "critical safety invariants — exceeding limits or panicking apply must crash explicitly"
     )]
-    pub fn apply_event(&mut self, event: EventOf<A>) {
+    pub fn apply(&mut self, event: EventOf<A>) {
         assert!(
             self.uncommitted_events.len() < A::MAX_UNCOMMITTED,
             "Uncommitted event limit reached ({}). Call take_uncommitted_events() to drain.",
@@ -382,22 +377,8 @@ impl<A: Aggregate> AggregateRoot<A> {
         debug_assert_eq!(
             self.current_version(),
             next_version,
-            "Invariant violated: apply_event must increment current_version by exactly 1"
+            "Invariant violated: apply must increment current_version by exactly 1"
         );
-    }
-
-    /// Apply multiple events. Pre-allocates if the iterator provides a size hint,
-    /// capped at `MAX_UNCOMMITTED` to prevent malicious iterators from causing OOM.
-    pub fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<A>>) {
-        let iter = events.into_iter();
-        let (lower, _) = iter.size_hint();
-        // Cap reservation to MAX_UNCOMMITTED — a lying iterator claiming
-        // usize::MAX elements must not cause an OOM allocation.
-        let safe_reserve = lower.min(A::MAX_UNCOMMITTED);
-        self.uncommitted_events.reserve(safe_reserve);
-        for event in iter {
-            self.apply_event(event);
-        }
     }
 
     /// Rehydrate an aggregate from persisted versioned events.
@@ -447,7 +428,7 @@ impl<A: Aggregate> AggregateRoot<A> {
     /// Drain uncommitted events for persistence.
     ///
     /// Advances the persisted version to include the drained events.
-    /// Subsequent `apply_event` calls will continue from the new version.
+    /// Subsequent `apply` calls will continue from the new version.
     pub fn take_uncommitted_events(&mut self) -> SmallVec<[VersionedEvent<EventOf<A>>; 1]> {
         self.version = self.current_version();
         let events = std::mem::take(&mut self.uncommitted_events);

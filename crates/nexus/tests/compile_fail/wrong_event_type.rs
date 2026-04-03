@@ -53,5 +53,5 @@ impl Id for UserId {}
 fn main() {
     let mut user = AggregateRoot::<UserAggregate>::new(UserId(1));
     // This MUST fail: OrderEvent is not UserEvent
-    user.apply_event(OrderEvent::Placed);
+    user.apply(OrderEvent::Placed);
 }

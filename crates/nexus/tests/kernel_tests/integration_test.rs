@@ -81,7 +81,7 @@ fn create_user(agg: &mut AggregateRoot<UserAggregate>, name: String) -> Result<(
     if !agg.state().name.is_empty() {
         return Err(UserError::AlreadyExists);
     }
-    agg.apply_event(UserEvent::Created(UserCreated { name }));
+    agg.apply(UserEvent::Created(UserCreated { name }));
     Ok(())
 }
 
@@ -89,7 +89,7 @@ fn activate_user(agg: &mut AggregateRoot<UserAggregate>) -> Result<(), UserError
     if agg.state().active {
         return Err(UserError::AlreadyActive);
     }
-    agg.apply_event(UserEvent::Activated(UserActivated));
+    agg.apply(UserEvent::Activated(UserActivated));
     Ok(())
 }
 

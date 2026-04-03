@@ -77,7 +77,7 @@ impl fmt::Display for Version {
 /// An event paired with its version in the aggregate's event sequence.
 ///
 /// This type cannot be constructed outside the kernel — only
-/// `AggregateRoot::apply_event` and `AggregateRoot::load_from_events`
+/// `AggregateRoot::apply` and `AggregateRoot::load_from_events`
 /// produce `VersionedEvent` values. This guarantees that version
 /// numbers are always assigned by the kernel, never forged by user code.
 #[derive(Debug)]

@@ -109,28 +109,28 @@ impl Aggregate for LimitedAgg {
 
 #[test]
 #[should_panic(expected = "Uncommitted event limit reached")]
-fn c3_apply_event_panics_at_limit() {
+fn c3_apply_panics_at_limit() {
     let mut agg = AggregateRoot::<LimitedAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick); // 1
-    agg.apply_event(SEvent::Tick); // 2
-    agg.apply_event(SEvent::Tick); // 3 — at limit
-    agg.apply_event(SEvent::Tick); // 4 — MUST panic
+    agg.apply(SEvent::Tick); // 1
+    agg.apply(SEvent::Tick); // 2
+    agg.apply(SEvent::Tick); // 3 — at limit
+    agg.apply(SEvent::Tick); // 4 — MUST panic
 }
 
 #[test]
 fn c3_take_resets_count_allowing_more() {
     let mut agg = AggregateRoot::<LimitedAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     // At limit, but take resets
     let events = agg.take_uncommitted_events();
     assert_eq!(events.len(), 3);
 
     // Can apply again
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
     assert_eq!(agg.current_version(), Version::from_persisted(5));
 }
 
@@ -211,7 +211,7 @@ fn h2_error_contains_stream_id() {
 #[test]
 fn h5_event_recorded_before_state_mutation() {
     let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     // Both happened in the non-panic path
     assert_eq!(agg.state().count, 1);
@@ -272,11 +272,11 @@ fn h5_event_survives_panic_in_apply() {
     }
 
     let mut agg = AggregateRoot::<BombAgg>::new(SId(1));
-    agg.apply_event(BombEvent::Safe); // works fine
+    agg.apply(BombEvent::Safe); // works fine
 
     // Panicking apply — event should still be in uncommitted
     let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        agg.apply_event(BombEvent::Explode);
+        agg.apply(BombEvent::Explode);
     }));
     assert!(result.is_err(), "apply should have panicked");
 
@@ -369,8 +369,8 @@ fn l2_kernel_error_variants_are_known() {
 #[test]
 fn m3_aggregate_root_clone() {
     let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     let cloned = agg.clone();
     assert_eq!(cloned.version(), agg.version());
@@ -388,87 +388,24 @@ fn m3_aggregate_root_partial_eq() {
     assert_eq!(agg1, agg2);
 
     // Different after event
-    agg1.apply_event(SEvent::Tick);
+    agg1.apply(SEvent::Tick);
     assert_ne!(agg1, agg2);
 
     // Same again
-    agg2.apply_event(SEvent::Tick);
+    agg2.apply(SEvent::Tick);
     assert_eq!(agg1, agg2);
 }
 
 #[test]
 fn m3_clone_is_independent() {
     let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     let mut cloned = agg.clone();
-    cloned.apply_event(SEvent::Tick);
+    cloned.apply(SEvent::Tick);
 
     // Original unchanged
     assert_eq!(agg.current_version(), Version::from_persisted(1));
     // Clone advanced
     assert_eq!(cloned.current_version(), Version::from_persisted(2));
-}
-
-// =============================================================================
-// M5: Malicious size_hint on apply_events
-// =============================================================================
-
-#[test]
-fn m5_apply_events_with_lying_size_hint() {
-    // An iterator that claims to have 0 elements but actually has 3.
-    // The kernel should still work correctly (just without pre-allocation).
-    struct LyingIterator {
-        events: Vec<SEvent>,
-        pos: usize,
-    }
-    impl Iterator for LyingIterator {
-        type Item = SEvent;
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.pos < self.events.len() {
-                self.pos += 1;
-                Some(self.events[self.pos - 1].clone())
-            } else {
-                None
-            }
-        }
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            (0, None) // lies — claims 0 elements
-        }
-    }
-
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    let iter = LyingIterator {
-        events: vec![SEvent::Tick, SEvent::Tick, SEvent::Tick],
-        pos: 0,
-    };
-    agg.apply_events(iter);
-    assert_eq!(agg.current_version(), Version::from_persisted(3));
-}
-
-#[test]
-fn m5_apply_events_with_huge_size_hint_does_not_oom() {
-    // An iterator that claims usize::MAX elements but actually has 2.
-    // Without the cap, reserve(usize::MAX) would OOM instantly.
-    struct HugeHintIterator {
-        remaining: u8,
-    }
-    impl Iterator for HugeHintIterator {
-        type Item = SEvent;
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.remaining > 0 {
-                self.remaining -= 1;
-                Some(SEvent::Tick)
-            } else {
-                None
-            }
-        }
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            (usize::MAX, None) // malicious — claims usize::MAX elements
-        }
-    }
-
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_events(HugeHintIterator { remaining: 2 });
-    assert_eq!(agg.current_version(), Version::from_persisted(2));
 }

@@ -1,7 +1,7 @@
 //! Kernel benchmarks.
 //!
 //! Measures the hot paths in the kernel:
-//! - apply_event: single event application throughput
+//! - apply: single event application throughput
 //! - load_from_events: aggregate rehydration with N events
 //! - take_uncommitted_events: draining events for persistence
 //!
@@ -91,12 +91,12 @@ fn make_versioned_events(n: usize) -> Vec<VersionedEvent<BEvent>> {
 // Benchmarks
 // =============================================================================
 
-fn bench_apply_event(c: &mut Criterion) {
-    c.bench_function("apply_event (single)", |b| {
+fn bench_apply(c: &mut Criterion) {
+    c.bench_function("apply (single)", |b| {
         b.iter_with_setup(
             || AggregateRoot::<BAgg>::new(BId(1)),
             |mut agg| {
-                agg.apply_event(black_box(BEvent::Incremented));
+                agg.apply(black_box(BEvent::Incremented));
                 agg
             },
         );
@@ -132,7 +132,7 @@ fn bench_apply_then_take(c: &mut Criterion) {
                 || AggregateRoot::<BAgg>::new(BId(1)),
                 |mut agg| {
                     for _ in 0..size {
-                        agg.apply_event(BEvent::Incremented);
+                        agg.apply(BEvent::Incremented);
                     }
                     let events = agg.take_uncommitted_events();
                     black_box(events)
@@ -145,7 +145,7 @@ fn bench_apply_then_take(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_apply_event,
+    bench_apply,
     bench_load_from_events,
     bench_apply_then_take
 );

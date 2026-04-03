@@ -75,7 +75,7 @@ fn create_item(agg: &mut AggregateRoot<ItemAggregate>, name: String) -> Result<(
     if !agg.state().name.is_empty() {
         return Err(ItemError::AlreadyExists);
     }
-    agg.apply_event(ItemEvent::Created(ItemCreated { name }));
+    agg.apply(ItemEvent::Created(ItemCreated { name }));
     Ok(())
 }
 
@@ -83,7 +83,7 @@ fn mark_item_done(agg: &mut AggregateRoot<ItemAggregate>) -> Result<(), ItemErro
     if agg.state().done {
         return Err(ItemError::AlreadyDone);
     }
-    agg.apply_event(ItemEvent::Done(ItemDone));
+    agg.apply(ItemEvent::Done(ItemDone));
     Ok(())
 }
 
@@ -103,9 +103,9 @@ fn new_aggregate_has_default_state() {
 }
 
 #[test]
-fn apply_event_mutates_state_and_tracks_uncommitted() {
+fn apply_mutates_state_and_tracks_uncommitted() {
     let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
-    agg.apply_event(ItemEvent::Created(ItemCreated {
+    agg.apply(ItemEvent::Created(ItemCreated {
         name: "test".into(),
     }));
     assert_eq!(agg.state().name, "test");
@@ -116,10 +116,10 @@ fn apply_event_mutates_state_and_tracks_uncommitted() {
 #[test]
 fn take_uncommitted_events_drains() {
     let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
-    agg.apply_event(ItemEvent::Created(ItemCreated {
+    agg.apply(ItemEvent::Created(ItemCreated {
         name: "test".into(),
     }));
-    agg.apply_event(ItemEvent::Done(ItemDone));
+    agg.apply(ItemEvent::Done(ItemDone));
 
     let events = agg.take_uncommitted_events();
     assert_eq!(events.len(), 2);

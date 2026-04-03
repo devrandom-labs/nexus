@@ -69,8 +69,8 @@ impl Aggregate for UserAggregate {
 
 // 4. Use it
 let mut user = AggregateRoot::<UserAggregate>::new(id);
-user.apply_event(UserEvent::Created(UserCreated { name: "Alice".into() }));
-user.apply_event(UserEvent::Activated(UserActivated));
+user.apply(UserEvent::Created(UserCreated { name: "Alice".into() }));
+user.apply(UserEvent::Activated(UserActivated));
 
 let events = user.take_uncommitted_events();
 assert_eq!(events.len(), 2);

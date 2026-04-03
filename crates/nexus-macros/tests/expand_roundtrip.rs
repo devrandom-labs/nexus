@@ -112,11 +112,11 @@ impl ::std::fmt::Debug for RtAggregate {
 
 impl RtAggregate {
     fn add(&mut self, item: String) {
-        self.apply_event(RtEvent::Added(item));
+        self.apply(RtEvent::Added(item));
     }
 
     fn remove(&mut self) {
-        self.apply_event(RtEvent::Removed);
+        self.apply(RtEvent::Removed);
     }
 }
 

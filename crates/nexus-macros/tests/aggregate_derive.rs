@@ -68,7 +68,7 @@ impl TodoAggregate {
         if !self.state().title.is_empty() {
             return Err(TodoError::AlreadyExists);
         }
-        self.apply_event(TodoEvent::Created(TodoCreated { title }));
+        self.apply(TodoEvent::Created(TodoCreated { title }));
         Ok(())
     }
 
@@ -76,7 +76,7 @@ impl TodoAggregate {
         if self.state().done {
             return Err(TodoError::AlreadyDone);
         }
-        self.apply_event(TodoEvent::Completed(TodoCompleted));
+        self.apply(TodoEvent::Completed(TodoCompleted));
         Ok(())
     }
 }

@@ -106,7 +106,7 @@ proptest! {
         let n = events.len() as u64;
 
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         prop_assert_eq!(agg.current_version(), Version::from_persisted(n));
@@ -119,7 +119,7 @@ proptest! {
     fn prop_macro_uncommitted_matches_delta(events in proptest::collection::vec(arb_event(), 0..50)) {
         let mut agg = CounterAggregate::new(PId(1));
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         let uncommitted = agg.take_uncommitted_events();
@@ -129,7 +129,7 @@ proptest! {
 
     /// Property 4: Rehydrate-apply equivalence
     ///
-    /// load_from_events produces the same state as new() + apply_event().
+    /// load_from_events produces the same state as new() + apply().
     #[test]
     fn prop_macro_rehydrate_equals_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         // Path A: load_from_events
@@ -138,10 +138,10 @@ proptest! {
         }).collect();
         let agg_loaded = CounterAggregate::load_from_events(PId(1), versioned).unwrap();
 
-        // Path B: new() + apply_event()
+        // Path B: new() + apply()
         let mut agg_applied = CounterAggregate::new(PId(1));
         for event in &raw_events {
-            agg_applied.apply_event(event.clone());
+            agg_applied.apply(event.clone());
         }
 
         prop_assert_eq!(agg_loaded.state(), agg_applied.state());
@@ -158,13 +158,13 @@ proptest! {
         let mut agg = CounterAggregate::new(PId(1));
 
         for event in &batch1 {
-            agg.apply_event(event.clone());
+            agg.apply(event.clone());
         }
         let taken1 = agg.take_uncommitted_events();
         let last_v1 = taken1.last().unwrap().version();
 
         for event in &batch2 {
-            agg.apply_event(event.clone());
+            agg.apply(event.clone());
         }
         let taken2 = agg.take_uncommitted_events();
         let first_v2 = taken2.first().unwrap().version();
@@ -179,7 +179,7 @@ proptest! {
     fn prop_macro_take_idempotent(events in proptest::collection::vec(arb_event(), 0..50)) {
         let mut agg = CounterAggregate::new(PId(1));
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         let _first = agg.take_uncommitted_events();
@@ -195,7 +195,7 @@ proptest! {
     fn prop_macro_entity_matches_root(events in proptest::collection::vec(arb_event(), 0..50)) {
         let mut agg = CounterAggregate::new(PId(1));
         for event in events {
-            agg.apply_event(event);
+            agg.apply(event);
         }
 
         // AggregateEntity methods (via trait defaults)

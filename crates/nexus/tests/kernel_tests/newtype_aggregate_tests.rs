@@ -98,7 +98,7 @@ impl UserAggregate {
         if !self.state().name.is_empty() {
             return Err(UserError::AlreadyExists);
         }
-        self.apply_event(UserEvent::Created(UserCreated { name }));
+        self.apply(UserEvent::Created(UserCreated { name }));
         Ok(())
     }
 
@@ -106,7 +106,7 @@ impl UserAggregate {
         if self.state().active {
             return Err(UserError::AlreadyActive);
         }
-        self.apply_event(UserEvent::Activated(UserActivated));
+        self.apply(UserEvent::Activated(UserActivated));
         Ok(())
     }
 }

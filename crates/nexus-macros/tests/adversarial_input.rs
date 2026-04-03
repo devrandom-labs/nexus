@@ -51,7 +51,7 @@ struct SingleAggregate;
 #[test]
 fn single_variant_event_enum() {
     let mut agg = SingleAggregate::new(AId(1));
-    agg.apply_event(SingleEvent::Only);
+    agg.apply(SingleEvent::Only);
     assert!(agg.state().triggered);
 }
 
@@ -131,7 +131,7 @@ struct VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro;
 #[test]
 fn very_long_type_names() {
     let mut agg = VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro::new(AId(1));
-    agg.apply_event(
+    agg.apply(
         VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(
             "hello".into(),
         ),
@@ -180,8 +180,8 @@ struct PathTypeAggregate;
 #[test]
 fn aggregate_with_path_types() {
     let mut agg = PathTypeAggregate::new(AId(1));
-    agg.apply_event(inner::InnerEvent::Ping);
-    agg.apply_event(inner::InnerEvent::Ping);
+    agg.apply(inner::InnerEvent::Ping);
+    agg.apply(inner::InnerEvent::Ping);
     assert_eq!(agg.state().pings, 2);
 }
 
