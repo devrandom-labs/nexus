@@ -56,6 +56,7 @@ impl fmt::Display for StaticId {
 impl Id for StaticId {}
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "test-only event type used for static assertions")]
 enum StaticEvent {
     A,
 }
@@ -71,7 +72,7 @@ struct StaticState;
 impl AggregateState for StaticState {
     type Event = StaticEvent;
     fn initial() -> Self {
-        Self::default()
+        Self
     }
     fn apply(&mut self, _event: &StaticEvent) {}
     fn name(&self) -> &'static str {

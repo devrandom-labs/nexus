@@ -361,8 +361,7 @@ fn l2_kernel_error_variants_are_known() {
         actual: Version::from_persisted(1),
     };
     match err {
-        KernelError::VersionMismatch { .. } => {}
-        KernelError::RehydrationLimitExceeded { .. } => {} // If you add a variant, add it here and consider #[non_exhaustive]
+        KernelError::VersionMismatch { .. } | KernelError::RehydrationLimitExceeded { .. } => {} // If you add a variant, add it here and consider #[non_exhaustive]
     }
 }
 

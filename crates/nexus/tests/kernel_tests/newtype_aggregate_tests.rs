@@ -49,7 +49,7 @@ impl AggregateState for UserState {
     }
     fn apply(&mut self, event: &UserEvent) {
         match event {
-            UserEvent::Created(e) => self.name = e.name.clone(),
+            UserEvent::Created(e) => self.name.clone_from(&e.name),
             UserEvent::Activated(_) => self.active = true,
         }
     }

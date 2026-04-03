@@ -30,8 +30,8 @@ impl Message for ThingEvent {}
 impl DomainEvent for ThingEvent {
     fn name(&self) -> &'static str {
         match self {
-            ThingEvent::Created(_) => "ThingCreated",
-            ThingEvent::Activated(_) => "ThingActivated",
+            Self::Created(_) => "ThingCreated",
+            Self::Activated(_) => "ThingActivated",
         }
     }
 }
@@ -50,7 +50,7 @@ impl AggregateState for ThingState {
     }
     fn apply(&mut self, event: &ThingEvent) {
         match event {
-            ThingEvent::Created(e) => self.name = e.name.clone(),
+            ThingEvent::Created(e) => self.name.clone_from(&e.name),
             ThingEvent::Activated(_) => self.active = true,
         }
     }
@@ -63,7 +63,10 @@ impl AggregateState for ThingState {
 struct ThingAggregate;
 
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "test-only error type; variants used for type checking"
+)]
 enum ThingError {
     #[error("already exists")]
     AlreadyExists,

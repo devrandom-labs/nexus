@@ -3,10 +3,16 @@
 //! Measures the hot paths in the kernel:
 //! - apply: single event application throughput
 //! - replay: aggregate rehydration with N events
-//! - take_uncommitted_events: draining events for persistence
+//! - `take_uncommitted_events`: draining events for persistence
 //!
-//! Run: cargo bench --bench kernel_bench
-//! Reports: target/criterion/report/index.html
+//! Run: `cargo bench --bench kernel_bench`
+//! Reports: `target/criterion/report/index.html`
+#![allow(clippy::unwrap_used, reason = "benchmarks use unwrap for brevity")]
+#![allow(clippy::expect_used, reason = "benchmarks use expect for brevity")]
+#![allow(
+    clippy::shadow_reuse,
+    reason = "closure parameter shadowing is idiomatic in criterion benchmarks"
+)]
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::DomainEvent;
@@ -31,6 +37,7 @@ impl fmt::Display for BId {
 impl Id for BId {}
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "Set variant exists for realistic bench domain")]
 enum BEvent {
     Incremented,
     Set(u64),
@@ -39,8 +46,8 @@ impl Message for BEvent {}
 impl DomainEvent for BEvent {
     fn name(&self) -> &'static str {
         match self {
-            BEvent::Incremented => "Incremented",
-            BEvent::Set(_) => "Set",
+            Self::Incremented => "Incremented",
+            Self::Set(_) => "Set",
         }
     }
 }
@@ -84,7 +91,7 @@ fn make_versioned_events(n: usize) -> Vec<VersionedEvent<BEvent>> {
     (0..n)
         .map(|i| {
             VersionedEvent::from_persisted(
-                Version::from_persisted((i + 1) as u64),
+                Version::from_persisted(u64::try_from(i + 1).expect("index fits in u64")),
                 BEvent::Incremented,
             )
         })

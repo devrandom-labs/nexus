@@ -61,7 +61,7 @@ impl AggregateState for CountState {
         match event {
             CountEvent::Incremented => self.value += 1,
             CountEvent::Decremented => self.value -= 1,
-            CountEvent::Set(v) => self.value = *v as i64,
+            CountEvent::Set(v) => self.value = (*v).cast_signed(),
         }
     }
     fn name(&self) -> &'static str {
@@ -84,7 +84,7 @@ impl Aggregate for CountAgg {
 // Strategies — generate random valid data
 // =============================================================================
 
-/// Generate a random CountEvent
+/// Generate a random `CountEvent`
 fn arb_event() -> impl Strategy<Value = CountEvent> {
     prop_oneof![
         Just(CountEvent::Incremented),

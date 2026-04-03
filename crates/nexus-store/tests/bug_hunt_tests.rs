@@ -17,6 +17,14 @@
 #![allow(clippy::as_conversions, reason = "bug hunt tests")]
 #![allow(clippy::cast_possible_truncation, reason = "bug hunt tests")]
 #![allow(clippy::drop_non_drop, reason = "explicit drops for lending docs")]
+#![allow(
+    clippy::print_stdout,
+    reason = "bug hunt tests use println for diagnostic output"
+)]
+#![allow(
+    clippy::uninlined_format_args,
+    reason = "clarity over brevity in test assertions"
+)]
 
 use nexus::Version;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
@@ -97,12 +105,10 @@ impl RawEventStore for ProbeStore {
         }
         // Enforce implementor contract: versions must be sequential
         // from expected_version + 1
-        let mut expected_next = expected_version.as_u64() + 1;
-        for env in envelopes {
+        for (expected_next, env) in (expected_version.as_u64() + 1..).zip(envelopes.iter()) {
             if env.version().as_u64() != expected_next {
                 return Err(ProbeError::Conflict);
             }
-            expected_next += 1;
         }
         for env in envelopes {
             stream.push((
@@ -456,12 +462,12 @@ fn bug_probe_cannot_construct_pending_envelope_without_builder() {
     // - PendingEnvelope<()> has no Clone impl (interesting — is this intentional?)
 
     // Verify no Clone
-    fn _assert_not_clone<T>() {
+    fn assert_not_clone<T>() {
         // If PendingEnvelope implemented Clone, this would compile
         // We can't test negative traits in Rust, but we can document:
         // PendingEnvelope does NOT implement Clone, Copy, Default, or From.
     }
-    _assert_not_clone::<PendingEnvelope<()>>();
+    assert_not_clone::<PendingEnvelope<()>>();
 }
 
 // BUG PROBE: PersistedEnvelope has a public `new()` constructor.

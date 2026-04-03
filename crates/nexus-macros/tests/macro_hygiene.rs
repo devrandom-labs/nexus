@@ -240,12 +240,14 @@ fn user_functions_named_like_trait_methods() {
 struct Created; // user type named `Created`
 
 #[derive(Debug, Clone, DomainEvent)]
+#[allow(dead_code, reason = "test-only event type for macro hygiene tests")]
 enum ConflictEvent {
     Created(CreatedPayload), // variant also named `Created`
     Deleted,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "test-only payload type for macro hygiene tests")]
 struct CreatedPayload {
     name: String,
 }

@@ -60,6 +60,10 @@ fn single_variant_event_enum() {
 // =============================================================================
 
 #[derive(Debug, Clone, DomainEvent)]
+#[allow(
+    dead_code,
+    reason = "test-only event type — variants exist to stress-test macro variant arm generation"
+)]
 enum ManyEvent {
     V1,
     V2(u8),
@@ -190,6 +194,10 @@ fn aggregate_with_path_types() {
 // =============================================================================
 
 #[derive(Debug, Clone, DomainEvent)]
+#[allow(
+    dead_code,
+    reason = "test-only event type — fields exist to test mixed variant shape generation"
+)]
 enum MixedShapeEvent {
     Unit,
     Tuple(String, u64),
