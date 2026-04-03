@@ -16,17 +16,23 @@ The nexus-store examples reveal five DX pain points:
 
 ## Design Decisions
 
-### 1. `replay(version, event)` on `AggregateRoot`
+### 1. `replay(version, &event)` on `AggregateRoot`
 
 Single-event streaming rehydration step. Validates version is strictly sequential,
 applies to state, advances persisted version. Does NOT record as uncommitted.
+
+Takes `&EventOf<A>` (not owned) — this is critical for zero-copy codecs (rkyv,
+flatbuffers, capnp) where `decode()` returns a view borrowing from the payload
+buffer. Since `AggregateState::apply()` already takes `&Event`, the entire hot
+path from DB buffer through decode through state mutation is zero-allocation
+with a zero-copy codec.
 
 ```rust
 impl<A: Aggregate> AggregateRoot<A> {
     pub fn replay(
         &mut self,
         version: Version,
-        event: EventOf<A>,
+        event: &EventOf<A>,
     ) -> Result<(), KernelError> {
         let expected = self.version.next();
         if version != expected {
@@ -42,7 +48,7 @@ impl<A: Aggregate> AggregateRoot<A> {
                 max: A::MAX_REHYDRATION_EVENTS,
             });
         }
-        self.state.apply(&event);
+        self.state.apply(event);
         self.version = version;
         Ok(())
     }
@@ -50,7 +56,15 @@ impl<A: Aggregate> AggregateRoot<A> {
 ```
 
 `load_from_events` is **removed**. The only way to rehydrate is streaming via `replay()`.
-This enables zero-intermediate-allocation rehydration from a lending cursor.
+
+Zero-copy rehydration path with lending cursor:
+```
+DB buffer (owned by cursor)
+  → PersistedEnvelope borrows &[u8] payload
+    → zero-copy codec returns &Event (borrows from payload)
+      → replay(&event) → apply(&event) — no allocation
+  → drop reference, advance cursor, buffer reused
+```
 
 ### 2. Rename `apply_event` to `apply`
 
@@ -114,11 +128,14 @@ let mut root = AggregateRoot::<A>::new(id);
 while let Some(result) = stream.next().await {
     let env = result?;
     let event = codec.decode(env.event_type(), env.payload())?;
-    root.replay(env.version(), event)?;
-    // env dropped — lending iterator satisfied
+    root.replay(env.version(), &event)?;  // &event — zero-copy friendly
+    // event + env dropped — lending iterator satisfied
 }
 Ok(root)
 ```
+
+With a zero-copy codec, `event` borrows from `env.payload()` which borrows from
+the cursor buffer. The entire loop body is zero-allocation.
 
 ### 5. `InMemoryStore` behind `testing` feature
 
