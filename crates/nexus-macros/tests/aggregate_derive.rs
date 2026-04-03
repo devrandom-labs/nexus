@@ -113,13 +113,15 @@ fn derive_aggregate_invariants() {
 
 #[test]
 fn derive_aggregate_rehydrate() {
-    let history = vec![VersionedEvent::from_persisted(
-        Version::from_persisted(1),
-        TodoEvent::Created(TodoCreated {
-            title: "Loaded".into(),
-        }),
-    )];
-    let todo = TodoAggregate::load_from_events(TodoId(3), history).unwrap();
+    let mut todo = TodoAggregate::new(TodoId(3));
+    todo.root_mut()
+        .replay(
+            Version::from_persisted(1),
+            &TodoEvent::Created(TodoCreated {
+                title: "Loaded".into(),
+            }),
+        )
+        .unwrap();
     assert_eq!(todo.state().title, "Loaded");
     assert_eq!(todo.version(), Version::from_persisted(1));
 }

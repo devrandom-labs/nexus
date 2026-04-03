@@ -1,15 +1,14 @@
 //! Edge case tests for the kernel.
 //!
 //! These cover the gaps identified in our testing audit:
-//! - `load_from_events` with empty iterator
-//! - `load_from_events` starting from wrong version
+//! - `replay` with no events (new aggregate stays at INITIAL)
+//! - `replay` starting from wrong version
 //! - `current_version` after rehydrate + new events
 //! - take, apply, take again pattern
 //! - `Events` ref iteration
 
 use nexus::AggregateRoot;
 use nexus::Events;
-use nexus::VersionedEvent;
 use nexus::*;
 use std::fmt;
 
@@ -95,23 +94,25 @@ fn apply_multiple_events_in_loop() {
 }
 
 // =============================================================================
-// load_from_events edge cases
+// replay edge cases
 // =============================================================================
 
 #[test]
-fn load_from_events_empty_iterator_returns_default() {
-    let agg = AggregateRoot::<TAgg>::load_from_events(TId(1), Vec::new()).unwrap();
+fn new_aggregate_without_replay_has_default_state() {
+    let agg = AggregateRoot::<TAgg>::new(TId(1));
     assert_eq!(agg.version(), Version::INITIAL);
     assert!(agg.state().items.is_empty());
 }
 
 #[test]
-fn load_from_events_rejects_first_event_not_version_1() {
-    let events = vec![VersionedEvent::from_persisted(
-        Version::from_persisted(5), // should be 1!
-        TEvent::Added(Added("x".into())),
-    )];
-    let err = AggregateRoot::<TAgg>::load_from_events(TId(1), events).unwrap_err();
+fn replay_rejects_first_event_not_version_1() {
+    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let err = agg
+        .replay(
+            Version::from_persisted(5),
+            &TEvent::Added(Added("x".into())),
+        )
+        .unwrap_err();
     match err {
         KernelError::VersionMismatch {
             expected, actual, ..
@@ -119,7 +120,9 @@ fn load_from_events_rejects_first_event_not_version_1() {
             assert_eq!(expected, Version::from_persisted(1));
             assert_eq!(actual, Version::from_persisted(5));
         }
-        other => panic!("expected VersionMismatch, got {other:?}"),
+        other @ KernelError::RehydrationLimitExceeded { .. } => {
+            panic!("expected VersionMismatch, got {other:?}")
+        }
     }
 }
 
@@ -129,21 +132,22 @@ fn load_from_events_rejects_first_event_not_version_1() {
 
 #[test]
 fn current_version_after_rehydrate_plus_new_events() {
-    let history = vec![
-        VersionedEvent::from_persisted(
-            Version::from_persisted(1),
-            TEvent::Added(Added("a".into())),
-        ),
-        VersionedEvent::from_persisted(
-            Version::from_persisted(2),
-            TEvent::Added(Added("b".into())),
-        ),
-        VersionedEvent::from_persisted(
-            Version::from_persisted(3),
-            TEvent::Added(Added("c".into())),
-        ),
-    ];
-    let mut agg = AggregateRoot::<TAgg>::load_from_events(TId(1), history).unwrap();
+    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    agg.replay(
+        Version::from_persisted(1),
+        &TEvent::Added(Added("a".into())),
+    )
+    .unwrap();
+    agg.replay(
+        Version::from_persisted(2),
+        &TEvent::Added(Added("b".into())),
+    )
+    .unwrap();
+    agg.replay(
+        Version::from_persisted(3),
+        &TEvent::Added(Added("c".into())),
+    )
+    .unwrap();
 
     assert_eq!(agg.version(), Version::from_persisted(3)); // persisted
     assert_eq!(agg.current_version(), Version::from_persisted(3)); // no uncommitted yet

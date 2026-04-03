@@ -2,19 +2,20 @@
 //!
 //! Measures the hot paths in the kernel:
 //! - apply: single event application throughput
-//! - load_from_events: aggregate rehydration with N events
+//! - replay: aggregate rehydration with N events
 //! - take_uncommitted_events: draining events for persistence
 //!
 //! Run: cargo bench --bench kernel_bench
 //! Reports: target/criterion/report/index.html
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::DomainEvent;
 use nexus::Id;
 use nexus::Message;
-use nexus::{Aggregate, AggregateRoot, AggregateState, EventOf};
+use nexus::{Aggregate, AggregateRoot, AggregateState};
 use nexus::{Version, VersionedEvent};
 use std::fmt;
+use std::hint::black_box;
 
 // =============================================================================
 // Bench domain — minimal types, fast apply
@@ -50,6 +51,9 @@ struct BState {
 }
 impl AggregateState for BState {
     type Event = BEvent;
+    fn initial() -> Self {
+        Self::default()
+    }
     fn apply(&mut self, event: &BEvent) {
         match event {
             BEvent::Incremented => self.count += 1,
@@ -103,22 +107,18 @@ fn bench_apply(c: &mut Criterion) {
     });
 }
 
-fn bench_load_from_events(c: &mut Criterion) {
-    let mut group = c.benchmark_group("load_from_events");
+fn bench_replay(c: &mut Criterion) {
+    let mut group = c.benchmark_group("replay");
     for size in [10, 100, 1_000, 10_000] {
         let events = make_versioned_events(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &events, |b, events| {
-            b.iter_with_setup(
-                || {
-                    events
-                        .iter()
-                        .map(|ve| VersionedEvent::from_persisted(ve.version(), ve.event().clone()))
-                        .collect::<Vec<_>>()
-                },
-                |events| {
-                    AggregateRoot::<BAgg>::load_from_events(black_box(BId(1)), events).unwrap()
-                },
-            );
+            b.iter(|| {
+                let mut agg = AggregateRoot::<BAgg>::new(black_box(BId(1)));
+                for ve in events {
+                    agg.replay(ve.version(), ve.event()).unwrap();
+                }
+                agg
+            });
         });
     }
     group.finish();
@@ -143,10 +143,5 @@ fn bench_apply_then_take(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_apply,
-    bench_load_from_events,
-    bench_apply_then_take
-);
+criterion_group!(benches, bench_apply, bench_replay, bench_apply_then_take);
 criterion_main!(benches);

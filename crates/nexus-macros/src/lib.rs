@@ -14,7 +14,7 @@ use syn::{Data, DeriveInput, Error, Result, Type, parse_macro_input};
 /// - Replaces the unit struct with a newtype wrapping `AggregateRoot<Self>`
 /// - `impl Aggregate` with the specified associated types
 /// - `impl AggregateEntity` with `root()`/`root_mut()` delegation
-/// - `new(id)` and `load_from_events(id, events)` constructors
+/// - `new(id)` constructor
 /// - `impl Debug`
 #[proc_macro_attribute]
 pub fn aggregate(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -165,19 +165,6 @@ fn parse_aggregate(
             #[must_use]
             #vis fn new(id: #id_type) -> Self {
                 Self(::nexus::AggregateRoot::new(id))
-            }
-
-            /// Rehydrate from persisted events.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`nexus::KernelError::VersionMismatch`] if event versions
-            /// are not strictly sequential.
-            #vis fn load_from_events(
-                id: #id_type,
-                events: impl IntoIterator<Item = ::nexus::VersionedEvent<::nexus::EventOf<#name>>>,
-            ) -> ::std::result::Result<Self, ::nexus::KernelError> {
-                ::nexus::AggregateRoot::load_from_events(id, events).map(Self)
             }
         }
 

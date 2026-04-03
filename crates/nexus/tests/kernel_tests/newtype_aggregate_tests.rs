@@ -145,19 +145,21 @@ fn newtype_aggregate_invariant_enforcement() {
 
 #[test]
 fn newtype_aggregate_rehydrate() {
-    let history = vec![
-        VersionedEvent::from_persisted(
+    let mut user = UserAggregate::new(UserId(3));
+    user.root_mut()
+        .replay(
             Version::from_persisted(1),
-            UserEvent::Created(UserCreated {
+            &UserEvent::Created(UserCreated {
                 name: "Dave".into(),
             }),
-        ),
-        VersionedEvent::from_persisted(
+        )
+        .unwrap();
+    user.root_mut()
+        .replay(
             Version::from_persisted(2),
-            UserEvent::Activated(UserActivated),
-        ),
-    ];
-    let user = UserAggregate(AggregateRoot::load_from_events(UserId(3), history).unwrap());
+            &UserEvent::Activated(UserActivated),
+        )
+        .unwrap();
 
     assert_eq!(user.state().name, "Dave");
     assert!(user.state().active);

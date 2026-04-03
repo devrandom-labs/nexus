@@ -90,13 +90,6 @@ impl RtAggregate {
     fn new(id: RtId) -> Self {
         Self(::nexus::AggregateRoot::new(id))
     }
-
-    fn load_from_events(
-        id: RtId,
-        events: impl IntoIterator<Item = ::nexus::VersionedEvent<::nexus::EventOf<RtAggregate>>>,
-    ) -> ::std::result::Result<Self, ::nexus::KernelError> {
-        ::nexus::AggregateRoot::load_from_events(id, events).map(Self)
-    }
 }
 
 impl ::std::fmt::Debug for RtAggregate {
@@ -140,11 +133,13 @@ fn expanded_lifecycle() {
 
 #[test]
 fn expanded_rehydrate() {
-    let history = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), RtEvent::Added("a".into())),
-        VersionedEvent::from_persisted(Version::from_persisted(2), RtEvent::Added("b".into())),
-    ];
-    let agg = RtAggregate::load_from_events(RtId(1), history).unwrap();
+    let mut agg = RtAggregate::new(RtId(1));
+    agg.root_mut()
+        .replay(Version::from_persisted(1), &RtEvent::Added("a".into()))
+        .unwrap();
+    agg.root_mut()
+        .replay(Version::from_persisted(2), &RtEvent::Added("b".into()))
+        .unwrap();
     assert_eq!(agg.state().items, vec!["a", "b"]);
     assert_eq!(agg.version(), Version::from_persisted(2));
 }

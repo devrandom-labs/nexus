@@ -120,7 +120,7 @@ pub trait Aggregate: Sized {
     /// Default: 1024.
     const MAX_UNCOMMITTED: usize = DEFAULT_MAX_UNCOMMITTED;
 
-    /// Maximum events during rehydration via `load_from_events`.
+    /// Maximum events during rehydration via `replay`.
     /// Prevents a corrupted or malicious store from feeding unbounded events.
     /// Default: 1,000,000.
     const MAX_REHYDRATION_EVENTS: usize = DEFAULT_MAX_REHYDRATION_EVENTS;
@@ -183,7 +183,7 @@ pub type EventOf<A> = <<A as Aggregate>::State as AggregateState>::Event;
 /// Override per-aggregate via `Aggregate::MAX_UNCOMMITTED`.
 pub const DEFAULT_MAX_UNCOMMITTED: usize = 1024;
 
-/// Default maximum events during rehydration via `load_from_events`.
+/// Default maximum events during rehydration via `replay`.
 /// Override per-aggregate via `Aggregate::MAX_REHYDRATION_EVENTS`.
 pub const DEFAULT_MAX_REHYDRATION_EVENTS: usize = 1_000_000;
 
@@ -381,48 +381,62 @@ impl<A: Aggregate> AggregateRoot<A> {
         );
     }
 
-    /// Rehydrate an aggregate from persisted versioned events.
+    /// Replay a single persisted event during rehydration.
     ///
-    /// Validates that version numbers are strictly sequential starting from 1.
+    /// Takes a borrowed event reference so zero-copy codecs (rkyv, flatbuffers)
+    /// can pass views directly from database buffers without cloning.
+    ///
+    /// Call this in a loop for each event read from the store:
+    ///
+    /// ```ignore
+    /// let mut agg = AggregateRoot::<MyAggregate>::new(id);
+    /// for ve in events {
+    ///     let (version, event) = ve.into_parts();
+    ///     agg.replay(version, &event)?;
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::VersionMismatch`] if any event version is not
-    /// strictly sequential (i.e., there is a gap or duplicate).
+    /// Returns [`KernelError::VersionMismatch`] if `version` is not the
+    /// next expected version (i.e., there is a gap, duplicate, or out-of-order event).
     ///
-    /// Returns [`KernelError::RehydrationLimitExceeded`] if the event count
-    /// exceeds `Aggregate::MAX_REHYDRATION_EVENTS`.
-    pub fn load_from_events(
-        id: A::Id,
-        events: impl IntoIterator<Item = VersionedEvent<EventOf<A>>>,
-    ) -> Result<Self, KernelError> {
-        let mut aggregate = Self::new(id);
-        let mut count: usize = 0;
-        for versioned_event in events {
-            count += 1;
-            if count > A::MAX_REHYDRATION_EVENTS {
-                return Err(KernelError::RehydrationLimitExceeded {
-                    stream_id: ErrorId::from_display(&aggregate.id),
-                    max: A::MAX_REHYDRATION_EVENTS,
-                });
-            }
-            let expected = aggregate.version.next();
-            let (version, event) = versioned_event.into_parts();
-            if version != expected {
-                return Err(KernelError::VersionMismatch {
-                    stream_id: ErrorId::from_display(&aggregate.id),
-                    expected,
-                    actual: version,
-                });
-            }
-            aggregate.state.apply(&event);
-            aggregate.version = version;
+    /// Returns [`KernelError::RehydrationLimitExceeded`] if `version` exceeds
+    /// `Aggregate::MAX_REHYDRATION_EVENTS`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `MAX_REHYDRATION_EVENTS` exceeds `u64::MAX` on the target
+    /// platform (impossible on 32-bit and 64-bit systems).
+    #[allow(
+        clippy::expect_used,
+        reason = "u64::try_from(usize) cannot fail on supported platforms (max 64-bit)"
+    )]
+    pub fn replay(&mut self, version: Version, event: &EventOf<A>) -> Result<(), KernelError> {
+        let expected = self.version.next();
+        if version != expected {
+            return Err(KernelError::VersionMismatch {
+                stream_id: ErrorId::from_display(&self.id),
+                expected,
+                actual: version,
+            });
         }
+        if version.as_u64()
+            > u64::try_from(A::MAX_REHYDRATION_EVENTS)
+                .expect("MAX_REHYDRATION_EVENTS exceeds u64 on this platform")
+        {
+            return Err(KernelError::RehydrationLimitExceeded {
+                stream_id: ErrorId::from_display(&self.id),
+                max: A::MAX_REHYDRATION_EVENTS,
+            });
+        }
+        self.state.apply(event);
+        self.version = version;
         debug_assert!(
-            aggregate.uncommitted_events.is_empty(),
-            "Invariant violated: load_from_events must not produce uncommitted events"
+            self.uncommitted_events.is_empty(),
+            "Invariant violated: replay must not produce uncommitted events"
         );
-        Ok(aggregate)
+        Ok(())
     }
 
     /// Drain uncommitted events for persistence.

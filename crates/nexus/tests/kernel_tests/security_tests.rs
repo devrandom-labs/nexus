@@ -156,29 +156,26 @@ fn c4_from_persisted_accepts_zero_version() {
 fn c4_from_persisted_versioned_event_no_validation() {
     // from_persisted on VersionedEvent performs no validation.
     // A corrupted store could inject version 0 or backwards versions.
-    // load_from_events MUST catch this.
-    let bad_events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(5), SEvent::Tick),
-        VersionedEvent::from_persisted(Version::from_persisted(3), SEvent::Tick), // backwards!
-    ];
-    let result = AggregateRoot::<SAgg>::load_from_events(SId(1), bad_events);
+    // replay MUST catch this.
+    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    agg.replay(Version::from_persisted(1), &SEvent::Tick)
+        .unwrap();
+    // Attempt backwards version — must be rejected
+    let result = agg.replay(Version::from_persisted(0), &SEvent::Tick);
     assert!(
         result.is_err(),
-        "load_from_events must reject non-sequential versions"
+        "replay must reject non-sequential versions"
     );
 }
 
 #[test]
 fn c4_from_persisted_duplicate_versions_rejected() {
-    let bad_events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), SEvent::Tick),
-        VersionedEvent::from_persisted(Version::from_persisted(1), SEvent::Tick), // duplicate!
-    ];
-    let result = AggregateRoot::<SAgg>::load_from_events(SId(1), bad_events);
-    assert!(
-        result.is_err(),
-        "load_from_events must reject duplicate versions"
-    );
+    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    agg.replay(Version::from_persisted(1), &SEvent::Tick)
+        .unwrap();
+    // Attempt duplicate version — must be rejected
+    let result = agg.replay(Version::from_persisted(1), &SEvent::Tick);
+    assert!(result.is_err(), "replay must reject duplicate versions");
 }
 
 // =============================================================================
@@ -187,17 +184,20 @@ fn c4_from_persisted_duplicate_versions_rejected() {
 
 #[test]
 fn h2_error_contains_stream_id() {
-    let events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), SEvent::Tick),
-        VersionedEvent::from_persisted(Version::from_persisted(3), SEvent::Tick), // gap
-    ];
-    let err = AggregateRoot::<SAgg>::load_from_events(SId(42), events).unwrap_err();
+    let mut agg = AggregateRoot::<SAgg>::new(SId(42));
+    agg.replay(Version::from_persisted(1), &SEvent::Tick)
+        .unwrap();
+    let err = agg
+        .replay(Version::from_persisted(3), &SEvent::Tick) // gap
+        .unwrap_err();
     match err {
         KernelError::VersionMismatch { stream_id, .. } => {
             // Verify the ID is captured — NO heap allocation (ErrorId is stack-based)
             assert_eq!(format!("{stream_id}"), "42");
         }
-        other => panic!("expected VersionMismatch, got {other:?}"),
+        other @ KernelError::RehydrationLimitExceeded { .. } => {
+            panic!("expected VersionMismatch, got {other:?}")
+        }
     }
 }
 
@@ -309,28 +309,32 @@ impl Aggregate for TinyRehydrationAgg {
 }
 
 #[test]
-fn h1_load_from_events_enforces_rehydration_limit() {
-    let events: Vec<_> = (1..=6)
-        .map(|i| VersionedEvent::from_persisted(Version::from_persisted(i), SEvent::Tick))
-        .collect();
-
-    let result = AggregateRoot::<TinyRehydrationAgg>::load_from_events(SId(1), events);
+fn h1_replay_enforces_rehydration_limit() {
+    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId(1));
+    for i in 1..=5u64 {
+        agg.replay(Version::from_persisted(i), &SEvent::Tick)
+            .unwrap();
+    }
+    // 6th event exceeds the limit of 5
+    let result = agg.replay(Version::from_persisted(6), &SEvent::Tick);
     assert!(result.is_err());
     match result.unwrap_err() {
         KernelError::RehydrationLimitExceeded { max, .. } => {
             assert_eq!(max, 5);
         }
-        other => panic!("expected RehydrationLimitExceeded, got {other:?}"),
+        other @ KernelError::VersionMismatch { .. } => {
+            panic!("expected RehydrationLimitExceeded, got {other:?}")
+        }
     }
 }
 
 #[test]
-fn h1_load_within_limit_succeeds() {
-    let events: Vec<_> = (1..=5)
-        .map(|i| VersionedEvent::from_persisted(Version::from_persisted(i), SEvent::Tick))
-        .collect();
-
-    let agg = AggregateRoot::<TinyRehydrationAgg>::load_from_events(SId(1), events).unwrap();
+fn h1_replay_within_limit_succeeds() {
+    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId(1));
+    for i in 1..=5u64 {
+        agg.replay(Version::from_persisted(i), &SEvent::Tick)
+            .unwrap();
+    }
     assert_eq!(agg.version(), Version::from_persisted(5));
 }
 

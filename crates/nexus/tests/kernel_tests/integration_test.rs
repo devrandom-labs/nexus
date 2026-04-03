@@ -7,7 +7,6 @@
 //! a wrapper type that users own.
 
 use nexus::AggregateRoot;
-use nexus::VersionedEvent;
 use nexus::*;
 use std::fmt;
 
@@ -116,11 +115,12 @@ fn full_aggregate_lifecycle() {
 
 #[test]
 fn rehydrate_then_continue() {
-    let history = vec![VersionedEvent::from_persisted(
+    let mut user = AggregateRoot::<UserAggregate>::new(UserId(2));
+    user.replay(
         Version::from_persisted(1),
-        UserEvent::Created(UserCreated { name: "Bob".into() }),
-    )];
-    let mut user = AggregateRoot::<UserAggregate>::load_from_events(UserId(2), history).unwrap();
+        &UserEvent::Created(UserCreated { name: "Bob".into() }),
+    )
+    .unwrap();
 
     assert_eq!(user.version(), Version::from_persisted(1));
     assert_eq!(user.state().name, "Bob");

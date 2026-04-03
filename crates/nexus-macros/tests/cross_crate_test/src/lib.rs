@@ -121,13 +121,15 @@ mod tests {
 
     #[test]
     fn cross_crate_rehydrate() {
-        let history = vec![VersionedEvent::from_persisted(
-            Version::from_persisted(1),
-            TaskEvent::Created(TaskCreated {
-                title: "Loaded".into(),
-            }),
-        )];
-        let task = TaskAggregate::load_from_events(TaskId(3), history).unwrap();
+        let mut task = TaskAggregate::new(TaskId(3));
+        task.root_mut()
+            .replay(
+                Version::from_persisted(1),
+                &TaskEvent::Created(TaskCreated {
+                    title: "Loaded".into(),
+                }),
+            )
+            .unwrap();
         assert_eq!(task.state().title, "Loaded");
         assert_eq!(task.version(), Version::from_persisted(1));
     }

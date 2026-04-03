@@ -80,14 +80,15 @@ fn arb_event() -> impl Strategy<Value = CountEvent> {
 proptest! {
     /// Property 1: Replay determinism
     ///
-    /// Applying the same events twice produces identical state.
+    /// Replaying the same events twice produces identical state.
     #[test]
     fn prop_macro_replay_deterministic(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         let make_agg = |events: &[CountEvent]| {
-            let versioned: Vec<_> = events.iter().enumerate().map(|(i, e)| {
-                VersionedEvent::from_persisted(Version::from_persisted((i + 1) as u64), e.clone())
-            }).collect();
-            CounterAggregate::load_from_events(PId(1), versioned).unwrap()
+            let mut agg = CounterAggregate::new(PId(1));
+            for (i, e) in events.iter().enumerate() {
+                agg.root_mut().replay(Version::from_persisted((i + 1) as u64), e).unwrap();
+            }
+            agg
         };
 
         let agg1 = make_agg(&raw_events);
@@ -129,14 +130,14 @@ proptest! {
 
     /// Property 4: Rehydrate-apply equivalence
     ///
-    /// load_from_events produces the same state as new() + apply().
+    /// replay produces the same state as new() + apply().
     #[test]
     fn prop_macro_rehydrate_equals_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
-        // Path A: load_from_events
-        let versioned: Vec<_> = raw_events.iter().enumerate().map(|(i, e)| {
-            VersionedEvent::from_persisted(Version::from_persisted((i + 1) as u64), e.clone())
-        }).collect();
-        let agg_loaded = CounterAggregate::load_from_events(PId(1), versioned).unwrap();
+        // Path A: new() + replay()
+        let mut agg_replayed = CounterAggregate::new(PId(1));
+        for (i, e) in raw_events.iter().enumerate() {
+            agg_replayed.root_mut().replay(Version::from_persisted((i + 1) as u64), e).unwrap();
+        }
 
         // Path B: new() + apply()
         let mut agg_applied = CounterAggregate::new(PId(1));
@@ -144,7 +145,7 @@ proptest! {
             agg_applied.apply(event.clone());
         }
 
-        prop_assert_eq!(agg_loaded.state(), agg_applied.state());
+        prop_assert_eq!(agg_replayed.state(), agg_applied.state());
     }
 
     /// Property 5: Version continuity across take cycles

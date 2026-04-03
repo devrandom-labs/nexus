@@ -14,7 +14,6 @@
 #![cfg(not(miri))]
 
 use nexus::AggregateRoot;
-use nexus::VersionedEvent;
 use nexus::*;
 use proptest::prelude::*;
 use std::fmt;
@@ -95,14 +94,12 @@ fn arb_event() -> impl Strategy<Value = CountEvent> {
 }
 
 /// Generate a valid versioned event sequence (contiguous versions starting at 1)
-fn arb_versioned_events(max_len: usize) -> impl Strategy<Value = Vec<VersionedEvent<CountEvent>>> {
+fn arb_versioned_events(max_len: usize) -> impl Strategy<Value = Vec<(Version, CountEvent)>> {
     proptest::collection::vec(arb_event(), 0..max_len).prop_map(|events| {
         events
             .into_iter()
             .enumerate()
-            .map(|(i, event)| {
-                VersionedEvent::from_persisted(Version::from_persisted((i + 1) as u64), event)
-            })
+            .map(|(i, event)| (Version::from_persisted((i + 1) as u64), event))
             .collect()
     })
 }
@@ -114,21 +111,21 @@ fn arb_versioned_events(max_len: usize) -> impl Strategy<Value = Vec<VersionedEv
 proptest! {
     /// Property 1: Replay determinism
     ///
-    /// Loading the same event sequence twice must produce identical state.
+    /// Replaying the same event sequence twice must produce identical state.
     /// This is fundamental to event sourcing — state is a pure function of events.
-    /// We test by applying the same raw events via two different paths.
+    /// We test by replaying the same raw events via two different aggregate instances.
     #[test]
     fn prop_replay_is_deterministic(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
-        // Build the versioned sequence twice from the same raw events
-        let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
-            events.iter().enumerate().map(|(i, e)| VersionedEvent::from_persisted(
-                Version::from_persisted((i + 1) as u64),
-                e.clone(),
-            )).collect()
+        let replay_all = |events: &[CountEvent]| -> AggregateRoot<CountAgg> {
+            let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+            for (i, e) in events.iter().enumerate() {
+                agg.replay(Version::from_persisted((i + 1) as u64), e).unwrap();
+            }
+            agg
         };
 
-        let agg1 = AggregateRoot::<CountAgg>::load_from_events(PId(1), make_versioned(&raw_events)).unwrap();
-        let agg2 = AggregateRoot::<CountAgg>::load_from_events(PId(1), make_versioned(&raw_events)).unwrap();
+        let agg1 = replay_all(&raw_events);
+        let agg2 = replay_all(&raw_events);
 
         prop_assert_eq!(agg1.state(), agg2.state());
         prop_assert_eq!(agg1.version(), agg2.version());
@@ -171,23 +168,16 @@ proptest! {
 
     /// Property 4: Rehydrate-apply equivalence
     ///
-    /// Loading from versioned events produces the same state as
+    /// Replaying versioned events produces the same state as
     /// creating a new aggregate and applying the raw events.
-    /// This proves load_from_events is equivalent to sequential apply.
+    /// This proves replay is equivalent to sequential apply.
     #[test]
     fn prop_rehydrate_equals_sequential_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
-        let make_versioned = |events: &[CountEvent]| -> Vec<VersionedEvent<CountEvent>> {
-            events.iter().enumerate().map(|(i, e)| VersionedEvent::from_persisted(
-                Version::from_persisted((i + 1) as u64),
-                e.clone(),
-            )).collect()
-        };
-
-        // Path A: load_from_events
-        let agg_loaded = AggregateRoot::<CountAgg>::load_from_events(
-            PId(1),
-            make_versioned(&raw_events),
-        ).unwrap();
+        // Path A: new() + replay()
+        let mut agg_replayed = AggregateRoot::<CountAgg>::new(PId(1));
+        for (i, e) in raw_events.iter().enumerate() {
+            agg_replayed.replay(Version::from_persisted((i + 1) as u64), e).unwrap();
+        }
 
         // Path B: new() + apply()
         let mut agg_applied = AggregateRoot::<CountAgg>::new(PId(1));
@@ -195,7 +185,7 @@ proptest! {
             agg_applied.apply(event.clone());
         }
 
-        prop_assert_eq!(agg_loaded.state(), agg_applied.state());
+        prop_assert_eq!(agg_replayed.state(), agg_applied.state());
     }
 
     /// Property 5: Version sequence integrity
@@ -222,7 +212,7 @@ proptest! {
 
     /// Property 6: Version gap rejection
     ///
-    /// load_from_events must reject ANY sequence with a version gap.
+    /// replay must reject ANY sequence with a version gap.
     /// We generate a valid sequence then corrupt one version.
     #[test]
     fn prop_rejects_any_version_gap(
@@ -235,13 +225,18 @@ proptest! {
         let corrupt_idx = corrupt_idx % (events.len() - 1) + 1; // ensure valid index > 0
         let mut corrupted = events;
         // Add 1 to create a gap (skip a version)
-        corrupted[corrupt_idx] = VersionedEvent::from_persisted(
-            Version::from_persisted(corrupted[corrupt_idx].version().as_u64() + 1),
-            corrupted[corrupt_idx].event().clone(),
-        );
+        let (v, ref e) = corrupted[corrupt_idx];
+        corrupted[corrupt_idx] = (Version::from_persisted(v.as_u64() + 1), e.clone());
 
-        let result = AggregateRoot::<CountAgg>::load_from_events(PId(1), corrupted);
-        prop_assert!(result.is_err(), "Should reject sequence with version gap");
+        let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+        let mut found_error = false;
+        for (version, event) in &corrupted {
+            if agg.replay(*version, event).is_err() {
+                found_error = true;
+                break;
+            }
+        }
+        prop_assert!(found_error, "Should reject sequence with version gap");
     }
 
     /// Property 7: Take is idempotent

@@ -387,8 +387,14 @@ async fn main() {
     println!("\n=== Step 3: Rehydrate from store ===");
 
     let versioned = load_events(&codec, &store, stream_id).await;
-    let account = BankAccount::load_from_events(alice_id.clone(), versioned)
-        .expect("rehydration should succeed");
+    let mut account = BankAccount::new(alice_id.clone());
+    for ve in versioned {
+        let (version, event) = ve.into_parts();
+        account
+            .root_mut()
+            .replay(version, &event)
+            .expect("rehydration should succeed");
+    }
 
     println!(
         "Rehydrated: owner={}, balance={}, version={}",
@@ -428,8 +434,14 @@ async fn main() {
     let versioned = load_events(&codec, &store, stream_id).await;
     println!("Total events in stream: {}", versioned.len());
 
-    let account =
-        BankAccount::load_from_events(alice_id, versioned).expect("rehydration should succeed");
+    let mut account = BankAccount::new(alice_id);
+    for ve in versioned {
+        let (version, event) = ve.into_parts();
+        account
+            .root_mut()
+            .replay(version, &event)
+            .expect("rehydration should succeed");
+    }
 
     println!(
         "Final state: owner={}, balance={}, version={}",

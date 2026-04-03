@@ -186,11 +186,14 @@ impl InMemoryStore {
 
     fn load(&self, id: &AccountId) -> Option<BankAccount> {
         let events = self.streams.get(id)?;
-        let versioned: Vec<_> = events
-            .iter()
-            .map(|e| VersionedEvent::from_persisted(e.version(), e.event().clone()))
-            .collect();
-        Some(BankAccount::load_from_events(id.clone(), versioned).expect("valid event sequence"))
+        let mut account = BankAccount::new(id.clone());
+        for e in events {
+            account
+                .root_mut()
+                .replay(e.version(), e.event())
+                .expect("valid event sequence");
+        }
+        Some(account)
     }
 }
 

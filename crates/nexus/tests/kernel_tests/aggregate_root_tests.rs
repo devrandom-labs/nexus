@@ -131,34 +131,33 @@ fn take_uncommitted_events_drains() {
 }
 
 #[test]
-fn load_from_events_rehydrates() {
-    let events = vec![
-        VersionedEvent::from_persisted(
-            Version::from_persisted(1),
-            ItemEvent::Created(ItemCreated {
-                name: "loaded".into(),
-            }),
-        ),
-        VersionedEvent::from_persisted(Version::from_persisted(2), ItemEvent::Done(ItemDone)),
-    ];
-    let agg = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events).unwrap();
+fn replay_rehydrates() {
+    let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
+    agg.replay(
+        Version::from_persisted(1),
+        &ItemEvent::Created(ItemCreated {
+            name: "loaded".into(),
+        }),
+    )
+    .unwrap();
+    agg.replay(Version::from_persisted(2), &ItemEvent::Done(ItemDone))
+        .unwrap();
     assert_eq!(agg.version(), Version::from_persisted(2));
     assert_eq!(agg.state().name, "loaded");
     assert!(agg.state().done);
 }
 
 #[test]
-fn load_from_events_rejects_version_gap() {
-    let events = vec![
-        VersionedEvent::from_persisted(
-            Version::from_persisted(1),
-            ItemEvent::Created(ItemCreated {
-                name: "test".into(),
-            }),
-        ),
-        VersionedEvent::from_persisted(Version::from_persisted(3), ItemEvent::Done(ItemDone)),
-    ];
-    let result = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events);
+fn replay_rejects_version_gap() {
+    let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
+    agg.replay(
+        Version::from_persisted(1),
+        &ItemEvent::Created(ItemCreated {
+            name: "test".into(),
+        }),
+    )
+    .unwrap();
+    let result = agg.replay(Version::from_persisted(3), &ItemEvent::Done(ItemDone));
     assert!(result.is_err());
     match result.unwrap_err() {
         KernelError::VersionMismatch {
@@ -167,7 +166,9 @@ fn load_from_events_rejects_version_gap() {
             assert_eq!(expected, Version::from_persisted(2));
             assert_eq!(actual, Version::from_persisted(3));
         }
-        other => panic!("expected VersionMismatch, got {other:?}"),
+        other @ KernelError::RehydrationLimitExceeded { .. } => {
+            panic!("expected VersionMismatch, got {other:?}")
+        }
     }
 }
 
