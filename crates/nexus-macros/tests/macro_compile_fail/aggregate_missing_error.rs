@@ -12,7 +12,7 @@ struct St;
 impl AggregateState for St {
     type Event = Ev;
     fn initial() -> Self { Self::default() }
-    fn apply(&mut self, _: &Ev) {}
+    fn apply(self, _: &Ev) -> Self { self }
     fn name(&self) -> &'static str { "S" }
 }
 

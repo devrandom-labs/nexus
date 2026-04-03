@@ -14,37 +14,3 @@ note: required by a bound in `nexus::Aggregate::State`
    |
    |     type State: AggregateState;
    |                 ^^^^^^^^^^^^^^ required by this bound in `Aggregate::State`
-
-error[E0277]: the trait bound `NotAState: AggregateState` is not satisfied
-  --> tests/macro_compile_fail/aggregate_bad_state.rs:20:1
-   |
-20 | #[nexus::aggregate(state = NotAState, error = MyError, id = MyId)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `AggregateState` is not implemented for `NotAState`
-  --> tests/macro_compile_fail/aggregate_bad_state.rs:14:1
-   |
-14 | struct NotAState;
-   | ^^^^^^^^^^^^^^^^
-   = note: this error originates in the attribute macro `nexus::aggregate` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `NotAState: AggregateState` is not satisfied
-  --> tests/macro_compile_fail/aggregate_bad_state.rs:20:1
-   |
-20 | #[nexus::aggregate(state = NotAState, error = MyError, id = MyId)]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `AggregateState` is not implemented for `NotAState`
-  --> tests/macro_compile_fail/aggregate_bad_state.rs:14:1
-   |
-14 | struct NotAState;
-   | ^^^^^^^^^^^^^^^^
-note: required by a bound in `AggregateRoot::<A>::load_from_events`
-  --> $WORKSPACE/crates/nexus/src/aggregate.rs
-   |
-   |     pub fn load_from_events(
-   |            ---------------- required by a bound in this associated function
-   |         id: A::Id,
-   |         events: impl IntoIterator<Item = VersionedEvent<EventOf<A>>>,
-   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `AggregateRoot::<A>::load_from_events`
-   = note: this error originates in the attribute macro `nexus::aggregate` (in Nightly builds, run with -Z macro-backtrace for more info)

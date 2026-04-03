@@ -13,6 +13,10 @@ impl fmt::Display for AttrId {
 impl Id for AttrId {}
 
 #[derive(Debug, Clone)]
+#[allow(
+    dead_code,
+    reason = "test-only event type for macro attribute preservation tests"
+)]
 enum AttrEvent {
     A,
 }
@@ -28,9 +32,11 @@ struct AttrState;
 impl AggregateState for AttrState {
     type Event = AttrEvent;
     fn initial() -> Self {
-        Self::default()
+        Self
     }
-    fn apply(&mut self, _: &AttrEvent) {}
+    fn apply(self, _: &AttrEvent) -> Self {
+        self
+    }
     fn name(&self) -> &'static str {
         "Attr"
     }

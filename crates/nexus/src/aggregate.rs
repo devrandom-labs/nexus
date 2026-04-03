@@ -37,11 +37,12 @@ use std::fmt::Debug;
 /// impl AggregateState for CounterState {
 ///     fn initial() -> Self { Self::default() }
 ///     type Event = CounterEvent;
-///     fn apply(&mut self, event: &CounterEvent) {
+///     fn apply(mut self, event: &CounterEvent) -> Self {
 ///         match event {
 ///             CounterEvent::Incremented => self.value += 1,
 ///             CounterEvent::Decremented => self.value -= 1,
 ///         }
+///         self
 ///     }
 ///     fn name(&self) -> &'static str { "Counter" }
 /// }
@@ -57,7 +58,22 @@ pub trait AggregateState: Send + Sync + Debug + 'static {
     /// `Self::default()`.
     fn initial() -> Self;
 
-    fn apply(&mut self, event: &Self::Event);
+    /// Apply a domain event, returning the new state.
+    ///
+    /// Takes `self` by value to guarantee atomic state transitions —
+    /// either the entire function completes and returns a valid new
+    /// state, or it panics and the old state is consumed. No partial
+    /// mutation is possible.
+    ///
+    /// For simple cases, use `mut self` and return `self`:
+    /// ```ignore
+    /// fn apply(mut self, event: &MyEvent) -> Self {
+    ///     self.field = new_value;
+    ///     self
+    /// }
+    /// ```
+    #[must_use]
+    fn apply(self, event: &Self::Event) -> Self;
     fn name(&self) -> &'static str;
 }
 
@@ -78,7 +94,7 @@ pub trait AggregateState: Send + Sync + Debug + 'static {
 /// # impl Message for Ev {}
 /// # impl DomainEvent for Ev { fn name(&self) -> &'static str { "A" } }
 /// # #[derive(Default, Debug)] struct St;
-/// # impl AggregateState for St { type Event = Ev; fn initial() -> Self { Self::default() } fn apply(&mut self, _: &Ev) {} fn name(&self) -> &'static str { "S" } }
+/// # impl AggregateState for St { type Event = Ev; fn initial() -> Self { Self::default() } fn apply(self, _: &Ev) -> Self { self } fn name(&self) -> &'static str { "S" } }
 /// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct MyId(u64);
 /// # impl std::fmt::Display for MyId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
 /// # impl Id for MyId {}
@@ -102,7 +118,7 @@ pub trait AggregateState: Send + Sync + Debug + 'static {
 /// }
 ///
 /// let mut agg = MyAggregate::new(MyId(1));
-/// agg.apply_event(Ev::A);
+/// agg.apply(Ev::A);
 /// assert_eq!(agg.version(), Version::INITIAL);
 /// assert_eq!(agg.current_version(), Version::from_persisted(1));
 /// ```
@@ -115,12 +131,12 @@ pub trait Aggregate: Sized {
     type Error: Error + Send + Sync + Debug + 'static;
     type Id: Id;
 
-    /// Maximum uncommitted events before `apply_event` panics.
+    /// Maximum uncommitted events before `apply` panics.
     /// Override this for aggregates that produce many events per operation.
     /// Default: 1024.
     const MAX_UNCOMMITTED: usize = DEFAULT_MAX_UNCOMMITTED;
 
-    /// Maximum events during rehydration via `load_from_events`.
+    /// Maximum events during rehydration via `replay`.
     /// Prevents a corrupted or malicious store from feeding unbounded events.
     /// Default: 1,000,000.
     const MAX_REHYDRATION_EVENTS: usize = DEFAULT_MAX_REHYDRATION_EVENTS;
@@ -129,7 +145,7 @@ pub trait Aggregate: Sized {
 /// Trait for user-defined aggregate newtypes wrapping `AggregateRoot`.
 ///
 /// Provides default method implementations so users get `state()`,
-/// `apply_event()`, etc. on their own type. Only `root()` and
+/// `apply()`, etc. on their own type. Only `root()` and
 /// `root_mut()` must be implemented — typically via `#[derive(Aggregate)]`.
 pub trait AggregateEntity: Aggregate {
     /// Access the inner `AggregateRoot`.
@@ -163,13 +179,8 @@ pub trait AggregateEntity: Aggregate {
     }
 
     /// Apply a single event.
-    fn apply_event(&mut self, event: EventOf<Self>) {
-        self.root_mut().apply_event(event);
-    }
-
-    /// Apply multiple events.
-    fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<Self>>) {
-        self.root_mut().apply_events(events);
+    fn apply(&mut self, event: EventOf<Self>) {
+        self.root_mut().apply(event);
     }
 
     /// Drain uncommitted events for persistence.
@@ -184,11 +195,11 @@ pub trait AggregateEntity: Aggregate {
 /// write `EventOf<A>`.
 pub type EventOf<A> = <<A as Aggregate>::State as AggregateState>::Event;
 
-/// Default maximum uncommitted events before `apply_event` panics.
+/// Default maximum uncommitted events before `apply` panics.
 /// Override per-aggregate via `Aggregate::MAX_UNCOMMITTED`.
 pub const DEFAULT_MAX_UNCOMMITTED: usize = 1024;
 
-/// Default maximum events during rehydration via `load_from_events`.
+/// Default maximum events during rehydration via `replay`.
 /// Override per-aggregate via `Aggregate::MAX_REHYDRATION_EVENTS`.
 pub const DEFAULT_MAX_REHYDRATION_EVENTS: usize = 1_000_000;
 
@@ -223,11 +234,12 @@ pub const DEFAULT_MAX_REHYDRATION_EVENTS: usize = 1_000_000;
 /// impl AggregateState for TodoState {
 ///     type Event = TodoEvent;
 ///     fn initial() -> Self { Self::default() }
-///     fn apply(&mut self, event: &TodoEvent) {
+///     fn apply(mut self, event: &TodoEvent) -> Self {
 ///         match event {
 ///             TodoEvent::Created(t) => self.title = t.clone(),
 ///             TodoEvent::Done => self.done = true,
 ///         }
+///         self
 ///     }
 ///     fn name(&self) -> &'static str { "Todo" }
 /// }
@@ -252,8 +264,8 @@ pub const DEFAULT_MAX_REHYDRATION_EVENTS: usize = 1_000_000;
 ///
 /// // Use it
 /// let mut todo = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-/// todo.apply_event(TodoEvent::Created("Buy milk".into()));
-/// todo.apply_event(TodoEvent::Done);
+/// todo.apply(TodoEvent::Created("Buy milk".into()));
+/// todo.apply(TodoEvent::Done);
 ///
 /// assert_eq!(todo.state().title, "Buy milk");
 /// assert!(todo.state().done);
@@ -351,11 +363,13 @@ impl<A: Aggregate> AggregateRoot<A> {
         Version::new(total)
     }
 
-    /// Apply a single event: tracks as uncommitted, then mutates state.
+    /// Apply a single event: tracks as uncommitted, then transitions state.
     ///
-    /// The event is recorded BEFORE state mutation. If `AggregateState::apply()`
-    /// panics, the event is preserved (recoverable via replay). The reverse
-    /// (state mutated, event lost) would be unrecoverable data loss.
+    /// The event is recorded BEFORE the state transition. State is moved
+    /// out via `mem::replace`, so `AggregateState::apply(self, &event)`
+    /// either returns a fully-valid new state, or panics — in which case
+    /// the state falls back to `initial()` (clean, known) and the event
+    /// remains in `uncommitted_events` for recovery via replay.
     ///
     /// # Panics
     ///
@@ -363,91 +377,99 @@ impl<A: Aggregate> AggregateRoot<A> {
     /// Call `take_uncommitted_events()` to drain before hitting the limit.
     #[allow(
         clippy::panic,
-        clippy::expect_used,
-        reason = "critical safety invariants — exceeding limits or panicking apply must crash explicitly"
+        reason = "critical safety invariants — exceeding limits must crash explicitly"
     )]
-    pub fn apply_event(&mut self, event: EventOf<A>) {
+    pub fn apply(&mut self, event: EventOf<A>) {
         assert!(
             self.uncommitted_events.len() < A::MAX_UNCOMMITTED,
-            "Uncommitted event limit reached ({}). Call take_uncommitted_events() to drain.",
-            A::MAX_UNCOMMITTED,
+            "Uncommitted event limit reached ({limit}). {hint}",
+            limit = A::MAX_UNCOMMITTED,
+            hint = if A::MAX_UNCOMMITTED == 0 {
+                "MAX_UNCOMMITTED is 0 — this aggregate cannot accept any events. \
+                 Override Aggregate::MAX_UNCOMMITTED with a value > 0."
+            } else {
+                "Call take_uncommitted_events() to drain."
+            },
         );
         let next_version = self.current_version().next();
         // Record the event FIRST — survives panics in state.apply()
         self.uncommitted_events
             .push(VersionedEvent::new(next_version, event));
-        // Then mutate state — if this panics, the event is still recorded
-        self.state
-            .apply(self.uncommitted_events.last().expect("just pushed").event());
+        // Move state out (replaced with initial), apply atomically, put back.
+        // If apply panics: state is initial() (clean), event is preserved.
+        let old_state = std::mem::replace(&mut self.state, A::State::initial());
+        let event_idx = self.uncommitted_events.len() - 1;
+        self.state = old_state.apply(self.uncommitted_events[event_idx].event());
         debug_assert_eq!(
             self.current_version(),
             next_version,
-            "Invariant violated: apply_event must increment current_version by exactly 1"
+            "Invariant violated: apply must increment current_version by exactly 1"
         );
     }
 
-    /// Apply multiple events. Pre-allocates if the iterator provides a size hint,
-    /// capped at `MAX_UNCOMMITTED` to prevent malicious iterators from causing OOM.
-    pub fn apply_events(&mut self, events: impl IntoIterator<Item = EventOf<A>>) {
-        let iter = events.into_iter();
-        let (lower, _) = iter.size_hint();
-        // Cap reservation to MAX_UNCOMMITTED — a lying iterator claiming
-        // usize::MAX elements must not cause an OOM allocation.
-        let safe_reserve = lower.min(A::MAX_UNCOMMITTED);
-        self.uncommitted_events.reserve(safe_reserve);
-        for event in iter {
-            self.apply_event(event);
-        }
-    }
-
-    /// Rehydrate an aggregate from persisted versioned events.
+    /// Replay a single persisted event during rehydration.
     ///
-    /// Validates that version numbers are strictly sequential starting from 1.
+    /// Takes a borrowed event reference so zero-copy codecs (rkyv, flatbuffers)
+    /// can pass views directly from database buffers without cloning.
+    ///
+    /// Call this in a loop for each event read from the store:
+    ///
+    /// ```ignore
+    /// let mut agg = AggregateRoot::<MyAggregate>::new(id);
+    /// for ve in events {
+    ///     let (version, event) = ve.into_parts();
+    ///     agg.replay(version, &event)?;
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`KernelError::VersionMismatch`] if any event version is not
-    /// strictly sequential (i.e., there is a gap or duplicate).
+    /// Returns [`KernelError::VersionMismatch`] if `version` is not the
+    /// next expected version (i.e., there is a gap, duplicate, or out-of-order event).
     ///
-    /// Returns [`KernelError::RehydrationLimitExceeded`] if the event count
-    /// exceeds `Aggregate::MAX_REHYDRATION_EVENTS`.
-    pub fn load_from_events(
-        id: A::Id,
-        events: impl IntoIterator<Item = VersionedEvent<EventOf<A>>>,
-    ) -> Result<Self, KernelError> {
-        let mut aggregate = Self::new(id);
-        let mut count: usize = 0;
-        for versioned_event in events {
-            count += 1;
-            if count > A::MAX_REHYDRATION_EVENTS {
-                return Err(KernelError::RehydrationLimitExceeded {
-                    stream_id: ErrorId::from_display(&aggregate.id),
-                    max: A::MAX_REHYDRATION_EVENTS,
-                });
-            }
-            let expected = aggregate.version.next();
-            let (version, event) = versioned_event.into_parts();
-            if version != expected {
-                return Err(KernelError::VersionMismatch {
-                    stream_id: ErrorId::from_display(&aggregate.id),
-                    expected,
-                    actual: version,
-                });
-            }
-            aggregate.state.apply(&event);
-            aggregate.version = version;
+    /// Returns [`KernelError::RehydrationLimitExceeded`] if `version` exceeds
+    /// `Aggregate::MAX_REHYDRATION_EVENTS`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `MAX_REHYDRATION_EVENTS` exceeds `u64::MAX` on the target
+    /// platform (impossible on 32-bit and 64-bit systems).
+    #[allow(
+        clippy::expect_used,
+        reason = "u64::try_from(usize) cannot fail on supported platforms (max 64-bit)"
+    )]
+    pub fn replay(&mut self, version: Version, event: &EventOf<A>) -> Result<(), KernelError> {
+        let expected = self.version.next();
+        if version != expected {
+            return Err(KernelError::VersionMismatch {
+                stream_id: ErrorId::from_display(&self.id),
+                expected,
+                actual: version,
+            });
         }
+        if version.as_u64()
+            > u64::try_from(A::MAX_REHYDRATION_EVENTS)
+                .expect("MAX_REHYDRATION_EVENTS exceeds u64 on this platform")
+        {
+            return Err(KernelError::RehydrationLimitExceeded {
+                stream_id: ErrorId::from_display(&self.id),
+                max: A::MAX_REHYDRATION_EVENTS,
+            });
+        }
+        let old_state = std::mem::replace(&mut self.state, A::State::initial());
+        self.state = old_state.apply(event);
+        self.version = version;
         debug_assert!(
-            aggregate.uncommitted_events.is_empty(),
-            "Invariant violated: load_from_events must not produce uncommitted events"
+            self.uncommitted_events.is_empty(),
+            "Invariant violated: replay must not produce uncommitted events"
         );
-        Ok(aggregate)
+        Ok(())
     }
 
     /// Drain uncommitted events for persistence.
     ///
     /// Advances the persisted version to include the drained events.
-    /// Subsequent `apply_event` calls will continue from the new version.
+    /// Subsequent `apply` calls will continue from the new version.
     pub fn take_uncommitted_events(&mut self) -> SmallVec<[VersionedEvent<EventOf<A>>; 1]> {
         self.version = self.current_version();
         let events = std::mem::take(&mut self.uncommitted_events);
@@ -461,5 +483,30 @@ impl<A: Aggregate> AggregateRoot<A> {
             "Invariant violated: after take, uncommitted_events must be empty"
         );
         events
+    }
+
+    /// Read-only access to uncommitted events.
+    ///
+    /// Used by the repository save path to encode events without draining.
+    /// Call [`clear_uncommitted()`](Self::clear_uncommitted) after successful
+    /// persistence to advance the version and clear the buffer.
+    #[must_use]
+    pub fn uncommitted_events(&self) -> &[VersionedEvent<EventOf<A>>] {
+        &self.uncommitted_events
+    }
+
+    /// Advance the persisted version and clear the uncommitted buffer.
+    ///
+    /// Call this after events have been successfully persisted. The version
+    /// advances to include all previously uncommitted events.
+    ///
+    /// # Contract
+    ///
+    /// Only call after a successful write to the event store. Calling
+    /// without persistence leaves the aggregate's version ahead of
+    /// the store — subsequent saves will conflict.
+    pub fn clear_uncommitted(&mut self) {
+        self.version = self.current_version();
+        self.uncommitted_events.clear();
     }
 }

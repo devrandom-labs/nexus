@@ -37,11 +37,12 @@ impl AggregateState for TodoState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &TodoEvent) {
+    fn apply(mut self, event: &TodoEvent) -> Self {
         match event {
             TodoEvent::Created(e) => self.title = e.title.clone(),
             TodoEvent::Completed(_) => self.done = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Todo"
@@ -68,7 +69,7 @@ impl TodoAggregate {
         if !self.state().title.is_empty() {
             return Err(TodoError::AlreadyExists);
         }
-        self.apply_event(TodoEvent::Created(TodoCreated { title }));
+        self.apply(TodoEvent::Created(TodoCreated { title }));
         Ok(())
     }
 
@@ -76,7 +77,7 @@ impl TodoAggregate {
         if self.state().done {
             return Err(TodoError::AlreadyDone);
         }
-        self.apply_event(TodoEvent::Completed(TodoCompleted));
+        self.apply(TodoEvent::Completed(TodoCompleted));
         Ok(())
     }
 }
@@ -113,13 +114,15 @@ fn derive_aggregate_invariants() {
 
 #[test]
 fn derive_aggregate_rehydrate() {
-    let history = vec![VersionedEvent::from_persisted(
-        Version::from_persisted(1),
-        TodoEvent::Created(TodoCreated {
-            title: "Loaded".into(),
-        }),
-    )];
-    let todo = TodoAggregate::load_from_events(TodoId(3), history).unwrap();
+    let mut todo = TodoAggregate::new(TodoId(3));
+    todo.root_mut()
+        .replay(
+            Version::from_persisted(1),
+            &TodoEvent::Created(TodoCreated {
+                title: "Loaded".into(),
+            }),
+        )
+        .unwrap();
     assert_eq!(todo.state().title, "Loaded");
     assert_eq!(todo.version(), Version::from_persisted(1));
 }

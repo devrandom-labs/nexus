@@ -15,7 +15,7 @@ struct MyState;
 impl AggregateState for MyState {
     type Event = MyEvent;
     fn initial() -> Self { Self::default() }
-    fn apply(&mut self, _: &MyEvent) {}
+    fn apply(self, _: &MyEvent) -> Self { self }
     fn name(&self) -> &'static str { "My" }
 }
 

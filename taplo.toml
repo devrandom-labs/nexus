@@ -1,7 +1,7 @@
 ## https://taplo.tamasfe.dev/configuration/file.html
 
 include = ["**/Cargo.toml"]
-exclude = ["**/workspace-hack/Cargo.toml"]
+exclude = ["**/workspace-hack/Cargo.toml", ".direnv/**", ".worktrees/**", "target/**"]
 
 [formatting]
 # Align consecutive entries vertically.

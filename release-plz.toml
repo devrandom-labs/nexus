@@ -2,18 +2,29 @@
 git_release_enable = true
 git_tag_enable = true
 
-# Crates that should not be published to crates.io
+# workspace-hack must not be published
 [[package]]
 name = "workspace-hack"
 publish = false
 release = false
 
+# Examples are not published
 [[package]]
-name = "nexus-test-helpers"
+name = "nexus-example-inmemory"
 publish = false
 release = false
 
 [[package]]
-name = "todo-rusqlite"
+name = "nexus-example-store-and-kernel"
+publish = false
+release = false
+
+[[package]]
+name = "nexus-example-store-inmemory"
+publish = false
+release = false
+
+[[package]]
+name = "nexus-cross-crate-test"
 publish = false
 release = false

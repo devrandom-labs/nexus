@@ -44,11 +44,12 @@ impl AggregateState for ItemState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &ItemEvent) {
+    fn apply(mut self, event: &ItemEvent) -> Self {
         match event {
             ItemEvent::Created(e) => self.name.clone_from(&e.name),
             ItemEvent::Done(_) => self.done = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Item"
@@ -75,7 +76,7 @@ fn create_item(agg: &mut AggregateRoot<ItemAggregate>, name: String) -> Result<(
     if !agg.state().name.is_empty() {
         return Err(ItemError::AlreadyExists);
     }
-    agg.apply_event(ItemEvent::Created(ItemCreated { name }));
+    agg.apply(ItemEvent::Created(ItemCreated { name }));
     Ok(())
 }
 
@@ -83,7 +84,7 @@ fn mark_item_done(agg: &mut AggregateRoot<ItemAggregate>) -> Result<(), ItemErro
     if agg.state().done {
         return Err(ItemError::AlreadyDone);
     }
-    agg.apply_event(ItemEvent::Done(ItemDone));
+    agg.apply(ItemEvent::Done(ItemDone));
     Ok(())
 }
 
@@ -103,9 +104,9 @@ fn new_aggregate_has_default_state() {
 }
 
 #[test]
-fn apply_event_mutates_state_and_tracks_uncommitted() {
+fn apply_mutates_state_and_tracks_uncommitted() {
     let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
-    agg.apply_event(ItemEvent::Created(ItemCreated {
+    agg.apply(ItemEvent::Created(ItemCreated {
         name: "test".into(),
     }));
     assert_eq!(agg.state().name, "test");
@@ -116,10 +117,10 @@ fn apply_event_mutates_state_and_tracks_uncommitted() {
 #[test]
 fn take_uncommitted_events_drains() {
     let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
-    agg.apply_event(ItemEvent::Created(ItemCreated {
+    agg.apply(ItemEvent::Created(ItemCreated {
         name: "test".into(),
     }));
-    agg.apply_event(ItemEvent::Done(ItemDone));
+    agg.apply(ItemEvent::Done(ItemDone));
 
     let events = agg.take_uncommitted_events();
     assert_eq!(events.len(), 2);
@@ -131,34 +132,33 @@ fn take_uncommitted_events_drains() {
 }
 
 #[test]
-fn load_from_events_rehydrates() {
-    let events = vec![
-        VersionedEvent::from_persisted(
-            Version::from_persisted(1),
-            ItemEvent::Created(ItemCreated {
-                name: "loaded".into(),
-            }),
-        ),
-        VersionedEvent::from_persisted(Version::from_persisted(2), ItemEvent::Done(ItemDone)),
-    ];
-    let agg = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events).unwrap();
+fn replay_rehydrates() {
+    let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
+    agg.replay(
+        Version::from_persisted(1),
+        &ItemEvent::Created(ItemCreated {
+            name: "loaded".into(),
+        }),
+    )
+    .unwrap();
+    agg.replay(Version::from_persisted(2), &ItemEvent::Done(ItemDone))
+        .unwrap();
     assert_eq!(agg.version(), Version::from_persisted(2));
     assert_eq!(agg.state().name, "loaded");
     assert!(agg.state().done);
 }
 
 #[test]
-fn load_from_events_rejects_version_gap() {
-    let events = vec![
-        VersionedEvent::from_persisted(
-            Version::from_persisted(1),
-            ItemEvent::Created(ItemCreated {
-                name: "test".into(),
-            }),
-        ),
-        VersionedEvent::from_persisted(Version::from_persisted(3), ItemEvent::Done(ItemDone)),
-    ];
-    let result = AggregateRoot::<ItemAggregate>::load_from_events(TestId("1".into()), events);
+fn replay_rejects_version_gap() {
+    let mut agg = AggregateRoot::<ItemAggregate>::new(TestId("1".into()));
+    agg.replay(
+        Version::from_persisted(1),
+        &ItemEvent::Created(ItemCreated {
+            name: "test".into(),
+        }),
+    )
+    .unwrap();
+    let result = agg.replay(Version::from_persisted(3), &ItemEvent::Done(ItemDone));
     assert!(result.is_err());
     match result.unwrap_err() {
         KernelError::VersionMismatch {
@@ -167,7 +167,9 @@ fn load_from_events_rejects_version_gap() {
             assert_eq!(expected, Version::from_persisted(2));
             assert_eq!(actual, Version::from_persisted(3));
         }
-        other => panic!("expected VersionMismatch, got {other:?}"),
+        other @ KernelError::RehydrationLimitExceeded { .. } => {
+            panic!("expected VersionMismatch, got {other:?}")
+        }
     }
 }
 

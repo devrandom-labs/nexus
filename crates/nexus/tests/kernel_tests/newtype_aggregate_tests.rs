@@ -47,11 +47,12 @@ impl AggregateState for UserState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &UserEvent) {
+    fn apply(mut self, event: &UserEvent) -> Self {
         match event {
-            UserEvent::Created(e) => self.name = e.name.clone(),
+            UserEvent::Created(e) => self.name.clone_from(&e.name),
             UserEvent::Activated(_) => self.active = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "User"
@@ -98,7 +99,7 @@ impl UserAggregate {
         if !self.state().name.is_empty() {
             return Err(UserError::AlreadyExists);
         }
-        self.apply_event(UserEvent::Created(UserCreated { name }));
+        self.apply(UserEvent::Created(UserCreated { name }));
         Ok(())
     }
 
@@ -106,7 +107,7 @@ impl UserAggregate {
         if self.state().active {
             return Err(UserError::AlreadyActive);
         }
-        self.apply_event(UserEvent::Activated(UserActivated));
+        self.apply(UserEvent::Activated(UserActivated));
         Ok(())
     }
 }
@@ -145,19 +146,21 @@ fn newtype_aggregate_invariant_enforcement() {
 
 #[test]
 fn newtype_aggregate_rehydrate() {
-    let history = vec![
-        VersionedEvent::from_persisted(
+    let mut user = UserAggregate::new(UserId(3));
+    user.root_mut()
+        .replay(
             Version::from_persisted(1),
-            UserEvent::Created(UserCreated {
+            &UserEvent::Created(UserCreated {
                 name: "Dave".into(),
             }),
-        ),
-        VersionedEvent::from_persisted(
+        )
+        .unwrap();
+    user.root_mut()
+        .replay(
             Version::from_persisted(2),
-            UserEvent::Activated(UserActivated),
-        ),
-    ];
-    let user = UserAggregate(AggregateRoot::load_from_events(UserId(3), history).unwrap());
+            &UserEvent::Activated(UserActivated),
+        )
+        .unwrap();
 
     assert_eq!(user.state().name, "Dave");
     assert!(user.state().active);

@@ -48,13 +48,14 @@ impl AggregateState for RtState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &RtEvent) {
+    fn apply(mut self, event: &RtEvent) -> Self {
         match event {
             RtEvent::Added(s) => self.items.push(s.clone()),
             RtEvent::Removed => {
                 self.items.pop();
             }
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Rt"
@@ -90,13 +91,6 @@ impl RtAggregate {
     fn new(id: RtId) -> Self {
         Self(::nexus::AggregateRoot::new(id))
     }
-
-    fn load_from_events(
-        id: RtId,
-        events: impl IntoIterator<Item = ::nexus::VersionedEvent<::nexus::EventOf<RtAggregate>>>,
-    ) -> ::std::result::Result<Self, ::nexus::KernelError> {
-        ::nexus::AggregateRoot::load_from_events(id, events).map(Self)
-    }
 }
 
 impl ::std::fmt::Debug for RtAggregate {
@@ -112,11 +106,11 @@ impl ::std::fmt::Debug for RtAggregate {
 
 impl RtAggregate {
     fn add(&mut self, item: String) {
-        self.apply_event(RtEvent::Added(item));
+        self.apply(RtEvent::Added(item));
     }
 
     fn remove(&mut self) {
-        self.apply_event(RtEvent::Removed);
+        self.apply(RtEvent::Removed);
     }
 }
 
@@ -140,11 +134,13 @@ fn expanded_lifecycle() {
 
 #[test]
 fn expanded_rehydrate() {
-    let history = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), RtEvent::Added("a".into())),
-        VersionedEvent::from_persisted(Version::from_persisted(2), RtEvent::Added("b".into())),
-    ];
-    let agg = RtAggregate::load_from_events(RtId(1), history).unwrap();
+    let mut agg = RtAggregate::new(RtId(1));
+    agg.root_mut()
+        .replay(Version::from_persisted(1), &RtEvent::Added("a".into()))
+        .unwrap();
+    agg.root_mut()
+        .replay(Version::from_persisted(2), &RtEvent::Added("b".into()))
+        .unwrap();
     assert_eq!(agg.state().items, vec!["a", "b"]);
     assert_eq!(agg.version(), Version::from_persisted(2));
 }

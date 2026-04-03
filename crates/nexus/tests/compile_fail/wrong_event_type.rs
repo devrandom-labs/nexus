@@ -17,7 +17,7 @@ struct UserState;
 impl AggregateState for UserState {
     type Event = UserEvent;
     fn initial() -> Self { Self::default() }
-    fn apply(&mut self, _: &UserEvent) {}
+    fn apply(self, _: &UserEvent) -> Self { self }
     fn name(&self) -> &'static str { "User" }
 }
 
@@ -53,5 +53,5 @@ impl Id for UserId {}
 fn main() {
     let mut user = AggregateRoot::<UserAggregate>::new(UserId(1));
     // This MUST fail: OrderEvent is not UserEvent
-    user.apply_event(OrderEvent::Placed);
+    user.apply(OrderEvent::Placed);
 }

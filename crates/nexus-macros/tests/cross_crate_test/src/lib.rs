@@ -43,11 +43,12 @@ impl AggregateState for TaskState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &TaskEvent) {
+    fn apply(mut self, event: &TaskEvent) -> Self {
         match event {
             TaskEvent::Created(e) => self.title = e.title.clone(),
             TaskEvent::Completed(_) => self.done = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Task"
@@ -73,7 +74,7 @@ impl TaskAggregate {
         if !self.state().title.is_empty() {
             return Err(TaskError::AlreadyExists);
         }
-        self.apply_event(TaskEvent::Created(TaskCreated { title }));
+        self.apply(TaskEvent::Created(TaskCreated { title }));
         Ok(())
     }
 
@@ -81,7 +82,7 @@ impl TaskAggregate {
         if self.state().done {
             return Err(TaskError::AlreadyDone);
         }
-        self.apply_event(TaskEvent::Completed(TaskCompleted));
+        self.apply(TaskEvent::Completed(TaskCompleted));
         Ok(())
     }
 }
@@ -121,13 +122,15 @@ mod tests {
 
     #[test]
     fn cross_crate_rehydrate() {
-        let history = vec![VersionedEvent::from_persisted(
-            Version::from_persisted(1),
-            TaskEvent::Created(TaskCreated {
-                title: "Loaded".into(),
-            }),
-        )];
-        let task = TaskAggregate::load_from_events(TaskId(3), history).unwrap();
+        let mut task = TaskAggregate::new(TaskId(3));
+        task.root_mut()
+            .replay(
+                Version::from_persisted(1),
+                &TaskEvent::Created(TaskCreated {
+                    title: "Loaded".into(),
+                }),
+            )
+            .unwrap();
         assert_eq!(task.state().title, "Loaded");
         assert_eq!(task.version(), Version::from_persisted(1));
     }

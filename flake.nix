@@ -26,10 +26,7 @@
 
         src = lib.fileset.toSource {
           root = unfilteredSrc;
-          fileset = lib.fileset.unions [
-            (craneLib.fileset.commonCargoSources unfilteredSrc)
-            ./schemas
-          ];
+          fileset = craneLib.fileset.commonCargoSources unfilteredSrc;
         };
 
         commonArgs = {

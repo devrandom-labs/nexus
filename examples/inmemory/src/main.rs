@@ -71,7 +71,7 @@ impl AggregateState for AccountState {
         Self::default()
     }
 
-    fn apply(&mut self, event: &AccountEvent) {
+    fn apply(mut self, event: &AccountEvent) -> Self {
         match event {
             AccountEvent::Opened(e) => {
                 self.owner = e.owner.clone();
@@ -87,6 +87,7 @@ impl AggregateState for AccountState {
                 self.is_open = false;
             }
         }
+        self
     }
 
     fn name(&self) -> &'static str {
@@ -120,7 +121,7 @@ impl BankAccount {
         if self.state().is_open {
             return Err(AccountError::AlreadyOpen);
         }
-        self.apply_event(AccountEvent::Opened(AccountOpened { owner }));
+        self.apply(AccountEvent::Opened(AccountOpened { owner }));
         Ok(())
     }
 
@@ -128,7 +129,7 @@ impl BankAccount {
         if !self.state().is_open {
             return Err(AccountError::Closed);
         }
-        self.apply_event(AccountEvent::Deposited(MoneyDeposited { amount }));
+        self.apply(AccountEvent::Deposited(MoneyDeposited { amount }));
         Ok(())
     }
 
@@ -142,7 +143,7 @@ impl BankAccount {
                 amount,
             });
         }
-        self.apply_event(AccountEvent::Withdrawn(MoneyWithdrawn { amount }));
+        self.apply(AccountEvent::Withdrawn(MoneyWithdrawn { amount }));
         Ok(())
     }
 
@@ -153,7 +154,7 @@ impl BankAccount {
         if self.state().balance > 0 {
             return Err(AccountError::NonZeroBalance(self.state().balance));
         }
-        self.apply_event(AccountEvent::Closed(AccountClosed));
+        self.apply(AccountEvent::Closed(AccountClosed));
         Ok(())
     }
 }
@@ -186,11 +187,14 @@ impl InMemoryStore {
 
     fn load(&self, id: &AccountId) -> Option<BankAccount> {
         let events = self.streams.get(id)?;
-        let versioned: Vec<_> = events
-            .iter()
-            .map(|e| VersionedEvent::from_persisted(e.version(), e.event().clone()))
-            .collect();
-        Some(BankAccount::load_from_events(id.clone(), versioned).expect("valid event sequence"))
+        let mut account = BankAccount::new(id.clone());
+        for e in events {
+            account
+                .root_mut()
+                .replay(e.version(), e.event())
+                .expect("valid event sequence");
+        }
+        Some(account)
     }
 }
 

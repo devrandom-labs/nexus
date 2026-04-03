@@ -37,8 +37,9 @@ impl AggregateState for SState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, _: &SEvent) {
+    fn apply(mut self, _: &SEvent) -> Self {
         self.count = self.count.wrapping_add(1);
+        self
     }
     fn name(&self) -> &'static str {
         "S"
@@ -109,28 +110,28 @@ impl Aggregate for LimitedAgg {
 
 #[test]
 #[should_panic(expected = "Uncommitted event limit reached")]
-fn c3_apply_event_panics_at_limit() {
+fn c3_apply_panics_at_limit() {
     let mut agg = AggregateRoot::<LimitedAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick); // 1
-    agg.apply_event(SEvent::Tick); // 2
-    agg.apply_event(SEvent::Tick); // 3 — at limit
-    agg.apply_event(SEvent::Tick); // 4 — MUST panic
+    agg.apply(SEvent::Tick); // 1
+    agg.apply(SEvent::Tick); // 2
+    agg.apply(SEvent::Tick); // 3 — at limit
+    agg.apply(SEvent::Tick); // 4 — MUST panic
 }
 
 #[test]
 fn c3_take_resets_count_allowing_more() {
     let mut agg = AggregateRoot::<LimitedAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     // At limit, but take resets
     let events = agg.take_uncommitted_events();
     assert_eq!(events.len(), 3);
 
     // Can apply again
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
     assert_eq!(agg.current_version(), Version::from_persisted(5));
 }
 
@@ -156,29 +157,26 @@ fn c4_from_persisted_accepts_zero_version() {
 fn c4_from_persisted_versioned_event_no_validation() {
     // from_persisted on VersionedEvent performs no validation.
     // A corrupted store could inject version 0 or backwards versions.
-    // load_from_events MUST catch this.
-    let bad_events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(5), SEvent::Tick),
-        VersionedEvent::from_persisted(Version::from_persisted(3), SEvent::Tick), // backwards!
-    ];
-    let result = AggregateRoot::<SAgg>::load_from_events(SId(1), bad_events);
+    // replay MUST catch this.
+    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    agg.replay(Version::from_persisted(1), &SEvent::Tick)
+        .unwrap();
+    // Attempt backwards version — must be rejected
+    let result = agg.replay(Version::from_persisted(0), &SEvent::Tick);
     assert!(
         result.is_err(),
-        "load_from_events must reject non-sequential versions"
+        "replay must reject non-sequential versions"
     );
 }
 
 #[test]
 fn c4_from_persisted_duplicate_versions_rejected() {
-    let bad_events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), SEvent::Tick),
-        VersionedEvent::from_persisted(Version::from_persisted(1), SEvent::Tick), // duplicate!
-    ];
-    let result = AggregateRoot::<SAgg>::load_from_events(SId(1), bad_events);
-    assert!(
-        result.is_err(),
-        "load_from_events must reject duplicate versions"
-    );
+    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    agg.replay(Version::from_persisted(1), &SEvent::Tick)
+        .unwrap();
+    // Attempt duplicate version — must be rejected
+    let result = agg.replay(Version::from_persisted(1), &SEvent::Tick);
+    assert!(result.is_err(), "replay must reject duplicate versions");
 }
 
 // =============================================================================
@@ -187,17 +185,20 @@ fn c4_from_persisted_duplicate_versions_rejected() {
 
 #[test]
 fn h2_error_contains_stream_id() {
-    let events = vec![
-        VersionedEvent::from_persisted(Version::from_persisted(1), SEvent::Tick),
-        VersionedEvent::from_persisted(Version::from_persisted(3), SEvent::Tick), // gap
-    ];
-    let err = AggregateRoot::<SAgg>::load_from_events(SId(42), events).unwrap_err();
+    let mut agg = AggregateRoot::<SAgg>::new(SId(42));
+    agg.replay(Version::from_persisted(1), &SEvent::Tick)
+        .unwrap();
+    let err = agg
+        .replay(Version::from_persisted(3), &SEvent::Tick) // gap
+        .unwrap_err();
     match err {
         KernelError::VersionMismatch { stream_id, .. } => {
             // Verify the ID is captured — NO heap allocation (ErrorId is stack-based)
             assert_eq!(format!("{stream_id}"), "42");
         }
-        other => panic!("expected VersionMismatch, got {other:?}"),
+        other @ KernelError::RehydrationLimitExceeded { .. } => {
+            panic!("expected VersionMismatch, got {other:?}")
+        }
     }
 }
 
@@ -211,7 +212,7 @@ fn h2_error_contains_stream_id() {
 #[test]
 fn h5_event_recorded_before_state_mutation() {
     let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     // Both happened in the non-panic path
     assert_eq!(agg.state().count, 1);
@@ -248,11 +249,12 @@ fn h5_event_survives_panic_in_apply() {
         fn initial() -> Self {
             Self::default()
         }
-        fn apply(&mut self, event: &BombEvent) {
+        fn apply(mut self, event: &BombEvent) -> Self {
             match event {
                 BombEvent::Safe => self.count += 1,
                 BombEvent::Explode => panic!("state apply panicked"),
             }
+            self
         }
         fn name(&self) -> &'static str {
             "Bomb"
@@ -272,11 +274,11 @@ fn h5_event_survives_panic_in_apply() {
     }
 
     let mut agg = AggregateRoot::<BombAgg>::new(SId(1));
-    agg.apply_event(BombEvent::Safe); // works fine
+    agg.apply(BombEvent::Safe); // works fine
 
     // Panicking apply — event should still be in uncommitted
     let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        agg.apply_event(BombEvent::Explode);
+        agg.apply(BombEvent::Explode);
     }));
     assert!(result.is_err(), "apply should have panicked");
 
@@ -290,8 +292,9 @@ fn h5_event_survives_panic_in_apply() {
     assert_eq!(events[0].event().name(), "Safe");
     assert_eq!(events[1].event().name(), "Explode");
 
-    // State only reflects the first event (second apply panicked before completing)
-    assert_eq!(agg.state().count, 1);
+    // With by-value apply, state was mem::replaced with initial() before calling apply.
+    // The panic prevented the new state from being written back, so state is initial().
+    assert_eq!(agg.state().count, 0);
 }
 
 // =============================================================================
@@ -309,28 +312,32 @@ impl Aggregate for TinyRehydrationAgg {
 }
 
 #[test]
-fn h1_load_from_events_enforces_rehydration_limit() {
-    let events: Vec<_> = (1..=6)
-        .map(|i| VersionedEvent::from_persisted(Version::from_persisted(i), SEvent::Tick))
-        .collect();
-
-    let result = AggregateRoot::<TinyRehydrationAgg>::load_from_events(SId(1), events);
+fn h1_replay_enforces_rehydration_limit() {
+    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId(1));
+    for i in 1..=5u64 {
+        agg.replay(Version::from_persisted(i), &SEvent::Tick)
+            .unwrap();
+    }
+    // 6th event exceeds the limit of 5
+    let result = agg.replay(Version::from_persisted(6), &SEvent::Tick);
     assert!(result.is_err());
     match result.unwrap_err() {
         KernelError::RehydrationLimitExceeded { max, .. } => {
             assert_eq!(max, 5);
         }
-        other => panic!("expected RehydrationLimitExceeded, got {other:?}"),
+        other @ KernelError::VersionMismatch { .. } => {
+            panic!("expected RehydrationLimitExceeded, got {other:?}")
+        }
     }
 }
 
 #[test]
-fn h1_load_within_limit_succeeds() {
-    let events: Vec<_> = (1..=5)
-        .map(|i| VersionedEvent::from_persisted(Version::from_persisted(i), SEvent::Tick))
-        .collect();
-
-    let agg = AggregateRoot::<TinyRehydrationAgg>::load_from_events(SId(1), events).unwrap();
+fn h1_replay_within_limit_succeeds() {
+    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId(1));
+    for i in 1..=5u64 {
+        agg.replay(Version::from_persisted(i), &SEvent::Tick)
+            .unwrap();
+    }
     assert_eq!(agg.version(), Version::from_persisted(5));
 }
 
@@ -357,8 +364,7 @@ fn l2_kernel_error_variants_are_known() {
         actual: Version::from_persisted(1),
     };
     match err {
-        KernelError::VersionMismatch { .. } => {}
-        KernelError::RehydrationLimitExceeded { .. } => {} // If you add a variant, add it here and consider #[non_exhaustive]
+        KernelError::VersionMismatch { .. } | KernelError::RehydrationLimitExceeded { .. } => {} // If you add a variant, add it here and consider #[non_exhaustive]
     }
 }
 
@@ -369,8 +375,8 @@ fn l2_kernel_error_variants_are_known() {
 #[test]
 fn m3_aggregate_root_clone() {
     let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     let cloned = agg.clone();
     assert_eq!(cloned.version(), agg.version());
@@ -388,87 +394,24 @@ fn m3_aggregate_root_partial_eq() {
     assert_eq!(agg1, agg2);
 
     // Different after event
-    agg1.apply_event(SEvent::Tick);
+    agg1.apply(SEvent::Tick);
     assert_ne!(agg1, agg2);
 
     // Same again
-    agg2.apply_event(SEvent::Tick);
+    agg2.apply(SEvent::Tick);
     assert_eq!(agg1, agg2);
 }
 
 #[test]
 fn m3_clone_is_independent() {
     let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_event(SEvent::Tick);
+    agg.apply(SEvent::Tick);
 
     let mut cloned = agg.clone();
-    cloned.apply_event(SEvent::Tick);
+    cloned.apply(SEvent::Tick);
 
     // Original unchanged
     assert_eq!(agg.current_version(), Version::from_persisted(1));
     // Clone advanced
     assert_eq!(cloned.current_version(), Version::from_persisted(2));
-}
-
-// =============================================================================
-// M5: Malicious size_hint on apply_events
-// =============================================================================
-
-#[test]
-fn m5_apply_events_with_lying_size_hint() {
-    // An iterator that claims to have 0 elements but actually has 3.
-    // The kernel should still work correctly (just without pre-allocation).
-    struct LyingIterator {
-        events: Vec<SEvent>,
-        pos: usize,
-    }
-    impl Iterator for LyingIterator {
-        type Item = SEvent;
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.pos < self.events.len() {
-                self.pos += 1;
-                Some(self.events[self.pos - 1].clone())
-            } else {
-                None
-            }
-        }
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            (0, None) // lies — claims 0 elements
-        }
-    }
-
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    let iter = LyingIterator {
-        events: vec![SEvent::Tick, SEvent::Tick, SEvent::Tick],
-        pos: 0,
-    };
-    agg.apply_events(iter);
-    assert_eq!(agg.current_version(), Version::from_persisted(3));
-}
-
-#[test]
-fn m5_apply_events_with_huge_size_hint_does_not_oom() {
-    // An iterator that claims usize::MAX elements but actually has 2.
-    // Without the cap, reserve(usize::MAX) would OOM instantly.
-    struct HugeHintIterator {
-        remaining: u8,
-    }
-    impl Iterator for HugeHintIterator {
-        type Item = SEvent;
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.remaining > 0 {
-                self.remaining -= 1;
-                Some(SEvent::Tick)
-            } else {
-                None
-            }
-        }
-        fn size_hint(&self) -> (usize, Option<usize>) {
-            (usize::MAX, None) // malicious — claims usize::MAX elements
-        }
-    }
-
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
-    agg.apply_events(HugeHintIterator { remaining: 2 });
-    assert_eq!(agg.current_version(), Version::from_persisted(2));
 }

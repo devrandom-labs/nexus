@@ -30,8 +30,8 @@ impl Message for ThingEvent {}
 impl DomainEvent for ThingEvent {
     fn name(&self) -> &'static str {
         match self {
-            ThingEvent::Created(_) => "ThingCreated",
-            ThingEvent::Activated(_) => "ThingActivated",
+            Self::Created(_) => "ThingCreated",
+            Self::Activated(_) => "ThingActivated",
         }
     }
 }
@@ -48,11 +48,12 @@ impl AggregateState for ThingState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &ThingEvent) {
+    fn apply(mut self, event: &ThingEvent) -> Self {
         match event {
-            ThingEvent::Created(e) => self.name = e.name.clone(),
+            ThingEvent::Created(e) => self.name.clone_from(&e.name),
             ThingEvent::Activated(_) => self.active = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Thing"
@@ -63,7 +64,10 @@ impl AggregateState for ThingState {
 struct ThingAggregate;
 
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "test-only error type; variants used for type checking"
+)]
 enum ThingError {
     #[error("already exists")]
     AlreadyExists,
@@ -98,13 +102,13 @@ fn domain_event_name_works() {
 
 #[test]
 fn aggregate_state_apply_mutates() {
-    let mut state = ThingState::default();
-    state.apply(&ThingEvent::Created(ThingCreated {
+    let state = ThingState::default();
+    let state = state.apply(&ThingEvent::Created(ThingCreated {
         name: "hello".into(),
     }));
     assert_eq!(state.name, "hello");
     assert!(!state.active);
-    state.apply(&ThingEvent::Activated(ThingActivated));
+    let state = state.apply(&ThingEvent::Activated(ThingActivated));
     assert!(state.active);
 }
 

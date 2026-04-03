@@ -1,11 +1,11 @@
-name: udpate dependencies
+name: Upgrade Dependencies
 on:
   schedule:
     - cron: "0 0 1 * *"
   workflow_dispatch:
 jobs:
   checks:
-    name: Upgrade Dependencies to latest veersion and Create PR
+    name: Upgrade Dependencies and Create PR
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-dept: 0
+          fetch-depth: 0
       - name: Install Nix
         uses: nixbuild/nix-quick-install-action@v30
         with:

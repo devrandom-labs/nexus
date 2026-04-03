@@ -1,20 +1,27 @@
 //! Kernel benchmarks.
 //!
 //! Measures the hot paths in the kernel:
-//! - apply_event: single event application throughput
-//! - load_from_events: aggregate rehydration with N events
-//! - take_uncommitted_events: draining events for persistence
+//! - apply: single event application throughput
+//! - replay: aggregate rehydration with N events
+//! - `take_uncommitted_events`: draining events for persistence
 //!
-//! Run: cargo bench --bench kernel_bench
-//! Reports: target/criterion/report/index.html
+//! Run: `cargo bench --bench kernel_bench`
+//! Reports: `target/criterion/report/index.html`
+#![allow(clippy::unwrap_used, reason = "benchmarks use unwrap for brevity")]
+#![allow(clippy::expect_used, reason = "benchmarks use expect for brevity")]
+#![allow(
+    clippy::shadow_reuse,
+    reason = "closure parameter shadowing is idiomatic in criterion benchmarks"
+)]
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::DomainEvent;
 use nexus::Id;
 use nexus::Message;
-use nexus::{Aggregate, AggregateRoot, AggregateState, EventOf};
+use nexus::{Aggregate, AggregateRoot, AggregateState};
 use nexus::{Version, VersionedEvent};
 use std::fmt;
+use std::hint::black_box;
 
 // =============================================================================
 // Bench domain — minimal types, fast apply
@@ -30,6 +37,7 @@ impl fmt::Display for BId {
 impl Id for BId {}
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "Set variant exists for realistic bench domain")]
 enum BEvent {
     Incremented,
     Set(u64),
@@ -38,8 +46,8 @@ impl Message for BEvent {}
 impl DomainEvent for BEvent {
     fn name(&self) -> &'static str {
         match self {
-            BEvent::Incremented => "Incremented",
-            BEvent::Set(_) => "Set",
+            Self::Incremented => "Incremented",
+            Self::Set(_) => "Set",
         }
     }
 }
@@ -50,11 +58,15 @@ struct BState {
 }
 impl AggregateState for BState {
     type Event = BEvent;
-    fn apply(&mut self, event: &BEvent) {
+    fn initial() -> Self {
+        Self::default()
+    }
+    fn apply(mut self, event: &BEvent) -> Self {
         match event {
             BEvent::Incremented => self.count += 1,
             BEvent::Set(v) => self.count = *v,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Bench"
@@ -80,7 +92,7 @@ fn make_versioned_events(n: usize) -> Vec<VersionedEvent<BEvent>> {
     (0..n)
         .map(|i| {
             VersionedEvent::from_persisted(
-                Version::from_persisted((i + 1) as u64),
+                Version::from_persisted(u64::try_from(i + 1).expect("index fits in u64")),
                 BEvent::Incremented,
             )
         })
@@ -91,34 +103,30 @@ fn make_versioned_events(n: usize) -> Vec<VersionedEvent<BEvent>> {
 // Benchmarks
 // =============================================================================
 
-fn bench_apply_event(c: &mut Criterion) {
-    c.bench_function("apply_event (single)", |b| {
+fn bench_apply(c: &mut Criterion) {
+    c.bench_function("apply (single)", |b| {
         b.iter_with_setup(
             || AggregateRoot::<BAgg>::new(BId(1)),
             |mut agg| {
-                agg.apply_event(black_box(BEvent::Incremented));
+                agg.apply(black_box(BEvent::Incremented));
                 agg
             },
         );
     });
 }
 
-fn bench_load_from_events(c: &mut Criterion) {
-    let mut group = c.benchmark_group("load_from_events");
+fn bench_replay(c: &mut Criterion) {
+    let mut group = c.benchmark_group("replay");
     for size in [10, 100, 1_000, 10_000] {
         let events = make_versioned_events(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &events, |b, events| {
-            b.iter_with_setup(
-                || {
-                    events
-                        .iter()
-                        .map(|ve| VersionedEvent::from_persisted(ve.version(), ve.event().clone()))
-                        .collect::<Vec<_>>()
-                },
-                |events| {
-                    AggregateRoot::<BAgg>::load_from_events(black_box(BId(1)), events).unwrap()
-                },
-            );
+            b.iter(|| {
+                let mut agg = AggregateRoot::<BAgg>::new(black_box(BId(1)));
+                for ve in events {
+                    agg.replay(ve.version(), ve.event()).unwrap();
+                }
+                agg
+            });
         });
     }
     group.finish();
@@ -132,7 +140,7 @@ fn bench_apply_then_take(c: &mut Criterion) {
                 || AggregateRoot::<BAgg>::new(BId(1)),
                 |mut agg| {
                     for _ in 0..size {
-                        agg.apply_event(BEvent::Incremented);
+                        agg.apply(BEvent::Incremented);
                     }
                     let events = agg.take_uncommitted_events();
                     black_box(events)
@@ -143,10 +151,5 @@ fn bench_apply_then_take(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_apply_event,
-    bench_load_from_events,
-    bench_apply_then_take
-);
+criterion_group!(benches, bench_apply, bench_replay, bench_apply_then_take);
 criterion_main!(benches);

@@ -35,10 +35,11 @@ impl AggregateState for SingleState {
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &SingleEvent) {
+    fn apply(mut self, event: &SingleEvent) -> Self {
         match event {
             SingleEvent::Only => self.triggered = true,
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Single"
@@ -51,7 +52,7 @@ struct SingleAggregate;
 #[test]
 fn single_variant_event_enum() {
     let mut agg = SingleAggregate::new(AId(1));
-    agg.apply_event(SingleEvent::Only);
+    agg.apply(SingleEvent::Only);
     assert!(agg.state().triggered);
 }
 
@@ -60,6 +61,10 @@ fn single_variant_event_enum() {
 // =============================================================================
 
 #[derive(Debug, Clone, DomainEvent)]
+#[allow(
+    dead_code,
+    reason = "test-only event type — variants exist to stress-test macro variant arm generation"
+)]
 enum ManyEvent {
     V1,
     V2(u8),
@@ -109,12 +114,13 @@ impl AggregateState for VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacr
     fn initial() -> Self {
         Self::default()
     }
-    fn apply(&mut self, event: &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro) {
+    fn apply(mut self, event: &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro) -> Self {
         match event {
             VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(s) => {
                 self.data = s.clone();
             }
         }
+        self
     }
     fn name(&self) -> &'static str {
         "Long"
@@ -131,7 +137,7 @@ struct VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro;
 #[test]
 fn very_long_type_names() {
     let mut agg = VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro::new(AId(1));
-    agg.apply_event(
+    agg.apply(
         VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(
             "hello".into(),
         ),
@@ -161,8 +167,9 @@ mod inner {
         fn initial() -> Self {
             Self::default()
         }
-        fn apply(&mut self, _: &InnerEvent) {
+        fn apply(mut self, _: &InnerEvent) -> Self {
             self.pings += 1;
+            self
         }
         fn name(&self) -> &'static str {
             "Inner"
@@ -180,8 +187,8 @@ struct PathTypeAggregate;
 #[test]
 fn aggregate_with_path_types() {
     let mut agg = PathTypeAggregate::new(AId(1));
-    agg.apply_event(inner::InnerEvent::Ping);
-    agg.apply_event(inner::InnerEvent::Ping);
+    agg.apply(inner::InnerEvent::Ping);
+    agg.apply(inner::InnerEvent::Ping);
     assert_eq!(agg.state().pings, 2);
 }
 
@@ -190,6 +197,10 @@ fn aggregate_with_path_types() {
 // =============================================================================
 
 #[derive(Debug, Clone, DomainEvent)]
+#[allow(
+    dead_code,
+    reason = "test-only event type — fields exist to test mixed variant shape generation"
+)]
 enum MixedShapeEvent {
     Unit,
     Tuple(String, u64),
