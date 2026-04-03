@@ -20,21 +20,14 @@
     clippy::shadow_unrelated,
     reason = "example code shadows for readability"
 )]
-#![allow(
-    clippy::significant_drop_tightening,
-    reason = "lock guard lifetime is fine in example adapters"
-)]
-
-use std::collections::HashMap;
 
 use nexus::Version;
-use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
+use nexus_store::testing::InMemoryStore;
 use nexus_store::upcaster::EventUpcaster;
 use nexus_store::{Codec, pending_envelope};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
 // =============================================================================
 // 1. Domain events — a simple Todo aggregate
@@ -113,154 +106,7 @@ impl Codec<TodoEvent> for JsonCodec {
 }
 
 // =============================================================================
-// 3. VecStore — implements RawEventStore with a Vec "database"
-// =============================================================================
-
-/// A single row in our in-memory "database".
-///
-/// The store deals only in raw bytes — no typed events here.
-struct StoredRow {
-    version: u64,
-    event_type: String,
-    #[allow(dead_code, reason = "schema_version stored for upcasting demo")]
-    schema_version: u32,
-    payload: Vec<u8>,
-}
-
-/// In-memory event store backed by a `HashMap<String, Vec<StoredRow>>`.
-///
-/// Each key is a stream ID, each value is the ordered list of events.
-/// The `tokio::sync::Mutex` makes it safe for async access.
-struct VecStore {
-    streams: Mutex<HashMap<String, Vec<StoredRow>>>,
-}
-
-impl VecStore {
-    fn new() -> Self {
-        Self {
-            streams: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-/// Store-level errors.
-#[derive(Debug, thiserror::Error)]
-enum StoreError {
-    #[error("concurrency conflict: expected version {expected}, actual {actual}")]
-    Conflict { expected: u64, actual: u64 },
-}
-
-impl RawEventStore for VecStore {
-    type Error = StoreError;
-    type Stream<'a>
-        = VecStream
-    where
-        Self: 'a;
-
-    async fn append(
-        &self,
-        stream_id: &str,
-        expected_version: Version,
-        envelopes: &[PendingEnvelope<()>],
-    ) -> Result<(), Self::Error> {
-        let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
-
-        // Optimistic concurrency check: the number of existing events
-        // should match the expected version.
-        let current_len = u64::try_from(stream.len()).unwrap_or(u64::MAX);
-        if current_len != expected_version.as_u64() {
-            return Err(StoreError::Conflict {
-                expected: expected_version.as_u64(),
-                actual: current_len,
-            });
-        }
-
-        for env in envelopes {
-            stream.push(StoredRow {
-                version: env.version().as_u64(),
-                event_type: env.event_type().to_owned(),
-                schema_version: 1, // current schema version
-                payload: env.payload().to_vec(),
-            });
-        }
-
-        drop(guard);
-        Ok(())
-    }
-
-    async fn read_stream(
-        &self,
-        stream_id: &str,
-        from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
-        let guard = self.streams.lock().await;
-        let events = guard
-            .get(stream_id)
-            .map(|s| {
-                s.iter()
-                    .filter(|row| row.version >= from.as_u64())
-                    .map(|row| ReadRow {
-                        stream_id: stream_id.to_owned(),
-                        version: row.version,
-                        event_type: row.event_type.clone(),
-                        payload: row.payload.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        drop(guard);
-        Ok(VecStream { events, pos: 0 })
-    }
-}
-
-// =============================================================================
-// 4. VecStream — implements EventStream for reading
-// =============================================================================
-
-/// An owned copy of a row, used by the stream cursor.
-///
-/// We copy data out of the locked store so the cursor can outlive the
-/// lock. In a real DB adapter you'd hold a cursor/statement instead.
-struct ReadRow {
-    stream_id: String,
-    version: u64,
-    event_type: String,
-    payload: Vec<u8>,
-}
-
-/// Lending cursor over in-memory events.
-///
-/// Implements `EventStream` — each call to `next()` returns a
-/// `PersistedEnvelope` that borrows from the internal buffer.
-struct VecStream {
-    events: Vec<ReadRow>,
-    pos: usize,
-}
-
-impl EventStream for VecStream {
-    type Error = StoreError;
-
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
-        if self.pos >= self.events.len() {
-            return None;
-        }
-        let row = &self.events[self.pos];
-        self.pos += 1;
-        Some(Ok(PersistedEnvelope::new(
-            &row.stream_id,
-            Version::from_persisted(row.version),
-            &row.event_type,
-            1,
-            &row.payload,
-            (),
-        )))
-    }
-}
-
-// =============================================================================
-// 5. RenameUpcaster — schema evolution demo
+// 3. RenameUpcaster — schema evolution demo
 // =============================================================================
 
 /// Upcaster that renames `"TaskCreated"` to `"TodoCreated"`.
@@ -294,7 +140,7 @@ impl EventUpcaster for RenameUpcaster {
 }
 
 // =============================================================================
-// 6. main() — the full demo flow
+// 4. main() — the full demo flow
 // =============================================================================
 
 #[tokio::main]
@@ -304,7 +150,7 @@ async fn main() {
 
     // --- Setup ---
     let codec = JsonCodec;
-    let store = VecStore::new();
+    let store = InMemoryStore::new();
     let upcaster = RenameUpcaster;
     let stream_id = "todo-1";
 
@@ -344,7 +190,7 @@ async fn main() {
 
     // --- Step 3: Build PendingEnvelopes ---
     println!("Step 3: Build PendingEnvelopes (typestate builder)");
-    let mut envelopes: Vec<PendingEnvelope<()>> = Vec::new();
+    let mut envelopes: Vec<nexus_store::envelope::PendingEnvelope<()>> = Vec::new();
     for (i, (payload, event_type)) in encoded.iter().enumerate() {
         let version_num = u64::try_from(i + 1).expect("version should fit in u64");
         let envelope = pending_envelope(stream_id.into())
@@ -363,7 +209,7 @@ async fn main() {
     println!();
 
     // --- Step 4: Append to the store ---
-    println!("Step 4: Append envelopes to VecStore");
+    println!("Step 4: Append envelopes to InMemoryStore");
     store
         .append(stream_id, Version::INITIAL, &envelopes)
         .await
@@ -377,9 +223,10 @@ async fn main() {
     // --- Bonus: Simulate a legacy event for upcasting ---
     println!("Step 4b: Simulate a legacy 'TaskCreated' event (schema v1)");
     {
-        // Manually insert a v1 event that uses the old name "TaskCreated".
+        // Build a v1 event that uses the old name "TaskCreated".
         // In a real system, these would already be in the database from
-        // before the rename.
+        // before the rename. Here we append it through the normal API
+        // with the old event type name.
         let legacy_json = serde_json::to_vec(&TodoEvent::Created {
             id: "todo-1".to_owned(),
             title: "Legacy task from v1".to_owned(),
@@ -392,21 +239,22 @@ async fn main() {
         let old_json = legacy_str.replace("TodoCreated", "TaskCreated");
         println!("  Raw JSON (old schema): {old_json}");
 
-        let mut guard = store.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
-        stream.push(StoredRow {
-            version: u64::try_from(stream.len() + 1).unwrap_or(u64::MAX),
-            event_type: "TaskCreated".to_owned(),
-            schema_version: 1,
-            payload: old_json.into_bytes(),
-        });
-        drop(guard);
+        let legacy_envelope = pending_envelope(stream_id.into())
+            .version(Version::from_persisted(4))
+            .event_type("TaskCreated")
+            .payload(old_json.into_bytes())
+            .build_without_metadata();
+
+        store
+            .append(stream_id, Version::from_persisted(3), &[legacy_envelope])
+            .await
+            .expect("append legacy event should succeed");
         println!("  Inserted legacy event at version 4");
     }
     println!();
 
     // --- Step 5: Read back from the store ---
-    println!("Step 5: Read events back from VecStore");
+    println!("Step 5: Read events back from InMemoryStore");
     let mut event_stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -421,6 +269,7 @@ async fn main() {
                 let event_type = env.event_type().to_owned();
                 let payload = env.payload().to_vec();
                 let version = env.version().as_u64();
+                let schema_version = env.schema_version();
                 // The envelope borrows from the stream — we copy what we
                 // need and let it drop before the next iteration.
                 println!(
@@ -428,9 +277,7 @@ async fn main() {
                     String::from_utf8_lossy(&payload)
                 );
 
-                // In our simple store we track schema_version=1 for all
-                // rows. A real store would persist this per-event.
-                read_events.push((event_type, 1, payload, version));
+                read_events.push((event_type, schema_version, payload, version));
             }
             Some(Err(e)) => {
                 println!("  Error reading event: {e}");

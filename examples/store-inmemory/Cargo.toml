@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 nexus = { path = "../../crates/nexus", features = ["derive"] }
-nexus-store = { path = "../../crates/nexus-store" }
+nexus-store = { path = "../../crates/nexus-store", features = ["testing"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

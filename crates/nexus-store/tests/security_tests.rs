@@ -8,10 +8,6 @@
     reason = "tests use unwrap for clarity and brevity"
 )]
 #![allow(
-    clippy::significant_drop_tightening,
-    reason = "lock guard lifetime is fine in test adapters"
-)]
-#![allow(
     clippy::shadow_unrelated,
     reason = "tests shadow variables for readability"
 )]
@@ -31,120 +27,12 @@
 #![allow(clippy::str_to_string, reason = "tests use to_string/to_owned freely")]
 
 use nexus::Version;
-use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
+use nexus_store::testing::InMemoryStore;
 use nexus_store::upcaster::EventUpcaster;
-use std::collections::HashMap;
-use tokio::sync::Mutex;
-
-// =============================================================================
-// Shared test infrastructure (in-memory adapter)
-// =============================================================================
-
-type StoredRow = (u64, String, Vec<u8>);
-
-struct TestStore {
-    streams: Mutex<HashMap<String, Vec<StoredRow>>>,
-}
-
-impl TestStore {
-    fn new() -> Self {
-        Self {
-            streams: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-struct TestStream {
-    events: Vec<(String, u64, String, Vec<u8>)>,
-    pos: usize,
-}
-
-#[derive(Debug, thiserror::Error)]
-enum TestError {
-    #[error("conflict")]
-    Conflict,
-}
-
-impl EventStream for TestStream {
-    type Error = TestError;
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
-        if self.pos >= self.events.len() {
-            return None;
-        }
-        let row = &self.events[self.pos];
-        self.pos += 1;
-        Some(Ok(PersistedEnvelope::new(
-            &row.0,
-            Version::from_persisted(row.1),
-            &row.2,
-            1,
-            &row.3,
-            (),
-        )))
-    }
-}
-
-impl RawEventStore for TestStore {
-    type Error = TestError;
-    type Stream<'a>
-        = TestStream
-    where
-        Self: 'a;
-
-    async fn append(
-        &self,
-        stream_id: &str,
-        expected_version: Version,
-        envelopes: &[PendingEnvelope<()>],
-    ) -> Result<(), Self::Error> {
-        let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
-        let current = u64::try_from(stream.len()).unwrap_or(u64::MAX);
-        if current != expected_version.as_u64() {
-            return Err(TestError::Conflict);
-        }
-        // Validate version sequence — must be sequential from expected_version + 1
-        let mut expected_next = expected_version.as_u64() + 1;
-        for env in envelopes {
-            if env.version().as_u64() != expected_next {
-                return Err(TestError::Conflict);
-            }
-            expected_next += 1;
-        }
-        for env in envelopes {
-            stream.push((
-                env.version().as_u64(),
-                env.event_type().to_owned(),
-                env.payload().to_vec(),
-            ));
-        }
-        Ok(())
-    }
-
-    async fn read_stream(
-        &self,
-        stream_id: &str,
-        from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
-        let events = self
-            .streams
-            .lock()
-            .await
-            .get(stream_id)
-            .map(|s| {
-                s.iter()
-                    .filter(|(v, _, _)| *v >= from.as_u64())
-                    .map(|(v, t, p)| (stream_id.to_owned(), *v, t.clone(), p.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(TestStream { events, pos: 0 })
-    }
-}
 
 // =============================================================================
 // C2: Builder accepts any String — content validation is the facade's job
@@ -181,7 +69,7 @@ fn c2_builder_accepts_empty_event_type() {
 
 #[tokio::test]
 async fn h1_append_empty_envelopes_is_noop_or_error() {
-    let store = TestStore::new();
+    let store = InMemoryStore::new();
     // Appending zero events should either be rejected or be a safe no-op
     let result = store.append("s1", Version::INITIAL, &[]).await;
     // This should succeed (no-op) but version should not change
@@ -257,7 +145,7 @@ fn h3_upcaster_can_downgrade_version() {
 
 #[tokio::test]
 async fn h5_append_with_non_sequential_versions() {
-    let store = TestStore::new();
+    let store = InMemoryStore::new();
 
     // Envelopes with non-sequential versions: v3, v1, v5
     let envelopes = vec![
@@ -294,7 +182,7 @@ async fn h5_append_with_non_sequential_versions() {
 
 #[tokio::test]
 async fn h5_append_with_duplicate_versions() {
-    let store = TestStore::new();
+    let store = InMemoryStore::new();
 
     let envelopes = vec![
         pending_envelope("s1".into())
@@ -361,7 +249,7 @@ fn m2_pending_envelope_no_partial_eq() {
 
 #[tokio::test]
 async fn read_nonexistent_stream_returns_empty() {
-    let store = TestStore::new();
+    let store = InMemoryStore::new();
     let mut stream = store
         .read_stream("does-not-exist", Version::INITIAL)
         .await
@@ -378,7 +266,7 @@ async fn read_nonexistent_stream_returns_empty() {
 
 #[tokio::test]
 async fn streams_are_isolated() {
-    let store = TestStore::new();
+    let store = InMemoryStore::new();
 
     let e1 = vec![
         pending_envelope("stream-a".into())

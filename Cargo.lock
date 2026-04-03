@@ -441,6 +441,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "nexus",
+ "nexus-store",
  "proptest",
  "serde",
  "serde_json",

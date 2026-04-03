@@ -16,126 +16,22 @@
     reason = "tests shadow variables for readability"
 )]
 #![allow(clippy::panic, reason = "tests use panic for error propagation")]
-#![allow(
-    clippy::significant_drop_tightening,
-    reason = "lock guard lifetime is fine in test adapters"
-)]
 
 use nexus::Version;
-use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
-use std::collections::HashMap;
-use tokio::sync::Mutex;
-
-// =============================================================================
-// In-memory adapter (copied from raw_store_tests.rs)
-// =============================================================================
-
-/// Row stored per event: (version, `event_type`, payload).
-type StoredRow = (u64, String, Vec<u8>);
-
-/// Minimal in-memory adapter for testing `RawEventStore`.
-struct InMemoryRawStore {
-    streams: Mutex<HashMap<String, Vec<StoredRow>>>,
-}
-
-impl InMemoryRawStore {
-    fn new() -> Self {
-        Self {
-            streams: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-struct InMemoryStream {
-    events: Vec<(String, u64, String, Vec<u8>)>,
-    pos: usize,
-}
-
-impl EventStream for InMemoryStream {
-    type Error = TestError;
-
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
-        if self.pos >= self.events.len() {
-            return None;
-        }
-        let row = &self.events[self.pos];
-        self.pos += 1;
-        Some(Ok(PersistedEnvelope::new(
-            &row.0,
-            Version::from_persisted(row.1),
-            &row.2,
-            1,
-            &row.3,
-            (),
-        )))
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum TestError {
-    #[error("concurrency conflict")]
-    Conflict,
-}
-
-impl RawEventStore for InMemoryRawStore {
-    type Error = TestError;
-    type Stream<'a>
-        = InMemoryStream
-    where
-        Self: 'a;
-
-    async fn append(
-        &self,
-        stream_id: &str,
-        expected_version: Version,
-        envelopes: &[PendingEnvelope<()>],
-    ) -> Result<(), Self::Error> {
-        let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
-        let current_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
-        if current_version != expected_version.as_u64() {
-            return Err(TestError::Conflict);
-        }
-        for env in envelopes {
-            stream.push((
-                env.version().as_u64(),
-                env.event_type().to_owned(),
-                env.payload().to_vec(),
-            ));
-        }
-        drop(guard);
-        Ok(())
-    }
-
-    async fn read_stream(
-        &self,
-        stream_id: &str,
-        from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
-        let events = self
-            .streams
-            .lock()
-            .await
-            .get(stream_id)
-            .map(|s| {
-                s.iter()
-                    .filter(|(v, _, _)| *v >= from.as_u64())
-                    .map(|(v, t, p)| (stream_id.to_owned(), *v, t.clone(), p.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(InMemoryStream { events, pos: 0 })
-    }
-}
+use nexus_store::testing::{InMemoryStore, InMemoryStream};
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
-fn make_envelopes(stream_id: &str, start: u64, count: u64) -> Vec<PendingEnvelope<()>> {
+fn make_envelopes(
+    stream_id: &str,
+    start: u64,
+    count: u64,
+) -> Vec<nexus_store::envelope::PendingEnvelope<()>> {
     (start..start + count)
         .map(|v| {
             pending_envelope(stream_id.into())
@@ -171,7 +67,7 @@ async fn collect_stream(stream: &mut InMemoryStream) -> Vec<(u64, Vec<u8>)> {
 /// then read all and verify versions [1,2,3,4,5,6].
 #[tokio::test]
 async fn multi_batch_append_then_read_all() {
-    let store = InMemoryRawStore::new();
+    let store = InMemoryStore::new();
     let sid = "multi-batch-stream";
 
     // Batch 1: events with versions 1, 2, 3
@@ -196,7 +92,7 @@ async fn multi_batch_append_then_read_all() {
 /// Append 5 events, read from version 3, verify only versions [3,4,5] returned.
 #[tokio::test]
 async fn read_stream_from_version_filters_earlier() {
-    let store = InMemoryRawStore::new();
+    let store = InMemoryStore::new();
     let sid = "filter-stream";
 
     let envelopes = make_envelopes(sid, 1, 5);
@@ -220,7 +116,7 @@ async fn read_stream_from_version_filters_earlier() {
 /// First succeeds, second should get conflict.
 #[tokio::test]
 async fn concurrent_append_detects_conflict() {
-    let store = InMemoryRawStore::new();
+    let store = InMemoryStore::new();
     let sid = "conflict-stream";
 
     // Seed with 1 event
@@ -258,7 +154,7 @@ async fn concurrent_append_detects_conflict() {
 /// Append 1000 events, read all back, verify count and payload integrity.
 #[tokio::test]
 async fn large_batch_append_and_sequential_readback() {
-    let store = InMemoryRawStore::new();
+    let store = InMemoryStore::new();
     let sid = "large-batch-stream";
     let count: u64 = 1000;
 

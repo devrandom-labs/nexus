@@ -6,7 +6,7 @@
 //! Flow:
 //! 1. Define a BankAccount aggregate using `#[nexus::aggregate]`
 //! 2. Use a JSON `Codec<AccountEvent>` for serialization
-//! 3. Use an in-memory `RawEventStore` for persistence
+//! 3. Use `InMemoryStore` from nexus-store for persistence
 //! 4. Show: create aggregate -> apply events -> encode -> persist -> read back
 //!    -> decode -> rehydrate aggregate
 
@@ -21,13 +21,12 @@
 #![allow(clippy::shadow_unrelated, reason = "example shadows for readability")]
 
 use nexus::*;
-use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
+use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
-use nexus_store::{Codec, RawEventStore, pending_envelope};
+use nexus_store::testing::InMemoryStore;
+use nexus_store::{Codec, pending_envelope};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt;
-use tokio::sync::Mutex;
 
 // =============================================================================
 // Domain: Bank Account (kernel layer)
@@ -177,114 +176,6 @@ impl Codec<AccountEvent> for JsonCodec {
 }
 
 // =============================================================================
-// In-Memory Raw Event Store (nexus-store adapter)
-// =============================================================================
-
-/// Row stored per event: (stream_id, version, event_type, payload).
-type StoredRow = (String, u64, String, Vec<u8>);
-
-/// Minimal in-memory adapter implementing `RawEventStore`.
-/// Stores raw bytes — knows nothing about domain events.
-struct InMemStore {
-    streams: Mutex<HashMap<String, Vec<StoredRow>>>,
-}
-
-impl InMemStore {
-    fn new() -> Self {
-        Self {
-            streams: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-/// Lending cursor for reading events back from the in-memory store.
-struct InMemStream {
-    events: Vec<StoredRow>,
-    pos: usize,
-}
-
-impl EventStream for InMemStream {
-    type Error = StoreError;
-
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
-        if self.pos >= self.events.len() {
-            return None;
-        }
-        let row = &self.events[self.pos];
-        self.pos += 1;
-        Some(Ok(PersistedEnvelope::new(
-            &row.0,
-            Version::from_persisted(row.1),
-            &row.2,
-            1,
-            &row.3,
-            (),
-        )))
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum StoreError {
-    #[error("concurrency conflict: expected version {expected}, actual {actual}")]
-    Conflict { expected: u64, actual: u64 },
-}
-
-impl RawEventStore for InMemStore {
-    type Error = StoreError;
-    type Stream<'a>
-        = InMemStream
-    where
-        Self: 'a;
-
-    async fn append(
-        &self,
-        stream_id: &str,
-        expected_version: Version,
-        envelopes: &[PendingEnvelope<()>],
-    ) -> Result<(), Self::Error> {
-        let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
-        let current_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
-        if current_version != expected_version.as_u64() {
-            return Err(StoreError::Conflict {
-                expected: expected_version.as_u64(),
-                actual: current_version,
-            });
-        }
-        for env in envelopes {
-            stream.push((
-                stream_id.to_owned(),
-                env.version().as_u64(),
-                env.event_type().to_owned(),
-                env.payload().to_vec(),
-            ));
-        }
-        drop(guard);
-        Ok(())
-    }
-
-    async fn read_stream(
-        &self,
-        stream_id: &str,
-        from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
-        let events = self
-            .streams
-            .lock()
-            .await
-            .get(stream_id)
-            .map(|s| {
-                s.iter()
-                    .filter(|(_, v, _, _)| *v >= from.as_u64())
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(InMemStream { events, pos: 0 })
-    }
-}
-
-// =============================================================================
 // Bridge functions: kernel <-> store
 // =============================================================================
 
@@ -293,7 +184,7 @@ fn encode_events(
     codec: &JsonCodec,
     stream_id: &str,
     uncommitted: &[VersionedEvent<AccountEvent>],
-) -> Vec<PendingEnvelope<()>> {
+) -> Vec<nexus_store::envelope::PendingEnvelope<()>> {
     uncommitted
         .iter()
         .map(|ve| {
@@ -310,7 +201,7 @@ fn encode_events(
 /// Store -> Kernel: read stream, decode each envelope, build versioned events.
 async fn load_events(
     codec: &JsonCodec,
-    store: &InMemStore,
+    store: &InMemoryStore,
     stream_id: &str,
 ) -> Vec<VersionedEvent<AccountEvent>> {
     let mut stream = store
@@ -342,7 +233,7 @@ async fn load_events(
 #[tokio::main]
 async fn main() {
     let codec = JsonCodec;
-    let store = InMemStore::new();
+    let store = InMemoryStore::new();
     let stream_id = "account-alice";
 
     // -------------------------------------------------------------------------
