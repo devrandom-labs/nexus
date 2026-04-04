@@ -4,6 +4,7 @@ mod event;
 mod events;
 mod id;
 mod message;
+mod stream_id;
 mod version;
 
 pub use aggregate::{
@@ -15,6 +16,7 @@ pub use event::DomainEvent;
 pub use events::Events;
 pub use id::Id;
 pub use message::Message;
+pub use stream_id::{InvalidStreamId, MAX_STREAM_ID_LEN, StreamId};
 pub use version::{Version, VersionedEvent};
 
 #[cfg(feature = "derive")]
