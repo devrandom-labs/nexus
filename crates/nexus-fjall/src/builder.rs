@@ -1,7 +1,7 @@
 use crate::encoding::decode_stream_meta;
 use crate::error::FjallError;
 use crate::store::FjallStore;
-use fjall::PartitionCreateOptions;
+use fjall::{CompressionType, PartitionCreateOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
@@ -74,7 +74,11 @@ impl FjallStoreBuilder {
         let db = fjall::Config::new(&self.path).open_transactional()?;
 
         // --- streams partition: point-read-optimised defaults ---
-        let streams_defaults = PartitionCreateOptions::default().block_size(4_096);
+        // 4 KiB blocks for small metadata lookups, 15-bit bloom filter (~0.1% FPR)
+        // to minimise unnecessary I/O on point reads.
+        let streams_defaults = PartitionCreateOptions::default()
+            .block_size(4_096)
+            .bloom_filter_bits(Some(15));
         let streams_opts = match self.streams_config {
             Some(f) => f(streams_defaults),
             None => streams_defaults,
@@ -82,7 +86,11 @@ impl FjallStoreBuilder {
         let streams = db.open_partition("streams", streams_opts)?;
 
         // --- events partition: scan-optimised defaults ---
-        let events_defaults = PartitionCreateOptions::default().block_size(32_768);
+        // 32 KiB blocks for efficient sequential scans, LZ4 compression
+        // for reduced disk I/O on large event streams.
+        let events_defaults = PartitionCreateOptions::default()
+            .block_size(32_768)
+            .compression(CompressionType::Lz4);
         let events_opts = match self.events_config {
             Some(f) => f(events_defaults),
             None => events_defaults,
