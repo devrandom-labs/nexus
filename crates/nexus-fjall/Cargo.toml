@@ -1,0 +1,25 @@
+[package]
+name = "nexus-fjall"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Fjall-backed event store adapter for the Nexus event-sourcing framework"
+readme = "../../README.md"
+keywords = ["event-sourcing", "event-store", "fjall", "embedded"]
+categories = ["database"]
+
+[dependencies]
+fjall = { workspace = true }
+nexus = { version = "0.1.0", path = "../nexus" }
+nexus-store = { version = "0.1.0", path = "../nexus-store" }
+thiserror = { workspace = true }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
