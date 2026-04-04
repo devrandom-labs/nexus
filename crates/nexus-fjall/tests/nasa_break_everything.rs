@@ -470,12 +470,10 @@ async fn attack_append_read_roundtrip_fixed_evil_payloads() {
 // ============================================================================
 
 /// Evil stream IDs: Unicode, injection, path traversal, null bytes, whitespace.
-/// NOTE: Empty string is excluded — see attack_empty_string_stream_id_panics_bug
-/// for the documented bug where fjall panics on empty keys.
+/// Empty string is tested separately in attack_empty_string_stream_id_returns_error.
 #[tokio::test]
 async fn attack_evil_stream_ids() {
     let evil_ids: Vec<(&str, &str)> = vec![
-        // ("", "empty string") -- excluded: causes panic in fjall (BUG)
         ("x", "single character"),
         ("\u{65E5}\u{672C}\u{8A9E}", "CJK characters"),
         ("\u{1F525}\u{1F525}\u{1F525}", "emoji"),
@@ -1449,29 +1447,47 @@ async fn attack_stream_fused_after_exhaustion() {
     assert!(stream.next().await.is_none(), "fused: call 3 after None");
 }
 
-/// BUG FOUND: Empty stream ID causes a panic in lsm-tree (fjall's storage engine).
-/// The FjallStore::append method does not validate that stream_id is non-empty
-/// before passing it to fjall, and fjall panics on empty keys.
-/// This test documents the bug by catching the panic.
+/// Empty stream ID must return an error, not panic.
+///
+/// Previously this caused a panic deep inside fjall's lsm-tree ("key may not
+/// be empty"). Now `FjallStore` validates at the boundary.
 #[tokio::test]
-async fn attack_empty_string_stream_id_panics_bug() {
+async fn attack_empty_string_stream_id_returns_error() {
     let (store, _dir) = temp_store();
-    let store = std::sync::Arc::new(store);
-    let store_clone = std::sync::Arc::clone(&store);
-
-    // Run in a spawned task so we can catch the panic without killing the test
-    let handle = tokio::spawn(async move {
-        let env = make_envelope("", 1, "Created", b"empty-id");
-        store_clone.append("", Version::INITIAL, &[env]).await
-    });
-
-    let result = handle.await;
-    // BUG: fjall panics on empty key instead of returning an error.
-    // This should be an Err(AppendError::Store(...)) or similar, not a panic.
+    let env = make_envelope("", 1, "Created", b"empty-id");
+    let result = store.append("", Version::INITIAL, &[env]).await;
     assert!(
         result.is_err(),
-        "BUG CONFIRMED: empty stream ID causes panic in fjall. \
-         FjallStore should validate stream_id is non-empty and return an error."
+        "empty stream ID must return an error, not succeed or panic"
+    );
+}
+
+/// Empty stream ID on read_stream must also return an error.
+#[tokio::test]
+async fn attack_empty_string_stream_id_read_returns_error() {
+    let (store, _dir) = temp_store();
+    let result = store.read_stream("", Version::INITIAL).await;
+    assert!(result.is_err(), "reading empty stream ID must return error");
+}
+
+/// Numeric stream ID space exhaustion must fail cleanly, not wrap to 0.
+///
+/// If the counter wraps, two different stream_id strings would share the
+/// same numeric key prefix, causing silent data corruption.
+#[tokio::test]
+async fn attack_stream_id_exhaustion_does_not_wrap() {
+    let (store, _dir) = temp_store();
+
+    // Force the counter to u64::MAX so the next allocation would overflow.
+    store.set_next_stream_id_for_testing(u64::MAX);
+
+    let env = make_envelope("overflow-stream", 1, "Created", b"data");
+    let result = store
+        .append("overflow-stream", Version::INITIAL, &[env])
+        .await;
+    assert!(
+        result.is_err(),
+        "stream ID allocation at u64::MAX must fail, not wrap to 0"
     );
 }
 

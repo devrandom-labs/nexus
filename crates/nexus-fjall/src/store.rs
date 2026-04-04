@@ -32,6 +32,15 @@ impl FjallStore {
     pub fn builder(path: impl AsRef<Path>) -> FjallStoreBuilder {
         FjallStoreBuilder::new(path)
     }
+
+    /// Force the internal stream ID counter to a specific value.
+    ///
+    /// This is intended for testing overflow and exhaustion scenarios.
+    /// Production code should never call this.
+    #[doc(hidden)]
+    pub fn set_next_stream_id_for_testing(&self, value: u64) {
+        self.next_stream_id.store(value, Ordering::Relaxed);
+    }
 }
 
 impl RawEventStore for FjallStore {
@@ -48,6 +57,10 @@ impl RawEventStore for FjallStore {
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
+        if stream_id.is_empty() {
+            return Err(AppendError::Store(FjallError::EmptyStreamId));
+        }
+
         if envelopes.is_empty() {
             return Ok(());
         }
@@ -83,8 +96,14 @@ impl RawEventStore for FjallStore {
                 });
             }
             // Relaxed ordering is safe: write_tx() serializes all writers, so only
-            // one thread can reach this code at a time.
-            let numeric_id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
+            // one thread can reach this code at a time. We use load + checked_add
+            // + store instead of fetch_add to prevent silent wrap-around to 0,
+            // which would cause numeric ID collision and data corruption.
+            let numeric_id = self.next_stream_id.load(Ordering::Relaxed);
+            let next_id = numeric_id
+                .checked_add(1)
+                .ok_or(AppendError::Store(FjallError::StreamIdExhausted))?;
+            self.next_stream_id.store(next_id, Ordering::Relaxed);
             (numeric_id, 0)
         };
 
@@ -139,6 +158,10 @@ impl RawEventStore for FjallStore {
         stream_id: &str,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
+        if stream_id.is_empty() {
+            return Err(FjallError::EmptyStreamId);
+        }
+
         // Look up numeric stream ID from streams partition.
         let meta = self.streams.get(stream_id)?;
         let numeric_id = if let Some(meta_bytes) = meta {

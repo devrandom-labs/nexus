@@ -14,6 +14,21 @@ pub enum FjallError {
     /// Stream metadata has wrong byte size.
     #[error("corrupt metadata for stream '{stream_id}'")]
     CorruptMeta { stream_id: String },
+
+    /// Stream ID must not be empty (fjall requires non-empty keys).
+    #[error("stream_id must not be empty")]
+    EmptyStreamId,
+
+    /// Numeric stream ID space exhausted (`u64::MAX` streams created).
+    ///
+    /// This prevents silent wrap-around to 0, which would cause two
+    /// different `stream_id` strings to share the same numeric key space
+    /// and silently corrupt each other's event data.
+    #[error(
+        "stream ID space exhausted: cannot allocate more than {} streams",
+        u64::MAX
+    )]
+    StreamIdExhausted,
 }
 
 #[cfg(test)]
