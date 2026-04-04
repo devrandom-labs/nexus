@@ -15,10 +15,6 @@ pub enum FjallError {
     #[error("corrupt metadata for stream '{stream_id}'")]
     CorruptMeta { stream_id: String },
 
-    /// Stream ID must not be empty (fjall requires non-empty keys).
-    #[error("stream_id must not be empty")]
-    EmptyStreamId,
-
     /// Numeric stream ID space exhausted (`u64::MAX` streams created).
     ///
     /// This prevents silent wrap-around to 0, which would cause two
