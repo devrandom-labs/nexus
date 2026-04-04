@@ -1210,37 +1210,38 @@ async fn attack_schema_version_u32_max() {
     );
 }
 
-/// schema_version = 0 should cause an error during read (PersistedEnvelope::try_new rejects).
-/// Test what happens if we somehow get schema_version = 0 stored in the DB.
-/// The PendingEnvelope builder defaults to 1, so we force 0.
+/// schema_version = 0 is now clamped to 1 by the PendingEnvelope builder.
+/// This prevents write-read asymmetry where data could be stored but never read back.
 #[tokio::test]
-async fn attack_schema_version_zero_stored_causes_read_error() {
+async fn attack_schema_version_zero_clamped_by_builder() {
     let (store, _dir) = temp_store();
 
-    // Force schema_version = 0 through the builder
     let env = pending_envelope(sid("sv-zero"))
         .version(Version::from_persisted(1))
         .event_type("BadSchema")
         .payload(b"data".to_vec())
-        .schema_version(0)
+        .schema_version(0) // Builder clamps to 1
         .build_without_metadata();
 
-    // The append itself should succeed (it stores raw bytes, doesn't validate schema_version)
+    // Builder should have clamped 0 → 1
+    assert_eq!(
+        env.schema_version(),
+        1,
+        "builder must clamp schema_version 0 to 1"
+    );
+
     store
         .append(&sid("sv-zero"), Version::INITIAL, &[env])
         .await
         .unwrap();
 
-    // Reading should fail because PersistedEnvelope::try_new rejects schema_version=0
+    // Read succeeds because schema_version is now 1
     let mut stream = store
         .read_stream(&sid("sv-zero"), Version::from_persisted(1))
         .await
         .unwrap();
-    let result = stream.next().await.unwrap();
-    assert!(
-        result.is_err(),
-        "reading schema_version=0 from DB must return an error, not a valid envelope"
-    );
+    let persisted = stream.next().await.unwrap().unwrap();
+    assert_eq!(persisted.schema_version(), 1);
 }
 
 // ============================================================================

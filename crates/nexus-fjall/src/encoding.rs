@@ -134,7 +134,6 @@ pub fn encode_event_value(
 
     buf.extend_from_slice(event_type.as_bytes());
     buf.extend_from_slice(payload);
-
     Ok(())
 }
 

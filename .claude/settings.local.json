@@ -86,7 +86,21 @@
       "WebFetch(domain:www.polarsignals.com)",
       "WebFetch(domain:plf.inf.ethz.ch)",
       "WebFetch(domain:blog.readyset.io)",
-      "WebFetch(domain:databases.systems)"
+      "WebFetch(domain:databases.systems)",
+      "Bash(gh run:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(cargo doc:*)",
+      "Bash(source ~/.zshrc)",
+      "Bash(export PATH=\"$HOME/.nix-profile/bin:$HOME/.cargo/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:$PATH\")",
+      "Read(//usr/local/bin/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(empty\"\\). Now returns FjallError::EmptyStreamId at the boundary.:*)",
+      "Bash(sort -t: -k2 -n)",
+      "Bash(sort -t: -k2 -n -u)",
+      "Bash(perl -i -0pe 's/\\\\.append\\\\\\(\\\\n\\\\s+\"\"\\([a-z]\\)\"\"/\\\\.append\\(\\\\n                \\\\&sid\\(\"\"$1\"\"\\)/g' crates/nexus-fjall/tests/nasa_break_everything.rs)",
+      "Bash(TRYBUILD=overwrite nix develop --command cargo test -p nexus-store --test compile_fail_tests)",
+      "Bash(gh repo:*)"
     ]
   }
 }

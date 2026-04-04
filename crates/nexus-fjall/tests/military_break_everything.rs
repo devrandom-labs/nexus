@@ -1097,10 +1097,13 @@ async fn attack_reopen_10_times_with_appends() {
 // CATEGORY P: Schema version 0 attack through the store
 // ============================================================================
 
+/// Verify that `.schema_version(0)` is clamped to 1 by the builder.
+///
+/// Previously, schema_version=0 was accepted on write but rejected on read
+/// (PersistedEnvelope::try_new rejects 0), creating unreadable "black hole" data.
+/// Now the PendingEnvelope builder clamps 0 → 1.
 #[tokio::test]
-async fn attack_schema_version_zero_through_store() {
-    // The encoding layer accepts schema_version=0, but PersistedEnvelope::try_new rejects it.
-    // If we store an event with schema_version=0, reading it back should fail.
+async fn attack_schema_version_zero_clamped_to_one() {
     let (store, _dir) = temp_store();
     let sid_val = sid("schema-zero");
 
@@ -1108,40 +1111,31 @@ async fn attack_schema_version_zero_through_store() {
         .version(Version::from_persisted(1))
         .event_type("BadSchema")
         .payload(b"data".to_vec())
-        .schema_version(0)
+        .schema_version(0) // Builder clamps this to 1
         .build_without_metadata();
 
-    // Append should succeed (store doesn't validate schema_version)
-    let append_result = store.append(&sid_val, Version::INITIAL, &[env]).await;
+    // The envelope should have schema_version=1 (clamped from 0)
+    assert_eq!(
+        env.schema_version(),
+        1,
+        "builder must clamp schema_version 0 to 1"
+    );
 
-    match append_result {
-        Ok(()) => {
-            // Now read it back — should fail because PersistedEnvelope::try_new rejects sv=0
-            let mut stream = store.read_stream(&sid_val, Version::INITIAL).await.unwrap();
-            let read_result = stream.next().await;
-            match read_result {
-                Some(Err(_)) => {
-                    println!(
-                        "DEFENSE WORKS: schema_version=0 stored but correctly rejected on read. \
-                         However, this means the store accepted invalid data that can never be read back — \
-                         consider validating on write."
-                    );
-                }
-                Some(Ok(env)) => {
-                    panic!(
-                        "BUG: schema_version=0 event was successfully read back with sv={}",
-                        env.schema_version()
-                    );
-                }
-                None => {
-                    panic!("BUG: event vanished — stored but not readable");
-                }
-            }
-        }
-        Err(e) => {
-            println!("DEFENSE: store rejected schema_version=0 on write: {e}");
-        }
-    }
+    // Append and read back — should work normally
+    store
+        .append(&sid_val, Version::INITIAL, &[env])
+        .await
+        .unwrap();
+
+    let mut stream = store.read_stream(&sid_val, Version::INITIAL).await.unwrap();
+    let persisted = stream.next().await.unwrap().unwrap();
+    assert_eq!(
+        persisted.schema_version(),
+        1,
+        "persisted schema_version should be 1"
+    );
+    assert_eq!(persisted.event_type(), "BadSchema");
+    assert_eq!(persisted.payload(), b"data");
 }
 
 // ============================================================================

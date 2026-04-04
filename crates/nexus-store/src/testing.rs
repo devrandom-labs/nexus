@@ -135,10 +135,19 @@ impl RawEventStore for InMemoryStore {
         }
 
         // Sequential version validation: each envelope must have version
-        // expected_version + 1 + i.
+        // expected_version + 1 + i. Uses checked arithmetic to prevent
+        // overflow at version boundaries near u64::MAX.
         for (i, env) in envelopes.iter().enumerate() {
             let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
-            let expected_env_version = expected_version.as_u64() + 1 + i_u64;
+            let expected_env_version = expected_version
+                .as_u64()
+                .checked_add(1)
+                .and_then(|v| v.checked_add(i_u64))
+                .ok_or_else(|| AppendError::Conflict {
+                    stream_id: ErrorId::from_display(&stream_id),
+                    expected: expected_version,
+                    actual: env.version(),
+                })?;
             if env.version().as_u64() != expected_env_version {
                 return Err(AppendError::Conflict {
                     stream_id: ErrorId::from_display(&stream_id),

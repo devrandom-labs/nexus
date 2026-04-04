@@ -57,13 +57,11 @@ impl RawEventStore for FjallStore {
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
-        if envelopes.is_empty() {
-            return Ok(());
-        }
-
+        // Version check BEFORE empty-batch early return. An empty append
+        // with a stale expected_version signals a stale caller — report the
+        // conflict even though no data would be written.
         let mut tx = self.db.write_tx();
 
-        // Look up stream metadata (numeric_id, current_version).
         let (numeric_id, current_version) = if let Some(meta_bytes) = tx
             .get(&self.streams, stream_id.as_str())
             .map_err(|e| AppendError::Store(FjallError::Io(e)))?
@@ -91,6 +89,11 @@ impl RawEventStore for FjallStore {
                     actual: Version::from_persisted(0),
                 });
             }
+            // Empty batch on a new stream: validate version but don't
+            // allocate a numeric ID or create metadata.
+            if envelopes.is_empty() {
+                return Ok(());
+            }
             // Relaxed ordering is safe: write_tx() serializes all writers, so only
             // one thread can reach this code at a time. We use load + checked_add
             // + store instead of fetch_add to prevent silent wrap-around to 0,
@@ -103,10 +106,23 @@ impl RawEventStore for FjallStore {
             (numeric_id, 0)
         };
 
-        // Validate envelope versions are sequential from expected_version + 1.
+        // Empty batch on an existing stream: version was checked, no work to do.
+        if envelopes.is_empty() {
+            return Ok(());
+        }
+
+        // Validate envelope versions are sequential from current_version + 1.
+        // Uses checked arithmetic to prevent overflow near u64::MAX.
         for (i, env) in envelopes.iter().enumerate() {
             let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
-            let expected_env_version = current_version + 1 + i_u64;
+            let expected_env_version = current_version
+                .checked_add(1)
+                .and_then(|v| v.checked_add(i_u64))
+                .ok_or_else(|| AppendError::Conflict {
+                    stream_id: ErrorId::from_display(&stream_id),
+                    expected: Version::from_persisted(current_version),
+                    actual: env.version(),
+                })?;
             if env.version().as_u64() != expected_env_version {
                 return Err(AppendError::Conflict {
                     stream_id: ErrorId::from_display(&stream_id),
@@ -139,6 +155,7 @@ impl RawEventStore for FjallStore {
         let new_version = envelopes
             .last()
             .map_or(current_version, |last| last.version().as_u64());
+
         let meta = encode_stream_meta(numeric_id, new_version);
         tx.insert(&self.streams, stream_id.as_str(), meta);
 
@@ -177,10 +194,26 @@ impl RawEventStore for FjallStore {
         let start = encode_event_key(numeric_id, from.as_u64());
         let end = encode_event_key(numeric_id, u64::MAX);
 
+        // Precondition: start key must sort <= end key (same numeric_id).
+        debug_assert!(
+            start <= end,
+            "read_stream precondition: start key must sort <= end key"
+        );
+
         let mut events = Vec::new();
         for kv_result in self.events.inner().range(start..=end) {
             let kv = kv_result?;
             events.push((kv.0, kv.1));
+        }
+
+        // Postcondition: events must be sorted by key (fjall guarantees this,
+        // but we verify in debug mode).
+        #[cfg(debug_assertions)]
+        for window in events.windows(2) {
+            debug_assert!(
+                window[0].0 < window[1].0,
+                "read_stream postcondition: events must be strictly sorted by key"
+            );
         }
 
         Ok(FjallStream {

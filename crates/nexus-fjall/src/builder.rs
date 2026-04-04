@@ -115,6 +115,17 @@ impl FjallStoreBuilder {
         // since 0 is reserved as "no stream").
         let next_id = if max_id == 0 { 1 } else { max_id + 1 };
 
+        // Postcondition: next_id must never be 0 (0 is sentinel for "no stream").
+        debug_assert!(
+            next_id >= 1,
+            "builder postcondition: next_stream_id must be >= 1, got {next_id}"
+        );
+        // Postcondition: next_id must be strictly greater than any existing numeric_id.
+        debug_assert!(
+            next_id > max_id || (max_id == 0 && next_id == 1),
+            "builder postcondition: next_id ({next_id}) must be > max existing id ({max_id})"
+        );
+
         Ok(FjallStore {
             db,
             streams,

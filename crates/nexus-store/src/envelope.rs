@@ -149,12 +149,20 @@ impl WithEventType {
 impl WithPayload {
     /// Override the schema version (default: 1).
     ///
+    /// Schema versions start at 1. If 0 is passed, it is clamped to 1
+    /// to maintain the invariant that `PersistedEnvelope` always has
+    /// `schema_version > 0`.
+    ///
     /// The `EventStore` save path uses this to stamp new events at the
     /// current schema version, preventing upcasters from re-transforming
     /// events that are already in the latest format.
     #[must_use]
     pub const fn schema_version(mut self, schema_version: u32) -> Self {
-        self.schema_version = schema_version;
+        self.schema_version = if schema_version == 0 {
+            1
+        } else {
+            schema_version
+        };
         self
     }
 

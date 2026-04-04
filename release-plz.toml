@@ -1,6 +1,8 @@
 [workspace]
 git_release_enable = true
 git_tag_enable = true
+# workspace-hack is disabled before publishing, which dirties the tree
+allow_dirty = true
 
 # workspace-hack must not be published
 [[package]]
