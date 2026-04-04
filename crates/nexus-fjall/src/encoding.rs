@@ -15,7 +15,6 @@ pub(crate) enum DecodeError {
 
 /// Errors from encoding values into byte layouts.
 #[derive(Debug, Error)]
-#[allow(dead_code, reason = "used by RawEventStore::append (Task 6)")]
 pub(crate) enum EncodeError {
     #[error("event type too long: {len} bytes (max {})", u16::MAX)]
     EventTypeTooLong { len: usize },
@@ -33,7 +32,6 @@ pub(crate) const EVENT_VALUE_HEADER_SIZE: usize = 6;
 /// Encode an event key as `[u64 BE stream_numeric_id][u64 BE version]`.
 ///
 /// Big-endian encoding ensures natural byte ordering in LSM trees.
-#[allow(dead_code, reason = "used by RawEventStore::append (Task 6)")]
 pub(crate) fn encode_event_key(stream_numeric_id: u64, version: u64) -> [u8; EVENT_KEY_SIZE] {
     let mut buf = [0u8; EVENT_KEY_SIZE];
     buf[..8].copy_from_slice(&stream_numeric_id.to_be_bytes());
@@ -63,7 +61,6 @@ pub(crate) fn decode_event_key(key: &[u8]) -> Result<(u64, u64), DecodeError> {
 /// Encode stream metadata as `[u64 LE numeric_id][u64 LE version]`.
 ///
 /// Little-endian encoding is used since metadata has no ordering requirement.
-#[allow(dead_code, reason = "used by RawEventStore::append (Task 6)")]
 pub(crate) fn encode_stream_meta(numeric_id: u64, version: u64) -> [u8; STREAM_META_SIZE] {
     let mut buf = [0u8; STREAM_META_SIZE];
     buf[..8].copy_from_slice(&numeric_id.to_le_bytes());
@@ -94,7 +91,6 @@ pub(crate) fn decode_stream_meta(value: &[u8]) -> Result<(u64, u64), DecodeError
 ///
 /// The buffer is cleared and reused (no reallocation if capacity suffices).
 /// Returns an error if `event_type` exceeds `u16::MAX` bytes.
-#[allow(dead_code, reason = "used by RawEventStore::append (Task 6)")]
 pub(crate) fn encode_event_value(
     buf: &mut Vec<u8>,
     schema_version: u32,
