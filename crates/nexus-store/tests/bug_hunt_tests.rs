@@ -26,6 +26,7 @@
     reason = "clarity over brevity in test assertions"
 )]
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::AppendError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
@@ -36,6 +37,10 @@ use nexus_store::stream::EventStream;
 use nexus_store::upcaster::EventUpcaster;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
+
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
 
 // ============================================================================
 // In-memory adapter for probing
@@ -94,12 +99,12 @@ impl RawEventStore for ProbeStore {
 
     async fn append(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
+        let stream = guard.entry(stream_id.as_str().to_owned()).or_default();
         let current = u64::try_from(stream.len()).unwrap_or(u64::MAX);
         if current != expected_version.as_u64() {
             return Err(AppendError::Store(ProbeError::Conflict));
@@ -123,18 +128,18 @@ impl RawEventStore for ProbeStore {
 
     async fn read_stream(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
         let events = self
             .streams
             .lock()
             .await
-            .get(stream_id)
+            .get(stream_id.as_str())
             .map(|s| {
                 s.iter()
                     .filter(|(v, _, _)| *v >= from.as_u64())
-                    .map(|(v, t, p)| (stream_id.to_owned(), *v, t.clone(), p.clone()))
+                    .map(|(v, t, p)| (stream_id.as_str().to_owned(), *v, t.clone(), p.clone()))
                     .collect()
             })
             .unwrap_or_default();
@@ -155,7 +160,7 @@ async fn bug_probe_mixed_stream_ids_in_append_batch() {
 
     // Envelopes claim to be for "stream-A" but we append to "stream-B"
     let envelopes = vec![
-        pending_envelope("stream-A".into())
+        pending_envelope(sid("stream-A"))
             .version(Version::from_persisted(1))
             .event_type("E")
             .payload(vec![1])
@@ -166,7 +171,9 @@ async fn bug_probe_mixed_stream_ids_in_append_batch() {
     // and uses the stream_id parameter instead.
     // BUG: The envelope carries a stream_id that contradicts the append target.
     // There is NO validation that envelope.stream_id() == stream_id parameter.
-    let result = store.append("stream-B", Version::INITIAL, &envelopes).await;
+    let result = store
+        .append(&sid("stream-B"), Version::INITIAL, &envelopes)
+        .await;
     assert!(
         result.is_ok(),
         "BUG CONFIRMED: append silently accepts envelopes with mismatched stream_ids"
@@ -174,7 +181,7 @@ async fn bug_probe_mixed_stream_ids_in_append_batch() {
 
     // Now read stream-B — the event is there, but its envelope said stream-A
     let mut stream = store
-        .read_stream("stream-B", Version::INITIAL)
+        .read_stream(&sid("stream-B"), Version::INITIAL)
         .await
         .unwrap();
     let env = stream.next().await.unwrap().unwrap();
@@ -189,7 +196,7 @@ async fn bug_probe_mixed_stream_ids_in_append_batch() {
 // carry a stream_id at all? This is a design bug — redundant data that can diverge.
 #[test]
 fn bug_probe_pending_envelope_stream_id_is_redundant() {
-    let envelope = pending_envelope("my-stream".into())
+    let envelope = pending_envelope(sid("my-stream"))
         .version(Version::from_persisted(1))
         .event_type("E")
         .payload(vec![])
@@ -198,7 +205,7 @@ fn bug_probe_pending_envelope_stream_id_is_redundant() {
     // The envelope carries "my-stream" — but RawEventStore::append() takes
     // stream_id as a separate &str parameter. The adapter is free to ignore
     // the envelope's stream_id. This is a design inconsistency.
-    assert_eq!(envelope.stream_id(), "my-stream");
+    assert_eq!(envelope.stream_id().as_str(), "my-stream");
     // FINDING: stream_id exists on PendingEnvelope but is redundant with
     // the append() parameter. Either remove it from PendingEnvelope or
     // remove it from append() signature.
@@ -215,14 +222,14 @@ async fn append_rejects_version_zero_envelope() {
     assert_eq!(Version::INITIAL, Version::from_persisted(0));
 
     let envelopes = vec![
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(0))
             .event_type("E")
             .payload(vec![1])
             .build_without_metadata(),
     ];
 
-    let result = store.append("s1", Version::INITIAL, &envelopes).await;
+    let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
     assert!(
         result.is_err(),
         "Adapter must reject version 0 — first event must be version 1"
@@ -341,24 +348,24 @@ async fn append_rejects_backwards_versions() {
 
     // Deliberately backwards: version 3, then 2, then 1
     let envelopes = vec![
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(3))
             .event_type("E")
             .payload(vec![3])
             .build_without_metadata(),
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(2))
             .event_type("E")
             .payload(vec![2])
             .build_without_metadata(),
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(1))
             .event_type("E")
             .payload(vec![1])
             .build_without_metadata(),
     ];
 
-    let result = store.append("s1", Version::INITIAL, &envelopes).await;
+    let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
     assert!(
         result.is_err(),
         "Adapter must reject non-sequential versions"
@@ -380,15 +387,18 @@ proptest! {
     fn fuzz_dangerous_stream_ids(
         stream_id in "[a-z0-9._/-]{1,100}"
     ) {
-        // If any stream_id causes a panic, that's a bug
-        let result = std::panic::catch_unwind(|| {
-            pending_envelope(stream_id.clone())
-                .version(Version::from_persisted(1))
-                .event_type("E")
-                .payload(vec![1])
-                .build_without_metadata()
-        });
-        prop_assert!(result.is_ok(), "stream_id caused panic: {:?}", stream_id);
+        // StreamId may reject some inputs (null bytes, empty, too long).
+        // If from_persisted succeeds, building an envelope should not panic.
+        if let Ok(sid) = StreamId::from_persisted(stream_id.clone()) {
+            let result = std::panic::catch_unwind(move || {
+                pending_envelope(sid)
+                    .version(Version::from_persisted(1))
+                    .event_type("E")
+                    .payload(vec![1])
+                    .build_without_metadata()
+            });
+            prop_assert!(result.is_ok(), "stream_id caused panic: {:?}", stream_id);
+        }
     }
 
     // FUZZ: Version from_persisted with random u64 values
@@ -403,7 +413,7 @@ proptest! {
     fn fuzz_payload_byte_patterns(
         payload in prop::collection::vec(any::<u8>(), 0..10_000)
     ) {
-        let envelope = pending_envelope("s1".into())
+        let envelope = pending_envelope(sid("s1"))
             .version(Version::from_persisted(1))
             .event_type("E")
             .payload(payload.clone())
@@ -423,7 +433,7 @@ proptest! {
             let envelopes: Vec<_> = versions
                 .iter()
                 .map(|&v| {
-                    pending_envelope("s1".into())
+                    pending_envelope(sid("s1"))
                         .version(Version::from_persisted(v))
                         .event_type("E")
                         .payload(vec![v as u8])
@@ -431,7 +441,7 @@ proptest! {
                 })
                 .collect();
 
-            let result = store.append("s1", Version::INITIAL, &envelopes).await;
+            let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
 
             // Check if versions are actually sequential from 1
             let is_sequential = versions.iter().enumerate().all(|(i, &v)| v == (i as u64) + 1);
@@ -577,14 +587,14 @@ fn bug_probe_metadata_panic_on_drop() {
         }
     }
 
-    let envelope = pending_envelope("s1".into())
+    let envelope = pending_envelope(sid("s1"))
         .version(Version::from_persisted(1))
         .event_type("E")
         .payload(vec![])
         .build(PanicOnDrop(false));
 
     // Metadata is moved into the envelope, not cloned
-    assert_eq!(envelope.stream_id(), "s1");
+    assert_eq!(envelope.stream_id().as_str(), "s1");
     // FINDING: Drop order is fine — Rust handles this correctly.
 }
 

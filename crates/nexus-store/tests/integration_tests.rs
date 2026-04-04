@@ -17,24 +17,29 @@
 )]
 #![allow(clippy::panic, reason = "tests use panic for error propagation")]
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::testing::{InMemoryStore, InMemoryStream};
 
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================
 
 fn make_envelopes(
-    stream_id: &str,
+    stream_id: &StreamId,
     start: u64,
     count: u64,
 ) -> Vec<nexus_store::envelope::PendingEnvelope<()>> {
     (start..start + count)
         .map(|v| {
-            pending_envelope(stream_id.into())
+            pending_envelope(stream_id.clone())
                 .version(Version::from_persisted(v))
                 .event_type("Event")
                 .payload(v.to_le_bytes().to_vec())
@@ -68,22 +73,25 @@ async fn collect_stream(stream: &mut InMemoryStream) -> Vec<(u64, Vec<u8>)> {
 #[tokio::test]
 async fn multi_batch_append_then_read_all() {
     let store = InMemoryStore::new();
-    let sid = "multi-batch-stream";
+    let stream = sid("multi-batch-stream");
 
     // Batch 1: events with versions 1, 2, 3
-    let batch1 = make_envelopes(sid, 1, 3);
-    store.append(sid, Version::INITIAL, &batch1).await.unwrap();
+    let batch1 = make_envelopes(&stream, 1, 3);
+    store
+        .append(&stream, Version::INITIAL, &batch1)
+        .await
+        .unwrap();
 
     // Batch 2: events with versions 4, 5, 6 — expected_version = 3
-    let batch2 = make_envelopes(sid, 4, 3);
+    let batch2 = make_envelopes(&stream, 4, 3);
     store
-        .append(sid, Version::from_persisted(3), &batch2)
+        .append(&stream, Version::from_persisted(3), &batch2)
         .await
         .unwrap();
 
     // Read all from the beginning (version 0 / INITIAL)
-    let mut stream = store.read_stream(sid, Version::INITIAL).await.unwrap();
-    let events = collect_stream(&mut stream).await;
+    let mut cursor = store.read_stream(&stream, Version::INITIAL).await.unwrap();
+    let events = collect_stream(&mut cursor).await;
 
     let versions: Vec<u64> = events.iter().map(|(v, _)| *v).collect();
     assert_eq!(versions, vec![1, 2, 3, 4, 5, 6]);
@@ -93,20 +101,20 @@ async fn multi_batch_append_then_read_all() {
 #[tokio::test]
 async fn read_stream_from_version_filters_earlier() {
     let store = InMemoryStore::new();
-    let sid = "filter-stream";
+    let stream = sid("filter-stream");
 
-    let envelopes = make_envelopes(sid, 1, 5);
+    let envelopes = make_envelopes(&stream, 1, 5);
     store
-        .append(sid, Version::INITIAL, &envelopes)
+        .append(&stream, Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
     // Read starting from version 3
-    let mut stream = store
-        .read_stream(sid, Version::from_persisted(3))
+    let mut cursor = store
+        .read_stream(&stream, Version::from_persisted(3))
         .await
         .unwrap();
-    let events = collect_stream(&mut stream).await;
+    let events = collect_stream(&mut cursor).await;
 
     let versions: Vec<u64> = events.iter().map(|(v, _)| *v).collect();
     assert_eq!(versions, vec![3, 4, 5]);
@@ -117,23 +125,26 @@ async fn read_stream_from_version_filters_earlier() {
 #[tokio::test]
 async fn concurrent_append_detects_conflict() {
     let store = InMemoryStore::new();
-    let sid = "conflict-stream";
+    let stream = sid("conflict-stream");
 
     // Seed with 1 event
-    let seed = make_envelopes(sid, 1, 1);
-    store.append(sid, Version::INITIAL, &seed).await.unwrap();
+    let seed = make_envelopes(&stream, 1, 1);
+    store
+        .append(&stream, Version::INITIAL, &seed)
+        .await
+        .unwrap();
 
     // Writer A: append event 2 with expected_version=1
-    let writer_a = make_envelopes(sid, 2, 1);
+    let writer_a = make_envelopes(&stream, 2, 1);
     let result_a = store
-        .append(sid, Version::from_persisted(1), &writer_a)
+        .append(&stream, Version::from_persisted(1), &writer_a)
         .await;
     assert!(result_a.is_ok(), "writer A should succeed");
 
     // Writer B: also tries with expected_version=1 (stale), should conflict
-    let writer_b = make_envelopes(sid, 2, 1);
+    let writer_b = make_envelopes(&stream, 2, 1);
     let result_b = store
-        .append(sid, Version::from_persisted(1), &writer_b)
+        .append(&stream, Version::from_persisted(1), &writer_b)
         .await;
     assert!(result_b.is_err(), "writer B should get a conflict error");
 
@@ -146,8 +157,8 @@ async fn concurrent_append_detects_conflict() {
     );
 
     // Verify the stream only has the 2 events (seed + writer A)
-    let mut stream = store.read_stream(sid, Version::INITIAL).await.unwrap();
-    let events = collect_stream(&mut stream).await;
+    let mut cursor = store.read_stream(&stream, Version::INITIAL).await.unwrap();
+    let events = collect_stream(&mut cursor).await;
     assert_eq!(events.len(), 2);
 }
 
@@ -155,17 +166,17 @@ async fn concurrent_append_detects_conflict() {
 #[tokio::test]
 async fn large_batch_append_and_sequential_readback() {
     let store = InMemoryStore::new();
-    let sid = "large-batch-stream";
+    let stream = sid("large-batch-stream");
     let count: u64 = 1000;
 
-    let envelopes = make_envelopes(sid, 1, count);
+    let envelopes = make_envelopes(&stream, 1, count);
     store
-        .append(sid, Version::INITIAL, &envelopes)
+        .append(&stream, Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
-    let mut stream = store.read_stream(sid, Version::INITIAL).await.unwrap();
-    let events = collect_stream(&mut stream).await;
+    let mut cursor = store.read_stream(&stream, Version::INITIAL).await.unwrap();
+    let events = collect_stream(&mut cursor).await;
 
     // Verify count
     assert_eq!(
@@ -197,39 +208,39 @@ async fn large_batch_append_and_sequential_readback() {
 #[tokio::test]
 async fn next_after_none_returns_none() {
     let store = InMemoryStore::new();
-    let sid = "fused-stream";
-    let envelopes = make_envelopes(sid, 1, 2);
+    let stream = sid("fused-stream");
+    let envelopes = make_envelopes(&stream, 1, 2);
     store
-        .append(sid, Version::INITIAL, &envelopes)
+        .append(&stream, Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
-    let mut stream = store.read_stream(sid, Version::INITIAL).await.unwrap();
-    let _ = collect_stream(&mut stream).await;
+    let mut cursor = store.read_stream(&stream, Version::INITIAL).await.unwrap();
+    let _ = collect_stream(&mut cursor).await;
 
     // Stream exhausted — subsequent calls must return None
-    assert!(stream.next().await.is_none());
-    assert!(stream.next().await.is_none());
+    assert!(cursor.next().await.is_none());
+    assert!(cursor.next().await.is_none());
 }
 
 /// Reading from a version beyond the stream end yields empty.
 #[tokio::test]
 async fn read_from_future_version_returns_empty() {
     let store = InMemoryStore::new();
-    let sid = "future-version-stream";
-    let envelopes = make_envelopes(sid, 1, 3);
+    let stream = sid("future-version-stream");
+    let envelopes = make_envelopes(&stream, 1, 3);
     store
-        .append(sid, Version::INITIAL, &envelopes)
+        .append(&stream, Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
     // Read from version 100 — no events exist at that version
-    let mut stream = store
-        .read_stream(sid, Version::from_persisted(100))
+    let mut cursor = store
+        .read_stream(&stream, Version::from_persisted(100))
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        cursor.next().await.is_none(),
         "should return empty for future version"
     );
 }
@@ -238,15 +249,15 @@ async fn read_from_future_version_returns_empty() {
 #[tokio::test]
 async fn single_event_lifecycle() {
     let store = InMemoryStore::new();
-    let sid = "single-event";
-    let envelopes = make_envelopes(sid, 1, 1);
+    let stream = sid("single-event");
+    let envelopes = make_envelopes(&stream, 1, 1);
     store
-        .append(sid, Version::INITIAL, &envelopes)
+        .append(&stream, Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
-    let mut stream = store.read_stream(sid, Version::INITIAL).await.unwrap();
-    let events = collect_stream(&mut stream).await;
+    let mut cursor = store.read_stream(&stream, Version::INITIAL).await.unwrap();
+    let events = collect_stream(&mut cursor).await;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].0, 1);
 }
@@ -255,18 +266,20 @@ async fn single_event_lifecycle() {
 #[tokio::test]
 async fn read_different_stream_returns_empty() {
     let store = InMemoryStore::new();
-    let envelopes = make_envelopes("stream-a", 1, 3);
+    let stream_a = sid("stream-a");
+    let stream_b = sid("stream-b");
+    let envelopes = make_envelopes(&stream_a, 1, 3);
     store
-        .append("stream-a", Version::INITIAL, &envelopes)
+        .append(&stream_a, Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
-    let mut stream = store
-        .read_stream("stream-b", Version::INITIAL)
+    let mut cursor = store
+        .read_stream(&stream_b, Version::INITIAL)
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        cursor.next().await.is_none(),
         "different stream should be empty"
     );
 }

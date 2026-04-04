@@ -26,6 +26,7 @@
 )]
 #![allow(clippy::str_to_string, reason = "tests use to_string/to_owned freely")]
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
@@ -34,28 +35,28 @@ use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcaster::EventUpcaster;
 
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
+
 // =============================================================================
 // C2: Builder accepts any String — content validation is the facade's job
 // =============================================================================
 
 #[test]
-fn c2_builder_accepts_empty_stream_id() {
-    // The typestate builder ensures all fields are SET but cannot validate
-    // string CONTENT at compile time. Empty-string validation is deferred
-    // to the EventStore facade.
-    let envelope = pending_envelope(String::new())
-        .version(Version::from_persisted(1))
-        .event_type("Event")
-        .payload(vec![1])
-        .build_without_metadata();
-    assert_eq!(envelope.stream_id(), "");
+fn c2_builder_rejects_empty_stream_id_via_stream_id_type() {
+    // StreamId::from_persisted rejects empty strings at construction time,
+    // so the builder can no longer receive an empty stream_id. This is the
+    // desired compile-time safety improvement from the StreamId type.
+    let result = StreamId::from_persisted("");
+    assert!(result.is_err(), "StreamId should reject empty string");
 }
 
 #[test]
 fn c2_builder_accepts_empty_event_type() {
     // Same rationale: the builder takes &'static str, so "" is valid.
     // The EventStore facade must reject empty event_type at runtime.
-    let envelope = pending_envelope("stream".into())
+    let envelope = pending_envelope(sid("stream"))
         .version(Version::from_persisted(1))
         .event_type("")
         .payload(vec![1])
@@ -71,12 +72,15 @@ fn c2_builder_accepts_empty_event_type() {
 async fn h1_append_empty_envelopes_is_noop_or_error() {
     let store = InMemoryStore::new();
     // Appending zero events should either be rejected or be a safe no-op
-    let result = store.append("s1", Version::INITIAL, &[]).await;
+    let result = store.append(&sid("s1"), Version::INITIAL, &[]).await;
     // This should succeed (no-op) but version should not change
     assert!(result.is_ok());
 
     // Read should return empty stream
-    let mut stream = store.read_stream("s1", Version::INITIAL).await.unwrap();
+    let mut stream = store
+        .read_stream(&sid("s1"), Version::INITIAL)
+        .await
+        .unwrap();
     assert!(
         stream.next().await.is_none(),
         "Empty append should not create any events"
@@ -149,17 +153,17 @@ async fn h5_append_with_non_sequential_versions() {
 
     // Envelopes with non-sequential versions: v3, v1, v5
     let envelopes = vec![
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(3))
             .event_type("E")
             .payload(vec![])
             .build_without_metadata(),
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(1))
             .event_type("E")
             .payload(vec![])
             .build_without_metadata(),
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(5))
             .event_type("E")
             .payload(vec![])
@@ -167,7 +171,7 @@ async fn h5_append_with_non_sequential_versions() {
     ];
 
     // This should fail — versions must be sequential
-    let result = store.append("s1", Version::INITIAL, &envelopes).await;
+    let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
     // Currently the test adapter accepts this — it should NOT
     // The EventStore facade (when built) should validate this
     assert!(
@@ -185,19 +189,19 @@ async fn h5_append_with_duplicate_versions() {
     let store = InMemoryStore::new();
 
     let envelopes = vec![
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(1))
             .event_type("E")
             .payload(vec![])
             .build_without_metadata(),
-        pending_envelope("s1".into())
+        pending_envelope(sid("s1"))
             .version(Version::from_persisted(1))
             .event_type("E")
             .payload(vec![])
             .build_without_metadata(), // dup!
     ];
 
-    let result = store.append("s1", Version::INITIAL, &envelopes).await;
+    let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
     assert!(result.is_err(), "Append should reject duplicate versions");
 }
 
@@ -225,19 +229,19 @@ fn h4_store_error_size() {
 fn m2_pending_envelope_no_partial_eq() {
     // Currently PendingEnvelope doesn't implement PartialEq.
     // This test documents the gap — can't easily compare envelopes in tests.
-    let e1 = pending_envelope("s1".into())
+    let e1 = pending_envelope(sid("s1"))
         .version(Version::from_persisted(1))
         .event_type("E")
         .payload(vec![1])
         .build_without_metadata();
-    let e2 = pending_envelope("s1".into())
+    let e2 = pending_envelope(sid("s1"))
         .version(Version::from_persisted(1))
         .event_type("E")
         .payload(vec![1])
         .build_without_metadata();
     // Can't do assert_eq!(e1, e2) — no PartialEq
     // So we compare field by field
-    assert_eq!(e1.stream_id(), e2.stream_id());
+    assert_eq!(e1.stream_id().as_str(), e2.stream_id().as_str());
     assert_eq!(e1.version(), e2.version());
     assert_eq!(e1.event_type(), e2.event_type());
     assert_eq!(e1.payload(), e2.payload());
@@ -251,7 +255,7 @@ fn m2_pending_envelope_no_partial_eq() {
 async fn read_nonexistent_stream_returns_empty() {
     let store = InMemoryStore::new();
     let mut stream = store
-        .read_stream("does-not-exist", Version::INITIAL)
+        .read_stream(&sid("does-not-exist"), Version::INITIAL)
         .await
         .unwrap();
     assert!(
@@ -269,14 +273,14 @@ async fn streams_are_isolated() {
     let store = InMemoryStore::new();
 
     let e1 = vec![
-        pending_envelope("stream-a".into())
+        pending_envelope(sid("stream-a"))
             .version(Version::from_persisted(1))
             .event_type("EventA")
             .payload(vec![1])
             .build_without_metadata(),
     ];
     let e2 = vec![
-        pending_envelope("stream-b".into())
+        pending_envelope(sid("stream-b"))
             .version(Version::from_persisted(1))
             .event_type("EventB")
             .payload(vec![2])
@@ -284,17 +288,17 @@ async fn streams_are_isolated() {
     ];
 
     store
-        .append("stream-a", Version::INITIAL, &e1)
+        .append(&sid("stream-a"), Version::INITIAL, &e1)
         .await
         .unwrap();
     store
-        .append("stream-b", Version::INITIAL, &e2)
+        .append(&sid("stream-b"), Version::INITIAL, &e2)
         .await
         .unwrap();
 
     // Read stream-a — should only see EventA
     let mut stream = store
-        .read_stream("stream-a", Version::INITIAL)
+        .read_stream(&sid("stream-a"), Version::INITIAL)
         .await
         .unwrap();
     let envelope = stream.next().await.unwrap().unwrap();
@@ -305,7 +309,7 @@ async fn streams_are_isolated() {
 
     // Read stream-b — should only see EventB
     let mut stream = store
-        .read_stream("stream-b", Version::INITIAL)
+        .read_stream(&sid("stream-b"), Version::INITIAL)
         .await
         .unwrap();
     let envelope = stream.next().await.unwrap().unwrap();

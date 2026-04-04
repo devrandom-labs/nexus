@@ -1,18 +1,23 @@
 #![allow(clippy::unwrap_used, reason = "tests")]
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::pending_envelope;
 
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
+
 #[test]
 fn pending_envelope_accessors() {
-    let envelope = pending_envelope("user-123".into())
+    let envelope = pending_envelope(sid("user-123"))
         .version(Version::from_persisted(1))
         .event_type("UserCreated")
         .payload(vec![1, 2, 3])
         .build_without_metadata();
 
-    assert_eq!(envelope.stream_id(), "user-123");
+    assert_eq!(envelope.stream_id().as_str(), "user-123");
     assert_eq!(envelope.version(), Version::from_persisted(1));
     assert_eq!(envelope.event_type(), "UserCreated");
     assert_eq!(envelope.payload(), &[1, 2, 3]);
@@ -28,7 +33,7 @@ fn pending_envelope_with_metadata() {
     let meta = Meta {
         correlation_id: "corr-1".into(),
     };
-    let envelope = pending_envelope("order-1".into())
+    let envelope = pending_envelope(sid("order-1"))
         .version(Version::from_persisted(1))
         .event_type("OrderPlaced")
         .payload(vec![4, 5, 6])
@@ -39,7 +44,7 @@ fn pending_envelope_with_metadata() {
 
 #[test]
 fn pending_envelope_unit_metadata_default() {
-    let envelope = pending_envelope("stream".into())
+    let envelope = pending_envelope(sid("stream"))
         .version(Version::from_persisted(1))
         .event_type("Event")
         .payload(vec![])
@@ -127,7 +132,7 @@ fn persisted_envelope_zero_allocation_for_core_fields() {
 
 #[test]
 fn pending_envelope_debug_output() {
-    let envelope = pending_envelope("user-abc".into())
+    let envelope = pending_envelope(sid("user-abc"))
         .version(Version::from_persisted(7))
         .event_type("UserCreated")
         .payload(vec![1, 2, 3])
@@ -165,19 +170,19 @@ fn persisted_envelope_debug_output() {
 
 #[test]
 fn build_without_metadata_equals_build_unit() {
-    let without = pending_envelope("stream-1".into())
+    let without = pending_envelope(sid("stream-1"))
         .version(Version::from_persisted(5))
         .event_type("Evt")
         .payload(vec![9, 8, 7])
         .build_without_metadata();
 
-    let with_unit = pending_envelope("stream-1".into())
+    let with_unit = pending_envelope(sid("stream-1"))
         .version(Version::from_persisted(5))
         .event_type("Evt")
         .payload(vec![9, 8, 7])
         .build(());
 
-    assert_eq!(without.stream_id(), with_unit.stream_id());
+    assert_eq!(without.stream_id().as_str(), with_unit.stream_id().as_str());
     assert_eq!(without.version(), with_unit.version());
     assert_eq!(without.event_type(), with_unit.event_type());
     assert_eq!(without.payload(), with_unit.payload());

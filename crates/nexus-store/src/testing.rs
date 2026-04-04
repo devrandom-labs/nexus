@@ -6,6 +6,7 @@ use crate::error::StoreError;
 use crate::raw::RawEventStore;
 use crate::stream::EventStream;
 use nexus::ErrorId;
+use nexus::StreamId;
 use nexus::Version;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
@@ -116,12 +117,12 @@ impl RawEventStore for InMemoryStore {
     )]
     async fn append(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
+        let stream = guard.entry(stream_id.as_str().to_owned()).or_default();
 
         // Optimistic concurrency check.
         let actual_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
@@ -162,19 +163,19 @@ impl RawEventStore for InMemoryStore {
 
     async fn read_stream(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
         let events = self
             .streams
             .lock()
             .await
-            .get(stream_id)
+            .get(stream_id.as_str())
             .map(|rows| {
                 rows.iter()
                     .filter(|r| r.version >= from.as_u64())
                     .map(|r| ReadRow {
-                        stream_id: stream_id.to_owned(),
+                        stream_id: stream_id.as_str().to_owned(),
                         version: r.version,
                         event_type: r.event_type.clone(),
                         schema_version: r.schema_version,

@@ -25,6 +25,7 @@
     reason = "proptest macro generates code that triggers this lint"
 )]
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::envelope::PendingEnvelope;
 use nexus_store::pending_envelope;
@@ -45,13 +46,13 @@ fn leak_event_type(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn build_envelopes(stream_id: &str, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(stream_id: &StreamId, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
     payloads
         .iter()
         .enumerate()
         .map(|(i, p)| {
             let version_num = u64::try_from(i).unwrap_or(u64::MAX) + 1;
-            pending_envelope(stream_id.to_owned())
+            pending_envelope(stream_id.clone())
                 .version(Version::from_persisted(version_num))
                 .event_type(leak_event_type("TestEvent"))
                 .payload(p.clone())
@@ -64,8 +65,10 @@ fn build_envelopes(stream_id: &str, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope
 // Property-based tests
 // ============================================================================
 
-fn stream_id_strategy() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[a-z][a-z0-9-]{0,19}").unwrap()
+fn stream_id_strategy() -> impl Strategy<Value = StreamId> {
+    prop::string::string_regex("[a-z][a-z0-9-]{0,19}")
+        .unwrap()
+        .prop_map(|s| StreamId::from_persisted(s).unwrap())
 }
 
 fn payloads_strategy() -> impl Strategy<Value = Vec<Vec<u8>>> {

@@ -1,7 +1,7 @@
 error[E0599]: no method named `build_without_metadata` found for struct `WithEventType` in the current scope
  --> tests/compile_fail/builder_incomplete.rs:8:10
   |
-5 |       let _ = pending_envelope("s1".into())
+5 |       let _ = pending_envelope(StreamId::from_persisted("s1").unwrap())
   |  _____________-
 6 | |         .version(Version::from_persisted(1))
 7 | |         .event_type("E")

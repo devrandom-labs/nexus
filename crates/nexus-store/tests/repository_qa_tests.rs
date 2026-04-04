@@ -50,6 +50,10 @@ use nexus_store::testing::InMemoryStore;
 use nexus_store::upcaster::EventUpcaster;
 use proptest::prelude::*;
 
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Test domain: Counter aggregate (owning codec path)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -439,7 +443,7 @@ async fn d1_encode_failure_mid_batch_returns_codec_error() {
     agg.apply(CounterEvent::Incremented);
     agg.apply(CounterEvent::Incremented);
 
-    let result = es.save("s1", &mut agg).await;
+    let result = es.save(&sid("s1"), &mut agg).await;
     assert!(result.is_err());
     assert!(
         matches!(result.unwrap_err(), StoreError::Codec(_)),
@@ -454,7 +458,7 @@ async fn d1_encode_failure_first_event_returns_codec_error() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
 
-    let result = es.save("s1", &mut agg).await;
+    let result = es.save(&sid("s1"), &mut agg).await;
     assert!(matches!(result.unwrap_err(), StoreError::Codec(_)));
 }
 
@@ -467,10 +471,11 @@ async fn d1_decode_failure_mid_stream_returns_codec_error() {
     agg.apply(CounterEvent::Incremented);
     agg.apply(CounterEvent::Incremented);
     agg.apply(CounterEvent::Incremented);
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
 
     // Load — first decode succeeds, second fails
-    let result: Result<AggregateRoot<CounterAggregate>, _> = es.load("s1", CounterId(1)).await;
+    let result: Result<AggregateRoot<CounterAggregate>, _> =
+        es.load(&sid("s1"), CounterId(1)).await;
     assert!(result.is_err());
     assert!(
         matches!(result.unwrap_err(), StoreError::Codec(_)),
@@ -484,9 +489,10 @@ async fn d1_decode_failure_first_event_returns_codec_error() {
     let es = EventStore::new(InMemoryStore::new(), FailAfterNDecodesCodec::new(0));
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
-    es.save("s1", &mut agg).await.unwrap(); // encode works fine
+    es.save(&sid("s1"), &mut agg).await.unwrap(); // encode works fine
 
-    let result: Result<AggregateRoot<CounterAggregate>, _> = es.load("s1", CounterId(1)).await;
+    let result: Result<AggregateRoot<CounterAggregate>, _> =
+        es.load(&sid("s1"), CounterId(1)).await;
     assert!(matches!(result.unwrap_err(), StoreError::Codec(_)));
 }
 
@@ -512,7 +518,7 @@ async fn d2_failed_encode_must_not_consume_uncommitted_events() {
     assert_eq!(agg.current_version(), Version::from_persisted(2));
 
     // Save fails (encode error)
-    let result = es.save("s1", &mut agg).await;
+    let result = es.save(&sid("s1"), &mut agg).await;
     assert!(result.is_err());
 
     // CORRECT: version must NOT advance on failed save
@@ -536,7 +542,7 @@ async fn d2_failed_save_must_preserve_uncommitted_events() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
 
-    let _ = es.save("s1", &mut agg).await; // fails
+    let _ = es.save(&sid("s1"), &mut agg).await; // fails
 
     // CORRECT: uncommitted events must survive for retry
     let events = agg.take_uncommitted_events();
@@ -561,14 +567,14 @@ async fn d2_aggregate_must_be_retryable_after_failed_save() {
     agg.apply(CounterEvent::Incremented);
 
     // First save fails
-    let result = es.save("s1", &mut agg).await;
+    let result = es.save(&sid("s1"), &mut agg).await;
     assert!(result.is_err());
 
     // Fix the codec
     fail_flag.store(false, Ordering::SeqCst);
 
     // CORRECT: retry must succeed — same events should persist
-    let retry = es.save("s1", &mut agg).await;
+    let retry = es.save(&sid("s1"), &mut agg).await;
     assert!(
         retry.is_ok(),
         "aggregate must be retryable after a failed save — got: {:?}",
@@ -576,7 +582,7 @@ async fn d2_aggregate_must_be_retryable_after_failed_save() {
     );
 
     // CORRECT: loading must return the persisted state
-    let loaded: AggregateRoot<CounterAggregate> = es.load("s1", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&sid("s1"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 2);
     assert_eq!(loaded.version(), Version::from_persisted(2));
 }
@@ -588,12 +594,12 @@ async fn d2_aggregate_must_be_retryable_after_failed_save() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn d3_concurrent_saves_one_wins_one_conflicts() {
     let es = Arc::new(EventStore::new(InMemoryStore::new(), SimpleCodec));
-    let sid = "race-stream";
+    let stream = sid("race-stream");
 
     // Setup: one event in the stream
     let mut setup = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     setup.apply(CounterEvent::Set(0));
-    es.save(sid, &mut setup).await.unwrap();
+    es.save(&stream, &mut setup).await.unwrap();
 
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
 
@@ -601,12 +607,13 @@ async fn d3_concurrent_saves_one_wins_one_conflicts() {
     let handle_a = tokio::spawn({
         let es = es.clone();
         let barrier = barrier.clone();
+        let stream = stream.clone();
         async move {
             let mut agg: AggregateRoot<CounterAggregate> =
-                es.load(sid, CounterId(1)).await.unwrap();
+                es.load(&stream, CounterId(1)).await.unwrap();
             barrier.wait().await; // both loaded before either saves
             agg.apply(CounterEvent::Set(100));
-            es.save(sid, &mut agg).await
+            es.save(&stream, &mut agg).await
         }
     });
 
@@ -614,12 +621,13 @@ async fn d3_concurrent_saves_one_wins_one_conflicts() {
     let handle_b = tokio::spawn({
         let es = es.clone();
         let barrier = barrier.clone();
+        let stream = stream.clone();
         async move {
             let mut agg: AggregateRoot<CounterAggregate> =
-                es.load(sid, CounterId(1)).await.unwrap();
+                es.load(&stream, CounterId(1)).await.unwrap();
             barrier.wait().await; // both loaded before either saves
             agg.apply(CounterEvent::Set(200));
-            es.save(sid, &mut agg).await
+            es.save(&stream, &mut agg).await
         }
     });
 
@@ -651,13 +659,13 @@ async fn d3_concurrent_loads_both_succeed() {
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Set(42));
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
 
     let handle_a = tokio::spawn({
         let es = es.clone();
         async move {
             let loaded: AggregateRoot<CounterAggregate> =
-                es.load("s1", CounterId(1)).await.unwrap();
+                es.load(&sid("s1"), CounterId(1)).await.unwrap();
             loaded.state().value
         }
     });
@@ -665,7 +673,7 @@ async fn d3_concurrent_loads_both_succeed() {
         let es = es.clone();
         async move {
             let loaded: AggregateRoot<CounterAggregate> =
-                es.load("s1", CounterId(1)).await.unwrap();
+                es.load(&sid("s1"), CounterId(1)).await.unwrap();
             loaded.state().value
         }
     });
@@ -684,7 +692,7 @@ async fn d3_cross_stream_concurrent_saves_both_succeed() {
         async move {
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
             agg.apply(CounterEvent::Set(10));
-            es.save("stream-a", &mut agg).await
+            es.save(&sid("stream-a"), &mut agg).await
         }
     });
     let handle_b = tokio::spawn({
@@ -692,7 +700,7 @@ async fn d3_cross_stream_concurrent_saves_both_succeed() {
         async move {
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(2));
             agg.apply(CounterEvent::Set(20));
-            es.save("stream-b", &mut agg).await
+            es.save(&sid("stream-b"), &mut agg).await
         }
     });
 
@@ -701,9 +709,9 @@ async fn d3_cross_stream_concurrent_saves_both_succeed() {
 
     // Both streams independent — verify isolation
     let loaded_a: AggregateRoot<CounterAggregate> =
-        es.load("stream-a", CounterId(1)).await.unwrap();
+        es.load(&sid("stream-a"), CounterId(1)).await.unwrap();
     let loaded_b: AggregateRoot<CounterAggregate> =
-        es.load("stream-b", CounterId(2)).await.unwrap();
+        es.load(&sid("stream-b"), CounterId(2)).await.unwrap();
     assert_eq!(loaded_a.state().value, 10);
     assert_eq!(loaded_b.state().value, 20);
 }
@@ -715,14 +723,14 @@ async fn d3_cross_stream_concurrent_saves_both_succeed() {
 #[tokio::test]
 async fn d4_single_upcaster_transforms_on_load() {
     let es = EventStore::new(InMemoryStore::new(), SimpleCodec).with_upcaster(V1ToV2Upcaster);
-    let sid = "upcaster-1";
+    let stream = sid("upcaster-1");
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Set(42));
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
     // Load applies upcaster (v1→v2) but payload is unchanged
-    let loaded: AggregateRoot<CounterAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 42);
     assert_eq!(loaded.version(), Version::from_persisted(1));
 }
@@ -735,13 +743,13 @@ async fn d4_chained_upcasters_v1_to_v3() {
     // Chain order: V1ToV2 is checked first (prepended last).
     // Flow: v1 → V1ToV2 → v2 → V2ToV3 → v3
 
-    let sid = "chain-stream";
+    let stream = sid("chain-stream");
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
     agg.apply(CounterEvent::Decremented);
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
-    let loaded: AggregateRoot<CounterAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 0); // +1 -1 = 0
     assert_eq!(loaded.version(), Version::from_persisted(2));
 }
@@ -750,15 +758,15 @@ async fn d4_chained_upcasters_v1_to_v3() {
 async fn d4_chain_limit_exceeded_returns_error_on_load() {
     let es =
         EventStore::new(InMemoryStore::new(), SimpleCodec).with_upcaster(AlwaysUpcastsUpcaster);
-    let sid = "infinite-chain";
+    let stream = sid("infinite-chain");
 
     // Save one event
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
     // Load triggers infinite upcaster chain → hits 100-iteration limit
-    let result: Result<AggregateRoot<CounterAggregate>, _> = es.load(sid, CounterId(1)).await;
+    let result: Result<AggregateRoot<CounterAggregate>, _> = es.load(&stream, CounterId(1)).await;
     assert!(
         matches!(result, Err(StoreError::Codec(_))),
         "chain limit exceeded should surface as StoreError::Codec"
@@ -779,20 +787,21 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
     let raw_store = InMemoryStore::new();
 
     // Write a v1 event directly (simulating a legacy event)
-    let legacy = pending_envelope("zc-upcast".into())
+    let legacy = pending_envelope(sid("zc-upcast"))
         .version(Version::from_persisted(1))
         .event_type("Delta")
         .payload(5_i32.to_le_bytes().to_vec())
         .build_without_metadata(); // schema_version defaults to 1
     raw_store
-        .append("zc-upcast", Version::INITIAL, &[legacy])
+        .append(&sid("zc-upcast"), Version::INITIAL, &[legacy])
         .await
         .unwrap();
 
     // Load via ZeroCopyEventStore with upcaster — delta=5 doubled to 10
     let es = ZeroCopyEventStore::new(raw_store, DeltaBorrowingCodec)
         .with_upcaster(DeltaDoublingUpcaster);
-    let loaded: AggregateRoot<DeltaAggregate> = es.load("zc-upcast", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<DeltaAggregate> =
+        es.load(&sid("zc-upcast"), CounterId(1)).await.unwrap();
     assert_eq!(
         loaded.state().total,
         10,
@@ -808,16 +817,16 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
     // is saved through the EventStore (which stamps it at schema_version=2).
     // On reload, only the legacy event should be upcasted.
     let raw_store = InMemoryStore::new();
-    let sid = "double-upcast";
+    let stream = sid("double-upcast");
 
     // Write a legacy v1 event directly (simulating pre-migration data)
-    let legacy = pending_envelope(sid.into())
+    let legacy = pending_envelope(stream.clone())
         .version(Version::from_persisted(1))
         .event_type("Delta")
         .payload(5_i32.to_le_bytes().to_vec())
         .build_without_metadata(); // schema_version defaults to 1
     raw_store
-        .append(sid, Version::INITIAL, &[legacy])
+        .append(&stream, Version::INITIAL, &[legacy])
         .await
         .unwrap();
 
@@ -825,16 +834,16 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
         .with_upcaster(DeltaDoublingUpcaster);
 
     // Load: legacy delta=5 upcasted to 10. State total=10.
-    let mut loaded: AggregateRoot<DeltaAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let mut loaded: AggregateRoot<DeltaAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().total, 10);
 
     // Apply second event: delta=3 (saved at schema_version=2, no upcasting).
     loaded.apply(DeltaEvent { delta: 3 });
-    es.save(sid, &mut loaded).await.unwrap();
+    es.save(&stream, &mut loaded).await.unwrap();
 
     // Reload: legacy event upcasted (5→10), new event untouched (3).
     // Total = 10 + 3 = 13.
-    let reloaded: AggregateRoot<DeltaAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let reloaded: AggregateRoot<DeltaAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(
         reloaded.state().total,
         13,
@@ -855,13 +864,13 @@ async fn d5_first_save_uses_version_initial_as_expected() {
     agg.apply(CounterEvent::Incremented);
 
     // First event has version 1. expected_version = 1-1 = 0 (INITIAL).
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
 
     // Verify version after save
     assert_eq!(agg.version(), Version::from_persisted(1));
 
     // Verify correct readback
-    let loaded: AggregateRoot<CounterAggregate> = es.load("s1", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&sid("s1"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.version(), Version::from_persisted(1));
 }
 
@@ -873,14 +882,15 @@ async fn d5_version_consistency_through_save_load_cycles() {
 
     for round in 1..=10u64 {
         agg.apply(CounterEvent::Incremented);
-        es.save("s1", &mut agg).await.unwrap();
+        es.save(&sid("s1"), &mut agg).await.unwrap();
         assert_eq!(
             agg.version(),
             Version::from_persisted(round),
             "version mismatch after save round {round}"
         );
 
-        let loaded: AggregateRoot<CounterAggregate> = es.load("s1", CounterId(1)).await.unwrap();
+        let loaded: AggregateRoot<CounterAggregate> =
+            es.load(&sid("s1"), CounterId(1)).await.unwrap();
         assert_eq!(
             loaded.version(),
             Version::from_persisted(round),
@@ -906,10 +916,10 @@ async fn d5_batch_version_tracking() {
     agg.apply(CounterEvent::Decremented); // v4
 
     assert_eq!(agg.current_version(), Version::from_persisted(4));
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
     assert_eq!(agg.version(), Version::from_persisted(4));
 
-    let loaded: AggregateRoot<CounterAggregate> = es.load("s1", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&sid("s1"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.version(), Version::from_persisted(4));
     assert_eq!(loaded.state().value, 99); // +1 +1 =100 -1 = 99
 }
@@ -921,7 +931,7 @@ async fn d5_batch_version_tracking() {
 #[tokio::test]
 async fn d6_full_lifecycle_fresh_save_load_modify_save_load() {
     let es = EventStore::new(InMemoryStore::new(), SimpleCodec);
-    let sid = "lifecycle";
+    let stream = sid("lifecycle");
 
     // 1. Fresh aggregate
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
@@ -931,21 +941,21 @@ async fn d6_full_lifecycle_fresh_save_load_modify_save_load() {
     // 2. Apply events and save
     agg.apply(CounterEvent::Set(10));
     agg.apply(CounterEvent::Incremented);
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
     assert_eq!(agg.version(), Version::from_persisted(2));
 
     // 3. Load from store
-    let mut loaded: AggregateRoot<CounterAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let mut loaded: AggregateRoot<CounterAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 11);
     assert_eq!(loaded.version(), Version::from_persisted(2));
 
     // 4. Modify and save again
     loaded.apply(CounterEvent::Set(0));
-    es.save(sid, &mut loaded).await.unwrap();
+    es.save(&stream, &mut loaded).await.unwrap();
     assert_eq!(loaded.version(), Version::from_persisted(3));
 
     // 5. Final load — verify complete state
-    let final_agg: AggregateRoot<CounterAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let final_agg: AggregateRoot<CounterAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(final_agg.state().value, 0);
     assert_eq!(final_agg.version(), Version::from_persisted(3));
 }
@@ -953,16 +963,16 @@ async fn d6_full_lifecycle_fresh_save_load_modify_save_load() {
 #[tokio::test]
 async fn d6_ten_round_modify_save_load_cycles() {
     let es = EventStore::new(InMemoryStore::new(), SimpleCodec);
-    let sid = "ten-rounds";
+    let stream = sid("ten-rounds");
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     for round in 0..10 {
         agg.apply(CounterEvent::Incremented);
-        es.save(sid, &mut agg).await.unwrap();
+        es.save(&stream, &mut agg).await.unwrap();
 
         // Reload between each round
-        agg = es.load(sid, CounterId(1)).await.unwrap();
+        agg = es.load(&stream, CounterId(1)).await.unwrap();
         assert_eq!(agg.state().value, (round + 1) as i64);
     }
 
@@ -980,11 +990,11 @@ async fn d6_state_determinism_same_events_same_state() {
     agg.apply(CounterEvent::Decremented);
     agg.apply(CounterEvent::Decremented);
     agg.apply(CounterEvent::Incremented);
-    es.save("det", &mut agg).await.unwrap();
+    es.save(&sid("det"), &mut agg).await.unwrap();
 
     // Load twice — must produce identical state
-    let load1: AggregateRoot<CounterAggregate> = es.load("det", CounterId(1)).await.unwrap();
-    let load2: AggregateRoot<CounterAggregate> = es.load("det", CounterId(2)).await.unwrap();
+    let load1: AggregateRoot<CounterAggregate> = es.load(&sid("det"), CounterId(1)).await.unwrap();
+    let load2: AggregateRoot<CounterAggregate> = es.load(&sid("det"), CounterId(2)).await.unwrap();
 
     assert_eq!(load1.state(), load2.state());
     assert_eq!(load1.version(), load2.version());
@@ -997,9 +1007,10 @@ async fn d6_load_after_save_has_no_uncommitted_events() {
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
 
-    let mut loaded: AggregateRoot<CounterAggregate> = es.load("s1", CounterId(1)).await.unwrap();
+    let mut loaded: AggregateRoot<CounterAggregate> =
+        es.load(&sid("s1"), CounterId(1)).await.unwrap();
     // Loaded aggregate should have no uncommitted events
     let events = loaded.take_uncommitted_events();
     assert!(events.is_empty());
@@ -1017,7 +1028,7 @@ async fn d7_save_empty_is_noop() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     // Save with no uncommitted events — should be a no-op
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
     assert_eq!(agg.version(), Version::INITIAL);
 }
 
@@ -1030,7 +1041,7 @@ async fn d7_save_drains_uncommitted_events() {
     agg.apply(CounterEvent::Decremented);
     assert_eq!(agg.current_version(), Version::from_persisted(2));
 
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
 
     // After save, version = current_version (events drained)
     assert_eq!(agg.version(), agg.current_version());
@@ -1041,7 +1052,7 @@ async fn d7_save_drains_uncommitted_events() {
 async fn d7_load_nonexistent_stream_returns_fresh_aggregate() {
     let es = EventStore::new(InMemoryStore::new(), SimpleCodec);
     let loaded: AggregateRoot<CounterAggregate> =
-        es.load("does-not-exist", CounterId(1)).await.unwrap();
+        es.load(&sid("does-not-exist"), CounterId(1)).await.unwrap();
 
     assert_eq!(loaded.version(), Version::INITIAL);
     assert_eq!(loaded.state(), &CounterState::default());
@@ -1058,9 +1069,9 @@ async fn d7_repository_preserves_event_ordering() {
     agg.apply(CounterEvent::Decremented); // v2: 99
     agg.apply(CounterEvent::Set(0)); // v3: set to 0
     agg.apply(CounterEvent::Incremented); // v4: 1
-    es.save("ord", &mut agg).await.unwrap();
+    es.save(&sid("ord"), &mut agg).await.unwrap();
 
-    let loaded: AggregateRoot<CounterAggregate> = es.load("ord", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&sid("ord"), CounterId(1)).await.unwrap();
     assert_eq!(
         loaded.state().value,
         1,
@@ -1078,7 +1089,7 @@ async fn d8_codec_encode_error_is_store_error_codec() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
 
-    match es.save("s1", &mut agg).await {
+    match es.save(&sid("s1"), &mut agg).await {
         Err(StoreError::Codec(inner)) => {
             assert!(
                 inner.to_string().contains("encode limit"),
@@ -1095,9 +1106,10 @@ async fn d8_codec_decode_error_is_store_error_codec() {
     let es = EventStore::new(InMemoryStore::new(), FailAfterNDecodesCodec::new(0));
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
-    es.save("s1", &mut agg).await.unwrap(); // encode fine
+    es.save(&sid("s1"), &mut agg).await.unwrap(); // encode fine
 
-    let result: Result<AggregateRoot<CounterAggregate>, _> = es.load("s1", CounterId(1)).await;
+    let result: Result<AggregateRoot<CounterAggregate>, _> =
+        es.load(&sid("s1"), CounterId(1)).await;
     match result {
         Err(StoreError::Codec(inner)) => {
             assert!(inner.to_string().contains("decode limit"));
@@ -1114,16 +1126,18 @@ async fn d8_concurrency_conflict_should_be_store_error_conflict_not_adapter() {
 
     let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg1.apply(CounterEvent::Incremented);
-    es.save("s1", &mut agg1).await.unwrap();
+    es.save(&sid("s1"), &mut agg1).await.unwrap();
 
-    let mut copy_a: AggregateRoot<CounterAggregate> = es.load("s1", CounterId(1)).await.unwrap();
-    let mut copy_b: AggregateRoot<CounterAggregate> = es.load("s1", CounterId(1)).await.unwrap();
+    let mut copy_a: AggregateRoot<CounterAggregate> =
+        es.load(&sid("s1"), CounterId(1)).await.unwrap();
+    let mut copy_b: AggregateRoot<CounterAggregate> =
+        es.load(&sid("s1"), CounterId(1)).await.unwrap();
 
     copy_a.apply(CounterEvent::Incremented);
-    es.save("s1", &mut copy_a).await.unwrap();
+    es.save(&sid("s1"), &mut copy_a).await.unwrap();
 
     copy_b.apply(CounterEvent::Decremented);
-    let err = es.save("s1", &mut copy_b).await.unwrap_err();
+    let err = es.save(&sid("s1"), &mut copy_b).await.unwrap_err();
 
     // CORRECT: conflict must surface as StoreError::Conflict, not Adapter
     assert!(
@@ -1141,16 +1155,16 @@ async fn d8_rehydration_limit_exceeded_is_store_error_kernel() {
     agg.apply(CounterEvent::Incremented); // v1
     agg.apply(CounterEvent::Incremented); // v2
     agg.apply(CounterEvent::Incremented); // v3
-    es.save("tiny", &mut agg).await.unwrap();
+    es.save(&sid("tiny"), &mut agg).await.unwrap();
 
-    let mut agg: AggregateRoot<TinyAggregate> = es.load("tiny", CounterId(1)).await.unwrap();
+    let mut agg: AggregateRoot<TinyAggregate> = es.load(&sid("tiny"), CounterId(1)).await.unwrap();
     agg.apply(CounterEvent::Incremented); // v4
     agg.apply(CounterEvent::Incremented); // v5
     agg.apply(CounterEvent::Incremented); // v6
-    es.save("tiny", &mut agg).await.unwrap();
+    es.save(&sid("tiny"), &mut agg).await.unwrap();
 
     // Load 6 events with MAX_REHYDRATION_EVENTS=5 → fails at version 6
-    let result: Result<AggregateRoot<TinyAggregate>, _> = es.load("tiny", CounterId(1)).await;
+    let result: Result<AggregateRoot<TinyAggregate>, _> = es.load(&sid("tiny"), CounterId(1)).await;
     match result {
         Err(StoreError::Kernel(KernelError::RehydrationLimitExceeded { max, .. })) => {
             assert_eq!(max, 5);
@@ -1185,10 +1199,10 @@ proptest! {
                 agg.apply(event.clone());
             }
             let state_before_save = agg.state().value;
-            es.save("rt", &mut agg).await.unwrap();
+            es.save(&sid("rt"), &mut agg).await.unwrap();
 
             let loaded: AggregateRoot<CounterAggregate> =
-                es.load("rt", CounterId(1)).await.unwrap();
+                es.load(&sid("rt"), CounterId(1)).await.unwrap();
             prop_assert_eq!(loaded.state().value, state_before_save);
             prop_assert_eq!(loaded.version().as_u64(), events.len() as u64);
             Ok(())
@@ -1214,10 +1228,10 @@ proptest! {
             for event in &events {
                 agg.apply(event.clone());
             }
-            es.save("ord", &mut agg).await.unwrap();
+            es.save(&sid("ord"), &mut agg).await.unwrap();
 
             let loaded: AggregateRoot<CounterAggregate> =
-                es.load("ord", CounterId(1)).await.unwrap();
+                es.load(&sid("ord"), CounterId(1)).await.unwrap();
             prop_assert_eq!(loaded.state().value, expected_value);
             Ok(())
         })?;
@@ -1235,13 +1249,13 @@ proptest! {
             for event in &events {
                 agg.apply(event.clone());
             }
-            es.save("pure", &mut agg).await.unwrap();
+            es.save(&sid("pure"), &mut agg).await.unwrap();
 
             // Load twice — must produce identical state (deterministic replay)
             let load1: AggregateRoot<CounterAggregate> =
-                es.load("pure", CounterId(1)).await.unwrap();
+                es.load(&sid("pure"), CounterId(1)).await.unwrap();
             let load2: AggregateRoot<CounterAggregate> =
-                es.load("pure", CounterId(2)).await.unwrap();
+                es.load(&sid("pure"), CounterId(2)).await.unwrap();
 
             prop_assert_eq!(load1.state().value, load2.state().value);
             prop_assert_eq!(load1.version(), load2.version());
@@ -1262,9 +1276,9 @@ async fn d10_large_batch_500_events_save_and_load() {
     for _ in 0..500 {
         agg.apply(CounterEvent::Incremented);
     }
-    es.save("big", &mut agg).await.unwrap();
+    es.save(&sid("big"), &mut agg).await.unwrap();
 
-    let loaded: AggregateRoot<CounterAggregate> = es.load("big", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&sid("big"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 500);
     assert_eq!(loaded.version(), Version::from_persisted(500));
 }
@@ -1280,15 +1294,17 @@ async fn d10_max_rehydration_events_boundary() {
     agg.apply(CounterEvent::Incremented); // v1
     agg.apply(CounterEvent::Incremented); // v2
     agg.apply(CounterEvent::Incremented); // v3
-    es.save("boundary", &mut agg).await.unwrap();
+    es.save(&sid("boundary"), &mut agg).await.unwrap();
 
-    let mut agg: AggregateRoot<TinyAggregate> = es.load("boundary", CounterId(1)).await.unwrap();
+    let mut agg: AggregateRoot<TinyAggregate> =
+        es.load(&sid("boundary"), CounterId(1)).await.unwrap();
     agg.apply(CounterEvent::Incremented); // v4
     agg.apply(CounterEvent::Incremented); // v5
-    es.save("boundary", &mut agg).await.unwrap();
+    es.save(&sid("boundary"), &mut agg).await.unwrap();
 
     // Load 5 events — should succeed (version 5 is not > 5)
-    let loaded: AggregateRoot<TinyAggregate> = es.load("boundary", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<TinyAggregate> =
+        es.load(&sid("boundary"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 5);
     assert_eq!(loaded.version(), Version::from_persisted(5));
 }
@@ -1318,24 +1334,27 @@ async fn d11_schema_version_always_one() {
     let store = InMemoryStore::new();
 
     let envelopes = [
-        pending_envelope("sv".into())
+        pending_envelope(sid("sv"))
             .version(Version::from_persisted(1))
             .event_type("Incremented")
             .payload(b"inc".to_vec())
             .build_without_metadata(),
-        pending_envelope("sv".into())
+        pending_envelope(sid("sv"))
             .version(Version::from_persisted(2))
             .event_type("Set")
             .payload(b"set:42".to_vec())
             .build_without_metadata(),
     ];
     store
-        .append("sv", Version::INITIAL, &envelopes)
+        .append(&sid("sv"), Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
     // Read raw stream and verify schema versions
-    let mut stream = store.read_stream("sv", Version::INITIAL).await.unwrap();
+    let mut stream = store
+        .read_stream(&sid("sv"), Version::INITIAL)
+        .await
+        .unwrap();
     let env1 = stream.next().await.unwrap().unwrap();
     assert_eq!(
         env1.schema_version(),
@@ -1352,18 +1371,21 @@ async fn d11_schema_version_always_one() {
 }
 
 #[tokio::test]
-async fn d11_empty_stream_id_accepted_by_raw_store() {
-    // InMemoryStore doesn't validate stream_id — empty string is accepted.
-    // This documents the builder's "no validation" contract.
+async fn d11_stream_id_rejects_empty_string() {
+    // StreamId::from_persisted rejects empty strings at construction time.
+    // This is the desired compile-time safety improvement from the StreamId type.
+    let result = StreamId::from_persisted("");
+    assert!(result.is_err(), "StreamId should reject empty string");
+
+    // Valid stream_id still works
     let es = EventStore::new(InMemoryStore::new(), SimpleCodec);
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent::Incremented);
+    let result = es.save(&sid("valid-stream"), &mut agg).await;
+    assert!(result.is_ok(), "valid stream_id should be accepted");
 
-    // Empty stream_id works at the raw store level
-    let result = es.save("", &mut agg).await;
-    assert!(result.is_ok(), "empty stream_id should be accepted");
-
-    let loaded: AggregateRoot<CounterAggregate> = es.load("", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> =
+        es.load(&sid("valid-stream"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 1);
 }
 
@@ -1374,19 +1396,19 @@ async fn d11_stream_isolation_different_streams_independent() {
     // Save to stream A
     let mut agg_a = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg_a.apply(CounterEvent::Set(100));
-    es.save("stream-a", &mut agg_a).await.unwrap();
+    es.save(&sid("stream-a"), &mut agg_a).await.unwrap();
 
     // Save to stream B
     let mut agg_b = AggregateRoot::<CounterAggregate>::new(CounterId(2));
     agg_b.apply(CounterEvent::Set(200));
     agg_b.apply(CounterEvent::Incremented);
-    es.save("stream-b", &mut agg_b).await.unwrap();
+    es.save(&sid("stream-b"), &mut agg_b).await.unwrap();
 
     // Load each — must be independent
     let loaded_a: AggregateRoot<CounterAggregate> =
-        es.load("stream-a", CounterId(1)).await.unwrap();
+        es.load(&sid("stream-a"), CounterId(1)).await.unwrap();
     let loaded_b: AggregateRoot<CounterAggregate> =
-        es.load("stream-b", CounterId(2)).await.unwrap();
+        es.load(&sid("stream-b"), CounterId(2)).await.unwrap();
 
     assert_eq!(loaded_a.state().value, 100);
     assert_eq!(loaded_a.version(), Version::from_persisted(1));
@@ -1400,11 +1422,11 @@ async fn d11_append_empty_batch_is_noop() {
 
     // Save with no events — should not create the stream
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
-    es.save("empty-batch", &mut agg).await.unwrap();
+    es.save(&sid("empty-batch"), &mut agg).await.unwrap();
 
     // Loading should return fresh aggregate
     let loaded: AggregateRoot<CounterAggregate> =
-        es.load("empty-batch", CounterId(1)).await.unwrap();
+        es.load(&sid("empty-batch"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.version(), Version::INITIAL);
 }
 
@@ -1420,9 +1442,10 @@ async fn d11_multiple_event_types_in_single_stream() {
     agg.apply(CounterEvent::Decremented);
     agg.apply(CounterEvent::Set(-10));
     agg.apply(CounterEvent::Incremented);
-    es.save("mixed", &mut agg).await.unwrap();
+    es.save(&sid("mixed"), &mut agg).await.unwrap();
 
-    let loaded: AggregateRoot<CounterAggregate> = es.load("mixed", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> =
+        es.load(&sid("mixed"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, -9); // 50 +1 -1 -1 = -10 +1 = -9
     assert_eq!(loaded.version(), Version::from_persisted(6));
 }

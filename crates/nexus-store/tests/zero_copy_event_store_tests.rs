@@ -14,6 +14,10 @@ use nexus_store::repository::Repository;
 use nexus_store::testing::InMemoryStore;
 use std::fmt;
 
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
+
 // -- Domain where Event is a fixed-layout type decodable from bytes --
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,14 +109,14 @@ impl BorrowingCodec<CounterEvent> for CounterBorrowingCodec {
 #[tokio::test]
 async fn zero_copy_save_and_load_roundtrip() {
     let es = ZeroCopyEventStore::new(InMemoryStore::new(), CounterBorrowingCodec);
-    let sid = "counter-stream";
+    let stream = sid("counter-stream");
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg.apply(CounterEvent { delta: 10 });
     agg.apply(CounterEvent { delta: -3 });
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
-    let loaded: AggregateRoot<CounterAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 7);
     assert_eq!(loaded.version(), Version::from_persisted(2));
 }
@@ -120,7 +124,8 @@ async fn zero_copy_save_and_load_roundtrip() {
 #[tokio::test]
 async fn zero_copy_load_empty_stream() {
     let es = ZeroCopyEventStore::new(InMemoryStore::new(), CounterBorrowingCodec);
-    let loaded: AggregateRoot<CounterAggregate> = es.load("empty", CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> =
+        es.load(&sid("empty"), CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 0);
     assert_eq!(loaded.version(), Version::INITIAL);
 }
@@ -128,17 +133,17 @@ async fn zero_copy_load_empty_stream() {
 #[tokio::test]
 async fn zero_copy_multi_save_load() {
     let es = ZeroCopyEventStore::new(InMemoryStore::new(), CounterBorrowingCodec);
-    let sid = "multi";
+    let stream = sid("multi");
 
     let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     agg1.apply(CounterEvent { delta: 5 });
-    es.save(sid, &mut agg1).await.unwrap();
+    es.save(&stream, &mut agg1).await.unwrap();
 
-    let mut agg2: AggregateRoot<CounterAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let mut agg2: AggregateRoot<CounterAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     agg2.apply(CounterEvent { delta: 3 });
-    es.save(sid, &mut agg2).await.unwrap();
+    es.save(&stream, &mut agg2).await.unwrap();
 
-    let final_agg: AggregateRoot<CounterAggregate> = es.load(sid, CounterId(1)).await.unwrap();
+    let final_agg: AggregateRoot<CounterAggregate> = es.load(&stream, CounterId(1)).await.unwrap();
     assert_eq!(final_agg.state().value, 8);
     assert_eq!(final_agg.version(), Version::from_persisted(2));
 }

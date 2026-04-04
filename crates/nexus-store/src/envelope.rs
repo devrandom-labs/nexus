@@ -1,4 +1,5 @@
 use crate::error::InvalidSchemaVersion;
+use nexus::StreamId;
 use nexus::Version;
 
 // =============================================================================
@@ -9,7 +10,7 @@ use nexus::Version;
 ///
 /// Cannot be constructed directly. Use the typestate builder:
 /// ```ignore
-/// PendingEnvelopeBuilder::new("stream-1")
+/// PendingEnvelopeBuilder::new(stream_id)
 ///     .version(version)
 ///     .event_type("UserCreated")
 ///     .payload(bytes)
@@ -21,7 +22,7 @@ use nexus::Version;
 /// required fields are set before `build()` is callable.
 #[derive(Debug)]
 pub struct PendingEnvelope<M = ()> {
-    stream_id: String,
+    stream_id: StreamId,
     version: Version,
     event_type: &'static str,
     schema_version: u32,
@@ -32,7 +33,7 @@ pub struct PendingEnvelope<M = ()> {
 impl<M> PendingEnvelope<M> {
     /// The event stream identifier.
     #[must_use]
-    pub fn stream_id(&self) -> &str {
+    pub const fn stream_id(&self) -> &StreamId {
         &self.stream_id
     }
 
@@ -77,25 +78,25 @@ impl<M> PendingEnvelope<M> {
 
 /// Step 1: has `stream_id`, needs version.
 pub struct WithStreamId {
-    stream_id: String,
+    stream_id: StreamId,
 }
 
 /// Step 2: has `stream_id` + `version`, needs `event_type`.
 pub struct WithVersion {
-    stream_id: String,
+    stream_id: StreamId,
     version: Version,
 }
 
 /// Step 3: has `stream_id` + `version` + `event_type`, needs payload.
 pub struct WithEventType {
-    stream_id: String,
+    stream_id: StreamId,
     version: Version,
     event_type: &'static str,
 }
 
 /// Step 4: has all core fields, needs metadata.
 pub struct WithPayload {
-    stream_id: String,
+    stream_id: StreamId,
     version: Version,
     event_type: &'static str,
     payload: Vec<u8>,
@@ -105,7 +106,7 @@ pub struct WithPayload {
 impl WithStreamId {
     /// Start building a `PendingEnvelope` with the stream ID.
     #[must_use]
-    pub const fn new(stream_id: String) -> Self {
+    pub const fn new(stream_id: StreamId) -> Self {
         Self { stream_id }
     }
 
@@ -190,14 +191,14 @@ impl WithPayload {
 /// Start building a `PendingEnvelope`.
 ///
 /// ```ignore
-/// pending_envelope("stream-1".into())
+/// pending_envelope(stream_id)
 ///     .version(version)
 ///     .event_type("UserCreated")
 ///     .payload(bytes)
 ///     .build(metadata)
 /// ```
 #[must_use]
-pub const fn pending_envelope(stream_id: String) -> WithStreamId {
+pub const fn pending_envelope(stream_id: StreamId) -> WithStreamId {
     WithStreamId::new(stream_id)
 }
 

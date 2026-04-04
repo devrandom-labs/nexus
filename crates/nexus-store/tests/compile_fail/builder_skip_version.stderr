@@ -1,5 +1,5 @@
 error[E0599]: no method named `event_type` found for struct `WithStreamId` in the current scope
- --> tests/compile_fail/builder_skip_version.rs:4:43
+ --> tests/compile_fail/builder_skip_version.rs:5:71
   |
-4 |     let _ = pending_envelope("s1".into()).event_type("E");
-  |                                           ^^^^^^^^^^ method not found in `WithStreamId`
+5 |     let _ = pending_envelope(StreamId::from_persisted("s1").unwrap()).event_type("E");
+  |                                                                       ^^^^^^^^^^ method not found in `WithStreamId`

@@ -26,6 +26,7 @@
 )]
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::AppendError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
@@ -36,6 +37,10 @@ use nexus_store::upcaster::EventUpcaster;
 use std::collections::HashMap;
 use std::hint::black_box;
 use tokio::sync::Mutex;
+
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
 
 // =============================================================================
 // In-memory adapter (same pattern as raw_store_tests.rs)
@@ -92,12 +97,12 @@ impl RawEventStore for InMemoryRawStore {
 
     async fn append(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
+        let stream = guard.entry(stream_id.as_str().to_owned()).or_default();
         let current_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
         if current_version != expected_version.as_u64() {
             return Err(AppendError::Store(BenchError::Conflict));
@@ -115,18 +120,18 @@ impl RawEventStore for InMemoryRawStore {
 
     async fn read_stream(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
         let events = self
             .streams
             .lock()
             .await
-            .get(stream_id)
+            .get(stream_id.as_str())
             .map(|s| {
                 s.iter()
                     .filter(|(v, _, _)| *v >= from.as_u64())
-                    .map(|(v, t, p)| (stream_id.to_owned(), *v, t.clone(), p.clone()))
+                    .map(|(v, t, p)| (stream_id.as_str().to_owned(), *v, t.clone(), p.clone()))
                     .collect()
             })
             .unwrap_or_default();
@@ -167,10 +172,11 @@ impl EventUpcaster for NoopUpcaster {
 // =============================================================================
 
 fn make_envelopes(n: usize) -> Vec<PendingEnvelope<()>> {
+    let stream = sid("bench-stream");
     (0..n)
         .map(|i| {
             let version = u64::try_from(i + 1).unwrap_or(u64::MAX);
-            pending_envelope("bench-stream".to_owned())
+            pending_envelope(stream.clone())
                 .version(Version::from_persisted(version))
                 .event_type("BenchEvent")
                 .payload(vec![1, 2, 3, 4])
@@ -184,10 +190,11 @@ fn make_envelopes(n: usize) -> Vec<PendingEnvelope<()>> {
 // =============================================================================
 
 fn bench_builder_throughput(c: &mut Criterion) {
+    let stream = sid("stream-1");
     c.bench_function("PendingEnvelope builder", |b| {
         b.iter(|| {
             black_box(
-                pending_envelope(black_box("stream-1".to_owned()))
+                pending_envelope(black_box(stream.clone()))
                     .version(Version::from_persisted(1))
                     .event_type("UserCreated")
                     .payload(vec![1, 2, 3, 4])
@@ -226,7 +233,7 @@ fn bench_append(c: &mut Criterion) {
                 let store = InMemoryRawStore::new();
                 rt.block_on(async {
                     store
-                        .append("bench-stream", Version::INITIAL, black_box(envs))
+                        .append(&sid("bench-stream"), Version::INITIAL, black_box(envs))
                         .await
                         .unwrap();
                 });
@@ -247,7 +254,7 @@ fn bench_read_stream(c: &mut Criterion) {
         let store = InMemoryRawStore::new();
         rt.block_on(async {
             store
-                .append("bench-stream", Version::INITIAL, &envelopes)
+                .append(&sid("bench-stream"), Version::INITIAL, &envelopes)
                 .await
                 .unwrap();
         });
@@ -256,7 +263,7 @@ fn bench_read_stream(c: &mut Criterion) {
             b.iter(|| {
                 rt.block_on(async {
                     let mut stream = store
-                        .read_stream("bench-stream", Version::INITIAL)
+                        .read_stream(&sid("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
                     while let Some(result) = stream.next().await {

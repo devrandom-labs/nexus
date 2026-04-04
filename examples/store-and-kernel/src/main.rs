@@ -24,7 +24,7 @@ use nexus::*;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{Codec, pending_envelope};
+use nexus_store::{Codec, StreamId, pending_envelope};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -183,14 +183,14 @@ impl Codec<AccountEvent> for JsonCodec {
 /// Kernel -> Store: encode uncommitted events into pending envelopes.
 fn encode_events(
     codec: &JsonCodec,
-    stream_id: &str,
+    stream_id: &StreamId,
     uncommitted: &[VersionedEvent<AccountEvent>],
 ) -> Vec<nexus_store::envelope::PendingEnvelope<()>> {
     uncommitted
         .iter()
         .map(|ve| {
             let payload = codec.encode(ve.event()).expect("encode should succeed");
-            pending_envelope(stream_id.to_owned())
+            pending_envelope(stream_id.clone())
                 .version(ve.version())
                 .event_type(ve.event().name())
                 .payload(payload)
@@ -203,7 +203,7 @@ fn encode_events(
 async fn load_events(
     codec: &JsonCodec,
     store: &InMemoryStore,
-    stream_id: &str,
+    stream_id: &StreamId,
 ) -> Vec<VersionedEvent<AccountEvent>> {
     let mut stream = store
         .read_stream(stream_id, Version::from_persisted(1))
@@ -235,7 +235,7 @@ async fn load_events(
 async fn main() {
     let codec = JsonCodec;
     let store = InMemoryStore::new();
-    let stream_id = "account-alice";
+    let stream_id = StreamId::from_persisted("account-alice").expect("valid stream id");
 
     // -------------------------------------------------------------------------
     // Step 1: Create aggregate, apply business operations
@@ -263,9 +263,9 @@ async fn main() {
     println!("\n=== Step 2: Persist events to store ===");
 
     let uncommitted = account.take_uncommitted_events();
-    let envelopes = encode_events(&codec, stream_id, &uncommitted);
+    let envelopes = encode_events(&codec, &stream_id, &uncommitted);
     store
-        .append(stream_id, Version::INITIAL, &envelopes)
+        .append(&stream_id, Version::INITIAL, &envelopes)
         .await
         .expect("append should succeed");
 
@@ -279,7 +279,7 @@ async fn main() {
     // -------------------------------------------------------------------------
     println!("\n=== Step 3: Rehydrate from store ===");
 
-    let versioned = load_events(&codec, &store, stream_id).await;
+    let versioned = load_events(&codec, &store, &stream_id).await;
     let mut account = BankAccount::new(alice_id.clone());
     for ve in versioned {
         let (version, event) = ve.into_parts();
@@ -306,9 +306,9 @@ async fn main() {
     account.withdraw(300).expect("withdraw should succeed");
 
     let uncommitted = account.take_uncommitted_events();
-    let envelopes = encode_events(&codec, stream_id, &uncommitted);
+    let envelopes = encode_events(&codec, &stream_id, &uncommitted);
     store
-        .append(stream_id, expected_version, &envelopes)
+        .append(&stream_id, expected_version, &envelopes)
         .await
         .expect("append should succeed");
 
@@ -324,7 +324,7 @@ async fn main() {
     // -------------------------------------------------------------------------
     println!("\n=== Step 5: Full reload from store ===");
 
-    let versioned = load_events(&codec, &store, stream_id).await;
+    let versioned = load_events(&codec, &store, &stream_id).await;
     println!("Total events in stream: {}", versioned.len());
 
     let mut account = BankAccount::new(alice_id);

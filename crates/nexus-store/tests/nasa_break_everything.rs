@@ -60,6 +60,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::codec::Codec;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
@@ -72,6 +73,10 @@ use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcaster::{EventUpcaster, apply_upcasters};
 use nexus_store::upcaster_chain::{Chain, UpcasterChain};
+
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
 
 use proptest::prelude::*;
 
@@ -193,12 +198,12 @@ fn leak(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn build_envelopes(stream_id: &str, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(stream_id: &StreamId, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
     payloads
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            pending_envelope(stream_id.to_owned())
+            pending_envelope(stream_id.clone())
                 .version(Version::from_persisted(u64::try_from(i).unwrap() + 1))
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
@@ -208,7 +213,7 @@ fn build_envelopes(stream_id: &str, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope
 }
 
 fn build_envelopes_from(
-    stream_id: &str,
+    stream_id: &StreamId,
     start_version: u64,
     payloads: &[Vec<u8>],
 ) -> Vec<PendingEnvelope<()>> {
@@ -216,7 +221,7 @@ fn build_envelopes_from(
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            pending_envelope(stream_id.to_owned())
+            pending_envelope(stream_id.clone())
                 .version(Version::from_persisted(
                     start_version + u64::try_from(i).unwrap(),
                 ))
@@ -227,7 +232,7 @@ fn build_envelopes_from(
         .collect()
 }
 
-async fn read_all_payloads(store: &InMemoryStore, stream_id: &str) -> Vec<Vec<u8>> {
+async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamId) -> Vec<Vec<u8>> {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -240,7 +245,7 @@ async fn read_all_payloads(store: &InMemoryStore, stream_id: &str) -> Vec<Vec<u8
     payloads
 }
 
-async fn read_all_versions(store: &InMemoryStore, stream_id: &str) -> Vec<u64> {
+async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamId) -> Vec<u64> {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -257,8 +262,10 @@ async fn read_all_versions(store: &InMemoryStore, stream_id: &str) -> Vec<u64> {
 // Strategies
 // ============================================================================
 
-fn stream_id_strategy() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[a-z][a-z0-9_-]{0,29}").unwrap()
+fn stream_id_strategy() -> impl Strategy<Value = StreamId> {
+    prop::string::string_regex("[a-z][a-z0-9_-]{0,29}")
+        .unwrap()
+        .prop_map(|s| StreamId::from_persisted(s).unwrap())
 }
 
 fn evil_stream_id_strategy() -> impl Strategy<Value = String> {
@@ -405,18 +412,21 @@ proptest! {
 
     #[test]
     fn attack_pending_envelope_builder_preserves_all_fields(
-        stream_id in ".*",
+        raw_stream_id in ".*",
         version in any::<u64>(),
         payload in prop::collection::vec(any::<u8>(), 0..2000),
         metadata in any::<i32>(),
     ) {
+        // StreamId rejects invalid inputs (empty, null bytes, too long).
+        let Ok(stream_id) = StreamId::from_persisted(raw_stream_id) else { return Ok(()) };
+
         let env = pending_envelope(stream_id.clone())
             .version(Version::from_persisted(version))
             .event_type(leak("AnyType"))
             .payload(payload.clone())
             .build(metadata);
 
-        prop_assert_eq!(env.stream_id(), stream_id.as_str());
+        prop_assert_eq!(env.stream_id().as_str(), stream_id.as_str());
         prop_assert_eq!(env.version().as_u64(), version);
         prop_assert_eq!(env.event_type(), "AnyType");
         prop_assert_eq!(env.payload(), payload.as_slice());
@@ -1091,10 +1101,10 @@ proptest! {
             }
 
             // Save
-            es.save("stream-42", &mut root).await.unwrap();
+            es.save(&sid("stream-42"), &mut root).await.unwrap();
 
             // Load into fresh aggregate
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load("stream-42", TestId(42)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("stream-42"), TestId(42)).await.unwrap();
 
             // Verify state matches
             prop_assert_eq!(
@@ -1130,8 +1140,8 @@ proptest! {
                 root.apply(TestEvent::Happened(s.clone()));
             }
 
-            es.save("stream-1", &mut root).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load("stream-1", TestId(1)).await.unwrap();
+            es.save(&sid("stream-1"), &mut root).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("stream-1"), TestId(1)).await.unwrap();
 
             prop_assert_eq!(&loaded.state().log, &strings, "event log mismatch after roundtrip");
             Ok(())
@@ -1161,10 +1171,10 @@ proptest! {
             }
 
             // First save — should work
-            es.save("stream-99", &mut root).await.unwrap();
+            es.save(&sid("stream-99"), &mut root).await.unwrap();
 
             // Second save with no new events — should be a no-op, not an error
-            let result = es.save("stream-99", &mut root).await;
+            let result = es.save(&sid("stream-99"), &mut root).await;
             prop_assert!(result.is_ok(), "save with no uncommitted events must be a no-op");
             Ok(())
         })?;
@@ -1180,8 +1190,10 @@ async fn attack_event_store_load_empty_stream() {
     let store = InMemoryStore::new();
     let es = EventStore::new(store, JsonCodec);
 
-    let loaded: nexus::AggregateRoot<TestAggregate> =
-        es.load("nonexistent-stream", TestId(1)).await.unwrap();
+    let loaded: nexus::AggregateRoot<TestAggregate> = es
+        .load(&sid("nonexistent-stream"), TestId(1))
+        .await
+        .unwrap();
 
     assert_eq!(loaded.version(), Version::INITIAL);
     assert_eq!(loaded.state().events_applied, 0);
@@ -1210,21 +1222,21 @@ proptest! {
             for i in 0..n {
                 root_a.apply(TestEvent::ValueSet(i as i64));
             }
-            es.save("conflict-stream", &mut root_a).await.unwrap();
+            es.save(&sid("conflict-stream"), &mut root_a).await.unwrap();
 
             // Load into two separate aggregates
-            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load("conflict-stream", TestId(1)).await.unwrap();
-            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load("conflict-stream", TestId(1)).await.unwrap();
+            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(&sid("conflict-stream"), TestId(1)).await.unwrap();
+            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(&sid("conflict-stream"), TestId(1)).await.unwrap();
 
             // Both apply different events
             copy1.apply(TestEvent::ValueSet(100));
             copy2.apply(TestEvent::ValueSet(200));
 
             // First save succeeds
-            es.save("conflict-stream", &mut copy1).await.unwrap();
+            es.save(&sid("conflict-stream"), &mut copy1).await.unwrap();
 
             // Second save MUST fail with conflict
-            let result = es.save("conflict-stream", &mut copy2).await;
+            let result = es.save(&sid("conflict-stream"), &mut copy2).await;
             prop_assert!(result.is_err(), "concurrent save MUST detect conflict");
             Ok(())
         })?;
@@ -1257,14 +1269,14 @@ async fn attack_event_store_upcasters_applied_on_load() {
     let codec = JsonCodec;
     let payload = codec.encode(&TestEvent::Happened("hello".into())).unwrap();
     let envelopes = vec![
-        pending_envelope("upcast-stream".into())
+        pending_envelope(sid("upcast-stream"))
             .version(Version::from_persisted(1))
             .event_type(leak("Happened"))
             .payload(payload)
             .build_without_metadata(),
     ];
     store
-        .append("upcast-stream", Version::INITIAL, &envelopes)
+        .append(&sid("upcast-stream"), Version::INITIAL, &envelopes)
         .await
         .unwrap();
 
@@ -1272,7 +1284,7 @@ async fn attack_event_store_upcasters_applied_on_load() {
     let es = EventStore::new(store, JsonCodec).with_upcaster(OldToNewUpcaster);
 
     let loaded: nexus::AggregateRoot<TestAggregate> =
-        es.load("upcast-stream", TestId(1)).await.unwrap();
+        es.load(&sid("upcast-stream"), TestId(1)).await.unwrap();
     assert_eq!(loaded.state().events_applied, 1);
     assert_eq!(loaded.state().log, vec!["hello".to_owned()]);
 }
@@ -1327,24 +1339,26 @@ proptest! {
             for op in &ops {
                 match op {
                     ModelOp::Append { stream_id, payloads } => {
+                        let sid = StreamId::from_persisted(stream_id.as_str()).unwrap();
                         let model_stream = model.entry(stream_id.clone()).or_default();
                         let start_version = u64::try_from(model_stream.len()).unwrap();
                         let expected_version = Version::from_persisted(start_version);
 
                         let envelopes = build_envelopes_from(
-                            stream_id,
+                            &sid,
                             start_version + 1,
                             payloads,
                         );
 
-                        let result = store.append(stream_id, expected_version, &envelopes).await;
+                        let result = store.append(&sid, expected_version, &envelopes).await;
                         prop_assert!(result.is_ok(), "append should succeed for model-valid operation");
 
                         model_stream.extend(payloads.iter().cloned());
                     }
                     ModelOp::Read { stream_id } => {
+                        let sid = StreamId::from_persisted(stream_id.as_str()).unwrap();
                         let expected = model.get(stream_id).cloned().unwrap_or_default();
-                        let actual = read_all_payloads(&store, stream_id).await;
+                        let actual = read_all_payloads(&store, &sid).await;
 
                         prop_assert_eq!(
                             actual.len(), expected.len(),
@@ -1429,13 +1443,18 @@ proptest! {
 
     #[test]
     fn attack_evil_stream_ids_dont_crash(
-        stream_id in evil_stream_id_strategy(),
+        raw_stream_id in evil_stream_id_strategy(),
     ) {
+        // StreamId rejects invalid inputs (empty, null bytes, too long).
+        // If from_persisted fails, the evil input is caught at construction
+        // time — which is the desired safety improvement.
+        let Ok(stream_id) = StreamId::from_persisted(raw_stream_id) else { return Ok(()) };
+
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = InMemoryStore::new();
 
-            // Building envelopes with evil stream_id should not panic
+            // Building envelopes with validated stream_id should not panic
             let envelope = pending_envelope(stream_id.clone())
                 .version(Version::from_persisted(1))
                 .event_type(leak("E"))
@@ -1502,7 +1521,7 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
             let es = EventStore::new(store, JsonCodec);
-            let stream_id = "lifecycle-stream";
+            let stream_id = sid("lifecycle-stream");
 
             let mut total_events: u64 = 0;
             let mut expected_last_value: i64 = 0;
@@ -1512,7 +1531,7 @@ proptest! {
                 let mut root: nexus::AggregateRoot<TestAggregate> = if cycle_idx == 0 {
                     nexus::AggregateRoot::<TestAggregate>::new(TestId(1))
                 } else {
-                    es.load(stream_id, TestId(1)).await.unwrap()
+                    es.load(&stream_id, TestId(1)).await.unwrap()
                 };
 
                 // Verify loaded state
@@ -1528,11 +1547,11 @@ proptest! {
                 }
 
                 // Save
-                es.save(stream_id, &mut root).await.unwrap();
+                es.save(&stream_id, &mut root).await.unwrap();
                 total_events += u64::try_from(values.len()).unwrap();
 
                 // Verify by loading again
-                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(stream_id, TestId(1)).await.unwrap();
+                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&stream_id, TestId(1)).await.unwrap();
                 prop_assert_eq!(
                     loaded.state().last_value, expected_last_value,
                     "last_value wrong after cycle {}", cycle_idx,
@@ -1746,8 +1765,8 @@ proptest! {
                 expected_log.push(s.clone());
             }
 
-            es.save("mixed-stream", &mut root).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load("mixed-stream", TestId(7)).await.unwrap();
+            es.save(&sid("mixed-stream"), &mut root).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("mixed-stream"), TestId(7)).await.unwrap();
 
             prop_assert_eq!(loaded.state().last_value, expected_last_value);
             prop_assert_eq!(&loaded.state().log, &expected_log);
@@ -1798,7 +1817,7 @@ proptest! {
 
             // Create many streams with many events
             for stream_idx in 0..num_streams {
-                let stream_id = format!("stress-{}", stream_idx);
+                let stream_id = StreamId::from_persisted(format!("stress-{}", stream_idx)).unwrap();
                 let payloads: Vec<Vec<u8>> = (0..events_per_stream)
                     .map(|i| {
                         let mut p = vec![stream_idx as u8];
@@ -1813,7 +1832,7 @@ proptest! {
 
             // Verify each stream independently
             for stream_idx in 0..num_streams {
-                let stream_id = format!("stress-{}", stream_idx);
+                let stream_id = StreamId::from_persisted(format!("stress-{}", stream_idx)).unwrap();
                 let read = read_all_payloads(&store, &stream_id).await;
                 prop_assert_eq!(
                     read.len(), events_per_stream,
@@ -1884,14 +1903,14 @@ async fn attack_concurrent_writers_exactly_one_wins() {
     for writer_id in 0..num_writers {
         let store = Arc::clone(&store);
         handles.push(tokio::spawn(async move {
-            let envelope = pending_envelope("race-stream".into())
+            let envelope = pending_envelope(sid("race-stream"))
                 .version(Version::from_persisted(1))
                 .event_type(Box::leak(format!("Writer{writer_id}").into_boxed_str()))
                 .payload(vec![writer_id as u8])
                 .build_without_metadata();
 
             store
-                .append("race-stream", Version::INITIAL, &[envelope])
+                .append(&sid("race-stream"), Version::INITIAL, &[envelope])
                 .await
         }));
     }
@@ -1914,7 +1933,7 @@ async fn attack_concurrent_writers_exactly_one_wins() {
     );
 
     // The stream should have exactly 1 event
-    let payloads = read_all_payloads(&store, "race-stream").await;
+    let payloads = read_all_payloads(&store, &sid("race-stream")).await;
     assert_eq!(payloads.len(), 1, "stream must have exactly 1 event");
 }
 
@@ -2007,14 +2026,14 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
             let es = EventStore::new(store, JsonCodec);
-            let sid = "interleave-stream";
+            let stream = sid("interleave-stream");
 
             // Batch 1: create, apply, save
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
             for &v in &batch1 {
                 root.apply(TestEvent::ValueSet(v));
             }
-            es.save(sid, &mut root).await.unwrap();
+            es.save(&stream, &mut root).await.unwrap();
             let v1 = root.version().as_u64();
             prop_assert_eq!(v1, u64::try_from(batch1.len()).unwrap());
 
@@ -2022,20 +2041,20 @@ proptest! {
             for &v in &batch2 {
                 root.apply(TestEvent::ValueSet(v));
             }
-            es.save(sid, &mut root).await.unwrap();
+            es.save(&stream, &mut root).await.unwrap();
             let v2 = root.version().as_u64();
             prop_assert_eq!(v2, u64::try_from(batch1.len() + batch2.len()).unwrap());
 
             // Batch 3: load fresh, apply, save
-            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(sid, TestId(1)).await.unwrap();
+            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(&stream, TestId(1)).await.unwrap();
             prop_assert_eq!(fresh.version().as_u64(), v2);
             for &v in &batch3 {
                 fresh.apply(TestEvent::ValueSet(v));
             }
-            es.save(sid, &mut fresh).await.unwrap();
+            es.save(&stream, &mut fresh).await.unwrap();
 
             // Final verification
-            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(sid, TestId(1)).await.unwrap();
+            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(&stream, TestId(1)).await.unwrap();
             let total = batch1.len() + batch2.len() + batch3.len();
             prop_assert_eq!(
                 final_root.version().as_u64(),
@@ -2101,25 +2120,27 @@ proptest! {
         rt.block_on(async {
             // Store A: write X first, then Y
             let store_a = InMemoryStore::new();
-            let env_x = build_envelopes("x", &payloads_x);
-            let env_y = build_envelopes("y", &payloads_y);
-            store_a.append("x", Version::INITIAL, &env_x).await.unwrap();
-            store_a.append("y", Version::INITIAL, &env_y).await.unwrap();
+            let sid_x = sid("x");
+            let sid_y = sid("y");
+            let env_x = build_envelopes(&sid_x, &payloads_x);
+            let env_y = build_envelopes(&sid_y, &payloads_y);
+            store_a.append(&sid_x, Version::INITIAL, &env_x).await.unwrap();
+            store_a.append(&sid_y, Version::INITIAL, &env_y).await.unwrap();
 
             // Store B: write Y first, then X
             let store_b = InMemoryStore::new();
-            let env_x2 = build_envelopes("x", &payloads_x);
-            let env_y2 = build_envelopes("y", &payloads_y);
-            store_b.append("y", Version::INITIAL, &env_y2).await.unwrap();
-            store_b.append("x", Version::INITIAL, &env_x2).await.unwrap();
+            let env_x2 = build_envelopes(&sid_x, &payloads_x);
+            let env_y2 = build_envelopes(&sid_y, &payloads_y);
+            store_b.append(&sid_y, Version::INITIAL, &env_y2).await.unwrap();
+            store_b.append(&sid_x, Version::INITIAL, &env_x2).await.unwrap();
 
             // Both stores should yield identical data for each stream
-            let a_x = read_all_payloads(&store_a, "x").await;
-            let b_x = read_all_payloads(&store_b, "x").await;
+            let a_x = read_all_payloads(&store_a, &sid_x).await;
+            let b_x = read_all_payloads(&store_b, &sid_x).await;
             prop_assert_eq!(&a_x, &b_x, "stream x differs based on creation order");
 
-            let a_y = read_all_payloads(&store_a, "y").await;
-            let b_y = read_all_payloads(&store_b, "y").await;
+            let a_y = read_all_payloads(&store_a, &sid_y).await;
+            let b_y = read_all_payloads(&store_b, &sid_y).await;
             prop_assert_eq!(&a_y, &b_y, "stream y differs based on creation order");
 
             Ok(())
@@ -2240,17 +2261,17 @@ proptest! {
             }
 
             // After save, uncommitted should be drained
-            es.save("drain-test", &mut root).await.unwrap();
+            es.save(&sid("drain-test"), &mut root).await.unwrap();
             prop_assert_eq!(root.version().as_u64(), u64::try_from(n).unwrap());
 
             // Second save should be a no-op (no uncommitted events)
-            es.save("drain-test", &mut root).await.unwrap();
+            es.save(&sid("drain-test"), &mut root).await.unwrap();
 
             // Can still apply more events after save
             root.apply(TestEvent::ValueSet(999));
-            es.save("drain-test", &mut root).await.unwrap();
+            es.save(&sid("drain-test"), &mut root).await.unwrap();
 
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load("drain-test", TestId(1)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("drain-test"), TestId(1)).await.unwrap();
             prop_assert_eq!(loaded.state().last_value, 999);
             prop_assert_eq!(loaded.state().events_applied, u64::try_from(n + 1).unwrap());
             Ok(())

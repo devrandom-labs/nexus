@@ -11,6 +11,10 @@ use nexus_store::testing::InMemoryStore;
 use nexus_store::upcaster::EventUpcaster;
 use std::fmt;
 
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
+
 // -- Test domain --
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,14 +112,14 @@ impl Codec<TodoEvent> for TestCodec {
 #[tokio::test]
 async fn save_and_load_roundtrip() {
     let es = EventStore::new(InMemoryStore::new(), TestCodec);
-    let sid = "todo-stream-1";
+    let stream = sid("todo-stream-1");
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     agg.apply(TodoEvent::Created("Buy milk".into()));
     agg.apply(TodoEvent::Done);
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
-    let loaded: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let loaded: AggregateRoot<TodoAggregate> = es.load(&stream, TodoId(1)).await.unwrap();
     assert_eq!(loaded.state().title, "Buy milk");
     assert!(loaded.state().done);
     assert_eq!(loaded.version(), Version::from_persisted(2));
@@ -124,7 +128,8 @@ async fn save_and_load_roundtrip() {
 #[tokio::test]
 async fn load_empty_stream_returns_fresh_aggregate() {
     let es = EventStore::new(InMemoryStore::new(), TestCodec);
-    let loaded: AggregateRoot<TodoAggregate> = es.load("nonexistent", TodoId(1)).await.unwrap();
+    let loaded: AggregateRoot<TodoAggregate> =
+        es.load(&sid("nonexistent"), TodoId(1)).await.unwrap();
     assert_eq!(loaded.version(), Version::INITIAL);
     assert_eq!(loaded.state(), &TodoState::default());
 }
@@ -133,23 +138,23 @@ async fn load_empty_stream_returns_fresh_aggregate() {
 async fn save_no_uncommitted_events_is_noop() {
     let es = EventStore::new(InMemoryStore::new(), TestCodec);
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&sid("s1"), &mut agg).await.unwrap();
 }
 
 #[tokio::test]
 async fn save_then_append_more_events() {
     let es = EventStore::new(InMemoryStore::new(), TestCodec);
-    let sid = "multi-save";
+    let stream = sid("multi-save");
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     agg.apply(TodoEvent::Created("Task".into()));
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
-    let mut loaded: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let mut loaded: AggregateRoot<TodoAggregate> = es.load(&stream, TodoId(1)).await.unwrap();
     loaded.apply(TodoEvent::Done);
-    es.save(sid, &mut loaded).await.unwrap();
+    es.save(&stream, &mut loaded).await.unwrap();
 
-    let final_agg: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let final_agg: AggregateRoot<TodoAggregate> = es.load(&stream, TodoId(1)).await.unwrap();
     assert_eq!(final_agg.state().title, "Task");
     assert!(final_agg.state().done);
     assert_eq!(final_agg.version(), Version::from_persisted(2));
@@ -159,20 +164,20 @@ async fn save_then_append_more_events() {
 async fn optimistic_concurrency_conflict() {
     let store = InMemoryStore::new();
     let es = EventStore::new(store, TestCodec);
-    let sid = "conflict-test";
+    let stream = sid("conflict-test");
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     agg.apply(TodoEvent::Created("Original".into()));
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
-    let mut agg_a: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
-    let mut agg_b: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let mut agg_a: AggregateRoot<TodoAggregate> = es.load(&stream, TodoId(1)).await.unwrap();
+    let mut agg_b: AggregateRoot<TodoAggregate> = es.load(&stream, TodoId(1)).await.unwrap();
 
     agg_a.apply(TodoEvent::Done);
-    es.save(sid, &mut agg_a).await.unwrap();
+    es.save(&stream, &mut agg_a).await.unwrap();
 
     agg_b.apply(TodoEvent::Done);
-    let result = es.save(sid, &mut agg_b).await;
+    let result = es.save(&stream, &mut agg_b).await;
     assert!(result.is_err(), "should get concurrency conflict");
 }
 
@@ -194,15 +199,15 @@ impl EventUpcaster for V1ToV2Upcaster {
 async fn load_with_upcaster_transforms_events() {
     // EventStore with upcaster — save then load through the same store
     let es = EventStore::new(InMemoryStore::new(), TestCodec).with_upcaster(V1ToV2Upcaster);
-    let sid = "upcaster-stream";
+    let stream = sid("upcaster-stream");
 
     // Save — upcasters are only applied on reads, not writes
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     agg.apply(TodoEvent::Created("Task".into()));
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&stream, &mut agg).await.unwrap();
 
     // Load — upcaster bumps schema version but payload format is unchanged
-    let loaded: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let loaded: AggregateRoot<TodoAggregate> = es.load(&stream, TodoId(1)).await.unwrap();
     assert_eq!(loaded.state().title, "Task");
     assert_eq!(loaded.version(), Version::from_persisted(1));
 }

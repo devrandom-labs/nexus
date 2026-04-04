@@ -16,6 +16,7 @@ pub use codec::Codec;
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use event_store::{EventStore, ZeroCopyEventStore};
+pub use nexus::StreamId;
 pub use raw::RawEventStore;
 pub use repository::Repository;
 pub use stream::EventStream;

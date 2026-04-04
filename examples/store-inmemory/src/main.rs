@@ -21,6 +21,7 @@
     reason = "example code shadows for readability"
 )]
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
@@ -152,7 +153,7 @@ async fn main() {
     let codec = JsonCodec;
     let store = InMemoryStore::new();
     let upcaster = RenameUpcaster;
-    let stream_id = "todo-1";
+    let stream_id = StreamId::from_persisted("todo-1").expect("valid stream id");
 
     // --- Step 1: Create domain events ---
     println!("Step 1: Create domain events");
@@ -193,7 +194,7 @@ async fn main() {
     let mut envelopes: Vec<nexus_store::envelope::PendingEnvelope<()>> = Vec::new();
     for (i, (payload, event_type)) in encoded.iter().enumerate() {
         let version_num = u64::try_from(i + 1).expect("version should fit in u64");
-        let envelope = pending_envelope(stream_id.into())
+        let envelope = pending_envelope(stream_id.clone())
             .version(Version::from_persisted(version_num))
             .event_type(event_type)
             .payload(payload.clone())
@@ -211,7 +212,7 @@ async fn main() {
     // --- Step 4: Append to the store ---
     println!("Step 4: Append envelopes to InMemoryStore");
     store
-        .append(stream_id, Version::INITIAL, &envelopes)
+        .append(&stream_id, Version::INITIAL, &envelopes)
         .await
         .expect("append should succeed");
     println!(
@@ -239,14 +240,14 @@ async fn main() {
         let old_json = legacy_str.replace("TodoCreated", "TaskCreated");
         println!("  Raw JSON (old schema): {old_json}");
 
-        let legacy_envelope = pending_envelope(stream_id.into())
+        let legacy_envelope = pending_envelope(stream_id.clone())
             .version(Version::from_persisted(4))
             .event_type("TaskCreated")
             .payload(old_json.into_bytes())
             .build_without_metadata();
 
         store
-            .append(stream_id, Version::from_persisted(3), &[legacy_envelope])
+            .append(&stream_id, Version::from_persisted(3), &[legacy_envelope])
             .await
             .expect("append legacy event should succeed");
         println!("  Inserted legacy event at version 4");
@@ -256,7 +257,7 @@ async fn main() {
     // --- Step 5: Read back from the store ---
     println!("Step 5: Read events back from InMemoryStore");
     let mut event_stream = store
-        .read_stream(stream_id, Version::INITIAL)
+        .read_stream(&stream_id, Version::INITIAL)
         .await
         .expect("read_stream should succeed");
 

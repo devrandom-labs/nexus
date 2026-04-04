@@ -6,7 +6,7 @@ use crate::raw::RawEventStore;
 use crate::repository::Repository;
 use crate::stream::EventStream;
 use crate::upcaster_chain::{Chain, UpcasterChain};
-use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
+use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, StreamId, Version};
 
 // ─── Shared upcaster logic ───────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ async fn save_with_encoder<A, S, U, F>(
     store: &S,
     upcasters: &U,
     encode_fn: F,
-    stream_id: &str,
+    stream_id: &StreamId,
     aggregate: &mut AggregateRoot<A>,
 ) -> Result<(), StoreError>
 where
@@ -110,7 +110,7 @@ where
         let payload = encode_fn(ve.event())?;
         let sv = current_schema_version(upcasters, ve.event().name());
         envelopes.push(
-            pending_envelope(stream_id.into())
+            pending_envelope(stream_id.clone())
                 .version(ve.version())
                 .event_type(ve.event().name())
                 .payload(payload)
@@ -192,7 +192,7 @@ where
 {
     type Error = StoreError;
 
-    async fn load(&self, stream_id: &str, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+    async fn load(&self, stream_id: &StreamId, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
         let mut stream = self
             .store
             .read_stream(stream_id, Version::INITIAL)
@@ -224,7 +224,7 @@ where
 
     async fn save(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         aggregate: &mut AggregateRoot<A>,
     ) -> Result<(), StoreError> {
         save_with_encoder(
@@ -296,7 +296,7 @@ where
 {
     type Error = StoreError;
 
-    async fn load(&self, stream_id: &str, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+    async fn load(&self, stream_id: &StreamId, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
         let mut stream = self
             .store
             .read_stream(stream_id, Version::INITIAL)
@@ -328,7 +328,7 @@ where
 
     async fn save(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         aggregate: &mut AggregateRoot<A>,
     ) -> Result<(), StoreError> {
         save_with_encoder(

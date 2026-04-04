@@ -1,4 +1,4 @@
-use nexus::{Aggregate, AggregateRoot};
+use nexus::{Aggregate, AggregateRoot, StreamId};
 use std::future::Future;
 
 /// Port for loading and saving aggregates via event streams.
@@ -27,7 +27,7 @@ use std::future::Future;
 /// # Example Implementation Pattern
 ///
 /// ```ignore
-/// async fn load(&self, stream_id: &str, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+/// async fn load(&self, stream_id: &StreamId, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
 ///     let mut stream = self.store.read_stream(stream_id, Version::INITIAL).await
 ///         .map_err(|e| StoreError::Adapter(Box::new(e)))?;
 ///     let mut root = AggregateRoot::<A>::new(id);
@@ -51,7 +51,7 @@ pub trait Repository<A: Aggregate>: Send + Sync {
     /// Returns a fresh aggregate at `Version::INITIAL` if the stream is empty.
     fn load(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         id: A::Id,
     ) -> impl Future<Output = Result<AggregateRoot<A>, Self::Error>> + Send;
 
@@ -62,7 +62,7 @@ pub trait Repository<A: Aggregate>: Send + Sync {
     /// The aggregate's persisted version advances on success.
     fn save(
         &self,
-        stream_id: &str,
+        stream_id: &StreamId,
         aggregate: &mut AggregateRoot<A>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }

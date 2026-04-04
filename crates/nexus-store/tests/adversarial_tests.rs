@@ -27,9 +27,15 @@
 
 use std::collections::HashMap;
 
+use nexus::StreamId;
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::pending_envelope;
+
+#[allow(clippy::unwrap_used, reason = "test helper")]
+fn sid(s: &str) -> StreamId {
+    StreamId::from_persisted(s).unwrap()
+}
 
 // =============================================================================
 // 1. Unicode stream ID with emoji
@@ -37,26 +43,25 @@ use nexus_store::pending_envelope;
 
 #[test]
 fn unicode_stream_id() {
-    let stream_id = "user-\u{1F600}-stream"; // user-😀-stream
-    let envelope = pending_envelope(stream_id.to_owned())
+    let envelope = pending_envelope(sid("user-\u{1F600}-stream"))
         .version(Version::from_persisted(1))
         .event_type("UserCreated")
         .payload(vec![1, 2, 3])
         .build_without_metadata();
 
-    assert_eq!(envelope.stream_id(), stream_id);
+    assert_eq!(envelope.stream_id().as_str(), "user-\u{1F600}-stream");
 
     // Round-trip through PersistedEnvelope
-    let owned_id = envelope.stream_id().to_owned();
+    let owned_str = envelope.stream_id().as_str().to_owned();
     let persisted = PersistedEnvelope::<()>::new(
-        &owned_id,
+        &owned_str,
         envelope.version(),
         envelope.event_type(),
         1,
         envelope.payload(),
         (),
     );
-    assert_eq!(persisted.stream_id(), stream_id);
+    assert_eq!(persisted.stream_id(), "user-\u{1F600}-stream");
 }
 
 // =============================================================================
@@ -66,20 +71,21 @@ fn unicode_stream_id() {
 #[test]
 fn rtl_and_zero_width_joiner_stream_id() {
     // Arabic text + ZWJ (U+200D) + more Arabic
-    let stream_id = "\u{0639}\u{0631}\u{0628}\u{064A}\u{200D}\u{0645}\u{0632}\u{064A}\u{062F}";
-    let envelope = pending_envelope(stream_id.to_owned())
+    let raw = "\u{0639}\u{0631}\u{0628}\u{064A}\u{200D}\u{0645}\u{0632}\u{064A}\u{062F}";
+    let stream_id = sid(raw);
+    let envelope = pending_envelope(stream_id)
         .version(Version::from_persisted(1))
         .event_type("Event")
         .payload(vec![])
         .build_without_metadata();
 
     // Must be stored literally — no normalization or stripping
-    assert_eq!(envelope.stream_id(), stream_id);
+    assert_eq!(envelope.stream_id().as_str(), raw);
     assert!(
-        envelope.stream_id().contains('\u{200D}'),
+        envelope.stream_id().as_str().contains('\u{200D}'),
         "ZWJ character must not be stripped"
     );
-    assert_eq!(envelope.stream_id().len(), stream_id.len());
+    assert_eq!(envelope.stream_id().as_str().len(), raw.len());
 }
 
 // =============================================================================
@@ -88,7 +94,7 @@ fn rtl_and_zero_width_joiner_stream_id() {
 
 #[test]
 fn max_version_envelope() {
-    let envelope = pending_envelope("stream".to_owned())
+    let envelope = pending_envelope(sid("stream"))
         .version(Version::from_persisted(u64::MAX))
         .event_type("Event")
         .payload(vec![])
@@ -114,7 +120,7 @@ fn max_version_envelope() {
 
 #[test]
 fn empty_payload() {
-    let envelope = pending_envelope("stream".to_owned())
+    let envelope = pending_envelope(sid("stream"))
         .version(Version::from_persisted(1))
         .event_type("EmptyEvent")
         .payload(vec![])
@@ -132,7 +138,7 @@ fn empty_payload() {
 fn large_payload() {
     let size = 1_000_000;
     let payload = vec![0xFF_u8; size];
-    let envelope = pending_envelope("stream".to_owned())
+    let envelope = pending_envelope(sid("stream"))
         .version(Version::from_persisted(1))
         .event_type("LargeEvent")
         .payload(payload)
@@ -151,16 +157,17 @@ fn large_payload() {
 
 #[test]
 fn path_traversal_stream_id() {
-    let stream_id = "../../../etc/passwd";
-    let envelope = pending_envelope(stream_id.to_owned())
+    let raw = "../../../etc/passwd";
+    let stream_id = sid(raw);
+    let envelope = pending_envelope(stream_id)
         .version(Version::from_persisted(1))
         .event_type("Event")
         .payload(vec![42])
         .build_without_metadata();
 
     // Must be stored literally — no path interpretation
-    assert_eq!(envelope.stream_id(), stream_id);
-    assert!(envelope.stream_id().starts_with("../"));
+    assert_eq!(envelope.stream_id().as_str(), raw);
+    assert!(envelope.stream_id().as_str().starts_with("../"));
 }
 
 // =============================================================================
@@ -168,18 +175,11 @@ fn path_traversal_stream_id() {
 // =============================================================================
 
 #[test]
-fn null_bytes_in_stream_id() {
-    let stream_id = "stream\0injected";
-    let envelope = pending_envelope(stream_id.to_owned())
-        .version(Version::from_persisted(1))
-        .event_type("Event")
-        .payload(vec![1])
-        .build_without_metadata();
-
-    // Must be stored literally — null byte is not a terminator
-    assert_eq!(envelope.stream_id(), stream_id);
-    assert_eq!(envelope.stream_id().len(), "stream\0injected".len());
-    assert!(envelope.stream_id().contains('\0'));
+fn null_bytes_in_stream_id_rejected_by_stream_id() {
+    // StreamId rejects null bytes at construction time — this is the
+    // desired compile-time safety improvement from the StreamId type.
+    let result = StreamId::from_persisted("stream\0injected");
+    assert!(result.is_err(), "StreamId should reject null bytes");
 }
 
 // =============================================================================
@@ -195,7 +195,7 @@ fn exotic_metadata_nested_generics() {
     let metadata: Vec<Option<HashMap<String, Vec<u8>>>> =
         vec![Some(inner_map), None, Some(HashMap::new())];
 
-    let envelope = pending_envelope("stream".to_owned())
+    let envelope = pending_envelope(sid("stream"))
         .version(Version::from_persisted(1))
         .event_type("ExoticEvent")
         .payload(vec![0xAB])
@@ -221,7 +221,7 @@ fn zero_sized_metadata() {
     #[derive(Debug, Clone, PartialEq)]
     struct Zst;
 
-    let envelope = pending_envelope("stream".to_owned())
+    let envelope = pending_envelope(sid("stream"))
         .version(Version::from_persisted(1))
         .event_type("ZstEvent")
         .payload(vec![])

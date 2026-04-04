@@ -1,5 +1,6 @@
+use nexus::StreamId;
 use nexus_store::pending_envelope;
 
 fn main() {
-    let _ = pending_envelope("s1".into()).event_type("E");
+    let _ = pending_envelope(StreamId::from_persisted("s1").unwrap()).event_type("E");
 }
