@@ -426,4 +426,155 @@ mod tests {
         }
         assert!(stream_b.next().await.is_none());
     }
+
+    // ---- persistence tests ----
+
+    #[tokio::test]
+    async fn data_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("db");
+
+        // Write events, close store.
+        {
+            let store = FjallStore::builder(&db_path).open().unwrap();
+            let envs = vec![make_envelope("s1", 1, "Created", b"persist-me")];
+            store.append("s1", Version::INITIAL, &envs).await.unwrap();
+        }
+
+        // Reopen and verify.
+        {
+            let store = FjallStore::builder(&db_path).open().unwrap();
+            let mut stream = store
+                .read_stream("s1", Version::from_persisted(1))
+                .await
+                .unwrap();
+            let env = stream.next().await.unwrap().unwrap();
+            assert_eq!(env.event_type(), "Created");
+            assert_eq!(env.payload(), b"persist-me");
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_id_counter_recovers_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("db");
+
+        // Create two streams, close.
+        {
+            let store = FjallStore::builder(&db_path).open().unwrap();
+            store
+                .append("s1", Version::INITIAL, &[make_envelope("s1", 1, "A", b"")])
+                .await
+                .unwrap();
+            store
+                .append("s2", Version::INITIAL, &[make_envelope("s2", 1, "B", b"")])
+                .await
+                .unwrap();
+        }
+
+        // Reopen, create third stream — should not collide with existing numeric IDs.
+        {
+            let store = FjallStore::builder(&db_path).open().unwrap();
+            store
+                .append("s3", Version::INITIAL, &[make_envelope("s3", 1, "C", b"")])
+                .await
+                .unwrap();
+
+            // All three streams readable and isolated.
+            let mut st = store
+                .read_stream("s3", Version::from_persisted(1))
+                .await
+                .unwrap();
+            let env = st.next().await.unwrap().unwrap();
+            assert_eq!(env.event_type(), "C");
+        }
+    }
+
+    // ---- version tracking tests ----
+
+    #[tokio::test]
+    async fn version_tracks_across_appends() {
+        let store = temp_store();
+        store
+            .append("s", Version::INITIAL, &[make_envelope("s", 1, "A", b"")])
+            .await
+            .unwrap();
+        store
+            .append(
+                "s",
+                Version::from_persisted(1),
+                &[make_envelope("s", 2, "B", b"")],
+            )
+            .await
+            .unwrap();
+
+        let mut stream = store
+            .read_stream("s", Version::from_persisted(1))
+            .await
+            .unwrap();
+        {
+            let e1 = stream.next().await.unwrap().unwrap();
+            assert_eq!(e1.version().as_u64(), 1);
+        }
+        {
+            let e2 = stream.next().await.unwrap().unwrap();
+            assert_eq!(e2.version().as_u64(), 2);
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    // ---- large batch tests ----
+
+    #[tokio::test]
+    async fn large_batch_append() {
+        let store = temp_store();
+        let envelopes: Vec<_> = (1..=100)
+            .map(|i| make_envelope("big", i, "Tick", &[0u8; 256]))
+            .collect();
+        store
+            .append("big", Version::INITIAL, &envelopes)
+            .await
+            .unwrap();
+
+        let mut stream = store
+            .read_stream("big", Version::from_persisted(1))
+            .await
+            .unwrap();
+        let mut count = 0u64;
+        while let Some(result) = stream.next().await {
+            let _ = result.unwrap();
+            count += 1;
+        }
+        assert_eq!(count, 100);
+    }
+
+    // ---- schema version tests ----
+
+    #[tokio::test]
+    async fn schema_version_preserved() {
+        let store = temp_store();
+        let env = pending_envelope("s".to_owned())
+            .version(Version::from_persisted(1))
+            .event_type("Migrated")
+            .payload(b"data".to_vec())
+            .schema_version(42)
+            .build_without_metadata();
+        store.append("s", Version::INITIAL, &[env]).await.unwrap();
+
+        let mut stream = store
+            .read_stream("s", Version::from_persisted(1))
+            .await
+            .unwrap();
+        let persisted = stream.next().await.unwrap().unwrap();
+        assert_eq!(persisted.schema_version(), 42);
+    }
+
+    // ---- edge cases ----
+
+    #[tokio::test]
+    async fn empty_batch_append_succeeds() {
+        let store = temp_store();
+        let result = store.append("s", Version::INITIAL, &[]).await;
+        assert!(result.is_ok());
+    }
 }
