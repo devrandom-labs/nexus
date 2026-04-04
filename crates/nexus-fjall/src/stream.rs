@@ -55,14 +55,20 @@ impl EventStream for FjallStream {
             }));
         };
 
-        Some(Ok(PersistedEnvelope::new(
+        let envelope = PersistedEnvelope::try_new(
             &self.stream_id,
             Version::from_persisted(version),
             event_type,
             schema_version,
             payload,
             (),
-        )))
+        )
+        .map_err(|_| FjallError::CorruptValue {
+            stream_id: self.stream_id.clone(),
+            version,
+        });
+
+        Some(envelope)
     }
 }
 

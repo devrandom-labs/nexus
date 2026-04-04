@@ -48,6 +48,10 @@ impl RawEventStore for FjallStore {
         expected_version: Version,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
+        if envelopes.is_empty() {
+            return Ok(());
+        }
+
         let mut tx = self.db.write_tx();
 
         // Look up stream metadata (numeric_id, current_version).
@@ -78,6 +82,8 @@ impl RawEventStore for FjallStore {
                     actual: Version::from_persisted(0),
                 });
             }
+            // Relaxed ordering is safe: write_tx() serializes all writers, so only
+            // one thread can reach this code at a time.
             let numeric_id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
             (numeric_id, 0)
         };
@@ -193,16 +199,17 @@ mod tests {
             .build_without_metadata()
     }
 
-    fn temp_store() -> FjallStore {
+    fn temp_store() -> (FjallStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        FjallStore::builder(dir.path().join("db")).open().unwrap()
+        let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
+        (store, dir)
     }
 
     // ---- append tests ----
 
     #[tokio::test]
     async fn append_to_new_stream() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let env = make_envelope("stream-1", 1, "Created", b"payload");
 
         let result = store.append("stream-1", Version::INITIAL, &[env]).await;
@@ -211,7 +218,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_multiple_events() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let envs = vec![
             make_envelope("stream-1", 1, "Created", b"p1"),
             make_envelope("stream-1", 2, "Updated", b"p2"),
@@ -224,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_detects_version_conflict() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let env1 = make_envelope("stream-1", 1, "Created", b"p1");
         store
             .append("stream-1", Version::INITIAL, &[env1])
@@ -248,7 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_to_nonexistent_stream_with_nonzero_version_fails() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let env = make_envelope("stream-1", 6, "Created", b"payload");
 
         let result = store
@@ -268,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_sequential_batches() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
 
         // First batch.
         let batch1 = vec![
@@ -308,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_empty_stream_returns_empty() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let mut stream = store
             .read_stream("nonexistent", Version::from_persisted(1))
             .await
@@ -318,7 +325,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_after_append_returns_events() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let envs = vec![
             make_envelope("stream-1", 1, "Created", b"p1"),
             make_envelope("stream-1", 2, "Updated", b"p2"),
@@ -354,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_with_from_version_skips_earlier() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let envs = vec![
             make_envelope("stream-1", 1, "Created", b"p1"),
             make_envelope("stream-1", 2, "Updated", b"p2"),
@@ -388,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn streams_are_isolated() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
 
         let env_a = make_envelope("stream-a", 1, "CreatedA", b"a-data");
         store
@@ -494,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn version_tracks_across_appends() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         store
             .append("s", Version::INITIAL, &[make_envelope("s", 1, "A", b"")])
             .await
@@ -527,7 +534,7 @@ mod tests {
 
     #[tokio::test]
     async fn large_batch_append() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let envelopes: Vec<_> = (1..=100)
             .map(|i| make_envelope("big", i, "Tick", &[0u8; 256]))
             .collect();
@@ -552,7 +559,7 @@ mod tests {
 
     #[tokio::test]
     async fn schema_version_preserved() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let env = pending_envelope("s".to_owned())
             .version(Version::from_persisted(1))
             .event_type("Migrated")
@@ -573,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_batch_append_succeeds() {
-        let store = temp_store();
+        let (store, _dir) = temp_store();
         let result = store.append("s", Version::INITIAL, &[]).await;
         assert!(result.is_ok());
     }
