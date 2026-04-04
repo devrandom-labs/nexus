@@ -2,7 +2,7 @@ use thiserror::Error;
 
 /// Errors from decoding stored byte layouts.
 #[derive(Debug, Error)]
-pub(crate) enum DecodeError {
+pub enum DecodeError {
     #[error("invalid size: expected {expected}, got {actual}")]
     InvalidSize { expected: usize, actual: usize },
 
@@ -15,24 +15,25 @@ pub(crate) enum DecodeError {
 
 /// Errors from encoding values into byte layouts.
 #[derive(Debug, Error)]
-pub(crate) enum EncodeError {
+pub enum EncodeError {
     #[error("event type too long: {len} bytes (max {})", u16::MAX)]
     EventTypeTooLong { len: usize },
 }
 
 /// Size of an encoded event key in bytes: `[u64 BE stream_numeric_id][u64 BE version]`.
-pub(crate) const EVENT_KEY_SIZE: usize = 16;
+pub const EVENT_KEY_SIZE: usize = 16;
 
 /// Size of an encoded stream metadata value in bytes: `[u64 LE numeric_id][u64 LE version]`.
-pub(crate) const STREAM_META_SIZE: usize = 16;
+pub const STREAM_META_SIZE: usize = 16;
 
 /// Size of the fixed header in an encoded event value: `[u32 LE schema_version][u16 LE event_type_len]`.
-pub(crate) const EVENT_VALUE_HEADER_SIZE: usize = 6;
+pub const EVENT_VALUE_HEADER_SIZE: usize = 6;
 
 /// Encode an event key as `[u64 BE stream_numeric_id][u64 BE version]`.
 ///
 /// Big-endian encoding ensures natural byte ordering in LSM trees.
-pub(crate) fn encode_event_key(stream_numeric_id: u64, version: u64) -> [u8; EVENT_KEY_SIZE] {
+#[must_use]
+pub fn encode_event_key(stream_numeric_id: u64, version: u64) -> [u8; EVENT_KEY_SIZE] {
     let mut buf = [0u8; EVENT_KEY_SIZE];
     buf[..8].copy_from_slice(&stream_numeric_id.to_be_bytes());
     buf[8..].copy_from_slice(&version.to_be_bytes());
@@ -40,7 +41,11 @@ pub(crate) fn encode_event_key(stream_numeric_id: u64, version: u64) -> [u8; EVE
 }
 
 /// Decode an event key from `[u64 BE stream_numeric_id][u64 BE version]`.
-pub(crate) fn decode_event_key(key: &[u8]) -> Result<(u64, u64), DecodeError> {
+///
+/// # Errors
+///
+/// Returns [`DecodeError::InvalidSize`] if `key` is not exactly [`EVENT_KEY_SIZE`] bytes.
+pub fn decode_event_key(key: &[u8]) -> Result<(u64, u64), DecodeError> {
     if key.len() != EVENT_KEY_SIZE {
         return Err(DecodeError::InvalidSize {
             expected: EVENT_KEY_SIZE,
@@ -61,7 +66,8 @@ pub(crate) fn decode_event_key(key: &[u8]) -> Result<(u64, u64), DecodeError> {
 /// Encode stream metadata as `[u64 LE numeric_id][u64 LE version]`.
 ///
 /// Little-endian encoding is used since metadata has no ordering requirement.
-pub(crate) fn encode_stream_meta(numeric_id: u64, version: u64) -> [u8; STREAM_META_SIZE] {
+#[must_use]
+pub fn encode_stream_meta(numeric_id: u64, version: u64) -> [u8; STREAM_META_SIZE] {
     let mut buf = [0u8; STREAM_META_SIZE];
     buf[..8].copy_from_slice(&numeric_id.to_le_bytes());
     buf[8..].copy_from_slice(&version.to_le_bytes());
@@ -69,7 +75,11 @@ pub(crate) fn encode_stream_meta(numeric_id: u64, version: u64) -> [u8; STREAM_M
 }
 
 /// Decode stream metadata from `[u64 LE numeric_id][u64 LE version]`.
-pub(crate) fn decode_stream_meta(value: &[u8]) -> Result<(u64, u64), DecodeError> {
+///
+/// # Errors
+///
+/// Returns [`DecodeError::InvalidSize`] if `value` is not exactly [`STREAM_META_SIZE`] bytes.
+pub fn decode_stream_meta(value: &[u8]) -> Result<(u64, u64), DecodeError> {
     if value.len() != STREAM_META_SIZE {
         return Err(DecodeError::InvalidSize {
             expected: STREAM_META_SIZE,
@@ -90,8 +100,11 @@ pub(crate) fn decode_stream_meta(value: &[u8]) -> Result<(u64, u64), DecodeError
 /// Encode an event value as `[u32 LE schema_version][u16 LE event_type_len][event_type UTF-8][payload]`.
 ///
 /// The buffer is cleared and reused (no reallocation if capacity suffices).
-/// Returns an error if `event_type` exceeds `u16::MAX` bytes.
-pub(crate) fn encode_event_value(
+///
+/// # Errors
+///
+/// Returns [`EncodeError::EventTypeTooLong`] if `event_type` exceeds `u16::MAX` bytes.
+pub fn encode_event_value(
     buf: &mut Vec<u8>,
     schema_version: u32,
     event_type: &str,
@@ -126,7 +139,13 @@ pub(crate) fn encode_event_value(
 }
 
 /// Decode an event value from `[u32 LE schema_version][u16 LE event_type_len][event_type UTF-8][payload]`.
-pub(crate) fn decode_event_value(value: &[u8]) -> Result<(u32, &str, &[u8]), DecodeError> {
+///
+/// # Errors
+///
+/// Returns [`DecodeError::ValueTooShort`] if `value` is shorter than the header or
+/// the claimed event-type length, or [`DecodeError::InvalidUtf8`] if the event-type
+/// bytes are not valid UTF-8.
+pub fn decode_event_value(value: &[u8]) -> Result<(u32, &str, &[u8]), DecodeError> {
     if value.len() < EVENT_VALUE_HEADER_SIZE {
         return Err(DecodeError::ValueTooShort {
             min: EVENT_VALUE_HEADER_SIZE,

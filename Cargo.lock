@@ -562,6 +562,7 @@ dependencies = [
  "fjall",
  "nexus",
  "nexus-store",
+ "proptest",
  "tempfile",
  "thiserror",
  "tokio",
