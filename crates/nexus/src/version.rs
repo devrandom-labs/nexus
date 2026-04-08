@@ -1,12 +1,15 @@
 use std::fmt;
+use std::num::NonZeroU64;
 
-/// A monotonically increasing sequence number for aggregate event history.
+/// A monotonically increasing event version number.
 ///
-/// Versions are assigned by the kernel — user code cannot construct
-/// arbitrary versions. The only public entry points are:
-/// - `Version::INITIAL` — the starting version (0)
-/// - `Version::from_persisted()` — for store adapters rehydrating from a database
-/// - `version.next()` — derives the next version from an existing one
+/// Wraps `NonZeroU64` — event versions are always >= 1.
+/// A fresh aggregate with no events has `Option<Version>` = `None`.
+///
+/// The only public entry points are:
+/// - `Version::INITIAL` — the first event version (1)
+/// - `Version::new()` — construct from a `u64` (returns `None` for 0)
+/// - `version.next()` — derives the next version, returns `None` on overflow
 ///
 /// # Example
 ///
@@ -14,57 +17,43 @@ use std::fmt;
 /// use nexus::Version;
 ///
 /// let v = Version::INITIAL;
-/// assert_eq!(v.as_u64(), 0);
-/// assert_eq!(v.next().as_u64(), 1);
-/// assert!(v < v.next());
+/// assert_eq!(v.as_u64(), 1);
+/// assert_eq!(v.next().unwrap().as_u64(), 2);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Version(u64);
+pub struct Version(NonZeroU64);
 
 impl Version {
-    /// The starting version for a new aggregate.
-    pub const INITIAL: Self = Self(0);
+    /// The first event version (1).
+    pub const INITIAL: Self = Self(NonZeroU64::MIN);
 
     /// The next version in sequence.
     ///
-    /// # Panics
-    ///
-    /// Panics if the version is `u64::MAX` (overflow). This is a hard limit —
-    /// an aggregate cannot have more than `u64::MAX` events.
+    /// Returns `None` if the version is `u64::MAX` (overflow).
     #[must_use]
-    #[allow(
-        clippy::panic,
-        reason = "version overflow must crash, not silently wrap"
-    )]
-    pub const fn next(self) -> Self {
+    pub const fn next(self) -> Option<Self> {
         match self.0.checked_add(1) {
-            Some(v) => Self(v),
-            None => panic!("Version overflow: cannot increment past u64::MAX"),
+            Some(v) => Some(Self(v)),
+            None => None,
         }
     }
 
-    /// The underlying integer value.
+    /// The underlying integer value. Always >= 1.
     #[must_use]
     pub const fn as_u64(self) -> u64 {
-        self.0
+        self.0.get()
     }
 
-    /// Construct a Version from a raw u64.
+    /// Construct a Version from a `u64`.
     ///
-    /// This is `pub(crate)` — only the kernel creates versions internally.
-    /// Store adapters use `from_persisted()` to reconstruct versions
-    /// from database rows.
-    pub(crate) const fn new(v: u64) -> Self {
-        Self(v)
-    }
-
-    /// Reconstruct a Version from persisted data.
-    ///
-    /// For store adapters that read version numbers from a database.
-    /// This is the only public way to construct a Version from a raw number.
+    /// Returns `None` if `v` is 0 (invalid — versions are always >= 1).
+    /// Mirrors [`NonZeroU64::new`].
     #[must_use]
-    pub const fn from_persisted(v: u64) -> Self {
-        Self(v)
+    pub const fn new(v: u64) -> Option<Self> {
+        match NonZeroU64::new(v) {
+            Some(nz) => Some(Self(nz)),
+            None => None,
+        }
     }
 }
 
@@ -75,10 +64,6 @@ impl fmt::Display for Version {
 }
 
 /// An event paired with its version in the aggregate's event sequence.
-///
-/// This type cannot be constructed outside the kernel — only
-/// `AggregateRoot::apply` produces `VersionedEvent` values internally. This guarantees that version
-/// numbers are always assigned by the kernel, never forged by user code.
 #[derive(Debug)]
 pub struct VersionedEvent<E> {
     version: Version,
@@ -123,24 +108,10 @@ impl<E> VersionedEvent<E> {
 
     /// Create a new versioned event.
     ///
-    /// This is `pub(crate)` — only the kernel can construct versioned events.
-    /// Store adapters use `into_parts()` and `from_parts()` to
-    /// serialize/deserialize, but cannot forge arbitrary version numbers
-    /// from user code.
-    pub(crate) const fn new(version: Version, event: E) -> Self {
-        Self { version, event }
-    }
-}
-
-/// Reconstruct a `VersionedEvent` from its parts.
-///
-/// This exists for store adapters that need to deserialize persisted events
-/// back into `VersionedEvent`. It is public because adapters live in
-/// separate crates, but the name `from_persisted` signals intent —
-/// this is for rehydration, not for creating new events.
-impl<E> VersionedEvent<E> {
+    /// Public because store adapters in separate crates need to
+    /// reconstruct `VersionedEvent` from deserialized parts.
     #[must_use]
-    pub const fn from_persisted(version: Version, event: E) -> Self {
+    pub const fn new(version: Version, event: E) -> Self {
         Self { version, event }
     }
 }

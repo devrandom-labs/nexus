@@ -21,6 +21,7 @@ workspace-hack = { version = "0.1.0", path = "../workspace-hack" }
 
 [dev-dependencies]
 nexus = { path = "../nexus", features = ["derive"] }
+nexus-store = { path = "../nexus-store" }
 proptest = { workspace = true }
 thiserror = { workspace = true }
 trybuild = "1"

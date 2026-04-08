@@ -1,22 +1,23 @@
-use nexus::ErrorId;
-use nexus::KernelError;
-use nexus::Version;
+use crate::stream_label::StreamLabel;
+use nexus::{KernelError, Version};
 use thiserror::Error;
 
 /// Errors from the event store layer.
 #[derive(Debug, Error)]
 pub enum StoreError {
     /// Optimistic concurrency conflict.
-    #[error("Concurrency conflict on '{stream_id}': expected version {expected}, actual {actual}")]
+    #[error(
+        "Concurrency conflict on stream '{stream_id}': expected version {expected:?}, actual {actual:?}"
+    )]
     Conflict {
-        stream_id: ErrorId,
-        expected: Version,
-        actual: Version,
+        stream_id: StreamLabel,
+        expected: Option<Version>,
+        actual: Option<Version>,
     },
 
     /// Stream not found.
     #[error("Stream '{stream_id}' not found")]
-    StreamNotFound { stream_id: ErrorId },
+    StreamNotFound { stream_id: StreamLabel },
 
     /// Serialization/deserialization failure.
     #[error("Codec error: {0}")]
@@ -41,9 +42,9 @@ pub enum StoreError {
 pub enum AppendError<E> {
     /// Optimistic concurrency conflict — expected version doesn't match.
     Conflict {
-        stream_id: ErrorId,
-        expected: Version,
-        actual: Version,
+        stream_id: StreamLabel,
+        expected: Option<Version>,
+        actual: Option<Version>,
     },
     /// Adapter-level failure (I/O, serialization, connection, etc.).
     Store(E),
@@ -58,7 +59,7 @@ impl<E: std::fmt::Display> std::fmt::Display for AppendError<E> {
                 actual,
             } => write!(
                 f,
-                "Concurrency conflict on '{stream_id}': expected version {expected}, actual {actual}"
+                "Concurrency conflict on '{stream_id}': expected version {expected:?}, actual {actual:?}"
             ),
             Self::Store(e) => write!(f, "Store error: {e}"),
         }
@@ -79,8 +80,9 @@ impl<E: std::error::Error + 'static> std::error::Error for AppendError<E> {
 #[error("invalid schema version: 0 (schema versions start at 1)")]
 pub struct InvalidSchemaVersion;
 
-/// Errors from upcaster validation via [`apply_upcasters()`](crate::apply_upcasters).
+/// Errors from upcaster validation and transform execution.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum UpcastError {
     /// Upcaster returned the same or lower schema version.
     #[error(
@@ -89,8 +91,8 @@ pub enum UpcastError {
     )]
     VersionNotAdvanced {
         event_type: String,
-        input_version: u32,
-        output_version: u32,
+        input_version: Version,
+        output_version: Version,
     },
 
     /// Upcaster returned an empty event type.
@@ -100,7 +102,7 @@ pub enum UpcastError {
     )]
     EmptyEventType {
         input_event_type: String,
-        schema_version: u32,
+        schema_version: Version,
     },
 
     /// Upcaster chain exceeded the iteration limit.
@@ -110,7 +112,16 @@ pub enum UpcastError {
     )]
     ChainLimitExceeded {
         event_type: String,
-        schema_version: u32,
-        limit: u32,
+        schema_version: Version,
+        limit: u64,
+    },
+
+    /// A schema transform failed to process the payload.
+    #[error("Transform failed for '{event_type}' at schema version {schema_version}: {source}")]
+    TransformFailed {
+        event_type: String,
+        schema_version: Version,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
 }

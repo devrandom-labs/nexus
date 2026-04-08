@@ -27,7 +27,7 @@ impl DomainEvent for AttrEvent {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct AttrState;
 impl AggregateState for AttrState {
     type Event = AttrEvent;
@@ -36,9 +36,6 @@ impl AggregateState for AttrState {
     }
     fn apply(self, _: &AttrEvent) -> Self {
         self
-    }
-    fn name(&self) -> &'static str {
-        "Attr"
     }
 }
 

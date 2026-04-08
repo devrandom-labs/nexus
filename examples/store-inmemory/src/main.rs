@@ -1,5 +1,5 @@
 // examples/store-inmemory — demonstrates all nexus-store traits with an
-// in-memory backend: Codec, RawEventStore, EventStream, EventUpcaster,
+// in-memory backend: Codec, RawEventStore, EventStream, Upcaster,
 // and the PendingEnvelope typestate builder.
 //
 // Run with: cargo run -p nexus-example-store-inmemory
@@ -21,14 +21,31 @@
     reason = "example code shadows for readability"
 )]
 
-use nexus::StreamId;
+use nexus::Id;
 use nexus::Version;
+use nexus_store::morsel::EventMorsel;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::upcaster::EventUpcaster;
+use nexus_store::upcaster::Upcaster;
 use nexus_store::{Codec, pending_envelope};
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+// =============================================================================
+// 0. Stream ID type — needed by RawEventStore
+// =============================================================================
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct TodoId(String);
+
+impl fmt::Display for TodoId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Id for TodoId {}
 
 // =============================================================================
 // 1. Domain events — a simple Todo aggregate
@@ -120,23 +137,32 @@ impl Codec<TodoEvent> for JsonCodec {
 /// the old Rust type doesn't need to exist.
 struct RenameUpcaster;
 
-impl EventUpcaster for RenameUpcaster {
-    fn can_upcast(&self, event_type: &str, schema_version: u32) -> bool {
-        event_type == "TaskCreated" && schema_version < 2
-    }
-
-    fn upcast(
+impl Upcaster for RenameUpcaster {
+    fn apply<'a>(
         &self,
-        _event_type: &str,
-        _schema_version: u32,
-        payload: &[u8],
-    ) -> (String, u32, Vec<u8>) {
+        morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, nexus_store::UpcastError> {
+        if morsel.event_type() != "TaskCreated" || morsel.schema_version().as_u64() >= 2 {
+            return Ok(morsel);
+        }
         // Rename the event type. The payload JSON uses serde's
         // tagged enum format, so we also need to rename the tag
         // inside the JSON body.
-        let json = String::from_utf8_lossy(payload);
+        let json = String::from_utf8_lossy(morsel.payload());
         let upgraded = json.replace("TaskCreated", "TodoCreated");
-        ("TodoCreated".to_owned(), 2, upgraded.into_bytes())
+        Ok(EventMorsel::new(
+            "TodoCreated",
+            Version::new(2).expect("2 is non-zero"),
+            upgraded.into_bytes(),
+        ))
+    }
+
+    fn current_version(&self, event_type: &str) -> Option<Version> {
+        if event_type == "TaskCreated" || event_type == "TodoCreated" {
+            Some(Version::new(2).expect("2 is non-zero"))
+        } else {
+            None
+        }
     }
 }
 
@@ -153,7 +179,7 @@ async fn main() {
     let codec = JsonCodec;
     let store = InMemoryStore::new();
     let upcaster = RenameUpcaster;
-    let stream_id = StreamId::from_persisted("todo-1").expect("valid stream id");
+    let stream_id = TodoId("todo-1".to_owned());
 
     // --- Step 1: Create domain events ---
     println!("Step 1: Create domain events");
@@ -194,14 +220,12 @@ async fn main() {
     let mut envelopes: Vec<nexus_store::envelope::PendingEnvelope<()>> = Vec::new();
     for (i, (payload, event_type)) in encoded.iter().enumerate() {
         let version_num = u64::try_from(i + 1).expect("version should fit in u64");
-        let envelope = pending_envelope(stream_id.clone())
-            .version(Version::from_persisted(version_num))
+        let envelope = pending_envelope(Version::new(version_num).expect("version > 0"))
             .event_type(event_type)
             .payload(payload.clone())
             .build_without_metadata();
         println!(
-            "  Envelope: stream={}, version={}, type={}",
-            envelope.stream_id(),
+            "  Envelope: version={}, type={}",
             envelope.version(),
             envelope.event_type()
         );
@@ -212,12 +236,12 @@ async fn main() {
     // --- Step 4: Append to the store ---
     println!("Step 4: Append envelopes to InMemoryStore");
     store
-        .append(&stream_id, Version::INITIAL, &envelopes)
+        .append(&stream_id, None, &envelopes)
         .await
         .expect("append should succeed");
     println!(
         "  Appended {} events to stream '{stream_id}'",
-        envelopes.len()
+        envelopes.len(),
     );
     println!();
 
@@ -240,14 +264,13 @@ async fn main() {
         let old_json = legacy_str.replace("TodoCreated", "TaskCreated");
         println!("  Raw JSON (old schema): {old_json}");
 
-        let legacy_envelope = pending_envelope(stream_id.clone())
-            .version(Version::from_persisted(4))
+        let legacy_envelope = pending_envelope(Version::new(4).expect("version > 0"))
             .event_type("TaskCreated")
             .payload(old_json.into_bytes())
             .build_without_metadata();
 
         store
-            .append(&stream_id, Version::from_persisted(3), &[legacy_envelope])
+            .append(&stream_id, Version::new(3), &[legacy_envelope])
             .await
             .expect("append legacy event should succeed");
         println!("  Inserted legacy event at version 4");
@@ -259,7 +282,7 @@ async fn main() {
     let mut event_stream = store
         .read_stream(&stream_id, Version::INITIAL)
         .await
-        .expect("read_stream should succeed");
+        .expect("read should succeed");
 
     let mut read_events: Vec<(String, u32, Vec<u8>, u64)> = Vec::new();
     loop {
@@ -292,18 +315,19 @@ async fn main() {
     // --- Step 6: Upcast and decode ---
     println!("Step 6: Apply upcaster, then decode with JsonCodec");
     for (event_type, schema_version, payload, version) in &read_events {
-        let (final_type, _final_version, final_payload) =
-            if upcaster.can_upcast(event_type, *schema_version) {
-                println!("  [UPCAST] version={version}: '{event_type}' v{schema_version} -> ...");
-                let result = upcaster.upcast(event_type, *schema_version, payload);
-                println!("           ... '{}' v{}", result.0, result.1);
-                result
-            } else {
-                (event_type.clone(), *schema_version, payload.clone())
-            };
+        let schema_ver = Version::new(u64::from(*schema_version)).expect("schema version > 0");
+        let morsel = EventMorsel::borrowed(event_type, schema_ver, payload);
+        let upcasted = upcaster.apply(morsel).expect("upcast should succeed");
+
+        if upcasted.event_type() != event_type {
+            println!(
+                "  [UPCAST] version={version}: '{event_type}' v{schema_version} -> '{}'",
+                upcasted.event_type()
+            );
+        }
 
         let decoded = codec
-            .decode(&final_type, &final_payload)
+            .decode(upcasted.event_type(), upcasted.payload())
             .expect("decode should succeed");
         println!("  version={version}: {decoded:?}");
     }

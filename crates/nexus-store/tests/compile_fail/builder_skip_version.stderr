@@ -1,5 +1,5 @@
-error[E0599]: no method named `event_type` found for struct `WithStreamId` in the current scope
- --> tests/compile_fail/builder_skip_version.rs:5:71
+error[E0599]: no method named `payload` found for struct `WithVersion` in the current scope
+ --> tests/compile_fail/builder_skip_version.rs:5:56
   |
-5 |     let _ = pending_envelope(StreamId::from_persisted("s1").unwrap()).event_type("E");
-  |                                                                       ^^^^^^^^^^ method not found in `WithStreamId`
+5 |     let _ = pending_envelope(Version::new(1).unwrap()).payload(vec![1]);
+  |                                                        ^^^^^^^ method not found in `WithVersion`

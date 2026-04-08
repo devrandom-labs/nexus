@@ -37,7 +37,7 @@ impl DomainEvent for ThingEvent {
 }
 
 // --- Test State ---
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct ThingState {
     name: String,
     active: bool,
@@ -54,9 +54,6 @@ impl AggregateState for ThingState {
             ThingEvent::Activated(_) => self.active = true,
         }
         self
-    }
-    fn name(&self) -> &'static str {
-        "Thing"
     }
 }
 
@@ -110,10 +107,4 @@ fn aggregate_state_apply_mutates() {
     assert!(!state.active);
     let state = state.apply(&ThingEvent::Activated(ThingActivated));
     assert!(state.active);
-}
-
-#[test]
-fn aggregate_state_name() {
-    let state = ThingState::default();
-    assert_eq!(state.name(), "Thing");
 }

@@ -1,8 +1,7 @@
-/// Applying an event from one aggregate to a different aggregate's state
+/// Replaying an event from one aggregate into a different aggregate's root
 /// must fail at compile time. This is the core type safety guarantee.
 
 use nexus::*;
-use nexus::AggregateRoot;
 
 // --- User domain ---
 #[derive(Debug, Clone)]
@@ -12,13 +11,12 @@ impl DomainEvent for UserEvent {
     fn name(&self) -> &'static str { "Created" }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct UserState;
 impl AggregateState for UserState {
     type Event = UserEvent;
     fn initial() -> Self { Self::default() }
     fn apply(self, _: &UserEvent) -> Self { self }
-    fn name(&self) -> &'static str { "User" }
 }
 
 // --- Order domain (different!) ---
@@ -53,5 +51,5 @@ impl Id for UserId {}
 fn main() {
     let mut user = AggregateRoot::<UserAggregate>::new(UserId(1));
     // This MUST fail: OrderEvent is not UserEvent
-    user.apply(OrderEvent::Placed);
+    user.replay(Version::INITIAL, &OrderEvent::Placed);
 }

@@ -15,16 +15,24 @@ pub enum FjallError {
     #[error("corrupt metadata for stream '{stream_id}'")]
     CorruptMeta { stream_id: String },
 
-    /// Numeric stream ID space exhausted (`u64::MAX` streams created).
+    /// Numeric ID space exhausted (`u64::MAX` streams created).
     ///
     /// This prevents silent wrap-around to 0, which would cause two
-    /// different `stream_id` strings to share the same numeric key space
-    /// and silently corrupt each other's event data.
-    #[error(
-        "stream ID space exhausted: cannot allocate more than {} streams",
-        u64::MAX
-    )]
-    StreamIdExhausted,
+    /// different IDs to share the same numeric key space and silently
+    /// corrupt each other's event data.
+    #[error("ID space exhausted: cannot allocate more than {} streams", u64::MAX)]
+    IdSpaceExhausted,
+
+    /// Invalid input on the write path (e.g. event type name too long).
+    ///
+    /// Distinct from `CorruptValue` which indicates already-persisted data
+    /// is unreadable. This error fires before any data is written.
+    #[error("invalid input for stream '{stream_id}' at version {version}: {reason}")]
+    InvalidInput {
+        stream_id: String,
+        version: u64,
+        reason: String,
+    },
 }
 
 #[cfg(test)]

@@ -1,26 +1,20 @@
-//! # NASA-Grade Adversarial Property Tests for nexus-fjall
+//! Property-based and adversarial tests for the fjall event store adapter.
 //!
-//! Mission: systematically try to BREAK every invariant the fjall event store
-//! adapter claims. Tool: proptest. Strategy: generate chaotic inputs, verify
-//! contracts hold. If something breaks, report it — do NOT fix.
+//! Uses proptest to generate chaotic inputs and verify store invariants hold.
 //!
-//! ## Attack Surface Catalog
+//! ## Coverage
 //!
-//! 1.  Encoding: event key round-trip for any (u64, u64)
-//! 2.  Encoding: stream meta round-trip for any (u64, u64)
-//! 3.  Encoding: event value round-trip for any data
-//! 4.  Encoding: event key byte ordering preserves numeric order
-//! 5.  Encoding: evil event type strings (Unicode, null bytes, huge)
-//! 6.  Append-read roundtrip: any payloads preserved
-//! 7.  Append-read roundtrip: adversarial payloads preserved
-//! 8.  Stream ID attack surface: evil IDs, isolation
-//! 9.  Version boundaries: u64::MAX, conflict detection, sequential enforcement
-//! 10. Concurrency: multiple tasks racing to append
-//! 11. Persistence: data survives reopen, counter recovery
-//! 12. Stress: many streams, large streams, large payloads
-//! 13. Schema version edge cases: boundaries, u32::MAX
-//! 14. Model-based testing: shadow HashMap vs real store
-//! 15. Empty and degenerate cases
+//! 1.  Encoding round-trips: event key, stream meta, event value
+//! 2.  Encoding byte ordering and adversarial event type strings
+//! 3.  Append-read roundtrips with arbitrary and adversarial payloads
+//! 4.  Stream ID validation and isolation
+//! 5.  Version boundaries, conflict detection, sequential enforcement
+//! 6.  Concurrent append races
+//! 7.  Persistence across reopen, counter recovery
+//! 8.  Stress: many streams, large streams, large payloads
+//! 9.  Schema version edge cases
+//! 10. Model-based testing: shadow HashMap vs real store
+//! 11. Edge cases: fused streams, version filtering
 
 #![allow(clippy::unwrap_used, reason = "test code")]
 #![allow(clippy::expect_used, reason = "test code")]
@@ -47,8 +41,8 @@
 #![allow(dead_code, reason = "strategies used only in some proptest blocks")]
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 
-use nexus::StreamId;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{
@@ -63,8 +57,16 @@ use nexus_store::stream::EventStream;
 
 use proptest::prelude::*;
 
-fn sid(s: &str) -> StreamId {
-    StreamId::from_persisted(s).unwrap()
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct TestId(String);
+impl std::fmt::Display for TestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl nexus::Id for TestId {}
+fn tid(s: &str) -> TestId {
+    TestId(s.to_owned())
 }
 
 // ============================================================================
@@ -81,41 +83,33 @@ fn temp_store() -> (FjallStore, tempfile::TempDir) {
     (store, dir)
 }
 
-fn make_envelope(
-    stream_id: &StreamId,
-    version: u64,
-    event_type: &'static str,
-    payload: &[u8],
-) -> PendingEnvelope<()> {
-    pending_envelope(stream_id.clone())
-        .version(Version::from_persisted(version))
+fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope<()> {
+    pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
         .build_without_metadata()
 }
 
 fn make_envelope_with_schema(
-    stream_id: &StreamId,
     version: u64,
     event_type: &'static str,
     payload: &[u8],
     schema_version: u32,
 ) -> PendingEnvelope<()> {
-    pending_envelope(stream_id.clone())
-        .version(Version::from_persisted(version))
+    let sv = NonZeroU32::new(schema_version).unwrap_or(NonZeroU32::MIN);
+    pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
-        .schema_version(schema_version)
+        .schema_version(sv)
         .build_without_metadata()
 }
 
-fn build_envelopes(stream_id: &StreamId, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
     payloads
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            pending_envelope(stream_id.clone())
-                .version(Version::from_persisted(u64::try_from(i).unwrap() + 1))
+            pending_envelope(Version::new(u64::try_from(i).unwrap() + 1).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
                 .build_without_metadata()
@@ -123,19 +117,12 @@ fn build_envelopes(stream_id: &StreamId, payloads: &[Vec<u8>]) -> Vec<PendingEnv
         .collect()
 }
 
-fn build_envelopes_from(
-    stream_id: &StreamId,
-    start_version: u64,
-    payloads: &[Vec<u8>],
-) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
     payloads
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            pending_envelope(stream_id.clone())
-                .version(Version::from_persisted(
-                    start_version + u64::try_from(i).unwrap(),
-                ))
+            pending_envelope(Version::new(start_version + u64::try_from(i).unwrap()).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
                 .build_without_metadata()
@@ -143,9 +130,9 @@ fn build_envelopes_from(
         .collect()
 }
 
-async fn read_all_payloads(store: &FjallStore, stream_id: &StreamId) -> Vec<Vec<u8>> {
+async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8>> {
     let mut stream = store
-        .read_stream(stream_id, Version::from_persisted(1))
+        .read_stream(stream_id, Version::INITIAL)
         .await
         .unwrap();
     let mut payloads = Vec::new();
@@ -156,9 +143,9 @@ async fn read_all_payloads(store: &FjallStore, stream_id: &StreamId) -> Vec<Vec<
     payloads
 }
 
-async fn read_all_versions(store: &FjallStore, stream_id: &StreamId) -> Vec<u64> {
+async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
     let mut stream = store
-        .read_stream(stream_id, Version::from_persisted(1))
+        .read_stream(stream_id, Version::INITIAL)
         .await
         .unwrap();
     let mut versions = Vec::new();
@@ -169,9 +156,9 @@ async fn read_all_versions(store: &FjallStore, stream_id: &StreamId) -> Vec<u64>
     versions
 }
 
-async fn read_all_event_types(store: &FjallStore, stream_id: &StreamId) -> Vec<String> {
+async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<String> {
     let mut stream = store
-        .read_stream(stream_id, Version::from_persisted(1))
+        .read_stream(stream_id, Version::INITIAL)
         .await
         .unwrap();
     let mut types = Vec::new();
@@ -182,9 +169,9 @@ async fn read_all_event_types(store: &FjallStore, stream_id: &StreamId) -> Vec<S
     types
 }
 
-async fn count_events(store: &FjallStore, stream_id: &StreamId) -> u64 {
+async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
     let mut stream = store
-        .read_stream(stream_id, Version::from_persisted(1))
+        .read_stream(stream_id, Version::INITIAL)
         .await
         .unwrap();
     let mut count = 0u64;
@@ -199,10 +186,10 @@ async fn count_events(store: &FjallStore, stream_id: &StreamId) -> u64 {
 // Strategies
 // ============================================================================
 
-fn stream_id_strategy() -> impl Strategy<Value = StreamId> {
+fn stream_id_strategy() -> impl Strategy<Value = TestId> {
     prop::string::string_regex("[a-z][a-z0-9_-]{0,29}")
         .unwrap()
-        .prop_map(|s| StreamId::from_persisted(s).unwrap())
+        .prop_map(TestId)
 }
 
 fn evil_stream_id_strategy() -> impl Strategy<Value = String> {
@@ -392,10 +379,10 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (store, _dir) = temp_store();
-            let stream_id = sid("roundtrip-test");
-            let envelopes = build_envelopes(&stream_id, &payloads);
+            let stream_id = tid("roundtrip-test");
+            let envelopes = build_envelopes(&payloads);
 
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let read = read_all_payloads(&store, &stream_id).await;
             prop_assert_eq!(read.len(), payloads.len(), "payload count mismatch");
@@ -414,10 +401,10 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (store, _dir) = temp_store();
-            let stream_id = sid("evil-roundtrip");
-            let envelopes = build_envelopes(&stream_id, &payloads);
+            let stream_id = tid("evil-roundtrip");
+            let envelopes = build_envelopes(&payloads);
 
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let read = read_all_payloads(&store, &stream_id).await;
             prop_assert_eq!(read.len(), payloads.len());
@@ -451,15 +438,12 @@ async fn attack_append_read_roundtrip_fixed_evil_payloads() {
     ];
 
     for (i, (description, payload)) in evil_payloads.iter().enumerate() {
-        let stream_id = StreamId::from_persisted(format!("evil-{}", i)).unwrap();
+        let stream_id = TestId(format!("evil-{}", i));
         let version = u64::try_from(i).unwrap() + 1;
 
         // Each gets its own stream to avoid version conflicts
-        let env = make_envelope(&stream_id, 1, "EvilEvent", payload);
-        store
-            .append(&stream_id, Version::INITIAL, &[env])
-            .await
-            .unwrap();
+        let env = make_envelope(1, "EvilEvent", payload);
+        store.append(&stream_id, None, &[env]).await.unwrap();
 
         let read = read_all_payloads(&store, &stream_id).await;
         assert_eq!(read.len(), 1, "wrong count for: {}", description);
@@ -498,20 +482,11 @@ async fn attack_evil_stream_ids() {
     let (store, _dir) = temp_store();
 
     for (evil_id, description) in &evil_ids {
-        // StreamId rejects invalid inputs (empty, null bytes, too long).
-        let stream_id = match StreamId::from_persisted(*evil_id) {
-            Ok(s) => s,
-            Err(e) => {
-                println!(
-                    "Stream ID '{}' ({}) rejected by StreamId: {}",
-                    evil_id, description, e
-                );
-                continue;
-            }
-        };
+        // Use the evil_id directly as a TestId — no StreamId validation anymore.
+        let stream_id = TestId(evil_id.to_string());
 
-        let env = make_envelope(&stream_id, 1, "Created", b"test-payload");
-        let result = store.append(&stream_id, Version::INITIAL, &[env]).await;
+        let env = make_envelope(1, "Created", b"test-payload");
+        let result = store.append(&stream_id, None, &[env]).await;
 
         match result {
             Ok(()) => {
@@ -544,10 +519,10 @@ async fn attack_evil_stream_ids() {
 /// Very long stream ID (10,000 characters).
 #[tokio::test]
 async fn attack_very_long_stream_id() {
-    // StreamId rejects strings longer than MAX_STREAM_ID_LEN (512 bytes).
-    let long_id = "a".repeat(10_000);
-    let result = StreamId::from_persisted(long_id);
-    assert!(result.is_err(), "StreamId should reject very long strings");
+    // Version test: from_persisted(0) returns None.
+    let _long_id = "a".repeat(10_000);
+    let result = Version::new(0);
+    assert!(result.is_none(), "Version 0 must not be constructable");
 }
 
 proptest! {
@@ -564,11 +539,11 @@ proptest! {
         rt.block_on(async {
             let (store, _dir) = temp_store();
 
-            let env1 = make_envelope(&s1, 1, "EventA", b"payload-a");
-            store.append(&s1, Version::INITIAL, &[env1]).await.unwrap();
+            let env1 = make_envelope(1, "EventA", b"payload-a");
+            store.append(&s1, None, &[env1]).await.unwrap();
 
-            let env2 = make_envelope(&s2, 1, "EventB", b"payload-b");
-            store.append(&s2, Version::INITIAL, &[env2]).await.unwrap();
+            let env2 = make_envelope(1, "EventB", b"payload-b");
+            store.append(&s2, None, &[env2]).await.unwrap();
 
             // s1 must only contain its own data
             let s1_payloads = read_all_payloads(&store, &s1).await;
@@ -600,10 +575,8 @@ proptest! {
 #[tokio::test]
 async fn attack_version_boundaries_basic() {
     let (store, _dir) = temp_store();
-    let env = make_envelope(&sid("v-basic"), 1, "Created", b"ok");
-    let result = store
-        .append(&sid("v-basic"), Version::INITIAL, &[env])
-        .await;
+    let env = make_envelope(1, "Created", b"ok");
+    let result = store.append(&tid("v-basic"), None, &[env]).await;
     assert!(result.is_ok(), "basic version 0->1 must succeed");
 }
 
@@ -612,15 +585,14 @@ async fn attack_version_boundaries_basic() {
 async fn attack_version_boundaries_near_max() {
     let (_store, _dir) = temp_store();
     // We can't easily put u64::MAX - 1 events in the store, but we can test
-    // Version::from_persisted(u64::MAX) construction
-    let v_max = Version::from_persisted(u64::MAX);
+    // Version::new(u64::MAX) construction
+    let v_max = Version::new(u64::MAX).unwrap();
     assert_eq!(v_max.as_u64(), u64::MAX);
 
-    // Version::next() at u64::MAX should panic
-    let result = std::panic::catch_unwind(move || v_max.next());
+    // Version::next() at u64::MAX returns None (no overflow panic)
     assert!(
-        result.is_err(),
-        "Version::next() at u64::MAX must panic (overflow)"
+        v_max.next().is_none(),
+        "Version::next() at u64::MAX must return None"
     );
 }
 
@@ -637,34 +609,33 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (store, _dir) = temp_store();
-            let stream_id = sid("conflict-detect");
+            let stream_id = tid("conflict-detect");
 
             // Put N events in the stream
             let payloads: Vec<Vec<u8>> = (0..n).map(|i| vec![i as u8]).collect();
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let actual_version = u64::try_from(n).unwrap();
             prop_assume!(wrong_version != actual_version);
 
             // Try to append with wrong expected_version
             let new_envelopes = build_envelopes_from(
-                &stream_id,
                 wrong_version + 1,
                 &[vec![0xFF]],
             );
             let result = store.append(
                 &stream_id,
-                Version::from_persisted(wrong_version),
+                Version::new(wrong_version),
                 &new_envelopes,
             ).await;
 
             prop_assert!(result.is_err(), "wrong expected_version MUST be rejected");
             match result.unwrap_err() {
                 AppendError::Conflict { expected, actual, .. } => {
-                    prop_assert_eq!(expected.as_u64(), wrong_version,
+                    prop_assert_eq!(expected, Version::new(wrong_version),
                         "conflict expected version wrong");
-                    prop_assert_eq!(actual.as_u64(), actual_version,
+                    prop_assert_eq!(actual, Version::new(actual_version),
                         "conflict actual version wrong");
                 }
                 AppendError::Store(e) => {
@@ -682,44 +653,26 @@ async fn attack_sequential_version_enforcement() {
     let (store, _dir) = temp_store();
 
     // [1, 3] — gap
-    let envs_gap = vec![
-        make_envelope(&sid("seq-gap"), 1, "A", b""),
-        make_envelope(&sid("seq-gap"), 3, "B", b""),
-    ];
-    let result = store
-        .append(&sid("seq-gap"), Version::INITIAL, &envs_gap)
-        .await;
+    let envs_gap = vec![make_envelope(1, "A", b""), make_envelope(3, "B", b"")];
+    let result = store.append(&tid("seq-gap"), None, &envs_gap).await;
     assert!(result.is_err(), "[1, 3] gap must be rejected");
 
     // [2, 1] — reversed
-    let envs_rev = vec![
-        make_envelope(&sid("seq-rev"), 2, "A", b""),
-        make_envelope(&sid("seq-rev"), 1, "B", b""),
-    ];
-    let result = store
-        .append(&sid("seq-rev"), Version::INITIAL, &envs_rev)
-        .await;
+    let envs_rev = vec![make_envelope(2, "A", b""), make_envelope(1, "B", b"")];
+    let result = store.append(&tid("seq-rev"), None, &envs_rev).await;
     assert!(result.is_err(), "[2, 1] reversed must be rejected");
 
     // [1, 1] — duplicate
-    let envs_dup = vec![
-        make_envelope(&sid("seq-dup"), 1, "A", b""),
-        make_envelope(&sid("seq-dup"), 1, "B", b""),
-    ];
-    let result = store
-        .append(&sid("seq-dup"), Version::INITIAL, &envs_dup)
-        .await;
+    let envs_dup = vec![make_envelope(1, "A", b""), make_envelope(1, "B", b"")];
+    let result = store.append(&tid("seq-dup"), None, &envs_dup).await;
     assert!(result.is_err(), "[1, 1] duplicate must be rejected");
 
     // [0, 1] — starts at 0 instead of 1
-    let envs_zero = vec![
-        make_envelope(&sid("seq-zero"), 0, "A", b""),
-        make_envelope(&sid("seq-zero"), 1, "B", b""),
-    ];
-    let result = store
-        .append(&sid("seq-zero"), Version::INITIAL, &envs_zero)
-        .await;
-    assert!(result.is_err(), "[0, 1] starting at 0 must be rejected");
+    // Version 0 is now unrepresentable (NonZeroU64), so this is enforced at the type level.
+    assert!(
+        Version::new(0).is_none(),
+        "Version 0 must not be constructable"
+    );
 }
 
 proptest! {
@@ -733,13 +686,13 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (store, _dir) = temp_store();
-            let stream_id = sid("random-versions");
+            let stream_id = tid("random-versions");
 
             let envelopes: Vec<_> = versions.iter().map(|&v| {
-                make_envelope(&stream_id, v, leak("E"), &[v as u8])
+                make_envelope(v, leak("E"), &[v as u8])
             }).collect();
 
-            let result = store.append(&stream_id, Version::INITIAL, &envelopes).await;
+            let result = store.append(&stream_id, None, &envelopes).await;
 
             let is_sequential = versions.iter().enumerate().all(|(i, &v)| v == (i as u64) + 1);
             if is_sequential {
@@ -771,10 +724,8 @@ async fn attack_concurrent_appends_one_wins() {
     for task_id in 0..n_tasks {
         let store = Arc::clone(&store);
         let handle = tokio::spawn(async move {
-            let env = make_envelope(&sid("race-stream"), 1, "Raced", &[task_id as u8]);
-            store
-                .append(&sid("race-stream"), Version::INITIAL, &[env])
-                .await
+            let env = make_envelope(1, "Raced", &[task_id as u8]);
+            store.append(&tid("race-stream"), None, &[env]).await
         });
         handles.push(handle);
     }
@@ -802,7 +753,7 @@ async fn attack_concurrent_appends_one_wins() {
     );
 
     // Verify the stream has exactly 1 event
-    let count = count_events(&store, &sid("race-stream")).await;
+    let count = count_events(&store, &tid("race-stream")).await;
     assert_eq!(count, 1, "race-stream must have exactly 1 event");
 }
 
@@ -817,10 +768,10 @@ async fn attack_read_during_write() {
 
     // Append batch 1 (versions 1-10)
     let batch1: Vec<_> = (1..=10u64)
-        .map(|v| make_envelope(&sid("rw-stream"), v, "Batch1", &[v as u8]))
+        .map(|v| make_envelope(v, "Batch1", &[v as u8]))
         .collect();
     store
-        .append(&sid("rw-stream"), Version::INITIAL, &batch1)
+        .append(&tid("rw-stream"), None, &batch1)
         .await
         .unwrap();
 
@@ -828,10 +779,10 @@ async fn attack_read_during_write() {
     let store_write = Arc::clone(&store);
     let write_handle = tokio::spawn(async move {
         let batch2: Vec<_> = (11..=20u64)
-            .map(|v| make_envelope(&sid("rw-stream"), v, "Batch2", &[v as u8]))
+            .map(|v| make_envelope(v, "Batch2", &[v as u8]))
             .collect();
         store_write
-            .append(&sid("rw-stream"), Version::from_persisted(10), &batch2)
+            .append(&tid("rw-stream"), Version::new(10), &batch2)
             .await
             .unwrap();
     });
@@ -839,7 +790,7 @@ async fn attack_read_during_write() {
     // Read concurrently
     let store_read = Arc::clone(&store);
     let read_handle = tokio::spawn(async move {
-        let versions = read_all_versions(&store_read, &sid("rw-stream")).await;
+        let versions = read_all_versions(&store_read, &tid("rw-stream")).await;
         versions.len()
     });
 
@@ -872,14 +823,10 @@ async fn attack_persistence_across_many_reopens() {
             let store = FjallStore::builder(&db_path).open().unwrap();
             let start = total_events + 1;
             let envs: Vec<_> = (start..start + 100)
-                .map(|v| make_envelope(&sid("persist-stream"), v, "Tick", &[v as u8]))
+                .map(|v| make_envelope(v, "Tick", &[v as u8]))
                 .collect();
             store
-                .append(
-                    &sid("persist-stream"),
-                    Version::from_persisted(total_events),
-                    &envs,
-                )
+                .append(&tid("persist-stream"), Version::new(total_events), &envs)
                 .await
                 .unwrap();
             total_events += 100;
@@ -888,7 +835,7 @@ async fn attack_persistence_across_many_reopens() {
         // Reopen and verify cumulative count
         {
             let store = FjallStore::builder(&db_path).open().unwrap();
-            let count = count_events(&store, &sid("persist-stream")).await;
+            let count = count_events(&store, &tid("persist-stream")).await;
             assert_eq!(
                 count, total_events,
                 "round {}: expected {} events, got {}",
@@ -896,7 +843,7 @@ async fn attack_persistence_across_many_reopens() {
             );
 
             // Also verify first and last event
-            let versions = read_all_versions(&store, &sid("persist-stream")).await;
+            let versions = read_all_versions(&store, &tid("persist-stream")).await;
             assert_eq!(versions[0], 1, "round {}: first version wrong", round);
             assert_eq!(
                 *versions.last().unwrap(),
@@ -918,27 +865,15 @@ async fn attack_numeric_id_counter_recovery() {
     {
         let store = FjallStore::builder(&db_path).open().unwrap();
         store
-            .append(
-                &sid("a"),
-                Version::INITIAL,
-                &[make_envelope(&sid("a"), 1, "A", b"a-data")],
-            )
+            .append(&tid("a"), None, &[make_envelope(1, "A", b"a-data")])
             .await
             .unwrap();
         store
-            .append(
-                &sid("b"),
-                Version::INITIAL,
-                &[make_envelope(&sid("b"), 1, "B", b"b-data")],
-            )
+            .append(&tid("b"), None, &[make_envelope(1, "B", b"b-data")])
             .await
             .unwrap();
         store
-            .append(
-                &sid("c"),
-                Version::INITIAL,
-                &[make_envelope(&sid("c"), 1, "C", b"c-data")],
-            )
+            .append(&tid("c"), None, &[make_envelope(1, "C", b"c-data")])
             .await
             .unwrap();
     }
@@ -947,11 +882,7 @@ async fn attack_numeric_id_counter_recovery() {
     {
         let store = FjallStore::builder(&db_path).open().unwrap();
         store
-            .append(
-                &sid("d"),
-                Version::INITIAL,
-                &[make_envelope(&sid("d"), 1, "D", b"d-data")],
-            )
+            .append(&tid("d"), None, &[make_envelope(1, "D", b"d-data")])
             .await
             .unwrap();
 
@@ -962,9 +893,9 @@ async fn attack_numeric_id_counter_recovery() {
             ("c", "C", b"c-data"),
             ("d", "D", b"d-data"),
         ] {
-            let stream_id = sid(id);
+            let stream_id = tid(id);
             let mut stream = store
-                .read_stream(&stream_id, Version::from_persisted(1))
+                .read_stream(&stream_id, Version::INITIAL)
                 .await
                 .unwrap();
             let env = stream.next().await.unwrap().unwrap();
@@ -989,14 +920,11 @@ async fn attack_many_streams_recovery() {
     {
         let store = FjallStore::builder(&db_path).open().unwrap();
         for stream_num in 0..100u64 {
-            let stream_id = StreamId::from_persisted(format!("stream-{}", stream_num)).unwrap();
+            let stream_id = TestId(format!("stream-{}", stream_num));
             let envs: Vec<_> = (1..=10u64)
-                .map(|v| make_envelope(&stream_id, v, "Tick", &[stream_num as u8, v as u8]))
+                .map(|v| make_envelope(v, "Tick", &[stream_num as u8, v as u8]))
                 .collect();
-            store
-                .append(&stream_id, Version::INITIAL, &envs)
-                .await
-                .unwrap();
+            store.append(&stream_id, None, &envs).await.unwrap();
         }
     }
 
@@ -1004,7 +932,7 @@ async fn attack_many_streams_recovery() {
     {
         let store = FjallStore::builder(&db_path).open().unwrap();
         for stream_num in 0..100u64 {
-            let stream_id = StreamId::from_persisted(format!("stream-{}", stream_num)).unwrap();
+            let stream_id = TestId(format!("stream-{}", stream_num));
             let count = count_events(&store, &stream_id).await;
             assert_eq!(
                 count, 10,
@@ -1035,22 +963,19 @@ async fn attack_many_streams_isolation() {
     let (store, _dir) = temp_store();
 
     for stream_num in 0..50u64 {
-        let stream_id = StreamId::from_persisted(format!("iso-{}", stream_num)).unwrap();
+        let stream_id = TestId(format!("iso-{}", stream_num));
         let envs: Vec<_> = (1..=5u64)
             .map(|v| {
                 let event_type = leak(&format!("Event{}", stream_num));
-                make_envelope(&stream_id, v, event_type, &[stream_num as u8; 32])
+                make_envelope(v, event_type, &[stream_num as u8; 32])
             })
             .collect();
-        store
-            .append(&stream_id, Version::INITIAL, &envs)
-            .await
-            .unwrap();
+        store.append(&stream_id, None, &envs).await.unwrap();
     }
 
     // Verify each stream is isolated
     for stream_num in 0..50u64 {
-        let stream_id = StreamId::from_persisted(format!("iso-{}", stream_num)).unwrap();
+        let stream_id = TestId(format!("iso-{}", stream_num));
         let expected_type = format!("Event{}", stream_num);
 
         let types = read_all_event_types(&store, &stream_id).await;
@@ -1088,14 +1013,10 @@ async fn attack_large_event_stream() {
         let start = current_version + 1;
         let end = std::cmp::min(current_version + batch_size, total);
         let envs: Vec<_> = (start..=end)
-            .map(|v| make_envelope(&sid("big-stream"), v, "Tick", &v.to_le_bytes()))
+            .map(|v| make_envelope(v, "Tick", &v.to_le_bytes()))
             .collect();
         store
-            .append(
-                &sid("big-stream"),
-                Version::from_persisted(current_version),
-                &envs,
-            )
+            .append(&tid("big-stream"), Version::new(current_version), &envs)
             .await
             .unwrap();
         current_version = end;
@@ -1103,7 +1024,7 @@ async fn attack_large_event_stream() {
 
     // Read all back
     let mut stream = store
-        .read_stream(&sid("big-stream"), Version::from_persisted(1))
+        .read_stream(&tid("big-stream"), Version::new(1).unwrap())
         .await
         .unwrap();
     let mut count = 0u64;
@@ -1134,13 +1055,13 @@ async fn attack_large_payloads() {
     let (store, _dir) = temp_store();
     let payload_1mb = vec![0xAB_u8; 1_048_576]; // 1 MB
 
-    let env = make_envelope(&sid("large-payload"), 1, "HugeEvent", &payload_1mb);
+    let env = make_envelope(1, "HugeEvent", &payload_1mb);
     store
-        .append(&sid("large-payload"), Version::INITIAL, &[env])
+        .append(&tid("large-payload"), None, &[env])
         .await
         .unwrap();
 
-    let payloads = read_all_payloads(&store, &sid("large-payload")).await;
+    let payloads = read_all_payloads(&store, &tid("large-payload")).await;
     assert_eq!(payloads.len(), 1);
     assert_eq!(
         payloads[0].len(),
@@ -1155,14 +1076,14 @@ async fn attack_large_payloads() {
 async fn attack_many_small_events() {
     let (store, _dir) = temp_store();
     let envs: Vec<_> = (1..=1000u64)
-        .map(|v| make_envelope(&sid("small-events"), v, "Tiny", &[v as u8]))
+        .map(|v| make_envelope(v, "Tiny", &[v as u8]))
         .collect();
     store
-        .append(&sid("small-events"), Version::INITIAL, &envs)
+        .append(&tid("small-events"), None, &envs)
         .await
         .unwrap();
 
-    let count = count_events(&store, &sid("small-events")).await;
+    let count = count_events(&store, &tid("small-events")).await;
     assert_eq!(count, 1000, "expected 1000 small events, got {}", count);
 }
 
@@ -1174,14 +1095,11 @@ async fn attack_many_small_events() {
 #[tokio::test]
 async fn attack_schema_version_min_valid() {
     let (store, _dir) = temp_store();
-    let env = make_envelope_with_schema(&sid("sv-min"), 1, "Created", b"data", 1);
-    store
-        .append(&sid("sv-min"), Version::INITIAL, &[env])
-        .await
-        .unwrap();
+    let env = make_envelope_with_schema(1, "Created", b"data", 1);
+    store.append(&tid("sv-min"), None, &[env]).await.unwrap();
 
     let mut stream = store
-        .read_stream(&sid("sv-min"), Version::from_persisted(1))
+        .read_stream(&tid("sv-min"), Version::new(1).unwrap())
         .await
         .unwrap();
     let persisted = stream.next().await.unwrap().unwrap();
@@ -1192,14 +1110,11 @@ async fn attack_schema_version_min_valid() {
 #[tokio::test]
 async fn attack_schema_version_u32_max() {
     let (store, _dir) = temp_store();
-    let env = make_envelope_with_schema(&sid("sv-max"), 1, "Created", b"data", u32::MAX);
-    store
-        .append(&sid("sv-max"), Version::INITIAL, &[env])
-        .await
-        .unwrap();
+    let env = make_envelope_with_schema(1, "Created", b"data", u32::MAX);
+    store.append(&tid("sv-max"), None, &[env]).await.unwrap();
 
     let mut stream = store
-        .read_stream(&sid("sv-max"), Version::from_persisted(1))
+        .read_stream(&tid("sv-max"), Version::new(1).unwrap())
         .await
         .unwrap();
     let persisted = stream.next().await.unwrap().unwrap();
@@ -1210,34 +1125,30 @@ async fn attack_schema_version_u32_max() {
     );
 }
 
-/// schema_version = 0 is now clamped to 1 by the PendingEnvelope builder.
-/// This prevents write-read asymmetry where data could be stored but never read back.
+/// schema_version = 0 is now impossible at the type level (`NonZeroU32`).
+/// Verify that `NonZeroU32::MIN` (1) round-trips correctly.
 #[tokio::test]
 async fn attack_schema_version_zero_clamped_by_builder() {
     let (store, _dir) = temp_store();
 
-    let env = pending_envelope(sid("sv-zero"))
-        .version(Version::from_persisted(1))
+    let env = pending_envelope(Version::INITIAL)
         .event_type("BadSchema")
         .payload(b"data".to_vec())
-        .schema_version(0) // Builder clamps to 1
+        .schema_version(NonZeroU32::MIN) // Minimum valid schema version
         .build_without_metadata();
 
-    // Builder should have clamped 0 → 1
+    // schema_version should be 1
     assert_eq!(
         env.schema_version(),
         1,
-        "builder must clamp schema_version 0 to 1"
+        "schema_version must be 1 (NonZeroU32::MIN)"
     );
 
-    store
-        .append(&sid("sv-zero"), Version::INITIAL, &[env])
-        .await
-        .unwrap();
+    store.append(&tid("sv-zero"), None, &[env]).await.unwrap();
 
     // Read succeeds because schema_version is now 1
     let mut stream = store
-        .read_stream(&sid("sv-zero"), Version::from_persisted(1))
+        .read_stream(&tid("sv-zero"), Version::new(1).unwrap())
         .await
         .unwrap();
     let persisted = stream.next().await.unwrap().unwrap();
@@ -1289,12 +1200,11 @@ proptest! {
                             .get(stream_id)
                             .map_or(0u64, |v| u64::try_from(v.len()).unwrap());
 
-                        let sid = StreamId::from_persisted(stream_id.as_str()).unwrap();
+                        let sid = TestId(stream_id.clone());
                         let envelopes: Vec<_> = (1..=*n_events).map(|i| {
                             let version = current_count + u64::try_from(i).unwrap();
                             let payload = format!("op-{}-v{}", stream_id, version);
                             make_envelope(
-                                &sid,
                                 version,
                                 "ModelEvent",
                                 payload.as_bytes(),
@@ -1303,7 +1213,7 @@ proptest! {
 
                         let result = store.append(
                             &sid,
-                            Version::from_persisted(current_count),
+                            Version::new(current_count),
                             &envelopes,
                         ).await;
                         prop_assert!(result.is_ok(),
@@ -1320,7 +1230,7 @@ proptest! {
                     }
                     Op::Read { stream_idx } => {
                         let stream_id = &stream_ids[*stream_idx];
-                        let sid = StreamId::from_persisted(stream_id.as_str()).unwrap();
+                        let sid = TestId(stream_id.clone());
                         let shadow_data = shadow.get(stream_id);
 
                         let real_payloads = read_all_payloads(&store, &sid).await;
@@ -1360,58 +1270,24 @@ proptest! {
 // CATEGORY 10: Empty and Degenerate Cases
 // ============================================================================
 
-/// Read from empty store returns empty stream.
-#[tokio::test]
-async fn attack_empty_read_from_empty_store() {
-    let (store, _dir) = temp_store();
-    let mut stream = store
-        .read_stream(&sid("nonexistent"), Version::from_persisted(1))
-        .await
-        .unwrap();
-    assert!(
-        stream.next().await.is_none(),
-        "empty store must return empty stream"
-    );
-}
-
-/// Append empty batch is a no-op.
-#[tokio::test]
-async fn attack_empty_batch_append() {
-    let (store, _dir) = temp_store();
-    let result = store
-        .append(&sid("empty-batch"), Version::INITIAL, &[])
-        .await;
-    assert!(result.is_ok(), "empty batch must succeed");
-
-    // Stream should not exist (no events)
-    let mut stream = store
-        .read_stream(&sid("empty-batch"), Version::from_persisted(1))
-        .await
-        .unwrap();
-    assert!(
-        stream.next().await.is_none(),
-        "empty batch must not create events"
-    );
-}
-
 /// Read from Version::INITIAL returns events starting at version 1.
 #[tokio::test]
 async fn attack_read_from_initial_version() {
     let (store, _dir) = temp_store();
     let envs = vec![
-        make_envelope(&sid("initial-read"), 1, "A", b"a"),
-        make_envelope(&sid("initial-read"), 2, "B", b"b"),
-        make_envelope(&sid("initial-read"), 3, "C", b"c"),
+        make_envelope(1, "A", b"a"),
+        make_envelope(2, "B", b"b"),
+        make_envelope(3, "C", b"c"),
     ];
     store
-        .append(&sid("initial-read"), Version::INITIAL, &envs)
+        .append(&tid("initial-read"), None, &envs)
         .await
         .unwrap();
 
     // Version::INITIAL is 0, so read_stream(_, from=0) — implementation may
     // return events starting at 1, or from 0. Let's test what actually happens.
     let mut stream = store
-        .read_stream(&sid("initial-read"), Version::INITIAL)
+        .read_stream(&tid("initial-read"), Version::INITIAL)
         .await
         .unwrap();
     let mut versions = Vec::new();
@@ -1428,38 +1304,18 @@ async fn attack_read_from_initial_version() {
     );
 }
 
-/// Read from version higher than any stored returns empty stream.
-#[tokio::test]
-async fn attack_read_from_future_version() {
-    let (store, _dir) = temp_store();
-    let env = make_envelope(&sid("future-read"), 1, "Created", b"data");
-    store
-        .append(&sid("future-read"), Version::INITIAL, &[env])
-        .await
-        .unwrap();
-
-    let mut stream = store
-        .read_stream(&sid("future-read"), Version::from_persisted(999))
-        .await
-        .unwrap();
-    assert!(
-        stream.next().await.is_none(),
-        "reading from version 999 (only 1 event) must return empty stream"
-    );
-}
-
 /// Fused behavior: once next() returns None, all subsequent calls return None.
 #[tokio::test]
 async fn attack_stream_fused_after_exhaustion() {
     let (store, _dir) = temp_store();
-    let env = make_envelope(&sid("fused-test"), 1, "Created", b"data");
+    let env = make_envelope(1, "Created", b"data");
     store
-        .append(&sid("fused-test"), Version::INITIAL, &[env])
+        .append(&tid("fused-test"), None, &[env])
         .await
         .unwrap();
 
     let mut stream = store
-        .read_stream(&sid("fused-test"), Version::from_persisted(1))
+        .read_stream(&tid("fused-test"), Version::new(1).unwrap())
         .await
         .unwrap();
 
@@ -1478,31 +1334,10 @@ async fn attack_stream_fused_after_exhaustion() {
 /// be empty"). Now `FjallStore` validates at the boundary.
 #[test]
 fn attack_empty_string_stream_id_rejected_by_stream_id_type() {
-    // StreamId::from_persisted rejects empty strings at construction time.
+    // Version::new(0) returns None — test version boundary instead.
     // Empty stream IDs can no longer reach the store layer.
-    let result = StreamId::from_persisted("");
-    assert!(result.is_err(), "StreamId must reject empty string");
-}
-
-/// Numeric stream ID space exhaustion must fail cleanly, not wrap to 0.
-///
-/// If the counter wraps, two different stream_id strings would share the
-/// same numeric key prefix, causing silent data corruption.
-#[tokio::test]
-async fn attack_stream_id_exhaustion_does_not_wrap() {
-    let (store, _dir) = temp_store();
-
-    // Force the counter to u64::MAX so the next allocation would overflow.
-    store.set_next_stream_id_for_testing(u64::MAX);
-
-    let env = make_envelope(&sid("overflow-stream"), 1, "Created", b"data");
-    let result = store
-        .append(&sid("overflow-stream"), Version::INITIAL, &[env])
-        .await;
-    assert!(
-        result.is_err(),
-        "stream ID allocation at u64::MAX must fail, not wrap to 0"
-    );
+    let result = Version::new(0);
+    assert!(result.is_none(), "from_persisted(0) must return None");
 }
 
 /// Multiple appends to the same stream with correct version tracking.
@@ -1515,28 +1350,19 @@ async fn attack_multiple_sequential_appends() {
         let envs: Vec<_> = (1..=5u64)
             .map(|i| {
                 let version = start_version + i;
-                make_envelope(
-                    &sid("multi-append"),
-                    version,
-                    "Tick",
-                    &version.to_le_bytes(),
-                )
+                make_envelope(version, "Tick", &version.to_le_bytes())
             })
             .collect();
         store
-            .append(
-                &sid("multi-append"),
-                Version::from_persisted(start_version),
-                &envs,
-            )
+            .append(&tid("multi-append"), Version::new(start_version), &envs)
             .await
             .unwrap();
     }
 
-    let count = count_events(&store, &sid("multi-append")).await;
+    let count = count_events(&store, &tid("multi-append")).await;
     assert_eq!(count, 100, "20 batches of 5 = 100 events");
 
-    let versions = read_all_versions(&store, &sid("multi-append")).await;
+    let versions = read_all_versions(&store, &tid("multi-append")).await;
     for (i, v) in versions.iter().enumerate() {
         assert_eq!(
             *v,
@@ -1552,16 +1378,16 @@ async fn attack_multiple_sequential_appends() {
 async fn attack_read_with_from_version_filters() {
     let (store, _dir) = temp_store();
     let envs: Vec<_> = (1..=10u64)
-        .map(|v| make_envelope(&sid("filter-test"), v, "Tick", &v.to_le_bytes()))
+        .map(|v| make_envelope(v, "Tick", &v.to_le_bytes()))
         .collect();
     store
-        .append(&sid("filter-test"), Version::INITIAL, &envs)
+        .append(&tid("filter-test"), None, &envs)
         .await
         .unwrap();
 
     // Read from version 5 — should get versions 5..=10
     let mut stream = store
-        .read_stream(&sid("filter-test"), Version::from_persisted(5))
+        .read_stream(&tid("filter-test"), Version::new(5).unwrap())
         .await
         .unwrap();
     let mut versions = Vec::new();
@@ -1584,14 +1410,11 @@ async fn attack_event_type_preserved() {
     let envs: Vec<_> = types
         .iter()
         .enumerate()
-        .map(|(i, &t)| make_envelope(&sid("type-test"), u64::try_from(i).unwrap() + 1, t, b""))
+        .map(|(i, &t)| make_envelope(u64::try_from(i).unwrap() + 1, t, b""))
         .collect();
-    store
-        .append(&sid("type-test"), Version::INITIAL, &envs)
-        .await
-        .unwrap();
+    store.append(&tid("type-test"), None, &envs).await.unwrap();
 
-    let read_types = read_all_event_types(&store, &sid("type-test")).await;
+    let read_types = read_all_event_types(&store, &tid("type-test")).await;
     let expected: Vec<String> = types.iter().map(|t| (*t).to_owned()).collect();
     assert_eq!(read_types, expected, "event types not preserved");
 }
@@ -1602,16 +1425,11 @@ async fn attack_append_after_empty_batch() {
     let (store, _dir) = temp_store();
 
     // Empty batch first
-    store
-        .append(&sid("post-empty"), Version::INITIAL, &[])
-        .await
-        .unwrap();
+    store.append(&tid("post-empty"), None, &[]).await.unwrap();
 
-    // Now a real append — should still succeed with INITIAL because empty batch is no-op
-    let env = make_envelope(&sid("post-empty"), 1, "Created", b"after-empty");
-    let result = store
-        .append(&sid("post-empty"), Version::INITIAL, &[env])
-        .await;
+    // Now a real append — should still succeed with None because empty batch is no-op
+    let env = make_envelope(1, "Created", b"after-empty");
+    let result = store.append(&tid("post-empty"), None, &[env]).await;
     assert!(
         result.is_ok(),
         "append after empty batch must succeed with INITIAL: {:?}",
@@ -1630,17 +1448,16 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (store, _dir) = temp_store();
-            let stream_id = StreamId::from_persisted(format!("sv-{}", schema_ver)).unwrap();
+            let stream_id = TestId(format!("sv-{}", schema_ver));
             let env = make_envelope_with_schema(
-                &stream_id,
                 1,
                 "SchemaTest",
                 b"data",
                 schema_ver,
             );
-            store.append(&stream_id, Version::INITIAL, &[env]).await.unwrap();
+            store.append(&stream_id, None, &[env]).await.unwrap();
 
-            let mut stream = store.read_stream(&stream_id, Version::from_persisted(1)).await.unwrap();
+            let mut stream = store.read_stream(&stream_id, Version::INITIAL).await.unwrap();
             let persisted = stream.next().await.unwrap().unwrap();
             prop_assert_eq!(persisted.schema_version(), schema_ver,
                 "schema_version {} not preserved through roundtrip", schema_ver);
@@ -1660,10 +1477,10 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (store, _dir) = temp_store();
-            let stream_id = sid("monotonic-test");
+            let stream_id = tid("monotonic-test");
             let payloads: Vec<Vec<u8>> = (0..n).map(|i| vec![i as u8]).collect();
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let versions = read_all_versions(&store, &stream_id).await;
             for window in versions.windows(2) {

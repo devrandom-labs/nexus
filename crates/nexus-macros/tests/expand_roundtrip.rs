@@ -57,9 +57,6 @@ impl AggregateState for RtState {
         }
         self
     }
-    fn name(&self) -> &'static str {
-        "Rt"
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -106,11 +103,11 @@ impl ::std::fmt::Debug for RtAggregate {
 
 impl RtAggregate {
     fn add(&mut self, item: String) {
-        self.apply(RtEvent::Added(item));
+        self.root_mut().apply_event(&RtEvent::Added(item));
     }
 
     fn remove(&mut self) {
-        self.apply(RtEvent::Removed);
+        self.root_mut().apply_event(&RtEvent::Removed);
     }
 }
 
@@ -124,25 +121,24 @@ fn expanded_lifecycle() {
     agg.remove();
 
     assert_eq!(agg.state().items, vec!["one"]);
-    assert_eq!(agg.current_version(), Version::from_persisted(3));
-
-    let events = agg.take_uncommitted_events();
-    assert_eq!(events.len(), 3);
-    assert_eq!(events[0].event().name(), "Added");
-    assert_eq!(events[2].event().name(), "Removed");
+    // Version is None because apply_event does not advance version
+    assert_eq!(agg.version(), None);
 }
 
 #[test]
 fn expanded_rehydrate() {
     let mut agg = RtAggregate::new(RtId(1));
     agg.root_mut()
-        .replay(Version::from_persisted(1), &RtEvent::Added("a".into()))
+        .replay(Version::INITIAL, &RtEvent::Added("a".into()))
         .unwrap();
     agg.root_mut()
-        .replay(Version::from_persisted(2), &RtEvent::Added("b".into()))
+        .replay(
+            Version::INITIAL.next().expect("version 2"),
+            &RtEvent::Added("b".into()),
+        )
         .unwrap();
     assert_eq!(agg.state().items, vec!["a", "b"]);
-    assert_eq!(agg.version(), Version::from_persisted(2));
+    assert_eq!(agg.version(), Version::new(2));
 }
 
 #[test]
@@ -153,8 +149,8 @@ fn expanded_entity_trait_works() {
     // AggregateEntity methods
     assert_eq!(agg.id(), &RtId(1));
     assert_eq!(agg.state().items, vec!["test"]);
-    assert_eq!(agg.version(), Version::INITIAL);
-    assert_eq!(agg.current_version(), Version::from_persisted(1));
+    // Version is None because apply_event does not advance version
+    assert_eq!(agg.version(), None);
 }
 
 #[test]
@@ -166,10 +162,10 @@ fn expanded_debug() {
 
 #[test]
 fn expanded_generic_entity_bound() {
-    fn takes_entity<A: AggregateEntity>(agg: &A) -> Version {
+    fn takes_entity<A: AggregateEntity>(agg: &A) -> Option<Version> {
         agg.version()
     }
 
     let agg = RtAggregate::new(RtId(1));
-    assert_eq!(takes_entity(&agg), Version::INITIAL);
+    assert_eq!(takes_entity(&agg), None);
 }

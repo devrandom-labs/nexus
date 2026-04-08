@@ -1,38 +1,41 @@
 #![cfg(feature = "testing")]
 #![allow(clippy::unwrap_used, reason = "tests")]
 
-use nexus::StreamId;
-use nexus::Version;
+use nexus::{Id, Version};
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 
-fn sid(s: &str) -> StreamId {
-    StreamId::from_persisted(s).unwrap()
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct TestId(&'static str);
+impl std::fmt::Display for TestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
 }
+impl Id for TestId {}
 
 #[tokio::test]
 async fn append_and_read_back() {
     let store = InMemoryStore::new();
-    let envelope = pending_envelope(sid("stream-1"))
-        .version(Version::from_persisted(1))
+    let envelope = pending_envelope(Version::INITIAL)
         .event_type("TestEvent")
         .payload(b"hello".to_vec())
         .build_without_metadata();
     store
-        .append(&sid("stream-1"), Version::INITIAL, &[envelope])
+        .append(&TestId("stream-1"), None, &[envelope])
         .await
         .unwrap();
 
     let mut stream = store
-        .read_stream(&sid("stream-1"), Version::INITIAL)
+        .read_stream(&TestId("stream-1"), Version::INITIAL)
         .await
         .unwrap();
     let env = stream.next().await.unwrap().unwrap();
     assert_eq!(env.event_type(), "TestEvent");
     assert_eq!(env.payload(), b"hello");
-    assert_eq!(env.version(), Version::from_persisted(1));
+    assert_eq!(env.version(), Version::INITIAL);
     assert_eq!(env.schema_version(), 1);
     assert!(stream.next().await.is_none());
 }
@@ -42,40 +45,34 @@ async fn read_from_version_filters_correctly() {
     let store = InMemoryStore::new();
 
     let envelopes = vec![
-        pending_envelope(sid("s1"))
-            .version(Version::from_persisted(1))
+        pending_envelope(Version::new(1).unwrap())
             .event_type("E1")
             .payload(b"one".to_vec())
             .build_without_metadata(),
-        pending_envelope(sid("s1"))
-            .version(Version::from_persisted(2))
+        pending_envelope(Version::new(2).unwrap())
             .event_type("E2")
             .payload(b"two".to_vec())
             .build_without_metadata(),
-        pending_envelope(sid("s1"))
-            .version(Version::from_persisted(3))
+        pending_envelope(Version::new(3).unwrap())
             .event_type("E3")
             .payload(b"three".to_vec())
             .build_without_metadata(),
     ];
-    store
-        .append(&sid("s1"), Version::INITIAL, &envelopes)
-        .await
-        .unwrap();
+    store.append(&TestId("s1"), None, &envelopes).await.unwrap();
 
     // Read from version 2 -- should get events 2 and 3.
     let mut stream = store
-        .read_stream(&sid("s1"), Version::from_persisted(2))
+        .read_stream(&TestId("s1"), Version::new(2).unwrap())
         .await
         .unwrap();
 
     let e1 = stream.next().await.unwrap().unwrap();
     assert_eq!(e1.event_type(), "E2");
-    assert_eq!(e1.version(), Version::from_persisted(2));
+    assert_eq!(e1.version(), Version::new(2).unwrap());
 
     let e2 = stream.next().await.unwrap().unwrap();
     assert_eq!(e2.event_type(), "E3");
-    assert_eq!(e2.version(), Version::from_persisted(3));
+    assert_eq!(e2.version(), Version::new(3).unwrap());
 
     assert!(stream.next().await.is_none());
 }

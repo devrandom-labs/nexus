@@ -18,8 +18,9 @@ use std::sync::atomic::AtomicU64;
 /// ```
 pub struct FjallStoreBuilder {
     path: PathBuf,
-    streams_config: Option<Box<dyn FnOnce(PartitionCreateOptions) -> PartitionCreateOptions>>,
-    events_config: Option<Box<dyn FnOnce(PartitionCreateOptions) -> PartitionCreateOptions>>,
+    streams_config:
+        Option<Box<dyn FnOnce(PartitionCreateOptions) -> PartitionCreateOptions + Send>>,
+    events_config: Option<Box<dyn FnOnce(PartitionCreateOptions) -> PartitionCreateOptions + Send>>,
 }
 
 impl FjallStoreBuilder {
@@ -40,7 +41,7 @@ impl FjallStoreBuilder {
     #[must_use]
     pub fn streams_config<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(PartitionCreateOptions) -> PartitionCreateOptions + 'static,
+        F: FnOnce(PartitionCreateOptions) -> PartitionCreateOptions + Send + 'static,
     {
         self.streams_config = Some(Box::new(f));
         self
@@ -54,7 +55,7 @@ impl FjallStoreBuilder {
     #[must_use]
     pub fn events_config<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(PartitionCreateOptions) -> PartitionCreateOptions + 'static,
+        F: FnOnce(PartitionCreateOptions) -> PartitionCreateOptions + Send + 'static,
     {
         self.events_config = Some(Box::new(f));
         self
@@ -106,25 +107,27 @@ impl FjallStoreBuilder {
                 decode_stream_meta(&kv.1).map_err(|_| FjallError::CorruptMeta {
                     stream_id: String::from_utf8_lossy(&kv.0).into_owned(),
                 })?;
+            // Numeric ID 0 is reserved as "no stream" sentinel. If we see it
+            // in the database, the store is corrupt — reject early rather than
+            // silently reallocating ID 0 to a new stream.
+            if numeric_id == 0 {
+                return Err(FjallError::CorruptMeta {
+                    stream_id: String::from_utf8_lossy(&kv.0).into_owned(),
+                });
+            }
             if numeric_id > max_id {
                 max_id = numeric_id;
             }
         }
 
         // Next assignable ID is max + 1 (or 1 if no streams exist yet,
-        // since 0 is reserved as "no stream").
-        let next_id = if max_id == 0 { 1 } else { max_id + 1 };
-
-        // Postcondition: next_id must never be 0 (0 is sentinel for "no stream").
-        debug_assert!(
-            next_id >= 1,
-            "builder postcondition: next_stream_id must be >= 1, got {next_id}"
-        );
-        // Postcondition: next_id must be strictly greater than any existing numeric_id.
-        debug_assert!(
-            next_id > max_id || (max_id == 0 && next_id == 1),
-            "builder postcondition: next_id ({next_id}) must be > max existing id ({max_id})"
-        );
+        // since 0 is reserved as "no stream"). Uses checked_add to prevent
+        // silent wrap-around to 0 when the full ID space is exhausted.
+        let next_id = if max_id == 0 {
+            1
+        } else {
+            max_id.checked_add(1).ok_or(FjallError::IdSpaceExhausted)?
+        };
 
         Ok(FjallStore {
             db,

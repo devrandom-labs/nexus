@@ -12,6 +12,7 @@ categories = ["data-structures"]
 
 [features]
 testing = ["dep:tokio"]
+bounded-labels = []
 
 [dependencies]
 nexus = { version = "0.1.0", path = "../nexus" }

@@ -1,6 +1,6 @@
 use crate::error::InvalidSchemaVersion;
-use nexus::StreamId;
 use nexus::Version;
+use std::num::NonZeroU32;
 
 // =============================================================================
 // PendingEnvelope — typestate builder ensures compile-time valid construction
@@ -10,19 +10,16 @@ use nexus::Version;
 ///
 /// Cannot be constructed directly. Use the typestate builder:
 /// ```ignore
-/// PendingEnvelopeBuilder::new(stream_id)
-///     .version(version)
+/// pending_envelope(version)
 ///     .event_type("UserCreated")
 ///     .payload(bytes)
-///     .metadata(meta)
-///     .build()
+///     .build(metadata)
 /// ```
 ///
 /// Each step returns a different type — the compiler enforces that all
 /// required fields are set before `build()` is callable.
 #[derive(Debug)]
 pub struct PendingEnvelope<M = ()> {
-    stream_id: StreamId,
     version: Version,
     event_type: &'static str,
     schema_version: u32,
@@ -31,12 +28,6 @@ pub struct PendingEnvelope<M = ()> {
 }
 
 impl<M> PendingEnvelope<M> {
-    /// The event stream identifier.
-    #[must_use]
-    pub const fn stream_id(&self) -> &StreamId {
-        &self.stream_id
-    }
-
     /// The event version in the stream.
     #[must_use]
     pub const fn version(&self) -> Version {
@@ -76,56 +67,30 @@ impl<M> PendingEnvelope<M> {
 // Typestate builder — compile-time enforced construction
 // =============================================================================
 
-/// Step 1: has `stream_id`, needs version.
-pub struct WithStreamId {
-    stream_id: StreamId,
-}
-
-/// Step 2: has `stream_id` + `version`, needs `event_type`.
+/// Step 1: has `version`, needs `event_type`.
 pub struct WithVersion {
-    stream_id: StreamId,
     version: Version,
 }
 
-/// Step 3: has `stream_id` + `version` + `event_type`, needs payload.
+/// Step 2: has `version` + `event_type`, needs payload.
 pub struct WithEventType {
-    stream_id: StreamId,
     version: Version,
     event_type: &'static str,
 }
 
-/// Step 4: has all core fields, needs metadata.
+/// Step 3: has all core fields, needs metadata.
 pub struct WithPayload {
-    stream_id: StreamId,
     version: Version,
     event_type: &'static str,
     payload: Vec<u8>,
     schema_version: u32,
 }
 
-impl WithStreamId {
-    /// Start building a `PendingEnvelope` with the stream ID.
-    #[must_use]
-    pub const fn new(stream_id: StreamId) -> Self {
-        Self { stream_id }
-    }
-
-    /// Set the event version.
-    #[must_use]
-    pub fn version(self, version: Version) -> WithVersion {
-        WithVersion {
-            stream_id: self.stream_id,
-            version,
-        }
-    }
-}
-
 impl WithVersion {
     /// Set the event type name (from `DomainEvent::name()`).
     #[must_use]
-    pub fn event_type(self, event_type: &'static str) -> WithEventType {
+    pub const fn event_type(self, event_type: &'static str) -> WithEventType {
         WithEventType {
-            stream_id: self.stream_id,
             version: self.version,
             event_type,
         }
@@ -135,9 +100,8 @@ impl WithVersion {
 impl WithEventType {
     /// Set the serialized event payload.
     #[must_use]
-    pub fn payload(self, payload: Vec<u8>) -> WithPayload {
+    pub const fn payload(self, payload: Vec<u8>) -> WithPayload {
         WithPayload {
-            stream_id: self.stream_id,
             version: self.version,
             event_type: self.event_type,
             payload,
@@ -149,20 +113,17 @@ impl WithEventType {
 impl WithPayload {
     /// Override the schema version (default: 1).
     ///
-    /// Schema versions start at 1. If 0 is passed, it is clamped to 1
-    /// to maintain the invariant that `PersistedEnvelope` always has
-    /// `schema_version > 0`.
+    /// Uses [`NonZeroU32`] to make `schema_version = 0` a compile-time
+    /// error. This matches the invariant enforced by
+    /// `PersistedEnvelope::try_new` on the read path — symmetric by
+    /// construction, not by runtime checks.
     ///
     /// The `EventStore` save path uses this to stamp new events at the
     /// current schema version, preventing upcasters from re-transforming
     /// events that are already in the latest format.
     #[must_use]
-    pub const fn schema_version(mut self, schema_version: u32) -> Self {
-        self.schema_version = if schema_version == 0 {
-            1
-        } else {
-            schema_version
-        };
+    pub const fn schema_version(mut self, schema_version: NonZeroU32) -> Self {
+        self.schema_version = schema_version.get();
         self
     }
 
@@ -170,7 +131,7 @@ impl WithPayload {
     ///
     /// # Validation contract
     ///
-    /// The builder deliberately accepts empty `stream_id` and `event_type`.
+    /// The builder deliberately accepts empty `event_type`.
     /// Content validation (e.g. rejecting empty strings) is the responsibility
     /// of the `EventStore` facade, not the envelope builder. This keeps the
     /// builder simple and composable while deferring policy to the layer that
@@ -178,7 +139,6 @@ impl WithPayload {
     #[must_use]
     pub fn build<M>(self, metadata: M) -> PendingEnvelope<M> {
         PendingEnvelope {
-            stream_id: self.stream_id,
             version: self.version,
             event_type: self.event_type,
             schema_version: self.schema_version,
@@ -199,27 +159,25 @@ impl WithPayload {
 /// Start building a `PendingEnvelope`.
 ///
 /// ```ignore
-/// pending_envelope(stream_id)
-///     .version(version)
+/// pending_envelope(version)
 ///     .event_type("UserCreated")
 ///     .payload(bytes)
 ///     .build(metadata)
 /// ```
 #[must_use]
-pub const fn pending_envelope(stream_id: StreamId) -> WithStreamId {
-    WithStreamId::new(stream_id)
+pub const fn pending_envelope(version: Version) -> WithVersion {
+    WithVersion { version }
 }
 
 /// Event envelope for the read path — borrows from database row buffer.
 ///
-/// Zero allocation for core fields (`stream_id`, `event_type`, `payload`).
+/// Zero allocation for core fields (`event_type`, `payload`).
 /// Metadata `M` is always owned (small data like UUIDs, timestamps).
 ///
 /// The lifetime `'a` ties the envelope to the row buffer — the envelope
 /// must be dropped before the cursor advances to the next row.
 #[derive(Debug)]
 pub struct PersistedEnvelope<'a, M = ()> {
-    stream_id: &'a str,
     version: Version,
     event_type: &'a str,
     schema_version: u32,
@@ -228,11 +186,10 @@ pub struct PersistedEnvelope<'a, M = ()> {
 }
 
 impl<'a, M> PersistedEnvelope<'a, M> {
-    /// Construct a persisted envelope from database row data.
+    /// Construct a persisted envelope from database row data (panicking).
     ///
-    /// Adapters call this to wrap raw row data. Once constructed, the
-    /// envelope is frozen — all access is through `const` borrowing
-    /// accessors. No mutation path exists.
+    /// Prefer [`try_new()`](Self::try_new) in adapter code where you
+    /// want to surface the error instead of panicking.
     ///
     /// # Panics
     ///
@@ -242,8 +199,7 @@ impl<'a, M> PersistedEnvelope<'a, M> {
         clippy::too_many_arguments,
         reason = "flat constructor mirrors DB row; a builder would add needless complexity for a read-path type"
     )]
-    pub const fn new(
-        stream_id: &'a str,
+    pub const fn new_unchecked(
         version: Version,
         event_type: &'a str,
         schema_version: u32,
@@ -255,7 +211,6 @@ impl<'a, M> PersistedEnvelope<'a, M> {
             "schema_version must be > 0: a schema version of 0 is invalid"
         );
         Self {
-            stream_id,
             version,
             event_type,
             schema_version,
@@ -266,7 +221,7 @@ impl<'a, M> PersistedEnvelope<'a, M> {
 
     /// Fallible constructor — returns `Err` if `schema_version` is 0.
     ///
-    /// Prefer this over [`new()`](Self::new) in adapter code where you
+    /// Prefer this over [`new_unchecked()`](Self::new_unchecked) in adapter code where you
     /// want to surface the error instead of panicking.
     ///
     /// # Errors
@@ -277,7 +232,6 @@ impl<'a, M> PersistedEnvelope<'a, M> {
         reason = "mirrors new() — flat constructor for DB row data"
     )]
     pub fn try_new(
-        stream_id: &'a str,
         version: Version,
         event_type: &'a str,
         schema_version: u32,
@@ -288,19 +242,12 @@ impl<'a, M> PersistedEnvelope<'a, M> {
             return Err(InvalidSchemaVersion);
         }
         Ok(Self {
-            stream_id,
             version,
             event_type,
             schema_version,
             payload,
             metadata,
         })
-    }
-
-    /// The event stream identifier.
-    #[must_use]
-    pub const fn stream_id(&self) -> &str {
-        self.stream_id
     }
 
     /// The event version in the stream.
@@ -315,13 +262,32 @@ impl<'a, M> PersistedEnvelope<'a, M> {
         self.event_type
     }
 
-    /// The schema version of the persisted event.
+    /// The schema version of the persisted event (raw `u32`).
     ///
-    /// Used by `EventUpcaster` to decide which events need upgrading.
+    /// Prefer [`schema_version_as_version`](Self::schema_version_as_version) for
+    /// passing to upcaster APIs which require `Version`.
     /// Always >= 1.
     #[must_use]
     pub const fn schema_version(&self) -> u32 {
         self.schema_version
+    }
+
+    /// The schema version as a [`Version`] for upcaster APIs.
+    ///
+    /// Safe because constructors enforce `schema_version >= 1`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `schema_version` is zero, which violates the
+    /// constructor invariant and should never happen in practice.
+    #[must_use]
+    #[allow(
+        clippy::expect_used,
+        reason = "constructors guarantee schema_version >= 1"
+    )]
+    pub fn schema_version_as_version(&self) -> Version {
+        Version::new(u64::from(self.schema_version))
+            .expect("PersistedEnvelope invariant: schema_version >= 1")
     }
 
     /// The serialized event payload.

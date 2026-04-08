@@ -1,7 +1,6 @@
-//! # NASA-Grade Adversarial Property Tests for nexus-store
+//! Adversarial property tests for `nexus-store`.
 //!
-//! Mission: systematically try to BREAK every invariant this crate claims.
-//! Tool: proptest. Strategy: generate chaotic inputs, verify contracts hold.
+//! Uses proptest to generate chaotic inputs and verify store invariants hold.
 //!
 //! ## Attack Surface Catalog
 //!
@@ -13,11 +12,11 @@
 //! 6.  RawEventStore: append-then-read roundtrip preserves all data
 //! 7.  EventStream: monotonically increasing versions
 //! 8.  EventStream: fused after None
-//! 9.  Upcaster: apply_upcasters rejects non-advancing versions
-//! 10. Upcaster: apply_upcasters rejects empty event_type
-//! 11. Upcaster: chain limit at 100 prevents infinite loops
-//! 12. Upcaster: well-behaved chain produces correct final state
-//! 13. UpcasterChain cons-list: dispatches to first match, falls through
+//! 9.  (deleted — old pipeline infrastructure)
+//! 10. (deleted — old pipeline infrastructure)
+//! 11. (deleted — old pipeline infrastructure)
+//! 12. Upcaster: well-behaved multi-step upcaster produces correct final state
+//! 13. (deleted — old TransformChain infrastructure)
 //! 14. EventStore: save-then-load roundtrip preserves aggregate state
 //! 15. EventStore: save with no uncommitted events is no-op
 //! 16. EventStore: concurrent saves detect conflict
@@ -56,29 +55,37 @@
 #![allow(clippy::arithmetic_side_effects, reason = "tests")]
 #![allow(clippy::print_stdout, reason = "diagnostic output")]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use nexus::StreamId;
 use nexus::Version;
+use nexus_store::Upcaster;
 use nexus_store::codec::Codec;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::{StoreError, UpcastError};
 use nexus_store::event_store::EventStore;
+use nexus_store::morsel::EventMorsel;
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::repository::Repository;
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::upcaster::{EventUpcaster, apply_upcasters};
-use nexus_store::upcaster_chain::{Chain, UpcasterChain};
-
-fn sid(s: &str) -> StreamId {
-    StreamId::from_persisted(s).unwrap()
-}
 
 use proptest::prelude::*;
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct StreamName(String);
+impl fmt::Display for StreamName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl nexus::Id for StreamName {}
+fn sn(s: &str) -> StreamName {
+    StreamName(s.to_owned())
+}
 
 // ============================================================================
 // Test Domain Types (minimal aggregate for integration tests)
@@ -100,7 +107,7 @@ impl nexus::DomainEvent for TestEvent {
     }
 }
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct TestState {
     events_applied: u64,
     last_value: i64,
@@ -119,9 +126,6 @@ impl nexus::AggregateState for TestState {
             TestEvent::ValueSet(v) => self.last_value = *v,
         }
         self
-    }
-    fn name(&self) -> &'static str {
-        "Test"
     }
 }
 
@@ -198,13 +202,12 @@ fn leak(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn build_envelopes(stream_id: &StreamId, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
     payloads
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            pending_envelope(stream_id.clone())
-                .version(Version::from_persisted(u64::try_from(i).unwrap() + 1))
+            pending_envelope(Version::new(u64::try_from(i).unwrap() + 1).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
                 .build_without_metadata()
@@ -212,19 +215,12 @@ fn build_envelopes(stream_id: &StreamId, payloads: &[Vec<u8>]) -> Vec<PendingEnv
         .collect()
 }
 
-fn build_envelopes_from(
-    stream_id: &StreamId,
-    start_version: u64,
-    payloads: &[Vec<u8>],
-) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
     payloads
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            pending_envelope(stream_id.clone())
-                .version(Version::from_persisted(
-                    start_version + u64::try_from(i).unwrap(),
-                ))
+            pending_envelope(Version::new(start_version + u64::try_from(i).unwrap()).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
                 .build_without_metadata()
@@ -232,7 +228,7 @@ fn build_envelopes_from(
         .collect()
 }
 
-async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamId) -> Vec<Vec<u8>> {
+async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamName) -> Vec<Vec<u8>> {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -245,7 +241,7 @@ async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamId) -> Vec<V
     payloads
 }
 
-async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamId) -> Vec<u64> {
+async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamName) -> Vec<u64> {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -262,32 +258,10 @@ async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamId) -> Vec<u
 // Strategies
 // ============================================================================
 
-fn stream_id_strategy() -> impl Strategy<Value = StreamId> {
+fn stream_id_strategy() -> impl Strategy<Value = StreamName> {
     prop::string::string_regex("[a-z][a-z0-9_-]{0,29}")
         .unwrap()
-        .prop_map(|s| StreamId::from_persisted(s).unwrap())
-}
-
-fn evil_stream_id_strategy() -> impl Strategy<Value = String> {
-    prop_oneof![
-        // Normal IDs
-        prop::string::string_regex("[a-z][a-z0-9-]{0,19}").unwrap(),
-        // Empty string
-        Just(String::new()),
-        // Unicode madness
-        prop::string::string_regex("[\\x00-\\xFF]{0,50}").unwrap(),
-        // SQL injection
-        Just("'; DROP TABLE events; --".to_owned()),
-        Just("stream\0id".to_owned()),
-        Just("../../../etc/passwd".to_owned()),
-        // Very long
-        Just("x".repeat(10_000)),
-        // Whitespace only
-        Just("   \t\n  ".to_owned()),
-        // Unicode normalization edge cases
-        Just("\u{FEFF}stream".to_owned()), // BOM prefix
-        Just("café".to_owned()),           // NFC vs NFD
-    ]
+        .prop_map(StreamName)
 }
 
 fn payloads_strategy() -> impl Strategy<Value = Vec<Vec<u8>>> {
@@ -332,34 +306,30 @@ proptest! {
 
     #[test]
     fn attack_persisted_envelope_schema_version_zero_panics(
-        stream_id in "[a-z]{1,10}",
         version in 1..1000u64,
         event_type in "[A-Z]{1,10}",
         payload in prop::collection::vec(any::<u8>(), 0..100),
     ) {
-        let result = std::panic::catch_unwind(|| {
-            PersistedEnvelope::<()>::new(
-                &stream_id,
-                Version::from_persisted(version),
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = PersistedEnvelope::<()>::new_unchecked(
+                Version::new(version).unwrap(),
                 &event_type,
                 0, // ATTACK: schema_version = 0
                 &payload,
                 (),
-            )
-        });
+            );
+        }));
         prop_assert!(result.is_err(), "schema_version=0 MUST panic in new()");
     }
 
     #[test]
     fn attack_persisted_envelope_try_new_rejects_zero(
-        stream_id in "[a-z]{1,10}",
         version in 1..1000u64,
         event_type in "[A-Z]{1,10}",
         payload in prop::collection::vec(any::<u8>(), 0..100),
     ) {
         let result = PersistedEnvelope::<()>::try_new(
-            &stream_id,
-            Version::from_persisted(version),
+            Version::new(version).unwrap(),
             &event_type,
             0, // ATTACK
             &payload,
@@ -378,23 +348,20 @@ proptest! {
 
     #[test]
     fn attack_persisted_envelope_accessors_are_faithful(
-        stream_id in "[a-z]{1,20}",
         version in 1..u64::MAX,
         event_type in "[A-Z][a-z]{0,20}",
         schema_version in 1..u32::MAX,
         payload in prop::collection::vec(any::<u8>(), 0..1000),
         metadata in any::<u64>(),
     ) {
-        let env = PersistedEnvelope::new(
-            &stream_id,
-            Version::from_persisted(version),
+        let env = PersistedEnvelope::new_unchecked(
+            Version::new(version).unwrap(),
             &event_type,
             schema_version,
             &payload,
             metadata,
         );
 
-        prop_assert_eq!(env.stream_id(), stream_id.as_str());
         prop_assert_eq!(env.version().as_u64(), version);
         prop_assert_eq!(env.event_type(), event_type.as_str());
         prop_assert_eq!(env.schema_version(), schema_version);
@@ -412,21 +379,17 @@ proptest! {
 
     #[test]
     fn attack_pending_envelope_builder_preserves_all_fields(
-        raw_stream_id in ".*",
-        version in any::<u64>(),
+        version in 1..u64::MAX,
         payload in prop::collection::vec(any::<u8>(), 0..2000),
         metadata in any::<i32>(),
     ) {
-        // StreamId rejects invalid inputs (empty, null bytes, too long).
-        let Ok(stream_id) = StreamId::from_persisted(raw_stream_id) else { return Ok(()) };
+        let ver = Version::new(version).unwrap();
 
-        let env = pending_envelope(stream_id.clone())
-            .version(Version::from_persisted(version))
+        let env = pending_envelope(ver)
             .event_type(leak("AnyType"))
             .payload(payload.clone())
             .build(metadata);
 
-        prop_assert_eq!(env.stream_id().as_str(), stream_id.as_str());
         prop_assert_eq!(env.version().as_u64(), version);
         prop_assert_eq!(env.event_type(), "AnyType");
         prop_assert_eq!(env.payload(), payload.as_slice());
@@ -443,30 +406,35 @@ proptest! {
 
     #[test]
     fn attack_version_from_persisted_roundtrip(v in any::<u64>()) {
-        let version = Version::from_persisted(v);
-        prop_assert_eq!(version.as_u64(), v, "from_persisted/as_u64 roundtrip failed");
+        let version = Version::new(v);
+        if v == 0 {
+            prop_assert!(version.is_none(), "from_persisted(0) must return None");
+        } else {
+            let version = version.unwrap();
+            prop_assert_eq!(version.as_u64(), v, "from_persisted/as_u64 roundtrip failed");
+        }
     }
 
     #[test]
-    fn attack_version_next_chain(start in 0..10_000u64, steps in 0..100usize) {
-        let mut v = Version::from_persisted(start);
+    fn attack_version_next_chain(start in 1..10_000u64, steps in 0..100usize) {
+        let mut v = Version::new(start).unwrap();
         for _ in 0..steps {
             if v.as_u64() == u64::MAX {
-                // next() should panic
-                let result = std::panic::catch_unwind(move || v.next());
-                prop_assert!(result.is_err(), "next() at MAX must panic");
+                // next() should return None
+                let result = v.next();
+                prop_assert!(result.is_none(), "next() at MAX must return None");
                 return Ok(());
             }
-            let next = v.next();
+            let next = v.next().unwrap();
             prop_assert_eq!(next.as_u64(), v.as_u64() + 1, "next() must increment by 1");
             v = next;
         }
     }
 
     #[test]
-    fn attack_version_ordering(a in any::<u64>(), b in any::<u64>()) {
-        let va = Version::from_persisted(a);
-        let vb = Version::from_persisted(b);
+    fn attack_version_ordering(a in 1..u64::MAX, b in 1..u64::MAX) {
+        let va = Version::new(a).unwrap();
+        let vb = Version::new(b).unwrap();
         prop_assert_eq!(va < vb, a < b, "Version ordering must match u64 ordering");
         prop_assert_eq!(va == vb, a == b, "Version equality must match u64 equality");
     }
@@ -487,9 +455,9 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = InMemoryStore::new();
-            let envelopes = build_envelopes(&stream_id, &payloads);
+            let envelopes = build_envelopes(&payloads);
 
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let read = read_all_payloads(&store, &stream_id).await;
             prop_assert_eq!(read.len(), payloads.len(), "payload count mismatch");
@@ -508,9 +476,9 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = InMemoryStore::new();
-            let envelopes = build_envelopes(&stream_id, &payloads);
+            let envelopes = build_envelopes(&payloads);
 
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let read = read_all_payloads(&store, &stream_id).await;
             prop_assert_eq!(read.len(), payloads.len());
@@ -542,8 +510,8 @@ proptest! {
 
             // First, put some events in
             let payloads: Vec<Vec<u8>> = (0..initial_count).map(|i| vec![i as u8]).collect();
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let actual_version = u64::try_from(initial_count).unwrap();
             // Skip if wrong_version accidentally matches
@@ -551,13 +519,12 @@ proptest! {
 
             // Try to append with wrong expected_version
             let new_envelopes = build_envelopes_from(
-                &stream_id,
                 wrong_version + 1,
                 &[vec![0xFF]],
             );
             let result = store.append(
                 &stream_id,
-                Version::from_persisted(wrong_version),
+                Version::new(wrong_version),
                 &new_envelopes,
             ).await;
 
@@ -585,14 +552,13 @@ proptest! {
             let store = InMemoryStore::new();
 
             let envelopes: Vec<_> = versions.iter().map(|&v| {
-                pending_envelope(stream_id.clone())
-                    .version(Version::from_persisted(v))
+                pending_envelope(Version::new(v).unwrap())
                     .event_type(leak("E"))
                     .payload(vec![v as u8])
                     .build_without_metadata()
             }).collect();
 
-            let result = store.append(&stream_id, Version::INITIAL, &envelopes).await;
+            let result = store.append(&stream_id, None, &envelopes).await;
 
             let is_sequential = versions.iter().enumerate().all(|(i, &v)| v == (i as u64) + 1);
             if is_sequential {
@@ -616,14 +582,13 @@ proptest! {
 
             // Create a batch where all envelopes have version 1
             let envelopes: Vec<_> = (0..n).map(|_| {
-                pending_envelope(stream_id.clone())
-                    .version(Version::from_persisted(1))
+                pending_envelope(Version::INITIAL)
                     .event_type(leak("E"))
                     .payload(vec![1])
                     .build_without_metadata()
             }).collect();
 
-            let result = store.append(&stream_id, Version::INITIAL, &envelopes).await;
+            let result = store.append(&stream_id, None, &envelopes).await;
             prop_assert!(result.is_err(), "duplicate versions MUST be rejected (batch of {} all at v1)", n);
             Ok(())
         })?;
@@ -653,14 +618,13 @@ proptest! {
             }
 
             let envelopes: Vec<_> = versions.iter().map(|&v| {
-                pending_envelope(stream_id.clone())
-                    .version(Version::from_persisted(v))
+                pending_envelope(Version::new(v).unwrap())
                     .event_type(leak("E"))
                     .payload(vec![v as u8])
                     .build_without_metadata()
             }).collect();
 
-            let result = store.append(&stream_id, Version::INITIAL, &envelopes).await;
+            let result = store.append(&stream_id, None, &envelopes).await;
             prop_assert!(result.is_err(), "version gap MUST be rejected: {:?}", versions);
             Ok(())
         })?;
@@ -683,8 +647,8 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
             let payloads: Vec<Vec<u8>> = (0..n).map(|i| vec![i as u8]).collect();
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let versions = read_all_versions(&store, &stream_id).await;
             for window in versions.windows(2) {
@@ -717,8 +681,8 @@ proptest! {
 
             if n > 0 {
                 let payloads: Vec<Vec<u8>> = (0..n).map(|i| vec![i as u8]).collect();
-                let envelopes = build_envelopes(&stream_id, &payloads);
-                store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+                let envelopes = build_envelopes(&payloads);
+                store.append(&stream_id, None, &envelopes).await.unwrap();
             }
 
             let mut stream = store.read_stream(&stream_id, Version::INITIAL).await.unwrap();
@@ -761,11 +725,11 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
 
-            let envelopes_a = build_envelopes(&id_a, &payloads_a);
-            let envelopes_b = build_envelopes(&id_b, &payloads_b);
+            let envelopes_a = build_envelopes(&payloads_a);
+            let envelopes_b = build_envelopes(&payloads_b);
 
-            store.append(&id_a, Version::INITIAL, &envelopes_a).await.unwrap();
-            store.append(&id_b, Version::INITIAL, &envelopes_b).await.unwrap();
+            store.append(&id_a, None, &envelopes_a).await.unwrap();
+            store.append(&id_b, None, &envelopes_b).await.unwrap();
 
             let read_a = read_all_payloads(&store, &id_a).await;
             let read_b = read_all_payloads(&store, &id_b).await;
@@ -801,12 +765,14 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
             let payloads: Vec<Vec<u8>> = (0..n).map(|i| vec![i as u8]).collect();
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let from_version = u64::try_from(from_offset).unwrap();
+            // from_persisted returns None for 0; use INITIAL (1) as minimum
+            let from_ver = Version::new(from_version).unwrap_or(Version::INITIAL);
             let mut stream = store
-                .read_stream(&stream_id, Version::from_persisted(from_version))
+                .read_stream(&stream_id, from_ver)
                 .await
                 .unwrap();
 
@@ -837,209 +803,57 @@ proptest! {
     }
 }
 
-// ============================================================================
-// ATTACK 12: Upcaster — apply_upcasters rejects non-advancing versions
-// ============================================================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
-
-    #[test]
-    fn attack_upcaster_rejects_same_version(
-        input_version in 1..1000u32,
-        payload in prop::collection::vec(any::<u8>(), 0..100),
-    ) {
-        struct SameVersionUpcaster(u32);
-        impl EventUpcaster for SameVersionUpcaster {
-            fn can_upcast(&self, _: &str, v: u32) -> bool { v == self.0 }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("E".into(), self.0, p.to_vec()) // returns SAME version
-            }
-        }
-
-        let u = SameVersionUpcaster(input_version);
-        let upcasters: Vec<&dyn EventUpcaster> = vec![&u];
-        let result = apply_upcasters(&upcasters, "E", input_version, &payload);
-        prop_assert!(
-            result.is_err(),
-            "apply_upcasters MUST reject same-version output (input=output={})",
-            input_version,
-        );
-        if let Err(UpcastError::VersionNotAdvanced { input_version: iv, output_version: ov, .. }) = &result {
-            prop_assert_eq!(*iv, input_version);
-            prop_assert_eq!(*ov, input_version);
-        }
-    }
-
-    #[test]
-    fn attack_upcaster_rejects_lower_version(
-        input_version in 2..1000u32,
-        decrement in 1..100u32,
-        payload in prop::collection::vec(any::<u8>(), 0..100),
-    ) {
-        let output_version = input_version.saturating_sub(decrement);
-        prop_assume!(output_version < input_version);
-
-        struct LowerVersionUpcaster { input: u32, output: u32 }
-        impl EventUpcaster for LowerVersionUpcaster {
-            fn can_upcast(&self, _: &str, v: u32) -> bool { v == self.input }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("E".into(), self.output, p.to_vec())
-            }
-        }
-
-        let upcaster = LowerVersionUpcaster { input: input_version, output: output_version };
-        let upcasters: Vec<&dyn EventUpcaster> = vec![&upcaster];
-        let result = apply_upcasters(&upcasters, "E", input_version, &payload);
-        prop_assert!(result.is_err(), "apply_upcasters MUST reject lower version output");
-    }
-}
+// (ATTACKS 12-14 deleted: old SchemaTransform + TransformChain pipeline infrastructure removed)
 
 // ============================================================================
-// ATTACK 13: Upcaster — apply_upcasters rejects empty event_type
-// ============================================================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
-
-    #[test]
-    fn attack_upcaster_rejects_empty_event_type(
-        input_version in 1..1000u32,
-        payload in prop::collection::vec(any::<u8>(), 0..100),
-    ) {
-        struct EmptyTypeUpcaster(u32);
-        impl EventUpcaster for EmptyTypeUpcaster {
-            fn can_upcast(&self, _: &str, v: u32) -> bool { v == self.0 }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                (String::new(), self.0 + 1, p.to_vec()) // empty event_type!
-            }
-        }
-
-        let u = EmptyTypeUpcaster(input_version);
-        let upcasters: Vec<&dyn EventUpcaster> = vec![&u];
-        let result = apply_upcasters(&upcasters, "SomeEvent", input_version, &payload);
-        prop_assert!(result.is_err(), "apply_upcasters MUST reject empty event_type");
-        assert!(matches!(result, Err(UpcastError::EmptyEventType { .. })));
-    }
-}
-
-// ============================================================================
-// ATTACK 14: Upcaster — chain limit prevents infinite loops
+// ATTACK 15: Upcaster — well-behaved 3-step upcaster produces correct state
 // ============================================================================
 
 #[test]
-fn attack_upcaster_chain_limit_101_iterations() {
-    struct IncrementForever;
-    impl EventUpcaster for IncrementForever {
-        fn can_upcast(&self, _: &str, _: u32) -> bool {
-            true // always matches
+fn attack_upcaster_correct_final_state() {
+    // Upcaster that steps "E" from V1->V2->V3->V4, preserving payload.
+    struct ThreeStepUpcaster;
+    impl Upcaster for ThreeStepUpcaster {
+        fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+            loop {
+                match (morsel.event_type(), morsel.schema_version()) {
+                    ("E", v) if v == Version::INITIAL => {
+                        morsel = morsel.with_schema_version(Version::new(2).unwrap());
+                    }
+                    ("E", v) if v == Version::new(2).unwrap() => {
+                        morsel = morsel.with_schema_version(Version::new(3).unwrap());
+                    }
+                    ("E", v) if v == Version::new(3).unwrap() => {
+                        morsel = morsel.with_schema_version(Version::new(4).unwrap());
+                    }
+                    _ => break,
+                }
+            }
+            Ok(morsel)
         }
-        fn upcast(&self, _: &str, v: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-            ("E".into(), v.saturating_add(1), p.to_vec())
+
+        fn current_version(&self, event_type: &str) -> Option<Version> {
+            match event_type {
+                "E" => Some(Version::new(4).unwrap()),
+                _ => None,
+            }
         }
     }
 
-    let upcasters: Vec<&dyn EventUpcaster> = vec![&IncrementForever];
-    let result = apply_upcasters(&upcasters, "E", 1, b"data");
+    let payload = vec![42u8; 100];
+    let morsel = EventMorsel::borrowed("E", Version::INITIAL, &payload);
+    let result = ThreeStepUpcaster.apply(morsel).unwrap();
 
-    assert!(result.is_err(), "infinite upcaster chain must be caught");
-    assert!(
-        matches!(
-            result,
-            Err(UpcastError::ChainLimitExceeded { limit: 100, .. })
-        ),
-        "should hit chain limit of 100, got: {:?}",
-        result,
+    assert_eq!(result.event_type(), "E");
+    assert_eq!(result.schema_version(), Version::new(4).unwrap());
+    assert_eq!(
+        result.payload(),
+        payload.as_slice(),
+        "payload corrupted through upcaster"
     );
 }
 
-// ============================================================================
-// ATTACK 15: Upcaster — well-behaved chain produces correct final state
-// ============================================================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
-
-    #[test]
-    fn attack_upcaster_chain_correct_final_state(
-        chain_length in 1..20u32,
-        payload in prop::collection::vec(any::<u8>(), 0..200),
-    ) {
-        // Build a chain of N upcasters: V1->V2, V2->V3, ..., VN->V(N+1)
-        // Each preserves the payload.
-        struct StepUpcaster(u32);
-        impl EventUpcaster for StepUpcaster {
-            fn can_upcast(&self, _: &str, v: u32) -> bool { v == self.0 }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("E".into(), self.0 + 1, p.to_vec())
-            }
-        }
-
-        let upcasters_owned: Vec<StepUpcaster> = (1..=chain_length).map(StepUpcaster).collect();
-        let upcasters: Vec<&dyn EventUpcaster> = upcasters_owned.iter()
-            .map(|u| u as &dyn EventUpcaster)
-            .collect();
-
-        let result = apply_upcasters(&upcasters, "E", 1, &payload);
-        let (event_type, final_version, final_payload) = result.unwrap();
-
-        prop_assert_eq!(event_type, "E");
-        prop_assert_eq!(final_version, chain_length + 1);
-        prop_assert_eq!(final_payload, payload, "payload corrupted through upcaster chain");
-    }
-}
-
-// ============================================================================
-// ATTACK 16: UpcasterChain cons-list — dispatches correctly
-// ============================================================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
-
-    #[test]
-    fn attack_upcaster_chain_cons_list_dispatch(
-        version in 1..100u32,
-        payload in prop::collection::vec(any::<u8>(), 0..100),
-    ) {
-        // Two upcasters: first handles version, second handles version+1
-        struct U(u32);
-        impl EventUpcaster for U {
-            fn can_upcast(&self, _: &str, v: u32) -> bool { v == self.0 }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("E".into(), self.0 + 1, p.to_vec())
-            }
-        }
-
-        let chain = Chain(U(version), Chain(U(version + 1), ()));
-
-        // First dispatch: should match U(version)
-        let result = chain.try_upcast("E", version, &payload);
-        prop_assert!(result.is_some(), "chain should match version {}", version);
-        let (_, new_v, _) = result.unwrap();
-        prop_assert_eq!(new_v, version + 1);
-
-        // Second dispatch: should match U(version+1)
-        let result = chain.try_upcast("E", version + 1, &payload);
-        prop_assert!(result.is_some());
-        let (_, new_v, _) = result.unwrap();
-        prop_assert_eq!(new_v, version + 2);
-
-        // Version not handled: should return None
-        let result = chain.try_upcast("E", version + 2, &payload);
-        prop_assert!(result.is_none(), "chain should not match unhandled version");
-    }
-
-    // Empty chain always returns None
-    #[test]
-    fn attack_empty_upcaster_chain(
-        version in any::<u32>(),
-        payload in prop::collection::vec(any::<u8>(), 0..100),
-    ) {
-        let chain = ();
-        let result = chain.try_upcast("E", version, &payload);
-        prop_assert!(result.is_none(), "empty chain must always return None");
-    }
-}
+// (ATTACK 16 deleted: old TransformChain cons-list infrastructure removed)
 
 // ============================================================================
 // ATTACK 17: Codec encode/decode roundtrip
@@ -1094,17 +908,15 @@ proptest! {
             let store = InMemoryStore::new();
             let es = EventStore::new(store, JsonCodec);
 
-            // Apply events to an aggregate
+            // Build events for the aggregate
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(42));
-            for &v in &values {
-                root.apply(TestEvent::ValueSet(v));
-            }
+            let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
 
             // Save
-            es.save(&sid("stream-42"), &mut root).await.unwrap();
+            es.save(&mut root, &events).await.unwrap();
 
             // Load into fresh aggregate
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("stream-42"), TestId(42)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(42)).await.unwrap();
 
             // Verify state matches
             prop_assert_eq!(
@@ -1118,7 +930,7 @@ proptest! {
                 "events_applied mismatch",
             );
             prop_assert_eq!(
-                loaded.version().as_u64(),
+                loaded.version().unwrap().as_u64(),
                 u64::try_from(values.len()).unwrap(),
                 "version mismatch after load",
             );
@@ -1136,12 +948,10 @@ proptest! {
             let es = EventStore::new(store, JsonCodec);
 
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
-            for s in &strings {
-                root.apply(TestEvent::Happened(s.clone()));
-            }
+            let events: Vec<TestEvent> = strings.iter().map(|s| TestEvent::Happened(s.clone())).collect();
 
-            es.save(&sid("stream-1"), &mut root).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("stream-1"), TestId(1)).await.unwrap();
+            es.save(&mut root, &events).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
 
             prop_assert_eq!(&loaded.state().log, &strings, "event log mismatch after roundtrip");
             Ok(())
@@ -1166,16 +976,14 @@ proptest! {
             let es = EventStore::new(store, JsonCodec);
 
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(99));
-            for &v in &values {
-                root.apply(TestEvent::ValueSet(v));
-            }
+            let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
 
             // First save — should work
-            es.save(&sid("stream-99"), &mut root).await.unwrap();
+            es.save(&mut root, &events).await.unwrap();
 
             // Second save with no new events — should be a no-op, not an error
-            let result = es.save(&sid("stream-99"), &mut root).await;
-            prop_assert!(result.is_ok(), "save with no uncommitted events must be a no-op");
+            let result = es.save(&mut root, &[]).await;
+            prop_assert!(result.is_ok(), "save with empty events must be a no-op");
             Ok(())
         })?;
     }
@@ -1190,12 +998,9 @@ async fn attack_event_store_load_empty_stream() {
     let store = InMemoryStore::new();
     let es = EventStore::new(store, JsonCodec);
 
-    let loaded: nexus::AggregateRoot<TestAggregate> = es
-        .load(&sid("nonexistent-stream"), TestId(1))
-        .await
-        .unwrap();
+    let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
 
-    assert_eq!(loaded.version(), Version::INITIAL);
+    assert_eq!(loaded.version(), None);
     assert_eq!(loaded.state().events_applied, 0);
     assert_eq!(loaded.state().last_value, 0);
     assert!(loaded.state().log.is_empty());
@@ -1217,26 +1022,20 @@ proptest! {
             let store = InMemoryStore::new();
             let es = EventStore::new(store, JsonCodec);
 
-            // Load two "copies" of the same aggregate
+            // Seed the aggregate with n events
             let mut root_a = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
-            for i in 0..n {
-                root_a.apply(TestEvent::ValueSet(i as i64));
-            }
-            es.save(&sid("conflict-stream"), &mut root_a).await.unwrap();
+            let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
+            es.save(&mut root_a, &events).await.unwrap();
 
             // Load into two separate aggregates
-            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(&sid("conflict-stream"), TestId(1)).await.unwrap();
-            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(&sid("conflict-stream"), TestId(1)).await.unwrap();
-
-            // Both apply different events
-            copy1.apply(TestEvent::ValueSet(100));
-            copy2.apply(TestEvent::ValueSet(200));
+            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
 
             // First save succeeds
-            es.save(&sid("conflict-stream"), &mut copy1).await.unwrap();
+            es.save(&mut copy1, &[TestEvent::ValueSet(100)]).await.unwrap();
 
             // Second save MUST fail with conflict
-            let result = es.save(&sid("conflict-stream"), &mut copy2).await;
+            let result = es.save(&mut copy2, &[TestEvent::ValueSet(200)]).await;
             prop_assert!(result.is_err(), "concurrent save MUST detect conflict");
             Ok(())
         })?;
@@ -1244,22 +1043,30 @@ proptest! {
 }
 
 // ============================================================================
-// ATTACK 22: EventStore — upcasters applied during load
+// ATTACK 22: EventStore — transforms applied during load
 // ============================================================================
 
 #[tokio::test]
-async fn attack_event_store_upcasters_applied_on_load() {
-    // Upcaster that transforms "OldHappened" V1 payload to "Happened" V2
-    struct OldToNewUpcaster;
-    impl EventUpcaster for OldToNewUpcaster {
-        fn can_upcast(&self, event_type: &str, schema_version: u32) -> bool {
-            event_type == "Happened" && schema_version == 1
+async fn attack_event_store_transforms_applied_on_load() {
+    // Upcaster that bumps "Happened" from schema V1 to V2 (payload unchanged)
+    struct HappenedV1ToV2;
+    impl Upcaster for HappenedV1ToV2 {
+        fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+            match (morsel.event_type(), morsel.schema_version()) {
+                ("Happened", v) if v == Version::INITIAL => Ok(EventMorsel::new(
+                    "Happened",
+                    Version::new(2).unwrap(),
+                    morsel.payload().to_vec(),
+                )),
+                _ => Ok(morsel),
+            }
         }
-        fn upcast(&self, _: &str, _: u32, payload: &[u8]) -> (String, u32, Vec<u8>) {
-            // Transform payload: add a prefix to the string inside
-            let s = std::str::from_utf8(payload).unwrap();
-            let modified = s.replace("Happened", "Happened");
-            ("Happened".into(), 2, modified.into_bytes())
+
+        fn current_version(&self, event_type: &str) -> Option<Version> {
+            match event_type {
+                "Happened" => Some(Version::new(2).unwrap()),
+                _ => None,
+            }
         }
     }
 
@@ -1269,22 +1076,17 @@ async fn attack_event_store_upcasters_applied_on_load() {
     let codec = JsonCodec;
     let payload = codec.encode(&TestEvent::Happened("hello".into())).unwrap();
     let envelopes = vec![
-        pending_envelope(sid("upcast-stream"))
-            .version(Version::from_persisted(1))
+        pending_envelope(Version::INITIAL)
             .event_type(leak("Happened"))
             .payload(payload)
             .build_without_metadata(),
     ];
-    store
-        .append(&sid("upcast-stream"), Version::INITIAL, &envelopes)
-        .await
-        .unwrap();
+    store.append(&sn("test-1"), None, &envelopes).await.unwrap();
 
     // Load with upcaster (schema v1 -> v2, payload unchanged for this test)
-    let es = EventStore::new(store, JsonCodec).with_upcaster(OldToNewUpcaster);
+    let es = EventStore::with_upcaster(store, JsonCodec, HappenedV1ToV2);
 
-    let loaded: nexus::AggregateRoot<TestAggregate> =
-        es.load(&sid("upcast-stream"), TestId(1)).await.unwrap();
+    let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
     assert_eq!(loaded.state().events_applied, 1);
     assert_eq!(loaded.state().log, vec!["hello".to_owned()]);
 }
@@ -1339,26 +1141,25 @@ proptest! {
             for op in &ops {
                 match op {
                     ModelOp::Append { stream_id, payloads } => {
-                        let sid = StreamId::from_persisted(stream_id.as_str()).unwrap();
+                        let id = StreamName(stream_id.clone());
                         let model_stream = model.entry(stream_id.clone()).or_default();
                         let start_version = u64::try_from(model_stream.len()).unwrap();
-                        let expected_version = Version::from_persisted(start_version);
+                        let expected_version = Version::new(start_version);
 
                         let envelopes = build_envelopes_from(
-                            &sid,
                             start_version + 1,
                             payloads,
                         );
 
-                        let result = store.append(&sid, expected_version, &envelopes).await;
+                        let result = store.append(&id, expected_version, &envelopes).await;
                         prop_assert!(result.is_ok(), "append should succeed for model-valid operation");
 
                         model_stream.extend(payloads.iter().cloned());
                     }
                     ModelOp::Read { stream_id } => {
-                        let sid = StreamId::from_persisted(stream_id.as_str()).unwrap();
+                        let id = StreamName(stream_id.clone());
                         let expected = model.get(stream_id).cloned().unwrap_or_default();
-                        let actual = read_all_payloads(&store, &sid).await;
+                        let actual = read_all_payloads(&store, &id).await;
 
                         prop_assert_eq!(
                             actual.len(), expected.len(),
@@ -1402,14 +1203,13 @@ proptest! {
                     .collect();
 
                 let envelopes = build_envelopes_from(
-                    &stream_id,
                     total_events + 1,
                     &payloads,
                 );
 
                 store.append(
                     &stream_id,
-                    Version::from_persisted(total_events),
+                    Version::new(total_events),
                     &envelopes,
                 ).await.unwrap();
 
@@ -1443,26 +1243,23 @@ proptest! {
 
     #[test]
     fn attack_evil_stream_ids_dont_crash(
-        raw_stream_id in evil_stream_id_strategy(),
+        raw_stream_id in "[a-zA-Z0-9_./-]{0,100}",
     ) {
-        // StreamId rejects invalid inputs (empty, null bytes, too long).
-        // If from_persisted fails, the evil input is caught at construction
-        // time — which is the desired safety improvement.
-        let Ok(stream_id) = StreamId::from_persisted(raw_stream_id) else { return Ok(()) };
+        // Any string can be used as an Id now. Test that evil IDs don't crash.
+        let stream_id = StreamName(raw_stream_id);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = InMemoryStore::new();
 
-            // Building envelopes with validated stream_id should not panic
-            let envelope = pending_envelope(stream_id.clone())
-                .version(Version::from_persisted(1))
+            // Building envelopes should not panic
+            let envelope = pending_envelope(Version::INITIAL)
                 .event_type(leak("E"))
                 .payload(vec![1, 2, 3])
                 .build_without_metadata();
 
             // Append should not panic (may succeed or fail with error)
-            let result = store.append(&stream_id, Version::INITIAL, &[envelope]).await;
+            let result = store.append(&stream_id, None, &[envelope]).await;
 
             // If append succeeded, read should return the event
             if result.is_ok() {
@@ -1491,7 +1288,7 @@ proptest! {
             let store = InMemoryStore::new();
 
             // Append with empty slice
-            let result = store.append(&stream_id, Version::INITIAL, &[]).await;
+            let result = store.append(&stream_id, None, &[]).await;
             // This should succeed (no-op) — no events to validate
             prop_assert!(result.is_ok(), "empty append should succeed as no-op");
 
@@ -1521,9 +1318,9 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
             let es = EventStore::new(store, JsonCodec);
-            let stream_id = sid("lifecycle-stream");
 
             let mut total_events: u64 = 0;
+            #[allow(unused_assignments, reason = "initial value unused; assigned in first iteration")]
             let mut expected_last_value: i64 = 0;
 
             for (cycle_idx, values) in cycles.iter().enumerate() {
@@ -1531,27 +1328,32 @@ proptest! {
                 let mut root: nexus::AggregateRoot<TestAggregate> = if cycle_idx == 0 {
                     nexus::AggregateRoot::<TestAggregate>::new(TestId(1))
                 } else {
-                    es.load(&stream_id, TestId(1)).await.unwrap()
+                    es.load(TestId(1)).await.unwrap()
                 };
 
                 // Verify loaded state
-                prop_assert_eq!(
-                    root.version().as_u64(), total_events,
-                    "version wrong at start of cycle {}", cycle_idx,
-                );
-
-                // Apply new events
-                for &v in values {
-                    root.apply(TestEvent::ValueSet(v));
-                    expected_last_value = v;
+                if total_events == 0 {
+                    prop_assert_eq!(
+                        root.version(), None,
+                        "version wrong at start of cycle {}", cycle_idx,
+                    );
+                } else {
+                    prop_assert_eq!(
+                        root.version().unwrap().as_u64(), total_events,
+                        "version wrong at start of cycle {}", cycle_idx,
+                    );
                 }
 
+                // Build events
+                let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
+                expected_last_value = *values.last().unwrap();
+
                 // Save
-                es.save(&stream_id, &mut root).await.unwrap();
+                es.save(&mut root, &events).await.unwrap();
                 total_events += u64::try_from(values.len()).unwrap();
 
                 // Verify by loading again
-                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&stream_id, TestId(1)).await.unwrap();
+                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
                 prop_assert_eq!(
                     loaded.state().last_value, expected_last_value,
                     "last_value wrong after cycle {}", cycle_idx,
@@ -1561,7 +1363,7 @@ proptest! {
                     "events_applied wrong after cycle {}", cycle_idx,
                 );
                 prop_assert_eq!(
-                    loaded.version().as_u64(), total_events,
+                    loaded.version().unwrap().as_u64(), total_events,
                     "version wrong after cycle {}", cycle_idx,
                 );
             }
@@ -1587,8 +1389,8 @@ proptest! {
         rt.block_on(async {
             let store = Arc::new(InMemoryStore::new());
             let payloads: Vec<Vec<u8>> = (0..n).map(|i| vec![i as u8]).collect();
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             // Spawn multiple readers
             let mut handles = Vec::new();
@@ -1629,19 +1431,19 @@ proptest! {
         if schema_version == 0 {
             // Must panic
             let result = std::panic::catch_unwind(|| {
-                let _ = PersistedEnvelope::<()>::new("s", Version::from_persisted(1), "E", 0, &[], ());
+                let _ = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), "E", 0, &[], ());
             });
             prop_assert!(result.is_err(), "schema_version=0 must panic");
 
             // try_new must return Err
-            let result = PersistedEnvelope::<()>::try_new("s", Version::from_persisted(1), "E", 0, &[], ());
+            let result = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), "E", 0, &[], ());
             prop_assert!(result.is_err(), "try_new(schema_version=0) must error");
         } else {
             // Must succeed
-            let env = PersistedEnvelope::<()>::new("s", Version::from_persisted(1), "E", schema_version, &[], ());
+            let env = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), "E", schema_version, &[], ());
             prop_assert_eq!(env.schema_version(), schema_version);
 
-            let env = PersistedEnvelope::<()>::try_new("s", Version::from_persisted(1), "E", schema_version, &[], ());
+            let env = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), "E", schema_version, &[], ());
             prop_assert!(env.is_ok());
             prop_assert_eq!(env.unwrap().schema_version(), schema_version);
         }
@@ -1649,14 +1451,17 @@ proptest! {
 }
 
 // ============================================================================
-// ATTACK 30: Version — next() at u64::MAX must panic
+// ATTACK 30: Version — next() at u64::MAX returns None
 // ============================================================================
 
 #[test]
-fn attack_version_next_at_max_panics() {
-    let v = Version::from_persisted(u64::MAX);
-    let result = std::panic::catch_unwind(move || v.next());
-    assert!(result.is_err(), "Version::next() at u64::MAX must panic");
+fn attack_version_next_at_max_returns_none() {
+    let v = Version::new(u64::MAX).unwrap();
+    assert_eq!(
+        v.next(),
+        None,
+        "Version::next() at u64::MAX must return None"
+    );
 }
 
 // ============================================================================
@@ -1673,10 +1478,11 @@ proptest! {
     ) {
         prop_assume!(expected != actual);
 
+        use nexus_store::ToStreamLabel;
         let err = StoreError::Conflict {
-            stream_id: nexus::ErrorId::from_display(&"test-stream"),
-            expected: Version::from_persisted(expected),
-            actual: Version::from_persisted(actual),
+            stream_id: "test-stream".to_stream_label(),
+            expected: Version::new(expected),
+            actual: Version::new(actual),
         };
 
         let msg = err.to_string();
@@ -1714,8 +1520,8 @@ proptest! {
             prop_assert!(read.is_empty(), "non-existent stream should be empty");
 
             // Append to non-existent stream should succeed (creating it)
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             // Now reading should return the events
             let read = read_all_payloads(&store, &stream_id).await;
@@ -1747,26 +1553,27 @@ proptest! {
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(7));
 
             // Interleave different event types
+            let mut events: Vec<TestEvent> = Vec::new();
             let mut expected_log: Vec<String> = Vec::new();
             let mut expected_last_value: i64 = 0;
 
             for (i, v) in values.iter().enumerate() {
-                root.apply(TestEvent::ValueSet(*v));
+                events.push(TestEvent::ValueSet(*v));
                 expected_last_value = *v;
 
                 if i < strings.len() {
-                    root.apply(TestEvent::Happened(strings[i].clone()));
+                    events.push(TestEvent::Happened(strings[i].clone()));
                     expected_log.push(strings[i].clone());
                 }
             }
             // Remaining strings
             for s in strings.iter().skip(values.len()) {
-                root.apply(TestEvent::Happened(s.clone()));
+                events.push(TestEvent::Happened(s.clone()));
                 expected_log.push(s.clone());
             }
 
-            es.save(&sid("mixed-stream"), &mut root).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("mixed-stream"), TestId(7)).await.unwrap();
+            es.save(&mut root, &events).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(7)).await.unwrap();
 
             prop_assert_eq!(loaded.state().last_value, expected_last_value);
             prop_assert_eq!(&loaded.state().log, &expected_log);
@@ -1776,26 +1583,26 @@ proptest! {
 }
 
 // ============================================================================
-// ATTACK 34: apply_upcasters with no upcasters is identity
+// ATTACK 34: No-op Upcaster (()) is identity
 // ============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn attack_apply_upcasters_no_op_with_empty_chain(
+    fn attack_noop_upcaster_is_identity(
         event_type in "[A-Z][a-z]{0,20}",
-        schema_version in 1..1000u32,
+        schema_version in 1..1000u64,
         payload in prop::collection::vec(any::<u8>(), 0..500),
     ) {
-        let upcasters: Vec<&dyn EventUpcaster> = vec![];
-        let (out_type, out_version, out_payload) = apply_upcasters(
-            &upcasters, &event_type, schema_version, &payload,
-        ).unwrap();
+        let upcaster = ();
+        let ver = Version::new(schema_version).unwrap();
+        let morsel = EventMorsel::borrowed(&event_type, ver, &payload);
+        let result = upcaster.apply(morsel).unwrap();
 
-        prop_assert_eq!(out_type, event_type, "event_type changed with empty chain");
-        prop_assert_eq!(out_version, schema_version, "version changed with empty chain");
-        prop_assert_eq!(out_payload, payload, "payload changed with empty chain");
+        prop_assert_eq!(result.event_type(), event_type.as_str(), "event_type changed with no-op upcaster");
+        prop_assert_eq!(result.schema_version(), ver, "version changed with no-op upcaster");
+        prop_assert_eq!(result.payload(), payload.as_slice(), "payload changed with no-op upcaster");
     }
 }
 
@@ -1817,7 +1624,7 @@ proptest! {
 
             // Create many streams with many events
             for stream_idx in 0..num_streams {
-                let stream_id = StreamId::from_persisted(format!("stress-{}", stream_idx)).unwrap();
+                let stream_id = StreamName(format!("stress-{}", stream_idx));
                 let payloads: Vec<Vec<u8>> = (0..events_per_stream)
                     .map(|i| {
                         let mut p = vec![stream_idx as u8];
@@ -1826,13 +1633,13 @@ proptest! {
                     })
                     .collect();
 
-                let envelopes = build_envelopes(&stream_id, &payloads);
-                store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+                let envelopes = build_envelopes(&payloads);
+                store.append(&stream_id, None, &envelopes).await.unwrap();
             }
 
             // Verify each stream independently
             for stream_idx in 0..num_streams {
-                let stream_id = StreamId::from_persisted(format!("stress-{}", stream_idx)).unwrap();
+                let stream_id = StreamName(format!("stress-{}", stream_idx));
                 let read = read_all_payloads(&store, &stream_id).await;
                 prop_assert_eq!(
                     read.len(), events_per_stream,
@@ -1862,26 +1669,28 @@ proptest! {
     #[test]
     fn attack_upcast_error_display_includes_context(
         event_type in "[A-Z][a-z]{0,20}",
-        schema_version in 1..1000u32,
+        schema_version in 1..1000u64,
     ) {
+        let ver = Version::new(schema_version).unwrap();
+
         let err1 = UpcastError::VersionNotAdvanced {
             event_type: event_type.clone(),
-            input_version: schema_version,
-            output_version: schema_version,
+            input_version: ver,
+            output_version: ver,
         };
         let msg1 = err1.to_string();
         prop_assert!(msg1.contains(&event_type), "event_type missing from error: {}", msg1);
 
         let err2 = UpcastError::EmptyEventType {
             input_event_type: event_type.clone(),
-            schema_version,
+            schema_version: ver,
         };
         let msg2 = err2.to_string();
         prop_assert!(msg2.contains(&event_type), "event_type missing from error: {}", msg2);
 
         let err3 = UpcastError::ChainLimitExceeded {
             event_type: event_type.clone(),
-            schema_version,
+            schema_version: ver,
             limit: 100,
         };
         let msg3 = err3.to_string();
@@ -1903,15 +1712,12 @@ async fn attack_concurrent_writers_exactly_one_wins() {
     for writer_id in 0..num_writers {
         let store = Arc::clone(&store);
         handles.push(tokio::spawn(async move {
-            let envelope = pending_envelope(sid("race-stream"))
-                .version(Version::from_persisted(1))
+            let envelope = pending_envelope(Version::INITIAL)
                 .event_type(Box::leak(format!("Writer{writer_id}").into_boxed_str()))
                 .payload(vec![writer_id as u8])
                 .build_without_metadata();
 
-            store
-                .append(&sid("race-stream"), Version::INITIAL, &[envelope])
-                .await
+            store.append(&sn("race-stream"), None, &[envelope]).await
         }));
     }
 
@@ -1933,7 +1739,7 @@ async fn attack_concurrent_writers_exactly_one_wins() {
     );
 
     // The stream should have exactly 1 event
-    let payloads = read_all_payloads(&store, &sid("race-stream")).await;
+    let payloads = read_all_payloads(&store, &sn("race-stream")).await;
     assert_eq!(payloads.len(), 1, "stream must have exactly 1 event");
 }
 
@@ -1945,38 +1751,50 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
     #[test]
-    fn attack_upcaster_type_morphing_chain(
+    fn attack_upcaster_type_morphing(
         payload in prop::collection::vec(any::<u8>(), 0..200),
     ) {
-        // Chain: "OldEvent" v1 -> "MiddleEvent" v2 -> "NewEvent" v3
-        struct RenameV1;
-        impl EventUpcaster for RenameV1 {
-            fn can_upcast(&self, et: &str, v: u32) -> bool { et == "OldEvent" && v == 1 }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("MiddleEvent".into(), 2, p.to_vec())
+        // Upcaster: "OldEvent" v1 -> "MiddleEvent" v2 -> "NewEvent" v3
+        struct RenamingUpcaster;
+        impl Upcaster for RenamingUpcaster {
+            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+                loop {
+                    match (morsel.event_type(), morsel.schema_version()) {
+                        ("OldEvent", v) if v == Version::INITIAL => {
+                            morsel = morsel
+                                .with_event_type(Cow::Borrowed("MiddleEvent"))
+                                .with_schema_version(Version::new(2).unwrap());
+                        }
+                        ("MiddleEvent", v) if v == Version::new(2).unwrap() => {
+                            morsel = morsel
+                                .with_event_type(Cow::Borrowed("NewEvent"))
+                                .with_schema_version(Version::new(3).unwrap());
+                        }
+                        _ => break,
+                    }
+                }
+                Ok(morsel)
             }
-        }
-        struct RenameV2;
-        impl EventUpcaster for RenameV2 {
-            fn can_upcast(&self, et: &str, v: u32) -> bool { et == "MiddleEvent" && v == 2 }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("NewEvent".into(), 3, p.to_vec())
+
+            fn current_version(&self, event_type: &str) -> Option<Version> {
+                match event_type {
+                    "OldEvent" | "MiddleEvent" | "NewEvent" => Some(Version::new(3).unwrap()),
+                    _ => None,
+                }
             }
         }
 
-        let upcasters: Vec<&dyn EventUpcaster> = vec![&RenameV1, &RenameV2];
-        let (final_type, final_version, final_payload) = apply_upcasters(
-            &upcasters, "OldEvent", 1, &payload,
-        ).unwrap();
+        let morsel = EventMorsel::borrowed("OldEvent", Version::INITIAL, &payload);
+        let result = RenamingUpcaster.apply(morsel).unwrap();
 
-        prop_assert_eq!(final_type, "NewEvent", "type rename chain failed");
-        prop_assert_eq!(final_version, 3);
-        prop_assert_eq!(final_payload, payload, "payload corrupted during type rename");
+        prop_assert_eq!(result.event_type(), "NewEvent", "type rename chain failed");
+        prop_assert_eq!(result.schema_version(), Version::new(3).unwrap());
+        prop_assert_eq!(result.payload(), payload.as_slice(), "payload corrupted during type rename");
     }
 }
 
 // ============================================================================
-// ATTACK 39: Payload transformation upcasters — payload actually changes
+// ATTACK 39: Upcaster payload transformation — payload actually changes
 // ============================================================================
 
 proptest! {
@@ -1988,24 +1806,36 @@ proptest! {
     ) {
         // Upcaster that prefixes payload with a magic header
         struct PrefixUpcaster;
-        impl EventUpcaster for PrefixUpcaster {
-            fn can_upcast(&self, _: &str, v: u32) -> bool { v == 1 }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                let mut new_payload = vec![0xCA, 0xFE];
-                new_payload.extend_from_slice(p);
-                ("E".into(), 2, new_payload)
+        impl Upcaster for PrefixUpcaster {
+            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+                loop {
+                    match (morsel.event_type(), morsel.schema_version()) {
+                        ("E", v) if v == Version::INITIAL => {
+                            let mut new_payload = vec![0xCA, 0xFE];
+                            new_payload.extend_from_slice(morsel.payload());
+                            morsel = EventMorsel::new("E", Version::new(2).unwrap(), new_payload);
+                        }
+                        _ => break,
+                    }
+                }
+                Ok(morsel)
+            }
+
+            fn current_version(&self, event_type: &str) -> Option<Version> {
+                match event_type {
+                    "E" => Some(Version::new(2).unwrap()),
+                    _ => None,
+                }
             }
         }
 
-        let upcasters: Vec<&dyn EventUpcaster> = vec![&PrefixUpcaster];
-        let (_, final_version, final_payload) = apply_upcasters(
-            &upcasters, "E", 1, &payload,
-        ).unwrap();
+        let morsel = EventMorsel::borrowed("E", Version::INITIAL, &payload);
+        let result = PrefixUpcaster.apply(morsel).unwrap();
 
-        prop_assert_eq!(final_version, 2);
-        prop_assert_eq!(final_payload.len(), payload.len() + 2);
-        prop_assert_eq!(&final_payload[..2], &[0xCA, 0xFE]);
-        prop_assert_eq!(&final_payload[2..], payload.as_slice());
+        prop_assert_eq!(result.schema_version(), Version::new(2).unwrap());
+        prop_assert_eq!(result.payload().len(), payload.len() + 2);
+        prop_assert_eq!(&result.payload()[..2], &[0xCA, 0xFE]);
+        prop_assert_eq!(&result.payload()[2..], payload.as_slice());
     }
 }
 
@@ -2017,7 +1847,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
     #[test]
-    fn attack_event_store_interleaved_save_apply(
+    fn attack_event_store_interleaved_save(
         batch1 in prop::collection::vec(-100..100i64, 1..5),
         batch2 in prop::collection::vec(-100..100i64, 1..5),
         batch3 in prop::collection::vec(-100..100i64, 1..5),
@@ -2026,38 +1856,31 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
             let es = EventStore::new(store, JsonCodec);
-            let stream = sid("interleave-stream");
 
-            // Batch 1: create, apply, save
+            // Batch 1: create, save events
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
-            for &v in &batch1 {
-                root.apply(TestEvent::ValueSet(v));
-            }
-            es.save(&stream, &mut root).await.unwrap();
-            let v1 = root.version().as_u64();
+            let events1: Vec<TestEvent> = batch1.iter().map(|&v| TestEvent::ValueSet(v)).collect();
+            es.save(&mut root, &events1).await.unwrap();
+            let v1 = root.version().unwrap().as_u64();
             prop_assert_eq!(v1, u64::try_from(batch1.len()).unwrap());
 
-            // Batch 2: apply more to SAME root, save again
-            for &v in &batch2 {
-                root.apply(TestEvent::ValueSet(v));
-            }
-            es.save(&stream, &mut root).await.unwrap();
-            let v2 = root.version().as_u64();
+            // Batch 2: save more to SAME root
+            let events2: Vec<TestEvent> = batch2.iter().map(|&v| TestEvent::ValueSet(v)).collect();
+            es.save(&mut root, &events2).await.unwrap();
+            let v2 = root.version().unwrap().as_u64();
             prop_assert_eq!(v2, u64::try_from(batch1.len() + batch2.len()).unwrap());
 
-            // Batch 3: load fresh, apply, save
-            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(&stream, TestId(1)).await.unwrap();
-            prop_assert_eq!(fresh.version().as_u64(), v2);
-            for &v in &batch3 {
-                fresh.apply(TestEvent::ValueSet(v));
-            }
-            es.save(&stream, &mut fresh).await.unwrap();
+            // Batch 3: load fresh, save more
+            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            prop_assert_eq!(fresh.version().unwrap().as_u64(), v2);
+            let events3: Vec<TestEvent> = batch3.iter().map(|&v| TestEvent::ValueSet(v)).collect();
+            es.save(&mut fresh, &events3).await.unwrap();
 
             // Final verification
-            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(&stream, TestId(1)).await.unwrap();
+            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
             let total = batch1.len() + batch2.len() + batch3.len();
             prop_assert_eq!(
-                final_root.version().as_u64(),
+                final_root.version().unwrap().as_u64(),
                 u64::try_from(total).unwrap(),
             );
             prop_assert_eq!(
@@ -2089,8 +1912,8 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = InMemoryStore::new();
-            let envelopes = build_envelopes(&stream_id, &payloads);
-            store.append(&stream_id, Version::INITIAL, &envelopes).await.unwrap();
+            let envelopes = build_envelopes(&payloads);
+            store.append(&stream_id, None, &envelopes).await.unwrap();
 
             let read1 = read_all_payloads(&store, &stream_id).await;
             let read2 = read_all_payloads(&store, &stream_id).await;
@@ -2120,19 +1943,19 @@ proptest! {
         rt.block_on(async {
             // Store A: write X first, then Y
             let store_a = InMemoryStore::new();
-            let sid_x = sid("x");
-            let sid_y = sid("y");
-            let env_x = build_envelopes(&sid_x, &payloads_x);
-            let env_y = build_envelopes(&sid_y, &payloads_y);
-            store_a.append(&sid_x, Version::INITIAL, &env_x).await.unwrap();
-            store_a.append(&sid_y, Version::INITIAL, &env_y).await.unwrap();
+            let sid_x = sn("x");
+            let sid_y = sn("y");
+            let env_x = build_envelopes(&payloads_x);
+            let env_y = build_envelopes(&payloads_y);
+            store_a.append(&sid_x, None, &env_x).await.unwrap();
+            store_a.append(&sid_y, None, &env_y).await.unwrap();
 
             // Store B: write Y first, then X
             let store_b = InMemoryStore::new();
-            let env_x2 = build_envelopes(&sid_x, &payloads_x);
-            let env_y2 = build_envelopes(&sid_y, &payloads_y);
-            store_b.append(&sid_y, Version::INITIAL, &env_y2).await.unwrap();
-            store_b.append(&sid_x, Version::INITIAL, &env_x2).await.unwrap();
+            let env_x2 = build_envelopes(&payloads_x);
+            let env_y2 = build_envelopes(&payloads_y);
+            store_b.append(&sid_y, None, &env_y2).await.unwrap();
+            store_b.append(&sid_x, None, &env_x2).await.unwrap();
 
             // Both stores should yield identical data for each stream
             let a_x = read_all_payloads(&store_a, &sid_x).await;
@@ -2148,53 +1971,30 @@ proptest! {
     }
 }
 
-// ============================================================================
-// ATTACK 43: UpcasterChain cons-list — deep nesting doesn't stack overflow
-// ============================================================================
-
-#[test]
-fn attack_deep_upcaster_chain_no_stack_overflow() {
-    // Build a chain of 50 upcasters (V1->V2, V2->V3, ..., V50->V51)
-    // using the cons-list. Each is a different struct.
-    struct Step(u32);
-    impl EventUpcaster for Step {
-        fn can_upcast(&self, _: &str, v: u32) -> bool {
-            v == self.0
-        }
-        fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-            ("E".into(), self.0 + 1, p.to_vec())
-        }
-    }
-
-    // Build chain: Chain(Step(1), Chain(Step(2), ... Chain(Step(50), ())))
-    // We have to do this manually since it's a type-level list.
-    // Let's test with the slice-based apply_upcasters instead for depth.
-    let steps: Vec<Step> = (1..=50).map(Step).collect();
-    let upcasters: Vec<&dyn EventUpcaster> =
-        steps.iter().map(|s| s as &dyn EventUpcaster).collect();
-
-    let payload = vec![42u8; 1000];
-    let (event_type, final_version, final_payload) =
-        apply_upcasters(&upcasters, "E", 1, &payload).unwrap();
-
-    assert_eq!(event_type, "E");
-    assert_eq!(final_version, 51);
-    assert_eq!(
-        final_payload, payload,
-        "payload corrupted through 50-step chain"
-    );
-}
+// (ATTACK 43 deleted: redundant with ATTACK 15, old TransformChain infrastructure removed)
 
 // ============================================================================
-// ATTACK 44: Aggregate with MAX_UNCOMMITTED = small, exercised through EventStore
+// ATTACK 44: Aggregate with small rehydration limit exercised through EventStore
 // ============================================================================
 
-#[derive(Default, Debug)]
+// NOTE: MAX_UNCOMMITTED has been removed from the API. AggregateRoot no longer
+// buffers uncommitted events — events are passed directly to Repository::save().
+// This test is replaced by a rehydration limit test below.
+
+#[derive(Default, Debug, Clone)]
+#[allow(
+    dead_code,
+    reason = "retained for potential future rehydration limit tests"
+)]
 struct TinyState {
     count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "retained for potential future rehydration limit tests"
+)]
 struct Tick;
 impl nexus::Message for Tick {}
 impl nexus::DomainEvent for Tick {
@@ -2212,42 +2012,17 @@ impl nexus::AggregateState for TinyState {
         self.count += 1;
         self
     }
-    fn name(&self) -> &'static str {
-        "Tiny"
-    }
-}
-
-struct TinyAggregate;
-impl nexus::Aggregate for TinyAggregate {
-    type State = TinyState;
-    type Error = TestError;
-    type Id = TestId;
-    const MAX_UNCOMMITTED: usize = 3;
-}
-
-#[test]
-fn attack_aggregate_max_uncommitted_panics() {
-    let mut root = nexus::AggregateRoot::<TinyAggregate>::new(TestId(1));
-    root.apply(Tick);
-    root.apply(Tick);
-    root.apply(Tick);
-
-    // Fourth apply should panic because MAX_UNCOMMITTED = 3
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        root.apply(Tick);
-    }));
-    assert!(result.is_err(), "apply beyond MAX_UNCOMMITTED must panic");
 }
 
 // ============================================================================
-// ATTACK 45: Save drains uncommitted, so a second save is always safe
+// ATTACK 45: Save advances version, so a second empty save is always safe
 // ============================================================================
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
     #[test]
-    fn attack_save_drains_uncommitted(
+    fn attack_save_advances_version(
         n in 1..20usize,
     ) {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2256,22 +2031,19 @@ proptest! {
             let es = EventStore::new(store, JsonCodec);
 
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
-            for i in 0..n {
-                root.apply(TestEvent::ValueSet(i as i64));
-            }
+            let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
 
-            // After save, uncommitted should be drained
-            es.save(&sid("drain-test"), &mut root).await.unwrap();
-            prop_assert_eq!(root.version().as_u64(), u64::try_from(n).unwrap());
+            // After save, version should advance
+            es.save(&mut root, &events).await.unwrap();
+            prop_assert_eq!(root.version().unwrap().as_u64(), u64::try_from(n).unwrap());
 
-            // Second save should be a no-op (no uncommitted events)
-            es.save(&sid("drain-test"), &mut root).await.unwrap();
+            // Second save with empty events should be a no-op
+            es.save(&mut root, &[]).await.unwrap();
 
-            // Can still apply more events after save
-            root.apply(TestEvent::ValueSet(999));
-            es.save(&sid("drain-test"), &mut root).await.unwrap();
+            // Can still save more events
+            es.save(&mut root, &[TestEvent::ValueSet(999)]).await.unwrap();
 
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(&sid("drain-test"), TestId(1)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
             prop_assert_eq!(loaded.state().last_value, 999);
             prop_assert_eq!(loaded.state().events_applied, u64::try_from(n + 1).unwrap());
             Ok(())

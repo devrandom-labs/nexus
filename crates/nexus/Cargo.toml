@@ -11,8 +11,8 @@ keywords = ["event-sourcing", "cqrs", "ddd", "aggregate", "domain-driven-design"
 categories = ["data-structures"]
 
 [dependencies]
+arrayvec = { workspace = true }
 nexus-macros = { version = "0.1.0", path = "../nexus-macros", optional = true }
-smallvec = { workspace = true }
 thiserror = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 

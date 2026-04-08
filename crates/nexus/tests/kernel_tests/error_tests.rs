@@ -1,40 +1,52 @@
-use nexus::{ErrorId, KernelError, Version};
+use nexus::{KernelError, Version};
 
 #[test]
-fn version_mismatch_display() {
+fn version_mismatch_display_exact() {
     let err = KernelError::VersionMismatch {
-        stream_id: ErrorId::from_display(&"user-123"),
-        expected: Version::from_persisted(3),
-        actual: Version::from_persisted(5),
+        expected: Version::new(3).unwrap(),
+        actual: Version::new(5).unwrap(),
     };
-    let msg = format!("{err}");
-    assert!(msg.contains("user-123"));
-    assert!(msg.contains('3'));
-    assert!(msg.contains('5'));
+    assert_eq!(format!("{err}"), "Version mismatch: expected 3, got 5");
 }
 
 #[test]
-fn kernel_error_is_std_error() {
+fn version_mismatch_display_with_initial() {
     let err = KernelError::VersionMismatch {
-        stream_id: ErrorId::from_display(&"test"),
         expected: Version::INITIAL,
-        actual: Version::from_persisted(1),
+        actual: Version::new(100).unwrap(),
+    };
+    assert_eq!(format!("{err}"), "Version mismatch: expected 1, got 100");
+}
+
+#[test]
+fn rehydration_limit_exceeded_display() {
+    let err = KernelError::RehydrationLimitExceeded { max: 1_000_000 };
+    assert_eq!(
+        format!("{err}"),
+        "Rehydration limit exceeded: max 1000000 events"
+    );
+}
+
+#[test]
+fn version_overflow_display() {
+    let err = KernelError::VersionOverflow;
+    assert_eq!(
+        format!("{err}"),
+        "Version sequence exhausted: cannot exceed u64::MAX events"
+    );
+}
+
+#[test]
+fn kernel_error_implements_std_error() {
+    let err = KernelError::VersionMismatch {
+        expected: Version::INITIAL,
+        actual: Version::new(2).unwrap(),
     };
     let _: &dyn std::error::Error = &err;
 }
 
 #[test]
-fn error_id_no_heap_allocation() {
-    // ErrorId is stack-allocated — 128 bytes + 1 byte length
-    // This verifies it works without String/heap
-    let id = ErrorId::from_display(&42_u64);
-    assert_eq!(format!("{id}"), "42");
-}
-
-#[test]
-fn error_id_truncates_long_values() {
-    let long = "a".repeat(200);
-    let id = ErrorId::from_display(&long);
-    // Truncated to 64 bytes
-    assert_eq!(format!("{id}").len(), 64);
+fn kernel_error_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<KernelError>();
 }

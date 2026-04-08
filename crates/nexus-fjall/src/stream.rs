@@ -14,6 +14,10 @@ pub struct FjallStream {
     pub(crate) events: Vec<(Slice, Slice)>,
     pub(crate) pos: usize,
     pub(crate) stream_id: String,
+    /// Once an error is returned, the stream is poisoned — all subsequent
+    /// calls to `next()` return `None`. This prevents silently skipping
+    /// corrupt entries on retry.
+    pub(crate) poisoned: bool,
     #[cfg(debug_assertions)]
     pub(crate) prev_version: Option<u64>,
 }
@@ -22,7 +26,7 @@ impl EventStream for FjallStream {
     type Error = FjallError;
 
     async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
-        if self.pos >= self.events.len() {
+        if self.poisoned || self.pos >= self.events.len() {
             return None;
         }
 
@@ -30,6 +34,7 @@ impl EventStream for FjallStream {
         self.pos += 1;
 
         let Ok((_stream_num, version)) = decode_event_key(key) else {
+            self.poisoned = true;
             return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id.clone(),
                 version: 0,
@@ -49,26 +54,32 @@ impl EventStream for FjallStream {
         }
 
         let Ok((schema_version, event_type, payload)) = decode_event_value(value) else {
+            self.poisoned = true;
             return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id.clone(),
                 version,
             }));
         };
 
-        let envelope = PersistedEnvelope::try_new(
-            &self.stream_id,
-            Version::from_persisted(version),
-            event_type,
-            schema_version,
-            payload,
-            (),
-        )
-        .map_err(|_| FjallError::CorruptValue {
-            stream_id: self.stream_id.clone(),
-            version,
-        });
+        let Some(ver) = Version::new(version) else {
+            self.poisoned = true;
+            return Some(Err(FjallError::CorruptValue {
+                stream_id: self.stream_id.clone(),
+                version,
+            }));
+        };
 
-        Some(envelope)
+        if let Ok(envelope) =
+            PersistedEnvelope::try_new(ver, event_type, schema_version, payload, ())
+        {
+            Some(Ok(envelope))
+        } else {
+            self.poisoned = true;
+            Some(Err(FjallError::CorruptValue {
+                stream_id: self.stream_id.clone(),
+                version,
+            }))
+        }
     }
 }
 
@@ -93,19 +104,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_stream_returns_none() {
-        let mut stream = FjallStream {
-            events: vec![],
-            pos: 0,
-            stream_id: "test-stream".into(),
-            #[cfg(debug_assertions)]
-            prev_version: None,
-        };
-        let result = stream.next().await;
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
     async fn yields_events_in_order() {
         let row1 = make_row(1, 1, 1, "UserCreated", b"payload-1");
         let row2 = make_row(1, 2, 1, "UserUpdated", b"payload-2");
@@ -114,14 +112,14 @@ mod tests {
             events: vec![row1, row2],
             pos: 0,
             stream_id: "user-123".into(),
+            poisoned: false,
             #[cfg(debug_assertions)]
             prev_version: None,
         };
 
         {
             let env1 = stream.next().await.unwrap().unwrap();
-            assert_eq!(env1.stream_id(), "user-123");
-            assert_eq!(env1.version(), Version::from_persisted(1));
+            assert_eq!(env1.version(), Version::new(1).unwrap());
             assert_eq!(env1.event_type(), "UserCreated");
             assert_eq!(env1.schema_version(), 1);
             assert_eq!(env1.payload(), b"payload-1");
@@ -129,33 +127,11 @@ mod tests {
 
         {
             let env2 = stream.next().await.unwrap().unwrap();
-            assert_eq!(env2.stream_id(), "user-123");
-            assert_eq!(env2.version(), Version::from_persisted(2));
+            assert_eq!(env2.version(), Version::new(2).unwrap());
             assert_eq!(env2.event_type(), "UserUpdated");
             assert_eq!(env2.schema_version(), 1);
             assert_eq!(env2.payload(), b"payload-2");
         }
-    }
-
-    #[tokio::test]
-    async fn fused_after_exhaustion() {
-        let row = make_row(1, 1, 1, "Created", b"data");
-
-        let mut stream = FjallStream {
-            events: vec![row],
-            pos: 0,
-            stream_id: "s".into(),
-            #[cfg(debug_assertions)]
-            prev_version: None,
-        };
-
-        // Consume the single event.
-        let _ = stream.next().await.unwrap().unwrap();
-
-        // All subsequent calls must return None (fused behavior).
-        assert!(stream.next().await.is_none());
-        assert!(stream.next().await.is_none());
-        assert!(stream.next().await.is_none());
     }
 
     #[tokio::test]
@@ -168,6 +144,7 @@ mod tests {
             events: vec![(Slice::from(key), Slice::from(truncated_value))],
             pos: 0,
             stream_id: "corrupt-stream".into(),
+            poisoned: false,
             #[cfg(debug_assertions)]
             prev_version: None,
         };

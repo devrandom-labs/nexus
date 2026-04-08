@@ -1,9 +1,8 @@
 //! Kernel benchmarks.
 //!
 //! Measures the hot paths in the kernel:
-//! - apply: single event application throughput
 //! - replay: aggregate rehydration with N events
-//! - `take_uncommitted_events`: draining events for persistence
+//! - `apply_events`: post-persistence state advancement
 //!
 //! Run: `cargo bench --bench kernel_bench`
 //! Reports: `target/criterion/report/index.html`
@@ -15,10 +14,7 @@
 )]
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use nexus::DomainEvent;
-use nexus::Id;
-use nexus::Message;
-use nexus::{Aggregate, AggregateRoot, AggregateState};
+use nexus::{Aggregate, AggregateRoot, AggregateState, DomainEvent, Events, Id, Message};
 use nexus::{Version, VersionedEvent};
 use std::fmt;
 use std::hint::black_box;
@@ -52,7 +48,7 @@ impl DomainEvent for BEvent {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct BState {
     count: u64,
 }
@@ -67,9 +63,6 @@ impl AggregateState for BState {
             BEvent::Set(v) => self.count = *v,
         }
         self
-    }
-    fn name(&self) -> &'static str {
-        "Bench"
     }
 }
 
@@ -91,8 +84,8 @@ impl Aggregate for BAgg {
 fn make_versioned_events(n: usize) -> Vec<VersionedEvent<BEvent>> {
     (0..n)
         .map(|i| {
-            VersionedEvent::from_persisted(
-                Version::from_persisted(u64::try_from(i + 1).expect("index fits in u64")),
+            VersionedEvent::new(
+                Version::new(u64::try_from(i + 1).expect("index fits in u64")).unwrap(),
                 BEvent::Incremented,
             )
         })
@@ -102,18 +95,6 @@ fn make_versioned_events(n: usize) -> Vec<VersionedEvent<BEvent>> {
 // =============================================================================
 // Benchmarks
 // =============================================================================
-
-fn bench_apply(c: &mut Criterion) {
-    c.bench_function("apply (single)", |b| {
-        b.iter_with_setup(
-            || AggregateRoot::<BAgg>::new(BId(1)),
-            |mut agg| {
-                agg.apply(black_box(BEvent::Incremented));
-                agg
-            },
-        );
-    });
-}
 
 fn bench_replay(c: &mut Criterion) {
     let mut group = c.benchmark_group("replay");
@@ -132,18 +113,26 @@ fn bench_replay(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_apply_then_take(c: &mut Criterion) {
-    let mut group = c.benchmark_group("apply_N_then_take");
+fn bench_apply_events(c: &mut Criterion) {
+    let mut group = c.benchmark_group("apply_events");
     for size in [1, 10, 100] {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.iter_with_setup(
-                || AggregateRoot::<BAgg>::new(BId(1)),
-                |mut agg| {
-                    for _ in 0..size {
-                        agg.apply(BEvent::Incremented);
+                || {
+                    let agg = AggregateRoot::<BAgg>::new(BId(1));
+                    let batches: Vec<Events<BEvent>> = (0..size)
+                        .map(|_| Events::new(BEvent::Incremented))
+                        .collect();
+                    (agg, batches)
+                },
+                |(mut agg, batches)| {
+                    for (i, batch) in batches.iter().enumerate() {
+                        #[allow(clippy::as_conversions, reason = "bench index always fits u64")]
+                        let v = Version::new((i + 1) as u64).unwrap();
+                        agg.advance_version(v);
+                        agg.apply_events(batch);
                     }
-                    let events = agg.take_uncommitted_events();
-                    black_box(events)
+                    black_box(agg)
                 },
             );
         });
@@ -151,5 +140,5 @@ fn bench_apply_then_take(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_apply, bench_replay, bench_apply_then_take);
+criterion_group!(benches, bench_replay, bench_apply_events);
 criterion_main!(benches);

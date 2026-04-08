@@ -1,0 +1,5 @@
+error: non-contiguous version: to (3) must equal from + 1 (2)
+  --> tests/macro_compile_fail/transforms_non_contiguous.rs:17:8
+   |
+17 |     fn v1_to_v3(payload: &[u8]) -> Result<Vec<u8>, MyError> {
+   |        ^^^^^^^^

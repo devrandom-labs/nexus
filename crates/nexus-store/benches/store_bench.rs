@@ -26,20 +26,29 @@
 )]
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use nexus::StreamId;
 use nexus::Version;
 use nexus_store::AppendError;
+use nexus_store::Upcaster;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
-use nexus_store::upcaster::EventUpcaster;
 use std::collections::HashMap;
+use std::fmt;
 use std::hint::black_box;
 use tokio::sync::Mutex;
 
-fn sid(s: &str) -> StreamId {
-    StreamId::from_persisted(s).unwrap()
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct BenchId(String);
+impl fmt::Display for BenchId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl nexus::Id for BenchId {}
+
+fn bid(s: &str) -> BenchId {
+    BenchId(s.to_owned())
 }
 
 // =============================================================================
@@ -61,7 +70,7 @@ impl InMemoryRawStore {
 }
 
 struct InMemoryStream {
-    events: Vec<(String, u64, String, Vec<u8>)>,
+    events: Vec<(u64, String, Vec<u8>)>,
     pos: usize,
 }
 
@@ -74,12 +83,11 @@ impl EventStream for InMemoryStream {
         }
         let row = &self.events[self.pos];
         self.pos += 1;
-        Some(Ok(PersistedEnvelope::new(
-            &row.0,
-            Version::from_persisted(row.1),
-            &row.2,
+        Some(Ok(PersistedEnvelope::new_unchecked(
+            Version::new(row.0).unwrap(),
+            &row.1,
             1,
-            &row.3,
+            &row.2,
             (),
         )))
     }
@@ -97,14 +105,15 @@ impl RawEventStore for InMemoryRawStore {
 
     async fn append(
         &self,
-        stream_id: &StreamId,
-        expected_version: Version,
+        id: &impl nexus::Id,
+        expected_version: Option<Version>,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.as_str().to_owned()).or_default();
+        let stream = guard.entry(id.to_string()).or_default();
         let current_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
-        if current_version != expected_version.as_u64() {
+        let expected_u64 = expected_version.map_or(0, nexus::Version::as_u64);
+        if current_version != expected_u64 {
             return Err(AppendError::Store(BenchError::Conflict));
         }
         for env in envelopes {
@@ -120,18 +129,18 @@ impl RawEventStore for InMemoryRawStore {
 
     async fn read_stream(
         &self,
-        stream_id: &StreamId,
+        id: &impl nexus::Id,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
         let events = self
             .streams
             .lock()
             .await
-            .get(stream_id.as_str())
+            .get(&id.to_string())
             .map(|s| {
                 s.iter()
                     .filter(|(v, _, _)| *v >= from.as_u64())
-                    .map(|(v, t, p)| (stream_id.as_str().to_owned(), *v, t.clone(), p.clone()))
+                    .map(|(v, t, p)| (*v, t.clone(), p.clone()))
                     .collect()
             })
             .unwrap_or_default();
@@ -140,30 +149,64 @@ impl RawEventStore for InMemoryRawStore {
 }
 
 // =============================================================================
-// Noop upcaster for chain benchmarks
+// Noop upcaster for benchmarks — walks v1 through v6
 // =============================================================================
 
-struct NoopUpcaster {
-    target_type: &'static str,
-    target_version: u32,
-}
+struct NoopV1ToV6;
 
-impl EventUpcaster for NoopUpcaster {
-    fn can_upcast(&self, event_type: &str, schema_version: u32) -> bool {
-        event_type == self.target_type && schema_version == self.target_version
+impl Upcaster for NoopV1ToV6 {
+    fn apply<'a>(
+        &self,
+        mut morsel: nexus_store::morsel::EventMorsel<'a>,
+    ) -> Result<nexus_store::morsel::EventMorsel<'a>, nexus_store::UpcastError> {
+        loop {
+            morsel = match (morsel.event_type(), morsel.schema_version()) {
+                ("UserCreated", v) if v == Version::new(1).unwrap() => {
+                    nexus_store::morsel::EventMorsel::new(
+                        "UserCreated",
+                        Version::new(2).unwrap(),
+                        morsel.payload().to_vec(),
+                    )
+                }
+                ("UserCreated", v) if v == Version::new(2).unwrap() => {
+                    nexus_store::morsel::EventMorsel::new(
+                        "UserCreated",
+                        Version::new(3).unwrap(),
+                        morsel.payload().to_vec(),
+                    )
+                }
+                ("UserCreated", v) if v == Version::new(3).unwrap() => {
+                    nexus_store::morsel::EventMorsel::new(
+                        "UserCreated",
+                        Version::new(4).unwrap(),
+                        morsel.payload().to_vec(),
+                    )
+                }
+                ("UserCreated", v) if v == Version::new(4).unwrap() => {
+                    nexus_store::morsel::EventMorsel::new(
+                        "UserCreated",
+                        Version::new(5).unwrap(),
+                        morsel.payload().to_vec(),
+                    )
+                }
+                ("UserCreated", v) if v == Version::new(5).unwrap() => {
+                    nexus_store::morsel::EventMorsel::new(
+                        "UserCreated",
+                        Version::new(6).unwrap(),
+                        morsel.payload().to_vec(),
+                    )
+                }
+                _ => break,
+            };
+        }
+        Ok(morsel)
     }
 
-    fn upcast(
-        &self,
-        _event_type: &str,
-        schema_version: u32,
-        payload: &[u8],
-    ) -> (String, u32, Vec<u8>) {
-        (
-            self.target_type.to_owned(),
-            schema_version + 1,
-            payload.to_vec(),
-        )
+    fn current_version(&self, event_type: &str) -> Option<Version> {
+        match event_type {
+            "UserCreated" => Some(Version::new(6).unwrap()),
+            _ => None,
+        }
     }
 }
 
@@ -172,12 +215,10 @@ impl EventUpcaster for NoopUpcaster {
 // =============================================================================
 
 fn make_envelopes(n: usize) -> Vec<PendingEnvelope<()>> {
-    let stream = sid("bench-stream");
     (0..n)
         .map(|i| {
             let version = u64::try_from(i + 1).unwrap_or(u64::MAX);
-            pending_envelope(stream.clone())
-                .version(Version::from_persisted(version))
+            pending_envelope(Version::new(version).unwrap())
                 .event_type("BenchEvent")
                 .payload(vec![1, 2, 3, 4])
                 .build_without_metadata()
@@ -190,12 +231,10 @@ fn make_envelopes(n: usize) -> Vec<PendingEnvelope<()>> {
 // =============================================================================
 
 fn bench_builder_throughput(c: &mut Criterion) {
-    let stream = sid("stream-1");
     c.bench_function("PendingEnvelope builder", |b| {
         b.iter(|| {
             black_box(
-                pending_envelope(black_box(stream.clone()))
-                    .version(Version::from_persisted(1))
+                pending_envelope(black_box(Version::INITIAL))
                     .event_type("UserCreated")
                     .payload(vec![1, 2, 3, 4])
                     .build_without_metadata(),
@@ -205,14 +244,12 @@ fn bench_builder_throughput(c: &mut Criterion) {
 }
 
 fn bench_persisted_envelope_construction(c: &mut Criterion) {
-    let stream_id = "stream-1";
     let event_type = "UserCreated";
     let payload = [1u8, 2, 3, 4, 5, 6, 7, 8];
-    c.bench_function("PersistedEnvelope::new (zero-alloc)", |b| {
+    c.bench_function("PersistedEnvelope::new_unchecked (zero-alloc)", |b| {
         b.iter(|| {
-            black_box(PersistedEnvelope::<()>::new(
-                black_box(stream_id),
-                Version::from_persisted(1),
+            black_box(PersistedEnvelope::<()>::new_unchecked(
+                Version::INITIAL,
                 black_box(event_type),
                 1,
                 black_box(&payload),
@@ -233,7 +270,7 @@ fn bench_append(c: &mut Criterion) {
                 let store = InMemoryRawStore::new();
                 rt.block_on(async {
                     store
-                        .append(&sid("bench-stream"), Version::INITIAL, black_box(envs))
+                        .append(&bid("bench-stream"), None, black_box(envs))
                         .await
                         .unwrap();
                 });
@@ -254,7 +291,7 @@ fn bench_read_stream(c: &mut Criterion) {
         let store = InMemoryRawStore::new();
         rt.block_on(async {
             store
-                .append(&sid("bench-stream"), Version::INITIAL, &envelopes)
+                .append(&bid("bench-stream"), None, &envelopes)
                 .await
                 .unwrap();
         });
@@ -263,7 +300,7 @@ fn bench_read_stream(c: &mut Criterion) {
             b.iter(|| {
                 rt.block_on(async {
                     let mut stream = store
-                        .read_stream(&sid("bench-stream"), Version::INITIAL)
+                        .read_stream(&bid("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
                     while let Some(result) = stream.next().await {
@@ -276,36 +313,19 @@ fn bench_read_stream(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_upcaster_chain(c: &mut Criterion) {
-    // Chain of 5 noop upcasters: v1->v2, v2->v3, ..., v5->v6
-    let upcasters: Vec<Box<dyn EventUpcaster>> = (1..=5)
-        .map(|v| -> Box<dyn EventUpcaster> {
-            Box::new(NoopUpcaster {
-                target_type: "UserCreated",
-                target_version: v,
-            })
-        })
-        .collect();
-
+fn bench_upcaster(c: &mut Criterion) {
+    let upcaster = NoopV1ToV6;
     let payload = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
 
-    c.bench_function("upcaster chain (5 noop)", |b| {
+    c.bench_function("upcaster (5 noop steps)", |b| {
         b.iter(|| {
-            let mut event_type = "UserCreated".to_owned();
-            let mut schema_version: u32 = 1;
-            let mut current_payload = payload.clone();
-
-            for upcaster in &upcasters {
-                if upcaster.can_upcast(&event_type, schema_version) {
-                    let (new_type, new_version, new_payload) =
-                        upcaster.upcast(&event_type, schema_version, &current_payload);
-                    event_type = new_type;
-                    schema_version = new_version;
-                    current_payload = new_payload;
-                }
-            }
-
-            black_box((event_type, schema_version, current_payload))
+            let morsel = nexus_store::EventMorsel::borrowed(
+                "UserCreated",
+                Version::new(1).unwrap(),
+                black_box(&payload),
+            );
+            let result = upcaster.apply(morsel).unwrap();
+            black_box(result)
         });
     });
 }
@@ -316,6 +336,6 @@ criterion_group!(
     bench_persisted_envelope_construction,
     bench_append,
     bench_read_stream,
-    bench_upcaster_chain
+    bench_upcaster
 );
 criterion_main!(benches);

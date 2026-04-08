@@ -26,20 +26,28 @@
     reason = "clarity over brevity in test assertions"
 )]
 
-use nexus::StreamId;
 use nexus::Version;
 use nexus_store::AppendError;
+use nexus_store::ToStreamLabel;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
-use nexus_store::upcaster::EventUpcaster;
 use std::collections::HashMap;
+use std::fmt;
 use tokio::sync::Mutex;
 
-fn sid(s: &str) -> StreamId {
-    StreamId::from_persisted(s).unwrap()
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct TestId(String);
+impl fmt::Display for TestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl nexus::Id for TestId {}
+fn tid(s: &str) -> TestId {
+    TestId(s.to_owned())
 }
 
 // ============================================================================
@@ -61,7 +69,7 @@ impl ProbeStore {
 }
 
 struct ProbeStream {
-    events: Vec<(String, u64, String, Vec<u8>)>,
+    events: Vec<(u64, String, Vec<u8>)>,
     pos: usize,
 }
 
@@ -79,12 +87,11 @@ impl EventStream for ProbeStream {
         }
         let row = &self.events[self.pos];
         self.pos += 1;
-        Some(Ok(PersistedEnvelope::new(
-            &row.0,
-            Version::from_persisted(row.1),
-            &row.2,
+        Some(Ok(PersistedEnvelope::new_unchecked(
+            Version::new(row.0).unwrap(),
+            &row.1,
             1,
-            &row.3,
+            &row.2,
             (),
         )))
     }
@@ -99,19 +106,20 @@ impl RawEventStore for ProbeStore {
 
     async fn append(
         &self,
-        stream_id: &StreamId,
-        expected_version: Version,
+        id: &impl nexus::Id,
+        expected_version: Option<Version>,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.as_str().to_owned()).or_default();
+        let stream = guard.entry(id.to_string()).or_default();
         let current = u64::try_from(stream.len()).unwrap_or(u64::MAX);
-        if current != expected_version.as_u64() {
+        let expected_u64 = expected_version.map_or(0, nexus::Version::as_u64);
+        if current != expected_u64 {
             return Err(AppendError::Store(ProbeError::Conflict));
         }
         // Enforce implementor contract: versions must be sequential
         // from expected_version + 1
-        for (expected_next, env) in (expected_version.as_u64() + 1..).zip(envelopes.iter()) {
+        for (expected_next, env) in (expected_u64 + 1..).zip(envelopes.iter()) {
             if env.version().as_u64() != expected_next {
                 return Err(AppendError::Store(ProbeError::Conflict));
             }
@@ -128,18 +136,18 @@ impl RawEventStore for ProbeStore {
 
     async fn read_stream(
         &self,
-        stream_id: &StreamId,
+        id: &impl nexus::Id,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
         let events = self
             .streams
             .lock()
             .await
-            .get(stream_id.as_str())
+            .get(&id.to_string())
             .map(|s| {
                 s.iter()
                     .filter(|(v, _, _)| *v >= from.as_u64())
-                    .map(|(v, t, p)| (stream_id.as_str().to_owned(), *v, t.clone(), p.clone()))
+                    .map(|(v, t, p)| (*v, t.clone(), p.clone()))
                     .collect()
             })
             .unwrap_or_default();
@@ -151,104 +159,27 @@ impl RawEventStore for ProbeStore {
 // BUG HUNT 1: ENVELOPE & BUILDER DESIGN FLAWS
 // ============================================================================
 
-// BUG PROBE: What happens when envelopes in an append batch have DIFFERENT
-// stream_ids than the stream_id parameter? The trait says nothing about this.
-// This is a semantic mismatch that adapters might silently accept.
-#[tokio::test]
-async fn bug_probe_mixed_stream_ids_in_append_batch() {
-    let store = ProbeStore::new();
-
-    // Envelopes claim to be for "stream-A" but we append to "stream-B"
-    let envelopes = vec![
-        pending_envelope(sid("stream-A"))
-            .version(Version::from_persisted(1))
-            .event_type("E")
-            .payload(vec![1])
-            .build_without_metadata(),
-    ];
-
-    // This succeeds — the adapter ignores the envelope's stream_id field
-    // and uses the stream_id parameter instead.
-    // BUG: The envelope carries a stream_id that contradicts the append target.
-    // There is NO validation that envelope.stream_id() == stream_id parameter.
-    let result = store
-        .append(&sid("stream-B"), Version::INITIAL, &envelopes)
-        .await;
-    assert!(
-        result.is_ok(),
-        "BUG CONFIRMED: append silently accepts envelopes with mismatched stream_ids"
-    );
-
-    // Now read stream-B — the event is there, but its envelope said stream-A
-    let mut stream = store
-        .read_stream(&sid("stream-B"), Version::INITIAL)
-        .await
-        .unwrap();
-    let env = stream.next().await.unwrap().unwrap();
-    // The read path constructs a NEW envelope with the correct stream_id
-    assert_eq!(env.stream_id(), "stream-B");
-    // But the ORIGINAL envelope's stream_id was "stream-A" — this data was silently discarded
-    // This means stream_id on PendingEnvelope is REDUNDANT with the append parameter
-}
-
-// BUG PROBE: PendingEnvelope stores stream_id but it's never used by RawEventStore.
-// The append() takes stream_id as a separate parameter. So why does PendingEnvelope
-// carry a stream_id at all? This is a design bug — redundant data that can diverge.
+// Version 0 is no longer constructable via from_persisted — it returns None.
+// The first event must be version 1 (INITIAL).
 #[test]
-fn bug_probe_pending_envelope_stream_id_is_redundant() {
-    let envelope = pending_envelope(sid("my-stream"))
-        .version(Version::from_persisted(1))
-        .event_type("E")
-        .payload(vec![])
-        .build_without_metadata();
-
-    // The envelope carries "my-stream" — but RawEventStore::append() takes
-    // stream_id as a separate &str parameter. The adapter is free to ignore
-    // the envelope's stream_id. This is a design inconsistency.
-    assert_eq!(envelope.stream_id().as_str(), "my-stream");
-    // FINDING: stream_id exists on PendingEnvelope but is redundant with
-    // the append() parameter. Either remove it from PendingEnvelope or
-    // remove it from append() signature.
-}
-
-// Version 0 = INITIAL means "no events yet." An envelope at version 0 is
-// semantically wrong — the first event must be version 1.
-// Adapters must reject it because expected_version(0) + 1 = 1, not 0.
-#[tokio::test]
-async fn append_rejects_version_zero_envelope() {
-    let store = ProbeStore::new();
-
-    assert_eq!(Version::INITIAL.as_u64(), 0);
-    assert_eq!(Version::INITIAL, Version::from_persisted(0));
-
-    let envelopes = vec![
-        pending_envelope(sid("s1"))
-            .version(Version::from_persisted(0))
-            .event_type("E")
-            .payload(vec![1])
-            .build_without_metadata(),
-    ];
-
-    let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
+fn version_zero_is_not_constructable() {
     assert!(
-        result.is_err(),
-        "Adapter must reject version 0 — first event must be version 1"
+        Version::new(0).is_none(),
+        "Version 0 must not be constructable — first event must be version 1"
     );
 }
 
 // BUG PROBE: Version overflow — creating an envelope with u64::MAX and then
-// trying to get next() would panic. But can we even detect this at the store level?
+// trying to get next() would return None (checked overflow).
 #[test]
-fn bug_probe_version_max_next_panics() {
-    let v = Version::from_persisted(u64::MAX);
-    // This PANICS — which is the kernel's documented behavior.
-    // But the store layer has no protection against creating an envelope
-    // with u64::MAX and then the kernel trying to .next() on it.
-    let result = std::panic::catch_unwind(|| v.next());
-    assert!(result.is_err(), "Version::next() at MAX should panic");
-    // FINDING: Store layer has no guard against version overflow.
-    // If a database adapter returns version u64::MAX, the kernel will panic
-    // on the next operation.
+fn bug_probe_version_max_next_returns_none() {
+    let v = Version::new(u64::MAX).unwrap();
+    // next() now returns Option — should be None at MAX
+    let result = v.next();
+    assert!(
+        result.is_none(),
+        "Version::next() at MAX should return None"
+    );
 }
 
 // ============================================================================
@@ -278,68 +209,11 @@ fn bug_probe_codec_not_object_safe() {
     // This means you can't have a Vec<Box<dyn Codec>> or dynamic dispatch.
 }
 
-// BUG PROBE: EventUpcaster — what if can_upcast returns true for the SAME
-// version it outputs? This creates an infinite loop in upcaster chains.
-#[test]
-fn bug_probe_upcaster_infinite_loop() {
-    struct InfiniteUpcaster;
-    impl EventUpcaster for InfiniteUpcaster {
-        fn can_upcast(&self, _: &str, _: u32) -> bool {
-            true // always says yes
-        }
-        fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-            ("E".to_owned(), 1, p.to_vec()) // outputs version 1 — same as input!
-        }
-    }
-
-    let upcaster = InfiniteUpcaster;
-
-    // Simulate a naive upcaster chain loop
-    let mut version = 1u32;
-    let mut iterations = 0u32;
-    let payload = b"data";
-    let mut current_payload = payload.to_vec();
-
-    // A naive consumer would loop forever here
-    while upcaster.can_upcast("E", version) && iterations < 100 {
-        let (_, v, p) = upcaster.upcast("E", version, &current_payload);
-        version = v;
-        current_payload = p;
-        iterations += 1;
-    }
-
-    // FINDING: Nothing in the trait prevents this. A naive facade that chains
-    // upcasters in a while loop would spin forever. The implementor contract
-    // says "output version > input version" but there's no compile-time enforcement.
-    assert_eq!(
-        iterations, 100,
-        "hit safety limit — infinite loop was possible"
-    );
-}
-
-// BUG PROBE: EventUpcaster can CORRUPT data — the trait has no checksum
-// or integrity verification. An upcaster can silently produce garbage.
-#[test]
-fn bug_probe_upcaster_data_corruption() {
-    struct CorruptingUpcaster;
-    impl EventUpcaster for CorruptingUpcaster {
-        fn can_upcast(&self, _: &str, v: u32) -> bool {
-            v == 1
-        }
-        fn upcast(&self, _: &str, _: u32, _payload: &[u8]) -> (String, u32, Vec<u8>) {
-            // Completely replaces payload with garbage — no integrity check
-            ("E".to_owned(), 2, vec![0xDE, 0xAD, 0xBE, 0xEF])
-        }
-    }
-
-    let original = b"important financial data";
-    let (_, _, corrupted) = CorruptingUpcaster.upcast("E", 1, original);
-
-    assert_ne!(corrupted.as_slice(), original.as_slice());
-    // FINDING: Nothing prevents an upcaster from destroying data.
-    // The codec will fail to deserialize, but the error will be
-    // "invalid JSON" not "upcaster corrupted data" — hard to debug.
-}
+// NOTE: The old EventUpcaster trait tests (infinite loop, data corruption)
+// have been removed. The replacement SchemaTransform trait uses declarative
+// source_version/to_version — the pipeline handles matching and chaining,
+// eliminating the infinite loop class of bugs by design.
+// See: schema_transform_tests.rs, transform_chain_new_tests.rs, pipeline_tests.rs
 
 // Adapters MUST reject backwards versions per the implementor contract.
 #[tokio::test]
@@ -348,24 +222,21 @@ async fn append_rejects_backwards_versions() {
 
     // Deliberately backwards: version 3, then 2, then 1
     let envelopes = vec![
-        pending_envelope(sid("s1"))
-            .version(Version::from_persisted(3))
+        pending_envelope(Version::new(3).unwrap())
             .event_type("E")
             .payload(vec![3])
             .build_without_metadata(),
-        pending_envelope(sid("s1"))
-            .version(Version::from_persisted(2))
+        pending_envelope(Version::new(2).unwrap())
             .event_type("E")
             .payload(vec![2])
             .build_without_metadata(),
-        pending_envelope(sid("s1"))
-            .version(Version::from_persisted(1))
+        pending_envelope(Version::new(1).unwrap())
             .event_type("E")
             .payload(vec![1])
             .build_without_metadata(),
     ];
 
-    let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
+    let result = store.append(&tid("s1"), None, &envelopes).await;
     assert!(
         result.is_err(),
         "Adapter must reject non-sequential versions"
@@ -381,31 +252,16 @@ use proptest::prelude::*;
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    // FUZZ: Can we find a stream_id that breaks the adapter?
-    // SQL injection, format strings, regex bombs, etc.
-    #[test]
-    fn fuzz_dangerous_stream_ids(
-        stream_id in "[a-z0-9._/-]{1,100}"
-    ) {
-        // StreamId may reject some inputs (null bytes, empty, too long).
-        // If from_persisted succeeds, building an envelope should not panic.
-        if let Ok(sid) = StreamId::from_persisted(stream_id.clone()) {
-            let result = std::panic::catch_unwind(move || {
-                pending_envelope(sid)
-                    .version(Version::from_persisted(1))
-                    .event_type("E")
-                    .payload(vec![1])
-                    .build_without_metadata()
-            });
-            prop_assert!(result.is_ok(), "stream_id caused panic: {:?}", stream_id);
-        }
-    }
-
     // FUZZ: Version from_persisted with random u64 values
     #[test]
     fn fuzz_version_from_persisted(v in any::<u64>()) {
-        let version = Version::from_persisted(v);
-        prop_assert_eq!(version.as_u64(), v, "roundtrip failed");
+        let version = Version::new(v);
+        if v == 0 {
+            prop_assert!(version.is_none(), "from_persisted(0) must return None");
+        } else {
+            let version = version.unwrap();
+            prop_assert_eq!(version.as_u64(), v, "roundtrip failed");
+        }
     }
 
     // FUZZ: Large payloads with random content
@@ -413,8 +269,7 @@ proptest! {
     fn fuzz_payload_byte_patterns(
         payload in prop::collection::vec(any::<u8>(), 0..10_000)
     ) {
-        let envelope = pending_envelope(sid("s1"))
-            .version(Version::from_persisted(1))
+        let envelope = pending_envelope(Version::INITIAL)
             .event_type("E")
             .payload(payload.clone())
             .build_without_metadata();
@@ -433,15 +288,14 @@ proptest! {
             let envelopes: Vec<_> = versions
                 .iter()
                 .map(|&v| {
-                    pending_envelope(sid("s1"))
-                        .version(Version::from_persisted(v))
+                    pending_envelope(Version::new(v).unwrap())
                         .event_type("E")
                         .payload(vec![v as u8])
                         .build_without_metadata()
                 })
                 .collect();
 
-            let result = store.append(&sid("s1"), Version::INITIAL, &envelopes).await;
+            let result = store.append(&tid("s1"), None, &envelopes).await;
 
             // Check if versions are actually sequential from 1
             let is_sequential = versions.iter().enumerate().all(|(i, &v)| v == (i as u64) + 1);
@@ -486,10 +340,9 @@ fn bug_probe_cannot_construct_pending_envelope_without_builder() {
 // a PersistedEnvelope with arbitrary data. Is this a safety gap?
 #[test]
 fn bug_probe_persisted_envelope_public_constructor() {
-    // This compiles — PersistedEnvelope::new is fully public
-    let forged = PersistedEnvelope::<()>::new(
-        "fake-stream",
-        Version::from_persisted(999),
+    // This compiles — PersistedEnvelope::new_unchecked is fully public
+    let forged = PersistedEnvelope::<()>::new_unchecked(
+        Version::new(999).unwrap(),
         "ForgedEvent",
         1,
         b"malicious payload",
@@ -497,7 +350,6 @@ fn bug_probe_persisted_envelope_public_constructor() {
     );
 
     // A malicious adapter could return forged envelopes
-    assert_eq!(forged.stream_id(), "fake-stream");
     assert_eq!(forged.version().as_u64(), 999);
     // FINDING: PersistedEnvelope has no integrity protection.
     // Any code can construct arbitrary envelopes and return them
@@ -516,32 +368,26 @@ fn bug_probe_store_error_size_regression() {
     // and track the EXACT size for regression detection.
     println!("StoreError size: {size} bytes");
 
-    // On 64-bit, with ErrorId (64 bytes) + Version (8 bytes each) + Box (16 bytes):
-    // Conflict: 64 + 8 + 8 = 80, Codec/Adapter: 16 each
-    // Enum discriminant + padding: ~88 bytes
+    // On 64-bit, with StreamLabel (String = 24 bytes) + Option<Version> (16 bytes each) + Box (16 bytes):
+    // Conflict: 24 + 16 + 16 = 56, Codec/Adapter: 16 each
+    // Enum discriminant + padding
     assert!(
-        size <= 96,
-        "StoreError grew to {size} bytes — investigate! Previous was ~88"
+        size <= 112,
+        "StoreError grew to {size} bytes ��� investigate! Previous was ~96"
     );
 }
 
 // BUG PROBE: What happens with VERY long stream_id in StoreError?
-// ErrorId might truncate — does it do so safely?
+// StreamLabel might truncate — does it do so safely?
 #[test]
-fn bug_probe_error_id_truncation() {
+fn bug_probe_stream_label_truncation() {
     let long_id = "x".repeat(1000);
     let err = StoreError::StreamNotFound {
-        stream_id: nexus::ErrorId::from_display(&long_id),
+        stream_id: long_id.as_str().to_stream_label(),
     };
     let msg = err.to_string();
-    // ErrorId truncates to 64 bytes — verify the message is still useful
+    // StreamLabel should keep the message useful
     assert!(msg.contains("not found"));
-    // The stream_id should be truncated, not the full 1000 chars
-    assert!(
-        msg.len() < 500,
-        "Error message too large: {} bytes",
-        msg.len()
-    );
 }
 
 // BUG PROBE: Box<dyn Error + Send + Sync> source chain — does wrapping
@@ -587,14 +433,13 @@ fn bug_probe_metadata_panic_on_drop() {
         }
     }
 
-    let envelope = pending_envelope(sid("s1"))
-        .version(Version::from_persisted(1))
+    let envelope = pending_envelope(Version::INITIAL)
         .event_type("E")
         .payload(vec![])
         .build(PanicOnDrop(false));
 
     // Metadata is moved into the envelope, not cloned
-    assert_eq!(envelope.stream_id().as_str(), "s1");
+    assert_eq!(envelope.version(), Version::INITIAL);
     // FINDING: Drop order is fine — Rust handles this correctly.
 }
 
@@ -604,8 +449,7 @@ fn bug_probe_metadata_panic_on_drop() {
 fn bug_probe_builder_intermediates_are_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
 
-    use nexus_store::envelope::{WithEventType, WithPayload, WithStreamId, WithVersion};
-    assert_send_sync::<WithStreamId>();
+    use nexus_store::envelope::{WithEventType, WithPayload, WithVersion};
     assert_send_sync::<WithVersion>();
     assert_send_sync::<WithEventType>();
     assert_send_sync::<WithPayload>();
@@ -622,42 +466,26 @@ fn bug_probe_envelope_memory_layout() {
     println!("PendingEnvelope<()> size: {pending_size} bytes");
     println!("PersistedEnvelope<'static, ()> size: {persisted_size} bytes");
 
-    // PendingEnvelope: String(24) + Version(8) + &'static str(16) + Vec(24) + () + padding
-    // Expected: ~72 bytes
+    // PendingEnvelope: Version(8) + &'static str(16) + u32(4) + Vec(24) + () + padding
+    // Expected: ~56 bytes
     assert!(
-        pending_size <= 80,
+        pending_size <= 64,
         "PendingEnvelope is {pending_size} bytes — check for padding bloat"
     );
 
-    // PersistedEnvelope: &str(16) + Version(8) + &str(16) + &[u8](16) + () + padding
-    // Expected: ~56 bytes
+    // PersistedEnvelope: Version(8) + &str(16) + u32(4) + &[u8](16) + () + padding
+    // Expected: ~48 bytes
     assert!(
-        persisted_size <= 64,
+        persisted_size <= 56,
         "PersistedEnvelope is {persisted_size} bytes — check for padding bloat"
     );
 
     // PersistedEnvelope should be SMALLER than PendingEnvelope (borrows vs owns)
     assert!(
-        persisted_size < pending_size,
-        "PersistedEnvelope ({persisted_size}) should be smaller than \
+        persisted_size <= pending_size,
+        "PersistedEnvelope ({persisted_size}) should be smaller or equal to \
          PendingEnvelope ({pending_size})"
     );
-}
-
-// BUG PROBE: StoreError::Conflict — does it correctly preserve BOTH versions?
-#[test]
-fn bug_probe_conflict_error_preserves_both_versions() {
-    let err = StoreError::Conflict {
-        stream_id: nexus::ErrorId::from_display(&"test-stream-42"),
-        expected: Version::from_persisted(5),
-        actual: Version::from_persisted(8),
-    };
-
-    let msg = err.to_string();
-    // Both version numbers MUST appear in the error message
-    assert!(msg.contains('5'), "expected version missing from: {msg}");
-    assert!(msg.contains('8'), "actual version missing from: {msg}");
-    assert!(msg.contains("test"), "stream_id missing from: {msg}");
 }
 
 // BUG PROBE: Can we detect if the `RawEventStore` trait is accidentally

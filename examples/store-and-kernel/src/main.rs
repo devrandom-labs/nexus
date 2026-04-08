@@ -7,7 +7,7 @@
 //! 1. Define a BankAccount aggregate using `#[nexus::aggregate]`
 //! 2. Use a JSON `Codec<AccountEvent>` for serialization
 //! 3. Use `InMemoryStore` from nexus-store for persistence
-//! 4. Show: create aggregate -> apply events -> encode -> persist -> read back
+//! 4. Show: create aggregate -> handle command -> encode -> persist -> read back
 //!    -> decode -> rehydrate aggregate
 
 // Example crate — relax strict lints for readability.
@@ -24,7 +24,7 @@ use nexus::*;
 use nexus_store::raw::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{Codec, StreamId, pending_envelope};
+use nexus_store::{Codec, pending_envelope};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -71,7 +71,7 @@ enum AccountEvent {
 
 // --- State ---
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct AccountState {
     owner: String,
     balance: u64,
@@ -100,10 +100,6 @@ impl AggregateState for AccountState {
         }
         self
     }
-
-    fn name(&self) -> &'static str {
-        "BankAccount"
-    }
 }
 
 // --- Errors ---
@@ -123,37 +119,56 @@ enum AccountError {
 #[nexus::aggregate(state = AccountState, error = AccountError, id = AccountId)]
 struct BankAccount;
 
-// --- Business logic ---
+// --- Commands ---
 
-impl BankAccount {
-    fn open(&mut self, owner: String) -> Result<(), AccountError> {
+struct OpenAccount {
+    owner: String,
+}
+
+struct Deposit {
+    amount: u64,
+}
+
+struct Withdraw {
+    amount: u64,
+}
+
+impl Handle<OpenAccount> for BankAccount {
+    fn handle(&self, cmd: OpenAccount) -> Result<Events<AccountEvent>, AccountError> {
         if self.state().is_open {
             return Err(AccountError::AlreadyOpen);
         }
-        self.apply(AccountEvent::Opened(AccountOpened { owner }));
-        Ok(())
+        Ok(events![AccountEvent::Opened(AccountOpened {
+            owner: cmd.owner,
+        })])
     }
+}
 
-    fn deposit(&mut self, amount: u64) -> Result<(), AccountError> {
+impl Handle<Deposit> for BankAccount {
+    fn handle(&self, cmd: Deposit) -> Result<Events<AccountEvent>, AccountError> {
         if !self.state().is_open {
             return Err(AccountError::Closed);
         }
-        self.apply(AccountEvent::Deposited(MoneyDeposited { amount }));
-        Ok(())
+        Ok(events![AccountEvent::Deposited(MoneyDeposited {
+            amount: cmd.amount,
+        })])
     }
+}
 
-    fn withdraw(&mut self, amount: u64) -> Result<(), AccountError> {
+impl Handle<Withdraw> for BankAccount {
+    fn handle(&self, cmd: Withdraw) -> Result<Events<AccountEvent>, AccountError> {
         if !self.state().is_open {
             return Err(AccountError::Closed);
         }
-        if self.state().balance < amount {
+        if self.state().balance < cmd.amount {
             return Err(AccountError::InsufficientFunds {
                 balance: self.state().balance,
-                amount,
+                amount: cmd.amount,
             });
         }
-        self.apply(AccountEvent::Withdrawn(MoneyWithdrawn { amount }));
-        Ok(())
+        Ok(events![AccountEvent::Withdrawn(MoneyWithdrawn {
+            amount: cmd.amount,
+        })])
     }
 }
 
@@ -180,33 +195,34 @@ impl Codec<AccountEvent> for JsonCodec {
 // Bridge functions: kernel <-> store
 // =============================================================================
 
-/// Kernel -> Store: encode uncommitted events into pending envelopes.
-fn encode_events(
+/// Encode decided events into pending envelopes for the store.
+fn encode_decided(
     codec: &JsonCodec,
-    stream_id: &StreamId,
-    uncommitted: &[VersionedEvent<AccountEvent>],
+    decided: &Events<AccountEvent>,
+    base_version: u64,
 ) -> Vec<nexus_store::envelope::PendingEnvelope<()>> {
-    uncommitted
+    decided
         .iter()
-        .map(|ve| {
-            let payload = codec.encode(ve.event()).expect("encode should succeed");
-            pending_envelope(stream_id.clone())
-                .version(ve.version())
-                .event_type(ve.event().name())
+        .enumerate()
+        .map(|(i, event)| {
+            let ver = Version::new(base_version + u64::try_from(i).unwrap() + 1).unwrap();
+            let payload = codec.encode(event).expect("encode should succeed");
+            pending_envelope(ver)
+                .event_type(event.name())
                 .payload(payload)
                 .build_without_metadata()
         })
         .collect()
 }
 
-/// Store -> Kernel: read stream, decode each envelope, build versioned events.
+/// Read events from the store, decode, and build versioned events.
 async fn load_events(
     codec: &JsonCodec,
     store: &InMemoryStore,
-    stream_id: &StreamId,
+    id: &AccountId,
 ) -> Vec<VersionedEvent<AccountEvent>> {
     let mut stream = store
-        .read_stream(stream_id, Version::from_persisted(1))
+        .read_stream(id, Version::INITIAL)
         .await
         .expect("read_stream should succeed");
 
@@ -220,7 +236,7 @@ async fn load_events(
                 let event: AccountEvent = codec
                     .decode(env.event_type(), env.payload())
                     .expect("decode should succeed");
-                versioned.push(VersionedEvent::from_persisted(env.version(), event));
+                versioned.push(VersionedEvent::new(env.version(), event));
             }
         }
     }
@@ -235,51 +251,87 @@ async fn load_events(
 async fn main() {
     let codec = JsonCodec;
     let store = InMemoryStore::new();
-    let stream_id = StreamId::from_persisted("account-alice").expect("valid stream id");
 
     // -------------------------------------------------------------------------
-    // Step 1: Create aggregate, apply business operations
+    // Step 1: Create aggregate, handle commands
     // -------------------------------------------------------------------------
     println!("=== Step 1: Create and operate on BankAccount ===");
 
     let alice_id = AccountId("alice".to_owned());
     let mut account = BankAccount::new(alice_id.clone());
-    account
-        .open("Alice Smith".to_owned())
+
+    let decided = account
+        .handle(OpenAccount {
+            owner: "Alice Smith".to_owned(),
+        })
         .expect("open should succeed");
-    account.deposit(1000).expect("deposit should succeed");
-    account.deposit(500).expect("deposit should succeed");
+    account.root_mut().apply_events(&decided);
+    account.root_mut().advance_version(Version::new(1).unwrap());
+
+    let decided = account
+        .handle(Deposit { amount: 1000 })
+        .expect("deposit should succeed");
+    account.root_mut().apply_events(&decided);
+    account.root_mut().advance_version(Version::new(2).unwrap());
+
+    let decided = account
+        .handle(Deposit { amount: 500 })
+        .expect("deposit should succeed");
+    account.root_mut().apply_events(&decided);
+    account.root_mut().advance_version(Version::new(3).unwrap());
 
     println!(
-        "State: owner={}, balance={}, version={}",
+        "State: owner={}, balance={}, version={:?}",
         account.state().owner,
         account.state().balance,
-        account.current_version()
+        account.version()
     );
 
     // -------------------------------------------------------------------------
-    // Step 2: Take uncommitted events, encode, persist to store
+    // Step 2: Encode and persist events to store
     // -------------------------------------------------------------------------
     println!("\n=== Step 2: Persist events to store ===");
 
-    let uncommitted = account.take_uncommitted_events();
-    let envelopes = encode_events(&codec, &stream_id, &uncommitted);
+    // For this demo, re-handle all three commands and persist them.
+    // In a real system, the repository handles this atomically.
+    let mut fresh = BankAccount::new(alice_id.clone());
+
+    let decided = fresh
+        .handle(OpenAccount {
+            owner: "Alice Smith".to_owned(),
+        })
+        .expect("open");
+    let envelopes = encode_decided(&codec, &decided, 0);
+    fresh.root_mut().apply_events(&decided);
+    fresh.root_mut().advance_version(Version::new(1).unwrap());
+
+    let decided = fresh.handle(Deposit { amount: 1000 }).expect("deposit");
+    let mut more = encode_decided(&codec, &decided, 1);
+    envelopes.len(); // keep envelopes alive
+    fresh.root_mut().apply_events(&decided);
+    fresh.root_mut().advance_version(Version::new(2).unwrap());
+
+    let decided = fresh.handle(Deposit { amount: 500 }).expect("deposit");
+    let mut even_more = encode_decided(&codec, &decided, 2);
+
+    // Combine all envelopes and persist
+    let mut all_envelopes = envelopes;
+    all_envelopes.append(&mut more);
+    all_envelopes.append(&mut even_more);
+
     store
-        .append(&stream_id, Version::INITIAL, &envelopes)
+        .append(&alice_id, None, &all_envelopes)
         .await
         .expect("append should succeed");
 
-    println!(
-        "Persisted {} events to stream '{stream_id}'",
-        envelopes.len()
-    );
+    println!("Persisted {} events to stream", all_envelopes.len());
 
     // -------------------------------------------------------------------------
     // Step 3: Read back from store, decode, rehydrate into new aggregate
     // -------------------------------------------------------------------------
     println!("\n=== Step 3: Rehydrate from store ===");
 
-    let versioned = load_events(&codec, &store, &stream_id).await;
+    let versioned = load_events(&codec, &store, &alice_id).await;
     let mut account = BankAccount::new(alice_id.clone());
     for ve in versioned {
         let (version, event) = ve.into_parts();
@@ -290,30 +342,34 @@ async fn main() {
     }
 
     println!(
-        "Rehydrated: owner={}, balance={}, version={}",
+        "Rehydrated: owner={}, balance={}, version={:?}",
         account.state().owner,
         account.state().balance,
         account.version()
     );
 
     // -------------------------------------------------------------------------
-    // Step 4: More operations, persist again (demonstrating optimistic concurrency)
+    // Step 4: More operations, persist again (optimistic concurrency)
     // -------------------------------------------------------------------------
     println!("\n=== Step 4: Withdraw and persist more events ===");
 
-    let mut account = account;
     let expected_version = account.version();
-    account.withdraw(300).expect("withdraw should succeed");
-
-    let uncommitted = account.take_uncommitted_events();
-    let envelopes = encode_events(&codec, &stream_id, &uncommitted);
+    let decided = account
+        .handle(Withdraw { amount: 300 })
+        .expect("withdraw should succeed");
+    let base = account.version().map_or(0, |v| v.as_u64());
+    let envelopes = encode_decided(&codec, &decided, base);
     store
-        .append(&stream_id, expected_version, &envelopes)
+        .append(&alice_id, expected_version, &envelopes)
         .await
         .expect("append should succeed");
 
+    account.root_mut().apply_events(&decided);
+    let new_ver = Version::new(base + 1).unwrap();
+    account.root_mut().advance_version(new_ver);
+
     println!(
-        "Persisted {} more event(s). balance={}, version={}",
+        "Persisted {} more event(s). balance={}, version={:?}",
         envelopes.len(),
         account.state().balance,
         account.version()
@@ -324,7 +380,7 @@ async fn main() {
     // -------------------------------------------------------------------------
     println!("\n=== Step 5: Full reload from store ===");
 
-    let versioned = load_events(&codec, &store, &stream_id).await;
+    let versioned = load_events(&codec, &store, &alice_id).await;
     println!("Total events in stream: {}", versioned.len());
 
     let mut account = BankAccount::new(alice_id);
@@ -337,7 +393,7 @@ async fn main() {
     }
 
     println!(
-        "Final state: owner={}, balance={}, version={}",
+        "Final state: owner={}, balance={}, version={:?}",
         account.state().owner,
         account.state().balance,
         account.version()
@@ -348,11 +404,16 @@ async fn main() {
     // -------------------------------------------------------------------------
     println!("\n=== Step 6: Invariant enforcement ===");
 
-    let mut account = account;
-    let err = account.withdraw(5000).expect_err("should reject overdraw");
+    let err = account
+        .handle(Withdraw { amount: 5000 })
+        .expect_err("should reject overdraw");
     println!("Overdraw rejected: {err}");
 
-    let err = account.open("Bob".to_owned()).expect_err("already open");
+    let err = account
+        .handle(OpenAccount {
+            owner: "Bob".to_owned(),
+        })
+        .expect_err("already open");
     println!("Double-open rejected: {err}");
 
     println!("\nDone. Full event-sourcing lifecycle with kernel + store integration.");

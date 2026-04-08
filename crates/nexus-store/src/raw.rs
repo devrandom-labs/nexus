@@ -1,7 +1,7 @@
 use crate::envelope::PendingEnvelope;
 use crate::error::AppendError;
 use crate::stream::EventStream;
-use nexus::StreamId;
+use nexus::Id;
 use nexus::Version;
 
 /// What database adapters implement. Bytes in, bytes out.
@@ -38,8 +38,8 @@ pub trait RawEventStore<M = ()>: Send + Sync {
     /// Accepting malformed batches corrupts the event stream.
     fn append(
         &self,
-        stream_id: &StreamId,
-        expected_version: Version,
+        id: &impl Id,
+        expected_version: Option<Version>,
         envelopes: &[PendingEnvelope<M>],
     ) -> impl std::future::Future<Output = Result<(), AppendError<Self::Error>>> + Send;
 
@@ -49,7 +49,7 @@ pub trait RawEventStore<M = ()>: Send + Sync {
     /// Each envelope borrows from the cursor — zero allocation per event.
     fn read_stream(
         &self,
-        stream_id: &StreamId,
+        id: &impl Id,
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::Stream<'_>, Self::Error>> + Send;
 }

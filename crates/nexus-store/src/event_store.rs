@@ -1,140 +1,30 @@
+use std::num::NonZeroU32;
+
 use crate::borrowing_codec::BorrowingCodec;
 use crate::codec::Codec;
 use crate::envelope::pending_envelope;
-use crate::error::{AppendError, StoreError, UpcastError};
+use crate::error::StoreError;
+use crate::morsel::EventMorsel;
 use crate::raw::RawEventStore;
 use crate::repository::Repository;
 use crate::stream::EventStream;
-use crate::upcaster_chain::{Chain, UpcasterChain};
-use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, StreamId, Version};
+use crate::upcaster::Upcaster;
+use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
-// ─── Shared upcaster logic ───────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared helpers
+// ═══════════════════════════════════════════════════════════════════════════
 
-const UPCAST_CHAIN_LIMIT: u32 = 100;
-
-fn run_upcasters<U: UpcasterChain>(
-    upcasters: &U,
-    event_type: &str,
-    schema_version: u32,
-    payload: &[u8],
-) -> Result<(String, u32, Vec<u8>), StoreError> {
-    let mut current_type = event_type.to_owned();
-    let mut current_version = schema_version;
-    let mut current_payload = payload.to_vec();
-    let mut iterations = 0u32;
-
-    while let Some((new_type, new_version, new_payload)) =
-        upcasters.try_upcast(&current_type, current_version, &current_payload)
-    {
-        iterations += 1;
-        if iterations > UPCAST_CHAIN_LIMIT {
-            return Err(StoreError::Codec(Box::new(
-                UpcastError::ChainLimitExceeded {
-                    event_type: current_type,
-                    schema_version: current_version,
-                    limit: UPCAST_CHAIN_LIMIT,
-                },
-            )));
-        }
-        if new_version <= current_version {
-            return Err(StoreError::Codec(Box::new(
-                UpcastError::VersionNotAdvanced {
-                    event_type: current_type,
-                    input_version: current_version,
-                    output_version: new_version,
-                },
-            )));
-        }
-        if new_type.is_empty() {
-            return Err(StoreError::Codec(Box::new(UpcastError::EmptyEventType {
-                input_event_type: current_type,
-                schema_version: new_version,
-            })));
-        }
-        current_type = new_type;
-        current_version = new_version;
-        current_payload = new_payload;
-    }
-
-    Ok((current_type, current_version, current_payload))
-}
-
-/// Determine the "current" schema version for an event type by probing
-/// the upcaster chain. Walks versions from 1 upward until no upcaster
-/// matches. New events should be stored at this version so that
-/// upcasters skip them on load.
-fn current_schema_version<U: UpcasterChain>(upcasters: &U, event_type: &str) -> u32 {
-    let mut version = 1u32;
-    while upcasters.can_upcast(event_type, version) {
-        version = version.saturating_add(1);
-        if version > UPCAST_CHAIN_LIMIT + 1 {
-            break;
-        }
-    }
-    version
-}
-
-// ─── Shared save logic ───────────────────────────────────────────────────
-
-#[allow(clippy::expect_used, reason = "checked non-empty above")]
-async fn save_with_encoder<A, S, U, F>(
-    store: &S,
-    upcasters: &U,
-    encode_fn: F,
-    stream_id: &StreamId,
-    aggregate: &mut AggregateRoot<A>,
-) -> Result<(), StoreError>
-where
-    A: Aggregate,
-    S: RawEventStore,
-    U: UpcasterChain,
-    EventOf<A>: DomainEvent,
-    F: Fn(&EventOf<A>) -> Result<Vec<u8>, StoreError>,
-{
-    let events = aggregate.uncommitted_events();
-    if events.is_empty() {
-        return Ok(());
-    }
-
-    let expected_version = Version::from_persisted(
-        events
-            .first()
-            .expect("checked non-empty above")
-            .version()
-            .as_u64()
-            - 1,
-    );
-
-    let mut envelopes = Vec::with_capacity(events.len());
-    for ve in events {
-        let payload = encode_fn(ve.event())?;
-        let sv = current_schema_version(upcasters, ve.event().name());
-        envelopes.push(
-            pending_envelope(stream_id.clone())
-                .version(ve.version())
-                .event_type(ve.event().name())
-                .payload(payload)
-                .schema_version(sv)
-                .build_without_metadata(),
-        );
-    }
-
-    match store.append(stream_id, expected_version, &envelopes).await {
-        Ok(()) => {
-            aggregate.clear_uncommitted();
-            Ok(())
-        }
-        Err(AppendError::Conflict {
-            stream_id: sid,
-            expected,
-            actual,
-        }) => Err(StoreError::Conflict {
-            stream_id: sid,
-            expected,
-            actual,
-        }),
-        Err(AppendError::Store(e)) => Err(StoreError::Adapter(Box::new(e))),
-    }
+/// Convert a `Version` (`NonZeroU64`) to a `NonZeroU32` for the envelope's
+/// `schema_version` field. Returns `Err(StoreError::Codec)` if the version
+/// exceeds `u32::MAX`.
+fn version_to_nz32(version: Version) -> Result<NonZeroU32, StoreError> {
+    let raw = version.as_u64();
+    let narrow = u32::try_from(raw)
+        .map_err(|_| StoreError::Codec(format!("schema version {raw} exceeds u32::MAX").into()))?;
+    // SAFETY: Version wraps NonZeroU64, so raw >= 1, so narrow >= 1.
+    NonZeroU32::new(narrow)
+        .ok_or_else(|| StoreError::Codec("schema version is zero (unreachable)".into()))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -148,35 +38,36 @@ where
 /// # Construction
 ///
 /// ```ignore
-/// let es = EventStore::new(store, codec)
-///     .with_upcaster(V1ToV2)
-///     .with_upcaster(V2ToV3);
+/// // No transforms:
+/// let es = EventStore::new(store, codec);
+///
+/// // With transforms (proc-macro generated):
+/// let es = EventStore::with_upcaster(store, codec, OrderTransforms);
 /// ```
 pub struct EventStore<S, C, U = ()> {
     store: S,
     codec: C,
-    upcasters: U,
+    upcaster: U,
 }
 
 impl<S, C> EventStore<S, C, ()> {
-    /// Create a new event store with no upcasters.
+    /// Create a new event store with no transforms.
     pub const fn new(store: S, codec: C) -> Self {
         Self {
             store,
             codec,
-            upcasters: (),
+            upcaster: (),
         }
     }
 }
 
 impl<S, C, U> EventStore<S, C, U> {
-    /// Add an upcaster to the chain. Returns a new `EventStore` with
-    /// the upcaster prepended (checked first during reads).
-    pub fn with_upcaster<H>(self, upcaster: H) -> EventStore<S, C, Chain<H, U>> {
-        EventStore {
-            store: self.store,
-            codec: self.codec,
-            upcasters: Chain(upcaster, self.upcasters),
+    /// Create an event store with an upcaster for schema evolution.
+    pub const fn with_upcaster(store: S, codec: C, upcaster: U) -> Self {
+        Self {
+            store,
+            codec,
+            upcaster,
         }
     }
 }
@@ -186,16 +77,16 @@ where
     A: Aggregate,
     S: RawEventStore,
     C: Codec<EventOf<A>>,
-    U: UpcasterChain,
+    U: Upcaster,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
     type Error = StoreError;
 
-    async fn load(&self, stream_id: &StreamId, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
         let mut stream = self
             .store
-            .read_stream(stream_id, Version::INITIAL)
+            .read_stream(&id, Version::INITIAL)
             .await
             .map_err(|e| StoreError::Adapter(Box::new(e)))?;
 
@@ -204,16 +95,23 @@ where
         while let Some(result) = stream.next().await {
             let env = result.map_err(|e| StoreError::Adapter(Box::new(e)))?;
 
-            let (event_type, _schema_version, payload) = run_upcasters(
-                &self.upcasters,
+            // Build morsel from envelope — all Cow::Borrowed (zero-alloc).
+            let morsel = EventMorsel::borrowed(
                 env.event_type(),
-                env.schema_version(),
+                env.schema_version_as_version(),
                 env.payload(),
-            )?;
+            );
 
+            // Run through upcaster — zero-alloc when no transform fires.
+            let transformed = self
+                .upcaster
+                .apply(morsel)
+                .map_err(|e| StoreError::Codec(Box::new(e)))?;
+
+            // Decode.
             let event = self
                 .codec
-                .decode(&event_type, &payload)
+                .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| StoreError::Codec(Box::new(e)))?;
 
             root.replay(env.version(), &event)?;
@@ -224,21 +122,86 @@ where
 
     async fn save(
         &self,
-        stream_id: &StreamId,
         aggregate: &mut AggregateRoot<A>,
+        events: &[EventOf<A>],
     ) -> Result<(), StoreError> {
-        save_with_encoder(
-            &self.store,
-            &self.upcasters,
-            |event| {
-                self.codec
-                    .encode(event)
-                    .map_err(|e| StoreError::Codec(Box::new(e)))
-            },
-            stream_id,
-            aggregate,
-        )
-        .await
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let expected_version = aggregate.version();
+
+        // Compute the first event's version.
+        let mut next_version = match expected_version {
+            None => Version::INITIAL,
+            Some(v) => v.next().ok_or(StoreError::Codec(
+                "version overflow: cannot advance past u64::MAX".into(),
+            ))?,
+        };
+
+        let mut envelopes = Vec::with_capacity(events.len());
+
+        for event in events {
+            let payload = self
+                .codec
+                .encode(event)
+                .map_err(|e| StoreError::Codec(Box::new(e)))?;
+
+            let event_name = event.name();
+            let schema_version = self
+                .upcaster
+                .current_version(event_name)
+                .unwrap_or(Version::INITIAL);
+            let schema_nz32 = version_to_nz32(schema_version)?;
+
+            let envelope = pending_envelope(next_version)
+                .event_type(event_name)
+                .payload(payload)
+                .schema_version(schema_nz32)
+                .build_without_metadata();
+
+            envelopes.push(envelope);
+
+            // Advance version for next event (if any).
+            // Track last_version before advancing so we don't lose it.
+            if envelopes.len() < events.len() {
+                next_version = next_version.next().ok_or(StoreError::Codec(
+                    "version overflow during batch construction".into(),
+                ))?;
+            }
+        }
+
+        // Append to store.
+        match self
+            .store
+            .append(aggregate.id(), expected_version, &envelopes)
+            .await
+        {
+            Ok(()) => {
+                // The last envelope's version is the new aggregate version.
+                #[allow(
+                    clippy::expect_used,
+                    reason = "envelopes is non-empty: checked events.is_empty() above"
+                )]
+                let last_version = envelopes.last().expect("envelopes is non-empty").version();
+
+                aggregate.advance_version(last_version);
+                for event in events {
+                    aggregate.apply_event(event);
+                }
+                Ok(())
+            }
+            Err(crate::error::AppendError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            }) => Err(StoreError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            }),
+            Err(crate::error::AppendError::Store(e)) => Err(StoreError::Adapter(Box::new(e))),
+        }
     }
 }
 
@@ -254,33 +217,36 @@ where
 /// # Construction
 ///
 /// ```ignore
-/// let es = ZeroCopyEventStore::new(store, codec)
-///     .with_upcaster(V1ToV2);
+/// // No transforms:
+/// let es = ZeroCopyEventStore::new(store, codec);
+///
+/// // With transforms (proc-macro generated):
+/// let es = ZeroCopyEventStore::with_upcaster(store, codec, OrderTransforms);
 /// ```
 pub struct ZeroCopyEventStore<S, C, U = ()> {
     store: S,
     codec: C,
-    upcasters: U,
+    upcaster: U,
 }
 
 impl<S, C> ZeroCopyEventStore<S, C, ()> {
-    /// Create a new zero-copy event store with no upcasters.
+    /// Create a new zero-copy event store with no transforms.
     pub const fn new(store: S, codec: C) -> Self {
         Self {
             store,
             codec,
-            upcasters: (),
+            upcaster: (),
         }
     }
 }
 
 impl<S, C, U> ZeroCopyEventStore<S, C, U> {
-    /// Add an upcaster to the chain.
-    pub fn with_upcaster<H>(self, upcaster: H) -> ZeroCopyEventStore<S, C, Chain<H, U>> {
-        ZeroCopyEventStore {
-            store: self.store,
-            codec: self.codec,
-            upcasters: Chain(upcaster, self.upcasters),
+    /// Create a zero-copy event store with an upcaster for schema evolution.
+    pub const fn with_upcaster(store: S, codec: C, upcaster: U) -> Self {
+        Self {
+            store,
+            codec,
+            upcaster,
         }
     }
 }
@@ -290,16 +256,16 @@ where
     A: Aggregate,
     S: RawEventStore,
     C: BorrowingCodec<EventOf<A>>,
-    U: UpcasterChain,
+    U: Upcaster,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
     type Error = StoreError;
 
-    async fn load(&self, stream_id: &StreamId, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
         let mut stream = self
             .store
-            .read_stream(stream_id, Version::INITIAL)
+            .read_stream(&id, Version::INITIAL)
             .await
             .map_err(|e| StoreError::Adapter(Box::new(e)))?;
 
@@ -308,16 +274,23 @@ where
         while let Some(result) = stream.next().await {
             let env = result.map_err(|e| StoreError::Adapter(Box::new(e)))?;
 
-            let (event_type, _schema_version, payload) = run_upcasters(
-                &self.upcasters,
+            // Build morsel from envelope — all Cow::Borrowed (zero-alloc).
+            let morsel = EventMorsel::borrowed(
                 env.event_type(),
-                env.schema_version(),
+                env.schema_version_as_version(),
                 env.payload(),
-            )?;
+            );
 
+            // Run through upcaster — zero-alloc when no transform fires.
+            let transformed = self
+                .upcaster
+                .apply(morsel)
+                .map_err(|e| StoreError::Codec(Box::new(e)))?;
+
+            // Decode — zero-copy: &E borrows from morsel payload.
             let event: &EventOf<A> = self
                 .codec
-                .decode(&event_type, &payload)
+                .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| StoreError::Codec(Box::new(e)))?;
 
             root.replay(env.version(), event)?;
@@ -328,20 +301,83 @@ where
 
     async fn save(
         &self,
-        stream_id: &StreamId,
         aggregate: &mut AggregateRoot<A>,
+        events: &[EventOf<A>],
     ) -> Result<(), StoreError> {
-        save_with_encoder(
-            &self.store,
-            &self.upcasters,
-            |event| {
-                self.codec
-                    .encode(event)
-                    .map_err(|e| StoreError::Codec(Box::new(e)))
-            },
-            stream_id,
-            aggregate,
-        )
-        .await
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let expected_version = aggregate.version();
+
+        // Compute the first event's version.
+        let mut next_version = match expected_version {
+            None => Version::INITIAL,
+            Some(v) => v.next().ok_or(StoreError::Codec(
+                "version overflow: cannot advance past u64::MAX".into(),
+            ))?,
+        };
+
+        let mut envelopes = Vec::with_capacity(events.len());
+
+        for event in events {
+            let payload = self
+                .codec
+                .encode(event)
+                .map_err(|e| StoreError::Codec(Box::new(e)))?;
+
+            let event_name = event.name();
+            let schema_version = self
+                .upcaster
+                .current_version(event_name)
+                .unwrap_or(Version::INITIAL);
+            let schema_nz32 = version_to_nz32(schema_version)?;
+
+            let envelope = pending_envelope(next_version)
+                .event_type(event_name)
+                .payload(payload)
+                .schema_version(schema_nz32)
+                .build_without_metadata();
+
+            envelopes.push(envelope);
+
+            // Advance version for next event (if any).
+            if envelopes.len() < events.len() {
+                next_version = next_version.next().ok_or(StoreError::Codec(
+                    "version overflow during batch construction".into(),
+                ))?;
+            }
+        }
+
+        // Append to store.
+        match self
+            .store
+            .append(aggregate.id(), expected_version, &envelopes)
+            .await
+        {
+            Ok(()) => {
+                #[allow(
+                    clippy::expect_used,
+                    reason = "envelopes is non-empty: checked events.is_empty() above"
+                )]
+                let last_version = envelopes.last().expect("envelopes is non-empty").version();
+
+                aggregate.advance_version(last_version);
+                for event in events {
+                    aggregate.apply_event(event);
+                }
+                Ok(())
+            }
+            Err(crate::error::AppendError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            }) => Err(StoreError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            }),
+            Err(crate::error::AppendError::Store(e)) => Err(StoreError::Adapter(Box::new(e))),
+        }
     }
 }

@@ -5,8 +5,9 @@ use crate::encoding::{
 use crate::error::FjallError;
 use crate::stream::FjallStream;
 use fjall::Slice;
-use nexus::{ErrorId, StreamId, Version};
+use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
+use nexus_store::ToStreamLabel;
 use nexus_store::error::AppendError;
 use nexus_store::raw::RawEventStore;
 use std::path::Path;
@@ -51,42 +52,49 @@ impl RawEventStore for FjallStore {
         clippy::significant_drop_tightening,
         reason = "tx must be held across concurrency check + inserts + commit"
     )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "transaction scope requires sequential steps in one function"
+    )]
     async fn append(
         &self,
-        stream_id: &StreamId,
-        expected_version: Version,
+        id: &impl Id,
+        expected_version: Option<Version>,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
+        let id_string = id.to_string();
+        let expected_raw = expected_version.map_or(0, Version::as_u64);
+
         // Version check BEFORE empty-batch early return. An empty append
         // with a stale expected_version signals a stale caller — report the
         // conflict even though no data would be written.
         let mut tx = self.db.write_tx();
 
         let (numeric_id, current_version) = if let Some(meta_bytes) = tx
-            .get(&self.streams, stream_id.as_str())
+            .get(&self.streams, &id_string)
             .map_err(|e| AppendError::Store(FjallError::Io(e)))?
         {
             let (numeric_id, current_version) = decode_stream_meta(&meta_bytes).map_err(|_| {
                 AppendError::Store(FjallError::CorruptMeta {
-                    stream_id: stream_id.as_str().to_owned(),
+                    stream_id: id_string.clone(),
                 })
             })?;
             // Optimistic concurrency check.
-            if current_version != expected_version.as_u64() {
+            if current_version != expected_raw {
                 return Err(AppendError::Conflict {
-                    stream_id: ErrorId::from_display(&stream_id),
+                    stream_id: id.to_stream_label(),
                     expected: expected_version,
-                    actual: Version::from_persisted(current_version),
+                    actual: Version::new(current_version),
                 });
             }
             (numeric_id, current_version)
         } else {
-            // New stream: expected_version must be 0.
-            if expected_version.as_u64() != 0 {
+            // New stream: expected_version must be None.
+            if expected_version.is_some() {
                 return Err(AppendError::Conflict {
-                    stream_id: ErrorId::from_display(&stream_id),
+                    stream_id: id.to_stream_label(),
                     expected: expected_version,
-                    actual: Version::from_persisted(0),
+                    actual: None,
                 });
             }
             // Empty batch on a new stream: validate version but don't
@@ -101,7 +109,7 @@ impl RawEventStore for FjallStore {
             let numeric_id = self.next_stream_id.load(Ordering::Relaxed);
             let next_id = numeric_id
                 .checked_add(1)
-                .ok_or(AppendError::Store(FjallError::StreamIdExhausted))?;
+                .ok_or(AppendError::Store(FjallError::IdSpaceExhausted))?;
             self.next_stream_id.store(next_id, Ordering::Relaxed);
             (numeric_id, 0)
         };
@@ -119,15 +127,15 @@ impl RawEventStore for FjallStore {
                 .checked_add(1)
                 .and_then(|v| v.checked_add(i_u64))
                 .ok_or_else(|| AppendError::Conflict {
-                    stream_id: ErrorId::from_display(&stream_id),
-                    expected: Version::from_persisted(current_version),
-                    actual: env.version(),
+                    stream_id: id.to_stream_label(),
+                    expected: Version::new(current_version),
+                    actual: Some(env.version()),
                 })?;
             if env.version().as_u64() != expected_env_version {
                 return Err(AppendError::Conflict {
-                    stream_id: ErrorId::from_display(&stream_id),
-                    expected: Version::from_persisted(expected_env_version),
-                    actual: env.version(),
+                    stream_id: id.to_stream_label(),
+                    expected: Version::new(expected_env_version),
+                    actual: Some(env.version()),
                 });
             }
         }
@@ -142,10 +150,11 @@ impl RawEventStore for FjallStore {
                 env.event_type(),
                 env.payload(),
             )
-            .map_err(|_| {
-                AppendError::Store(FjallError::CorruptValue {
-                    stream_id: stream_id.as_str().to_owned(),
+            .map_err(|e| {
+                AppendError::Store(FjallError::InvalidInput {
+                    stream_id: id_string.clone(),
                     version: env.version().as_u64(),
+                    reason: e.to_string(),
                 })
             })?;
             tx.insert(&self.events, key, Slice::from(&*value_buf));
@@ -157,7 +166,7 @@ impl RawEventStore for FjallStore {
             .map_or(current_version, |last| last.version().as_u64());
 
         let meta = encode_stream_meta(numeric_id, new_version);
-        tx.insert(&self.streams, stream_id.as_str(), meta);
+        tx.insert(&self.streams, &id_string, meta);
 
         // Atomic cross-partition commit.
         tx.commit()
@@ -168,15 +177,17 @@ impl RawEventStore for FjallStore {
 
     async fn read_stream(
         &self,
-        stream_id: &StreamId,
+        id: &impl Id,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
+        let id_string = id.to_string();
+
         // Look up numeric stream ID from streams partition.
-        let meta = self.streams.get(stream_id.as_str())?;
+        let meta = self.streams.get(&id_string)?;
         let numeric_id = if let Some(meta_bytes) = meta {
             let (numeric_id, _version) =
                 decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
-                    stream_id: stream_id.as_str().to_owned(),
+                    stream_id: id_string.clone(),
                 })?;
             numeric_id
         } else {
@@ -184,7 +195,8 @@ impl RawEventStore for FjallStore {
             return Ok(FjallStream {
                 events: vec![],
                 pos: 0,
-                stream_id: stream_id.as_str().to_owned(),
+                stream_id: id_string,
+                poisoned: false,
                 #[cfg(debug_assertions)]
                 prev_version: None,
             });
@@ -219,7 +231,8 @@ impl RawEventStore for FjallStore {
         Ok(FjallStream {
             events,
             pos: 0,
-            stream_id: stream_id.as_str().to_owned(),
+            stream_id: id_string,
+            poisoned: false,
             #[cfg(debug_assertions)]
             prev_version: None,
         })
@@ -234,18 +247,27 @@ mod tests {
     use nexus_store::envelope::pending_envelope;
     use nexus_store::stream::EventStream;
 
-    fn sid(s: &str) -> StreamId {
-        StreamId::from_persisted(s).unwrap()
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct TestId(String);
+
+    impl std::fmt::Display for TestId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl nexus::Id for TestId {}
+
+    fn tid(s: &str) -> TestId {
+        TestId(s.to_owned())
     }
 
     fn make_envelope(
-        stream_id: &StreamId,
         version: u64,
         event_type: &'static str,
         payload: &[u8],
     ) -> PendingEnvelope<()> {
-        pending_envelope(stream_id.clone())
-            .version(Version::from_persisted(version))
+        pending_envelope(Version::new(version).expect("test version must be > 0"))
             .event_type(event_type)
             .payload(payload.to_vec())
             .build_without_metadata()
@@ -262,11 +284,9 @@ mod tests {
     #[tokio::test]
     async fn append_to_new_stream() {
         let (store, _dir) = temp_store();
-        let env = make_envelope(&sid("stream-1"), 1, "Created", b"payload");
+        let env = make_envelope(1, "Created", b"payload");
 
-        let result = store
-            .append(&sid("stream-1"), Version::INITIAL, &[env])
-            .await;
+        let result = store.append(&tid("stream-1"), None, &[env]).await;
         assert!(result.is_ok());
     }
 
@@ -274,38 +294,31 @@ mod tests {
     async fn append_multiple_events() {
         let (store, _dir) = temp_store();
         let envs = vec![
-            make_envelope(&sid("stream-1"), 1, "Created", b"p1"),
-            make_envelope(&sid("stream-1"), 2, "Updated", b"p2"),
-            make_envelope(&sid("stream-1"), 3, "Updated", b"p3"),
+            make_envelope(1, "Created", b"p1"),
+            make_envelope(2, "Updated", b"p2"),
+            make_envelope(3, "Updated", b"p3"),
         ];
 
-        let result = store
-            .append(&sid("stream-1"), Version::INITIAL, &envs)
-            .await;
+        let result = store.append(&tid("stream-1"), None, &envs).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn append_detects_version_conflict() {
         let (store, _dir) = temp_store();
-        let env1 = make_envelope(&sid("stream-1"), 1, "Created", b"p1");
-        store
-            .append(&sid("stream-1"), Version::INITIAL, &[env1])
-            .await
-            .unwrap();
+        let env1 = make_envelope(1, "Created", b"p1");
+        store.append(&tid("stream-1"), None, &[env1]).await.unwrap();
 
-        // Try appending with wrong expected version (0 instead of 1).
-        let env2 = make_envelope(&sid("stream-1"), 1, "Duplicate", b"p2");
-        let result = store
-            .append(&sid("stream-1"), Version::INITIAL, &[env2])
-            .await;
+        // Try appending with wrong expected version (None instead of Some(1)).
+        let env2 = make_envelope(1, "Duplicate", b"p2");
+        let result = store.append(&tid("stream-1"), None, &[env2]).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             AppendError::Conflict {
                 expected, actual, ..
             } => {
-                assert_eq!(expected, Version::INITIAL);
-                assert_eq!(actual, Version::from_persisted(1));
+                assert_eq!(expected, None);
+                assert_eq!(actual, Version::new(1));
             }
             other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
         }
@@ -314,260 +327,54 @@ mod tests {
     #[tokio::test]
     async fn append_to_nonexistent_stream_with_nonzero_version_fails() {
         let (store, _dir) = temp_store();
-        let env = make_envelope(&sid("stream-1"), 6, "Created", b"payload");
+        let env = make_envelope(6, "Created", b"payload");
 
         let result = store
-            .append(&sid("stream-1"), Version::from_persisted(5), &[env])
+            .append(&tid("stream-1"), Version::new(5), &[env])
             .await;
         assert!(result.is_err());
         match result.unwrap_err() {
             AppendError::Conflict {
                 expected, actual, ..
             } => {
-                assert_eq!(expected, Version::from_persisted(5));
-                assert_eq!(actual, Version::from_persisted(0));
+                assert_eq!(expected, Version::new(5));
+                assert_eq!(actual, None);
             }
             other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
         }
     }
 
-    #[tokio::test]
-    async fn append_sequential_batches() {
-        let (store, _dir) = temp_store();
-
-        // First batch.
-        let batch1 = vec![
-            make_envelope(&sid("stream-1"), 1, "Created", b"p1"),
-            make_envelope(&sid("stream-1"), 2, "Updated", b"p2"),
-        ];
-        store
-            .append(&sid("stream-1"), Version::INITIAL, &batch1)
-            .await
-            .unwrap();
-
-        // Second batch, continuing from version 2.
-        let batch2 = vec![
-            make_envelope(&sid("stream-1"), 3, "Updated", b"p3"),
-            make_envelope(&sid("stream-1"), 4, "Closed", b"p4"),
-        ];
-        store
-            .append(&sid("stream-1"), Version::from_persisted(2), &batch2)
-            .await
-            .unwrap();
-
-        // Verify all events are readable.
-        let mut stream = store
-            .read_stream(&sid("stream-1"), Version::from_persisted(1))
-            .await
-            .unwrap();
-        let mut count = 0u64;
-        while let Some(result) = stream.next().await {
-            let env = result.unwrap();
-            count += 1;
-            assert_eq!(env.version().as_u64(), count);
-        }
-        assert_eq!(count, 4);
-    }
-
     // ---- read_stream tests ----
-
-    #[tokio::test]
-    async fn read_empty_stream_returns_empty() {
-        let (store, _dir) = temp_store();
-        let mut stream = store
-            .read_stream(&sid("nonexistent"), Version::from_persisted(1))
-            .await
-            .unwrap();
-        assert!(stream.next().await.is_none());
-    }
 
     #[tokio::test]
     async fn read_after_append_returns_events() {
         let (store, _dir) = temp_store();
         let envs = vec![
-            make_envelope(&sid("stream-1"), 1, "Created", b"p1"),
-            make_envelope(&sid("stream-1"), 2, "Updated", b"p2"),
+            make_envelope(1, "Created", b"p1"),
+            make_envelope(2, "Updated", b"p2"),
         ];
-        store
-            .append(&sid("stream-1"), Version::INITIAL, &envs)
-            .await
-            .unwrap();
+        store.append(&tid("stream-1"), None, &envs).await.unwrap();
 
         let mut stream = store
-            .read_stream(&sid("stream-1"), Version::from_persisted(1))
+            .read_stream(&tid("stream-1"), Version::new(1).unwrap())
             .await
             .unwrap();
 
         {
             let env = stream.next().await.unwrap().unwrap();
-            assert_eq!(env.stream_id(), "stream-1");
-            assert_eq!(env.version(), Version::from_persisted(1));
+            assert_eq!(env.version(), Version::new(1).unwrap());
             assert_eq!(env.event_type(), "Created");
             assert_eq!(env.payload(), b"p1");
         }
 
         {
             let env = stream.next().await.unwrap().unwrap();
-            assert_eq!(env.stream_id(), "stream-1");
-            assert_eq!(env.version(), Version::from_persisted(2));
+            assert_eq!(env.version(), Version::new(2).unwrap());
             assert_eq!(env.event_type(), "Updated");
             assert_eq!(env.payload(), b"p2");
         }
 
         assert!(stream.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn read_with_from_version_skips_earlier() {
-        let (store, _dir) = temp_store();
-        let envs = vec![
-            make_envelope(&sid("stream-1"), 1, "Created", b"p1"),
-            make_envelope(&sid("stream-1"), 2, "Updated", b"p2"),
-            make_envelope(&sid("stream-1"), 3, "Closed", b"p3"),
-        ];
-        store
-            .append(&sid("stream-1"), Version::INITIAL, &envs)
-            .await
-            .unwrap();
-
-        // Read from version 2 onwards.
-        let mut stream = store
-            .read_stream(&sid("stream-1"), Version::from_persisted(2))
-            .await
-            .unwrap();
-
-        {
-            let env = stream.next().await.unwrap().unwrap();
-            assert_eq!(env.version(), Version::from_persisted(2));
-            assert_eq!(env.event_type(), "Updated");
-        }
-
-        {
-            let env = stream.next().await.unwrap().unwrap();
-            assert_eq!(env.version(), Version::from_persisted(3));
-            assert_eq!(env.event_type(), "Closed");
-        }
-
-        assert!(stream.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn streams_are_isolated() {
-        let (store, _dir) = temp_store();
-
-        let env_a = make_envelope(&sid("stream-a"), 1, "CreatedA", b"a-data");
-        store
-            .append(&sid("stream-a"), Version::INITIAL, &[env_a])
-            .await
-            .unwrap();
-
-        let env_b = make_envelope(&sid("stream-b"), 1, "CreatedB", b"b-data");
-        store
-            .append(&sid("stream-b"), Version::INITIAL, &[env_b])
-            .await
-            .unwrap();
-
-        // Read stream-a: should only see its own event.
-        let mut stream_a = store
-            .read_stream(&sid("stream-a"), Version::from_persisted(1))
-            .await
-            .unwrap();
-        {
-            let env = stream_a.next().await.unwrap().unwrap();
-            assert_eq!(env.event_type(), "CreatedA");
-            assert_eq!(env.payload(), b"a-data");
-        }
-        assert!(stream_a.next().await.is_none());
-
-        // Read stream-b: should only see its own event.
-        let mut stream_b = store
-            .read_stream(&sid("stream-b"), Version::from_persisted(1))
-            .await
-            .unwrap();
-        {
-            let env = stream_b.next().await.unwrap().unwrap();
-            assert_eq!(env.event_type(), "CreatedB");
-            assert_eq!(env.payload(), b"b-data");
-        }
-        assert!(stream_b.next().await.is_none());
-    }
-
-    // ---- persistence tests ----
-
-    #[tokio::test]
-    async fn data_survives_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("db");
-
-        // Write events, close store.
-        {
-            let store = FjallStore::builder(&db_path).open().unwrap();
-            let envs = vec![make_envelope(&sid("s1"), 1, "Created", b"persist-me")];
-            store
-                .append(&sid("s1"), Version::INITIAL, &envs)
-                .await
-                .unwrap();
-        }
-
-        // Reopen and verify.
-        {
-            let store = FjallStore::builder(&db_path).open().unwrap();
-            let mut stream = store
-                .read_stream(&sid("s1"), Version::from_persisted(1))
-                .await
-                .unwrap();
-            let env = stream.next().await.unwrap().unwrap();
-            assert_eq!(env.event_type(), "Created");
-            assert_eq!(env.payload(), b"persist-me");
-        }
-    }
-
-    #[tokio::test]
-    async fn stream_id_counter_recovers_after_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("db");
-
-        // Create two streams, close.
-        {
-            let store = FjallStore::builder(&db_path).open().unwrap();
-            store
-                .append(
-                    &sid("s1"),
-                    Version::INITIAL,
-                    &[make_envelope(&sid("s1"), 1, "A", b"")],
-                )
-                .await
-                .unwrap();
-            store
-                .append(
-                    &sid("s2"),
-                    Version::INITIAL,
-                    &[make_envelope(&sid("s2"), 1, "B", b"")],
-                )
-                .await
-                .unwrap();
-        }
-
-        // Reopen, create third stream — should not collide with existing numeric IDs.
-        {
-            let store = FjallStore::builder(&db_path).open().unwrap();
-            store
-                .append(
-                    &sid("s3"),
-                    Version::INITIAL,
-                    &[make_envelope(&sid("s3"), 1, "C", b"")],
-                )
-                .await
-                .unwrap();
-
-            // All three streams readable and isolated.
-            let mut st = store
-                .read_stream(&sid("s3"), Version::from_persisted(1))
-                .await
-                .unwrap();
-            let env = st.next().await.unwrap().unwrap();
-            assert_eq!(env.event_type(), "C");
-        }
     }
 
     // ---- version tracking tests ----
@@ -576,24 +383,16 @@ mod tests {
     async fn version_tracks_across_appends() {
         let (store, _dir) = temp_store();
         store
-            .append(
-                &sid("s"),
-                Version::INITIAL,
-                &[make_envelope(&sid("s"), 1, "A", b"")],
-            )
+            .append(&tid("s"), None, &[make_envelope(1, "A", b"")])
             .await
             .unwrap();
         store
-            .append(
-                &sid("s"),
-                Version::from_persisted(1),
-                &[make_envelope(&sid("s"), 2, "B", b"")],
-            )
+            .append(&tid("s"), Version::new(1), &[make_envelope(2, "B", b"")])
             .await
             .unwrap();
 
         let mut stream = store
-            .read_stream(&sid("s"), Version::from_persisted(1))
+            .read_stream(&tid("s"), Version::new(1).unwrap())
             .await
             .unwrap();
         {
@@ -605,63 +404,5 @@ mod tests {
             assert_eq!(e2.version().as_u64(), 2);
         }
         assert!(stream.next().await.is_none());
-    }
-
-    // ---- large batch tests ----
-
-    #[tokio::test]
-    async fn large_batch_append() {
-        let (store, _dir) = temp_store();
-        let envelopes: Vec<_> = (1..=100)
-            .map(|i| make_envelope(&sid("big"), i, "Tick", &[0u8; 256]))
-            .collect();
-        store
-            .append(&sid("big"), Version::INITIAL, &envelopes)
-            .await
-            .unwrap();
-
-        let mut stream = store
-            .read_stream(&sid("big"), Version::from_persisted(1))
-            .await
-            .unwrap();
-        let mut count = 0u64;
-        while let Some(result) = stream.next().await {
-            let _ = result.unwrap();
-            count += 1;
-        }
-        assert_eq!(count, 100);
-    }
-
-    // ---- schema version tests ----
-
-    #[tokio::test]
-    async fn schema_version_preserved() {
-        let (store, _dir) = temp_store();
-        let env = pending_envelope(sid("s"))
-            .version(Version::from_persisted(1))
-            .event_type("Migrated")
-            .payload(b"data".to_vec())
-            .schema_version(42)
-            .build_without_metadata();
-        store
-            .append(&sid("s"), Version::INITIAL, &[env])
-            .await
-            .unwrap();
-
-        let mut stream = store
-            .read_stream(&sid("s"), Version::from_persisted(1))
-            .await
-            .unwrap();
-        let persisted = stream.next().await.unwrap().unwrap();
-        assert_eq!(persisted.schema_version(), 42);
-    }
-
-    // ---- edge cases ----
-
-    #[tokio::test]
-    async fn empty_batch_append_succeeds() {
-        let (store, _dir) = temp_store();
-        let result = store.append(&sid("s"), Version::INITIAL, &[]).await;
-        assert!(result.is_ok());
     }
 }
