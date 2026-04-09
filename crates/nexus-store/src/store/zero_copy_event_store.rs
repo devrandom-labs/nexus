@@ -20,16 +20,16 @@ use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 ///
 /// # Construction
 ///
-/// Created via [`Store::zero_copy_repository()`](super::store::Store::zero_copy_repository):
+/// Created via [`Store::repository()`](super::store::Store::repository):
 ///
 /// ```ignore
 /// let store = Store::new(backend);
 ///
 /// // No transforms:
-/// let orders = store.zero_copy_repository(OrderCodec, ());
+/// let orders = store.repository().codec(OrderCodec).build_zero_copy();
 ///
-/// // With transforms (proc-macro generated):
-/// let orders = store.zero_copy_repository(OrderCodec, OrderTransforms);
+/// // With transforms:
+/// let orders = store.repository().codec(OrderCodec).upcaster(OrderTransforms).build_zero_copy();
 /// ```
 pub struct ZeroCopyEventStore<S, C, U = ()> {
     store: Store<S>,

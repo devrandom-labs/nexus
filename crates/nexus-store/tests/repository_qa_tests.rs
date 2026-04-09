@@ -441,7 +441,10 @@ impl Upcaster for DeltaDoublingUpcaster {
 async fn d1_encode_failure_mid_batch_returns_codec_error() {
     // Encode succeeds for 1st event, fails for 2nd
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(FailAfterNEncodesCodec::new(1), ());
+    let es = store
+        .repository()
+        .codec(FailAfterNEncodesCodec::new(1))
+        .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     let result = es
@@ -465,7 +468,10 @@ async fn d1_encode_failure_mid_batch_returns_codec_error() {
 async fn d1_encode_failure_first_event_returns_codec_error() {
     // All encodes fail — no events should reach the store
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(FailAfterNEncodesCodec::new(0), ());
+    let es = store
+        .repository()
+        .codec(FailAfterNEncodesCodec::new(0))
+        .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     let result = es.save(&mut agg, &[CounterEvent::Incremented]).await;
@@ -477,7 +483,10 @@ async fn d1_decode_failure_mid_stream_returns_codec_error() {
     // FailAfterNDecodesCodec: encode always succeeds, decode fails after N calls.
     // Save 3 events (encodes fine), then load (2nd decode fails).
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(FailAfterNDecodesCodec::new(1), ());
+    let es = store
+        .repository()
+        .codec(FailAfterNDecodesCodec::new(1))
+        .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(
         &mut agg,
@@ -503,7 +512,10 @@ async fn d1_decode_failure_mid_stream_returns_codec_error() {
 async fn d1_decode_failure_first_event_returns_codec_error() {
     // Decode fails on the very first event
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(FailAfterNDecodesCodec::new(0), ());
+    let es = store
+        .repository()
+        .codec(FailAfterNDecodesCodec::new(0))
+        .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg, &[CounterEvent::Incremented])
         .await
@@ -523,7 +535,10 @@ async fn d1_decode_failure_first_event_returns_codec_error() {
 #[tokio::test]
 async fn d2_failed_encode_must_not_advance_version() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(FailAfterNEncodesCodec::new(0), ());
+    let es = store
+        .repository()
+        .codec(FailAfterNEncodesCodec::new(0))
+        .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     assert_eq!(agg.version(), None);
@@ -552,7 +567,7 @@ async fn d2_aggregate_must_be_retryable_after_failed_save() {
         fail_flag: fail_flag.clone(),
     };
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(codec, ());
+    let es = store.repository().codec(codec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     let events = [CounterEvent::Incremented, CounterEvent::Incremented];
@@ -585,7 +600,7 @@ async fn d2_aggregate_must_be_retryable_after_failed_save() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn d3_concurrent_saves_one_wins_one_conflicts() {
     let store = Store::new(InMemoryStore::new());
-    let es = Arc::new(store.repository(SimpleCodec, ()));
+    let es = Arc::new(store.repository().codec(SimpleCodec).build());
 
     // Setup: one event in the stream
     let mut setup = AggregateRoot::<CounterAggregate>::new(CounterId(1));
@@ -640,7 +655,7 @@ async fn d3_concurrent_saves_one_wins_one_conflicts() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn d3_concurrent_loads_both_succeed() {
     let store = Store::new(InMemoryStore::new());
-    let es = Arc::new(store.repository(SimpleCodec, ()));
+    let es = Arc::new(store.repository().codec(SimpleCodec).build());
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg, &[CounterEvent::Set(42)]).await.unwrap();
@@ -668,7 +683,7 @@ async fn d3_concurrent_loads_both_succeed() {
 #[tokio::test]
 async fn d3_cross_stream_concurrent_saves_both_succeed() {
     let store = Store::new(InMemoryStore::new());
-    let es = Arc::new(store.repository(SimpleCodec, ()));
+    let es = Arc::new(store.repository().codec(SimpleCodec).build());
 
     let handle_a = tokio::spawn({
         let es = es.clone();
@@ -702,7 +717,11 @@ async fn d3_cross_stream_concurrent_saves_both_succeed() {
 #[tokio::test]
 async fn d4_single_upcaster_transforms_on_load() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, IncrementedV1ToV2);
+    let es = store
+        .repository()
+        .codec(SimpleCodec)
+        .upcaster(IncrementedV1ToV2)
+        .build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg, &[CounterEvent::Set(42)]).await.unwrap();
@@ -716,7 +735,11 @@ async fn d4_single_upcaster_transforms_on_load() {
 #[tokio::test]
 async fn d4_chained_upcasters_v1_to_v3() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, IncrementedV1ToV3);
+    let es = store
+        .repository()
+        .codec(SimpleCodec)
+        .upcaster(IncrementedV1ToV3)
+        .build();
     // Flow: v1 → v2 → v3 (upcaster handles both steps internally)
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
@@ -764,7 +787,11 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
 
     // Load via ZeroCopyEventStore with upcaster — delta=5 doubled to 10
     let store = Store::new(raw_store);
-    let es = store.zero_copy_repository(DeltaBorrowingCodec, DeltaDoublingUpcaster);
+    let es = store
+        .repository()
+        .codec(DeltaBorrowingCodec)
+        .upcaster(DeltaDoublingUpcaster)
+        .build_zero_copy();
     let loaded: AggregateRoot<DeltaAggregate> = es.load(CounterId(1)).await.unwrap();
     assert_eq!(
         loaded.state().total,
@@ -793,7 +820,11 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
         .unwrap();
 
     let store = Store::new(raw_store);
-    let es = store.zero_copy_repository(DeltaBorrowingCodec, DeltaDoublingUpcaster);
+    let es = store
+        .repository()
+        .codec(DeltaBorrowingCodec)
+        .upcaster(DeltaDoublingUpcaster)
+        .build_zero_copy();
 
     // Load: legacy delta=5 upcasted to 10. State total=10.
     let mut loaded: AggregateRoot<DeltaAggregate> = es.load(CounterId(1)).await.unwrap();
@@ -822,7 +853,7 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
 #[tokio::test]
 async fn d5_first_save_uses_version_initial_as_expected() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg, &[CounterEvent::Incremented])
@@ -838,7 +869,7 @@ async fn d5_first_save_uses_version_initial_as_expected() {
 #[tokio::test]
 async fn d5_version_consistency_through_save_load_cycles() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
@@ -869,7 +900,7 @@ async fn d5_version_consistency_through_save_load_cycles() {
 #[tokio::test]
 async fn d5_batch_version_tracking() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     let events = [
@@ -893,7 +924,7 @@ async fn d5_batch_version_tracking() {
 #[tokio::test]
 async fn d6_full_lifecycle_fresh_save_load_modify_save_load() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     // 1. Fresh aggregate
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
@@ -927,7 +958,7 @@ async fn d6_full_lifecycle_fresh_save_load_modify_save_load() {
 #[tokio::test]
 async fn d6_ten_round_modify_save_load_cycles() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
@@ -948,7 +979,7 @@ async fn d6_ten_round_modify_save_load_cycles() {
 #[tokio::test]
 async fn d6_state_determinism_same_events_same_state() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(
@@ -975,7 +1006,7 @@ async fn d6_state_determinism_same_events_same_state() {
 #[tokio::test]
 async fn d6_load_after_save_has_no_pending_state() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg, &[CounterEvent::Incremented])
@@ -994,7 +1025,7 @@ async fn d6_load_after_save_has_no_pending_state() {
 #[tokio::test]
 async fn d7_save_empty_is_noop() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     // Save with empty events — should be a no-op
@@ -1005,7 +1036,7 @@ async fn d7_save_empty_is_noop() {
 #[tokio::test]
 async fn d7_save_advances_version() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     es.save(
@@ -1020,7 +1051,7 @@ async fn d7_save_advances_version() {
 #[tokio::test]
 async fn d7_load_nonexistent_stream_returns_fresh_aggregate() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId(1)).await.unwrap();
 
     assert_eq!(loaded.version(), None);
@@ -1030,7 +1061,7 @@ async fn d7_load_nonexistent_stream_returns_fresh_aggregate() {
 #[tokio::test]
 async fn d7_repository_preserves_event_ordering() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     es.save(
@@ -1060,7 +1091,10 @@ async fn d7_repository_preserves_event_ordering() {
 #[tokio::test]
 async fn d8_codec_encode_error_is_store_error_codec() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(FailAfterNEncodesCodec::new(0), ());
+    let es = store
+        .repository()
+        .codec(FailAfterNEncodesCodec::new(0))
+        .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     match es.save(&mut agg, &[CounterEvent::Incremented]).await {
@@ -1077,7 +1111,10 @@ async fn d8_codec_encode_error_is_store_error_codec() {
 #[tokio::test]
 async fn d8_codec_decode_error_is_store_error_codec() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(FailAfterNDecodesCodec::new(0), ());
+    let es = store
+        .repository()
+        .codec(FailAfterNDecodesCodec::new(0))
+        .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg, &[CounterEvent::Incremented])
         .await
@@ -1095,7 +1132,7 @@ async fn d8_codec_decode_error_is_store_error_codec() {
 #[tokio::test]
 async fn d8_concurrency_conflict_should_be_store_error_conflict_not_adapter() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg1, &[CounterEvent::Incremented])
@@ -1122,7 +1159,7 @@ async fn d8_concurrency_conflict_should_be_store_error_conflict_not_adapter() {
 #[tokio::test]
 async fn d8_rehydration_limit_exceeded_is_store_error_kernel() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     // Save 6 events (3 + 3) using TinyAggregate (MAX_REHYDRATION_EVENTS=5)
     let mut agg = AggregateRoot::<TinyAggregate>::new(CounterId(1));
@@ -1179,7 +1216,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(SimpleCodec, ());
+            let es = store.repository().codec(SimpleCodec).build();
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
             // Compute expected state
@@ -1206,7 +1243,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(SimpleCodec, ());
+            let es = store.repository().codec(SimpleCodec).build();
 
             let expected_value = events.iter().fold(0i64, |acc, e| match e {
                 CounterEvent::Incremented => acc + 1,
@@ -1231,7 +1268,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(SimpleCodec, ());
+            let es = store.repository().codec(SimpleCodec).build();
 
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
             es.save(&mut agg, &events).await.unwrap();
@@ -1256,7 +1293,7 @@ proptest! {
 #[tokio::test]
 async fn d10_large_batch_500_events_save_and_load() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     let events: Vec<CounterEvent> = (0..500).map(|_| CounterEvent::Incremented).collect();
@@ -1271,7 +1308,7 @@ async fn d10_large_batch_500_events_save_and_load() {
 async fn d10_max_rehydration_events_boundary() {
     // TinyAggregate: MAX_REHYDRATION_EVENTS = 5
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     // Save exactly 5 events (3 + 2 via reload)
     let mut agg = AggregateRoot::<TinyAggregate>::new(CounterId(1));
@@ -1348,7 +1385,7 @@ async fn d11_schema_version_always_one() {
 #[tokio::test]
 async fn d11_save_and_load_with_typed_id() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     let result = es.save(&mut agg, &[CounterEvent::Incremented]).await;
     assert!(result.is_ok(), "save with typed id should be accepted");
@@ -1360,7 +1397,7 @@ async fn d11_save_and_load_with_typed_id() {
 #[tokio::test]
 async fn d11_stream_isolation_different_streams_independent() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg_a = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg_a, &[CounterEvent::Set(100)])
@@ -1387,7 +1424,7 @@ async fn d11_stream_isolation_different_streams_independent() {
 #[tokio::test]
 async fn d11_append_empty_batch_is_noop() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg, &[]).await.unwrap();
@@ -1399,7 +1436,7 @@ async fn d11_append_empty_batch_is_noop() {
 #[tokio::test]
 async fn d11_multiple_event_types_in_single_stream() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(SimpleCodec, ());
+    let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
 
     es.save(

@@ -906,7 +906,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             // Build events for the aggregate
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(42));
@@ -945,7 +945,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
             let events: Vec<TestEvent> = strings.iter().map(|s| TestEvent::Happened(s.clone())).collect();
@@ -973,7 +973,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(99));
             let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
@@ -996,7 +996,7 @@ proptest! {
 #[tokio::test]
 async fn attack_event_store_load_empty_stream() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.repository(JsonCodec, ());
+    let es = store.repository().codec(JsonCodec).build();
 
     let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
 
@@ -1020,7 +1020,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             // Seed the aggregate with n events
             let mut root_a = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
@@ -1088,7 +1088,11 @@ async fn attack_event_store_transforms_applied_on_load() {
 
     // Load with upcaster (schema v1 -> v2, payload unchanged for this test)
     let store = Store::new(raw_store);
-    let es = store.repository(JsonCodec, HappenedV1ToV2);
+    let es = store
+        .repository()
+        .codec(JsonCodec)
+        .upcaster(HappenedV1ToV2)
+        .build();
 
     let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
     assert_eq!(loaded.state().events_applied, 1);
@@ -1321,7 +1325,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             let mut total_events: u64 = 0;
             #[allow(unused_assignments, reason = "initial value unused; assigned in first iteration")]
@@ -1552,7 +1556,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(7));
 
@@ -1859,7 +1863,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             // Batch 1: create, save events
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
@@ -2032,7 +2036,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = Store::new(InMemoryStore::new());
-            let es = store.repository(JsonCodec, ());
+            let es = store.repository().codec(JsonCodec).build();
 
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
             let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();

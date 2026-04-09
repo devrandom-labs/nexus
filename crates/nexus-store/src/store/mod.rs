@@ -1,3 +1,4 @@
+mod builder;
 mod event_store;
 mod raw;
 mod repository;
@@ -9,6 +10,7 @@ mod store;
 mod stream;
 mod zero_copy_event_store;
 
+pub use builder::{NeedsCodec, RepositoryBuilder};
 pub use event_store::EventStore;
 pub use raw::RawEventStore;
 pub use repository::Repository;

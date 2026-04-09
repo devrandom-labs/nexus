@@ -103,7 +103,10 @@ impl BorrowingCodec<CounterEvent> for CounterBorrowingCodec {
 #[tokio::test]
 async fn zero_copy_save_and_load_roundtrip() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.zero_copy_repository(CounterBorrowingCodec, ());
+    let es = store
+        .repository()
+        .codec(CounterBorrowingCodec)
+        .build_zero_copy();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     let events = [CounterEvent { delta: 10 }, CounterEvent { delta: -3 }];
@@ -117,7 +120,10 @@ async fn zero_copy_save_and_load_roundtrip() {
 #[tokio::test]
 async fn zero_copy_load_empty_stream() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.zero_copy_repository(CounterBorrowingCodec, ());
+    let es = store
+        .repository()
+        .codec(CounterBorrowingCodec)
+        .build_zero_copy();
     let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 0);
     assert_eq!(loaded.version(), None);
@@ -126,7 +132,10 @@ async fn zero_copy_load_empty_stream() {
 #[tokio::test]
 async fn zero_copy_multi_save_load() {
     let store = Store::new(InMemoryStore::new());
-    let es = store.zero_copy_repository(CounterBorrowingCodec, ());
+    let es = store
+        .repository()
+        .codec(CounterBorrowingCodec)
+        .build_zero_copy();
 
     let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg1, &[CounterEvent { delta: 5 }])

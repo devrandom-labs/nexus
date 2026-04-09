@@ -170,7 +170,7 @@ mod integration {
     #[tokio::test]
     async fn json_codec_works_with_event_store() {
         let store = Store::new(InMemoryStore::new());
-        let repo = store.repository(JsonCodec::default(), ());
+        let repo = store.repository().build();
 
         // Save a "Created" event
         let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));

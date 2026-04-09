@@ -42,10 +42,10 @@ pub(super) fn version_to_nz32(version: Version) -> Result<NonZeroU32, StoreError
 /// let store = Store::new(backend);
 ///
 /// // No transforms:
-/// let orders = store.repository(OrderCodec, ());
+/// let orders = store.repository().codec(OrderCodec).build();
 ///
-/// // With transforms (proc-macro generated):
-/// let orders = store.repository(OrderCodec, OrderTransforms);
+/// // With transforms:
+/// let orders = store.repository().codec(OrderCodec).upcaster(OrderTransforms).build();
 /// ```
 pub struct EventStore<S, C, U = ()> {
     store: Store<S>,

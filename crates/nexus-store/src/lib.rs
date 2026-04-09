@@ -15,6 +15,9 @@ pub use codec::{BorrowingCodec, Codec};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use nexus::Version;
-pub use store::{EventStore, EventStream, RawEventStore, Repository, Store, ZeroCopyEventStore};
+pub use store::{
+    EventStore, EventStream, NeedsCodec, RawEventStore, Repository, RepositoryBuilder, Store,
+    ZeroCopyEventStore,
+};
 pub use stream_label::{StreamLabel, ToStreamLabel};
 pub use upcasting::{EventMorsel, Upcaster};
