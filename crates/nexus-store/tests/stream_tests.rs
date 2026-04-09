@@ -1,6 +1,6 @@
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
-use nexus_store::stream::EventStream;
+use nexus_store::store::EventStream;
 
 /// In-memory test stream that yields from a Vec of owned data.
 struct VecStream {

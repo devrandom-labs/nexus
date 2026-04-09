@@ -309,7 +309,7 @@ fn parse_transforms(
                             schema_version: ::nexus::Version::new(#from_version).expect("nonzero"),
                             source: ::std::boxed::Box::new(e),
                         })?;
-                    ::nexus_store::morsel::EventMorsel::new(
+                    ::nexus_store::upcasting::EventMorsel::new(
                         #output_event_type,
                         ::nexus::Version::new(#to_version).expect("nonzero"),
                         payload,
@@ -357,9 +357,9 @@ fn parse_transforms(
         impl ::nexus_store::Upcaster for #struct_ident {
             fn apply<'a>(
                 &self,
-                mut morsel: ::nexus_store::morsel::EventMorsel<'a>,
+                mut morsel: ::nexus_store::upcasting::EventMorsel<'a>,
             ) -> ::core::result::Result<
-                ::nexus_store::morsel::EventMorsel<'a>,
+                ::nexus_store::upcasting::EventMorsel<'a>,
                 ::nexus_store::UpcastError,
             > {
                 loop {

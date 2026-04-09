@@ -9,7 +9,7 @@ use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::ToStreamLabel;
 use nexus_store::error::AppendError;
-use nexus_store::raw::RawEventStore;
+use nexus_store::store::RawEventStore;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -245,7 +245,7 @@ impl RawEventStore for FjallStore {
 mod tests {
     use super::*;
     use nexus_store::envelope::pending_envelope;
-    use nexus_store::stream::EventStream;
+    use nexus_store::store::EventStream;
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     struct TestId(String);

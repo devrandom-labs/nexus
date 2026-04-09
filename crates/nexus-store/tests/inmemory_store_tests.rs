@@ -3,8 +3,8 @@
 
 use nexus::{Id, Version};
 use nexus_store::pending_envelope;
-use nexus_store::raw::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::store::EventStream;
+use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

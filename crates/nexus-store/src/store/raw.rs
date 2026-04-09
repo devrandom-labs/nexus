@@ -1,6 +1,6 @@
+use super::stream::EventStream;
 use crate::envelope::PendingEnvelope;
 use crate::error::AppendError;
-use crate::stream::EventStream;
 use nexus::Id;
 use nexus::Version;
 

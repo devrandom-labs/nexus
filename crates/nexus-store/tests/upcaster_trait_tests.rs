@@ -2,7 +2,7 @@
 
 use nexus::Version;
 use nexus_store::Upcaster;
-use nexus_store::morsel::EventMorsel;
+use nexus_store::upcasting::EventMorsel;
 
 #[test]
 fn unit_upcaster_is_passthrough() {

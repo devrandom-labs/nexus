@@ -3,7 +3,7 @@
 
 use nexus::Version;
 use nexus_store::Upcaster;
-use nexus_store::morsel::EventMorsel;
+use nexus_store::upcasting::EventMorsel;
 
 #[derive(Debug)]
 struct TestError;

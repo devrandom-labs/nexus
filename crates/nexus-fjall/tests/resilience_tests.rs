@@ -43,8 +43,8 @@ use nexus_fjall::encoding::{decode_event_value, encode_event_value};
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
-use nexus_store::raw::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::store::EventStream;
+use nexus_store::store::RawEventStore;
 
 use proptest::prelude::*;
 

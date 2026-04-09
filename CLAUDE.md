@@ -64,14 +64,26 @@ nexus-macros <-- nexus (kernel, optional via "derive" feature)
 
 ### Store Crate (`nexus-store`) — Persistence Edge Layer
 
-- **`raw.rs`** — `RawEventStore<M>` trait: byte-level `append` and `read_stream` that database adapters implement. Accepts `&StreamId`.
-- **`stream.rs`** — `EventStream<M>` trait: GAT lending cursor (`next()` returns `PersistedEnvelope<'_, M>` borrowing from the cursor buffer).
-- **`envelope.rs`** — `PendingEnvelope<M>` (owned, write-path) built via typestate builder: `pending_envelope(StreamId).version().event_type().payload().build(metadata)`. `PersistedEnvelope<'a, M>` (borrowed, read-path) returned by cursors.
-- **`event_store.rs`** — `EventStore<S, C, U>` and `ZeroCopyEventStore<S, C, U>` facades composing a `RawEventStore` + `Codec`/`BorrowingCodec` + `UpcasterChain`. Both implement `Repository<A>`.
-- **`repository.rs`** — `Repository<A>` trait: high-level `load(&self, stream_id, id)` and `save(&self, stream_id, aggregate)`.
-- **`codec.rs`** / **`borrowing_codec.rs`** — `Codec<E>` for owning encode/decode (serde-based). `BorrowingCodec<E>` for zero-copy decode (rkyv, flatbuffers).
-- **`upcaster.rs`** / **`upcaster_chain.rs`** — `EventUpcaster` trait for raw-byte schema migrations. `UpcasterChain` + `Chain<H, T>` for compile-time monomorphized chaining.
-- **`error.rs`** — `StoreError`, `AppendError<E>` (optimistic concurrency conflicts), `UpcastError`, `InvalidSchemaVersion`.
+Organized into 4 module directories + 3 cross-cutting files:
+
+- **`codec/`** — Serialization traits.
+  - `owning.rs` — `Codec<E>` for owning encode/decode (serde-based).
+  - `borrowing.rs` — `BorrowingCodec<E>` for zero-copy decode (rkyv, flatbuffers).
+- **`envelope/`** — Event containers for read & write paths.
+  - `pending.rs` — `PendingEnvelope<M>` (owned, write-path) built via typestate builder: `pending_envelope(version).event_type().payload().build(metadata)`.
+  - `persisted.rs` — `PersistedEnvelope<'a, M>` (borrowed, read-path) returned by cursors.
+- **`upcasting/`** — Schema evolution.
+  - `morsel.rs` — `EventMorsel<'a>`: zero-copy-when-possible data unit flowing through transforms.
+  - `upcaster.rs` — `Upcaster` trait for raw-byte schema migrations. `()` is the no-op passthrough.
+- **`store/`** — Storage infrastructure: traits adapters implement + facades users interact with.
+  - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap. Factory methods: `repository(codec, upcaster) -> EventStore`, `zero_copy_repository(codec, upcaster) -> ZeroCopyEventStore`.
+  - `raw.rs` — `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
+  - `stream.rs` — `EventStream<M>` trait: GAT lending cursor.
+  - `event_store.rs` — `EventStore<S, C, U>` facade (owning codec). Holds `Store<S>`. Implements `Repository<A>`.
+  - `zero_copy_event_store.rs` — `ZeroCopyEventStore<S, C, U>` facade (borrowing codec). Holds `Store<S>`. Implements `Repository<A>`.
+  - `repository.rs` — `Repository<A>` trait: high-level `load` and `save`.
+- **`error.rs`** — `StoreError`, `AppendError<E>`, `UpcastError`, `InvalidSchemaVersion`.
+- **`stream_label.rs`** — `StreamLabel` (diagnostic ID for error messages), `ToStreamLabel` (blanket impl for `Display`).
 - **`testing.rs`** — `InMemoryStore` and `InMemoryStream` (feature-gated behind `testing`).
 
 ### Fjall Adapter Crate (`nexus-fjall`) — Embedded LSM-Tree Event Store

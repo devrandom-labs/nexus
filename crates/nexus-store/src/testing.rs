@@ -3,8 +3,8 @@
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::error::StoreError;
-use crate::raw::RawEventStore;
-use crate::stream::EventStream;
+use crate::store::EventStream;
+use crate::store::RawEventStore;
 use crate::stream_label::ToStreamLabel;
 use nexus::Id;
 use nexus::Version;

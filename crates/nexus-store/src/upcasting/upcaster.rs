@@ -1,5 +1,5 @@
+use super::morsel::EventMorsel;
 use crate::error::UpcastError;
-use crate::morsel::EventMorsel;
 use nexus::Version;
 
 /// Upcast old events to the current schema version.

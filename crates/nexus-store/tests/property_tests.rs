@@ -31,8 +31,8 @@ use nexus::Version;
 use nexus_store::Upcaster;
 use nexus_store::envelope::PendingEnvelope;
 use nexus_store::pending_envelope;
-use nexus_store::raw::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::store::EventStream;
+use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 
 use proptest::prelude::*;
@@ -257,11 +257,11 @@ proptest! {
     ) {
         struct V1ToV3Upcaster;
         impl Upcaster for V1ToV3Upcaster {
-            fn apply<'a>(&self, mut morsel: nexus_store::morsel::EventMorsel<'a>) -> Result<nexus_store::morsel::EventMorsel<'a>, nexus_store::UpcastError> {
+            fn apply<'a>(&self, mut morsel: nexus_store::upcasting::EventMorsel<'a>) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError> {
                 loop {
                     morsel = match (morsel.event_type(), morsel.schema_version()) {
-                        ("E", v) if v == Version::INITIAL => nexus_store::morsel::EventMorsel::new("E", Version::new(2).unwrap(), morsel.payload().to_vec()),
-                        ("E", v) if v == Version::new(2).unwrap() => nexus_store::morsel::EventMorsel::new("E", Version::new(3).unwrap(), morsel.payload().to_vec()),
+                        ("E", v) if v == Version::INITIAL => nexus_store::upcasting::EventMorsel::new("E", Version::new(2).unwrap(), morsel.payload().to_vec()),
+                        ("E", v) if v == Version::new(2).unwrap() => nexus_store::upcasting::EventMorsel::new("E", Version::new(3).unwrap(), morsel.payload().to_vec()),
                         _ => break,
                     };
                 }

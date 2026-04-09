@@ -31,8 +31,8 @@ use nexus_store::AppendError;
 use nexus_store::Upcaster;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
-use nexus_store::raw::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::store::EventStream;
+use nexus_store::store::RawEventStore;
 use std::collections::HashMap;
 use std::fmt;
 use std::hint::black_box;
@@ -157,40 +157,40 @@ struct NoopV1ToV6;
 impl Upcaster for NoopV1ToV6 {
     fn apply<'a>(
         &self,
-        mut morsel: nexus_store::morsel::EventMorsel<'a>,
-    ) -> Result<nexus_store::morsel::EventMorsel<'a>, nexus_store::UpcastError> {
+        mut morsel: nexus_store::upcasting::EventMorsel<'a>,
+    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError> {
         loop {
             morsel = match (morsel.event_type(), morsel.schema_version()) {
                 ("UserCreated", v) if v == Version::new(1).unwrap() => {
-                    nexus_store::morsel::EventMorsel::new(
+                    nexus_store::upcasting::EventMorsel::new(
                         "UserCreated",
                         Version::new(2).unwrap(),
                         morsel.payload().to_vec(),
                     )
                 }
                 ("UserCreated", v) if v == Version::new(2).unwrap() => {
-                    nexus_store::morsel::EventMorsel::new(
+                    nexus_store::upcasting::EventMorsel::new(
                         "UserCreated",
                         Version::new(3).unwrap(),
                         morsel.payload().to_vec(),
                     )
                 }
                 ("UserCreated", v) if v == Version::new(3).unwrap() => {
-                    nexus_store::morsel::EventMorsel::new(
+                    nexus_store::upcasting::EventMorsel::new(
                         "UserCreated",
                         Version::new(4).unwrap(),
                         morsel.payload().to_vec(),
                     )
                 }
                 ("UserCreated", v) if v == Version::new(4).unwrap() => {
-                    nexus_store::morsel::EventMorsel::new(
+                    nexus_store::upcasting::EventMorsel::new(
                         "UserCreated",
                         Version::new(5).unwrap(),
                         morsel.payload().to_vec(),
                     )
                 }
                 ("UserCreated", v) if v == Version::new(5).unwrap() => {
-                    nexus_store::morsel::EventMorsel::new(
+                    nexus_store::upcasting::EventMorsel::new(
                         "UserCreated",
                         Version::new(6).unwrap(),
                         morsel.payload().to_vec(),

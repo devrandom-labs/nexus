@@ -7,12 +7,12 @@ use std::fmt;
 
 use nexus::*;
 use nexus_store::Codec;
+use nexus_store::Store;
 use nexus_store::UpcastError;
 use nexus_store::Upcaster;
-use nexus_store::event_store::EventStore;
-use nexus_store::morsel::EventMorsel;
-use nexus_store::repository::Repository;
+use nexus_store::store::Repository;
 use nexus_store::testing::InMemoryStore;
+use nexus_store::upcasting::EventMorsel;
 
 // -- Test domain --
 
@@ -107,7 +107,8 @@ impl Codec<TodoEvent> for TestCodec {
 
 #[tokio::test]
 async fn save_and_load_roundtrip() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository(TestCodec, ());
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     let events = [TodoEvent::Created("Buy milk".into()), TodoEvent::Done];
@@ -121,7 +122,8 @@ async fn save_and_load_roundtrip() {
 
 #[tokio::test]
 async fn load_empty_stream_returns_fresh_aggregate() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository(TestCodec, ());
     let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
     assert_eq!(loaded.version(), None);
     assert_eq!(loaded.state(), &TodoState::default());
@@ -129,14 +131,16 @@ async fn load_empty_stream_returns_fresh_aggregate() {
 
 #[tokio::test]
 async fn save_no_uncommitted_events_is_noop() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository(TestCodec, ());
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     es.save(&mut agg, &[]).await.unwrap();
 }
 
 #[tokio::test]
 async fn save_then_append_more_events() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository(TestCodec, ());
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     es.save(&mut agg, &[TodoEvent::Created("Task".into())])
@@ -154,8 +158,8 @@ async fn save_then_append_more_events() {
 
 #[tokio::test]
 async fn optimistic_concurrency_conflict() {
-    let store = InMemoryStore::new();
-    let es = EventStore::new(store, TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository(TestCodec, ());
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
     es.save(&mut agg, &[TodoEvent::Created("Original".into())])
@@ -202,7 +206,8 @@ impl Upcaster for V1ToV2Upcaster {
 #[tokio::test]
 async fn load_with_transform_transforms_events() {
     // EventStore with upcaster — save then load through the same store
-    let es = EventStore::with_upcaster(InMemoryStore::new(), TestCodec, V1ToV2Upcaster);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository(TestCodec, V1ToV2Upcaster);
 
     // Save — transforms are only applied on reads, not writes
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
@@ -219,5 +224,6 @@ async fn load_with_transform_transforms_events() {
 #[tokio::test]
 async fn event_store_with_no_transforms_is_zero_sized_chain() {
     assert_eq!(std::mem::size_of::<()>(), 0);
-    let _es = EventStore::new(InMemoryStore::new(), TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let _es = store.repository(TestCodec, ());
 }

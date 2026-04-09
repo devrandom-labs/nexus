@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use nexus::Version;
-use nexus_store::morsel::EventMorsel;
+use nexus_store::upcasting::EventMorsel;
 
 #[test]
 fn morsel_from_borrowed_is_zero_alloc() {

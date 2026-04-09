@@ -7,12 +7,13 @@
     reason = "test codec uses pointer cast to simulate zero-copy"
 )]
 
+use std::fmt;
+
 use nexus::*;
 use nexus_store::BorrowingCodec;
-use nexus_store::event_store::ZeroCopyEventStore;
-use nexus_store::repository::Repository;
+use nexus_store::Store;
+use nexus_store::store::Repository;
 use nexus_store::testing::InMemoryStore;
-use std::fmt;
 
 // -- Domain where Event is a fixed-layout type decodable from bytes --
 
@@ -101,7 +102,8 @@ impl BorrowingCodec<CounterEvent> for CounterBorrowingCodec {
 
 #[tokio::test]
 async fn zero_copy_save_and_load_roundtrip() {
-    let es = ZeroCopyEventStore::new(InMemoryStore::new(), CounterBorrowingCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.zero_copy_repository(CounterBorrowingCodec, ());
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     let events = [CounterEvent { delta: 10 }, CounterEvent { delta: -3 }];
@@ -114,7 +116,8 @@ async fn zero_copy_save_and_load_roundtrip() {
 
 #[tokio::test]
 async fn zero_copy_load_empty_stream() {
-    let es = ZeroCopyEventStore::new(InMemoryStore::new(), CounterBorrowingCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.zero_copy_repository(CounterBorrowingCodec, ());
     let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId(1)).await.unwrap();
     assert_eq!(loaded.state().value, 0);
     assert_eq!(loaded.version(), None);
@@ -122,7 +125,8 @@ async fn zero_copy_load_empty_stream() {
 
 #[tokio::test]
 async fn zero_copy_multi_save_load() {
-    let es = ZeroCopyEventStore::new(InMemoryStore::new(), CounterBorrowingCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.zero_copy_repository(CounterBorrowingCodec, ());
 
     let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId(1));
     es.save(&mut agg1, &[CounterEvent { delta: 5 }])
