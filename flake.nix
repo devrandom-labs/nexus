@@ -26,7 +26,10 @@
 
         src = lib.fileset.toSource {
           root = unfilteredSrc;
-          fileset = craneLib.fileset.commonCargoSources unfilteredSrc;
+          fileset = lib.fileset.unions [
+            (craneLib.fileset.commonCargoSources unfilteredSrc)
+            (lib.fileset.fileFilter (f: f.hasExt "snap") unfilteredSrc)
+          ];
         };
 
         commonArgs = {
@@ -129,6 +132,7 @@
             cowsay
             tmux
             cargo-hakari
+            cargo-mutants
             tree
             cloc
             cargo-edit

@@ -2,18 +2,18 @@
 //!
 //! Now that the kernel IS the crate, architecture is enforced
 //! by Cargo's dependency graph. This test verifies the crate
-//! has no external runtime dependencies beyond smallvec and thiserror.
+//! has no external runtime dependencies beyond arrayvec and thiserror.
 
 #[test]
 fn nexus_has_minimal_dependencies() {
-    // If nexus compiles with only smallvec + thiserror,
+    // If nexus compiles with only arrayvec + thiserror,
     // the architecture is correct. This test documents that intent.
     // Any new dependency added to nexus Cargo.toml will require
     // deliberate consideration.
     let cargo_toml = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
     assert!(
-        cargo_toml.contains("smallvec"),
-        "nexus should depend on smallvec"
+        cargo_toml.contains("arrayvec"),
+        "nexus should depend on arrayvec"
     );
     assert!(
         cargo_toml.contains("thiserror"),

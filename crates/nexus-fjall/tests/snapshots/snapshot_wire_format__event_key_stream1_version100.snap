@@ -1,0 +1,6 @@
+---
+source: crates/nexus-fjall/tests/snapshot_wire_format.rs
+assertion_line: 70
+expression: hex_dump(&key_s1_v100)
+---
+00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 64

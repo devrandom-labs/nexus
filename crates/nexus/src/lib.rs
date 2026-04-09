@@ -8,9 +8,9 @@ mod version;
 
 pub use aggregate::{
     Aggregate, AggregateEntity, AggregateRoot, AggregateState, DEFAULT_MAX_REHYDRATION_EVENTS,
-    DEFAULT_MAX_UNCOMMITTED, EventOf,
+    EventOf, Handle,
 };
-pub use error::{ErrorId, KernelError};
+pub use error::KernelError;
 pub use event::DomainEvent;
 pub use events::Events;
 pub use id::Id;

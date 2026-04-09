@@ -32,64 +32,12 @@ use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::pending_envelope;
 
 // =============================================================================
-// 1. Unicode stream ID with emoji
-// =============================================================================
-
-#[test]
-fn unicode_stream_id() {
-    let stream_id = "user-\u{1F600}-stream"; // user-😀-stream
-    let envelope = pending_envelope(stream_id.to_owned())
-        .version(Version::from_persisted(1))
-        .event_type("UserCreated")
-        .payload(vec![1, 2, 3])
-        .build_without_metadata();
-
-    assert_eq!(envelope.stream_id(), stream_id);
-
-    // Round-trip through PersistedEnvelope
-    let owned_id = envelope.stream_id().to_owned();
-    let persisted = PersistedEnvelope::<()>::new(
-        &owned_id,
-        envelope.version(),
-        envelope.event_type(),
-        1,
-        envelope.payload(),
-        (),
-    );
-    assert_eq!(persisted.stream_id(), stream_id);
-}
-
-// =============================================================================
-// 2. RTL and zero-width joiner characters in stream ID
-// =============================================================================
-
-#[test]
-fn rtl_and_zero_width_joiner_stream_id() {
-    // Arabic text + ZWJ (U+200D) + more Arabic
-    let stream_id = "\u{0639}\u{0631}\u{0628}\u{064A}\u{200D}\u{0645}\u{0632}\u{064A}\u{062F}";
-    let envelope = pending_envelope(stream_id.to_owned())
-        .version(Version::from_persisted(1))
-        .event_type("Event")
-        .payload(vec![])
-        .build_without_metadata();
-
-    // Must be stored literally — no normalization or stripping
-    assert_eq!(envelope.stream_id(), stream_id);
-    assert!(
-        envelope.stream_id().contains('\u{200D}'),
-        "ZWJ character must not be stripped"
-    );
-    assert_eq!(envelope.stream_id().len(), stream_id.len());
-}
-
-// =============================================================================
-// 3. Maximum version envelope
+// 1. Maximum version envelope
 // =============================================================================
 
 #[test]
 fn max_version_envelope() {
-    let envelope = pending_envelope("stream".to_owned())
-        .version(Version::from_persisted(u64::MAX))
+    let envelope = pending_envelope(Version::new(u64::MAX).unwrap())
         .event_type("Event")
         .payload(vec![])
         .build_without_metadata();
@@ -97,9 +45,8 @@ fn max_version_envelope() {
     assert_eq!(envelope.version().as_u64(), u64::MAX);
 
     // Also verify via PersistedEnvelope
-    let persisted = PersistedEnvelope::<()>::new(
-        "stream",
-        Version::from_persisted(u64::MAX),
+    let persisted = PersistedEnvelope::<()>::new_unchecked(
+        Version::new(u64::MAX).unwrap(),
         "Event",
         1,
         &[],
@@ -109,13 +56,12 @@ fn max_version_envelope() {
 }
 
 // =============================================================================
-// 4. Empty payload
+// 2. Empty payload
 // =============================================================================
 
 #[test]
 fn empty_payload() {
-    let envelope = pending_envelope("stream".to_owned())
-        .version(Version::from_persisted(1))
+    let envelope = pending_envelope(Version::INITIAL)
         .event_type("EmptyEvent")
         .payload(vec![])
         .build_without_metadata();
@@ -125,15 +71,14 @@ fn empty_payload() {
 }
 
 // =============================================================================
-// 5. Large payload (1 MB)
+// 3. Large payload (1 MB)
 // =============================================================================
 
 #[test]
 fn large_payload() {
     let size = 1_000_000;
     let payload = vec![0xFF_u8; size];
-    let envelope = pending_envelope("stream".to_owned())
-        .version(Version::from_persisted(1))
+    let envelope = pending_envelope(Version::INITIAL)
         .event_type("LargeEvent")
         .payload(payload)
         .build_without_metadata();
@@ -146,44 +91,7 @@ fn large_payload() {
 }
 
 // =============================================================================
-// 6. Path traversal in stream ID
-// =============================================================================
-
-#[test]
-fn path_traversal_stream_id() {
-    let stream_id = "../../../etc/passwd";
-    let envelope = pending_envelope(stream_id.to_owned())
-        .version(Version::from_persisted(1))
-        .event_type("Event")
-        .payload(vec![42])
-        .build_without_metadata();
-
-    // Must be stored literally — no path interpretation
-    assert_eq!(envelope.stream_id(), stream_id);
-    assert!(envelope.stream_id().starts_with("../"));
-}
-
-// =============================================================================
-// 7. Null bytes in stream ID
-// =============================================================================
-
-#[test]
-fn null_bytes_in_stream_id() {
-    let stream_id = "stream\0injected";
-    let envelope = pending_envelope(stream_id.to_owned())
-        .version(Version::from_persisted(1))
-        .event_type("Event")
-        .payload(vec![1])
-        .build_without_metadata();
-
-    // Must be stored literally — null byte is not a terminator
-    assert_eq!(envelope.stream_id(), stream_id);
-    assert_eq!(envelope.stream_id().len(), "stream\0injected".len());
-    assert!(envelope.stream_id().contains('\0'));
-}
-
-// =============================================================================
-// 8. Exotic metadata with deeply nested generics
+// 4. Exotic metadata with deeply nested generics
 // =============================================================================
 
 #[test]
@@ -195,8 +103,7 @@ fn exotic_metadata_nested_generics() {
     let metadata: Vec<Option<HashMap<String, Vec<u8>>>> =
         vec![Some(inner_map), None, Some(HashMap::new())];
 
-    let envelope = pending_envelope("stream".to_owned())
-        .version(Version::from_persisted(1))
+    let envelope = pending_envelope(Version::INITIAL)
         .event_type("ExoticEvent")
         .payload(vec![0xAB])
         .build(metadata);
@@ -213,7 +120,7 @@ fn exotic_metadata_nested_generics() {
 }
 
 // =============================================================================
-// 9. Zero-sized metadata
+// 5. Zero-sized metadata
 // =============================================================================
 
 #[test]
@@ -221,8 +128,7 @@ fn zero_sized_metadata() {
     #[derive(Debug, Clone, PartialEq)]
     struct Zst;
 
-    let envelope = pending_envelope("stream".to_owned())
-        .version(Version::from_persisted(1))
+    let envelope = pending_envelope(Version::INITIAL)
         .event_type("ZstEvent")
         .payload(vec![])
         .build(Zst);
@@ -232,7 +138,7 @@ fn zero_sized_metadata() {
 }
 
 // =============================================================================
-// 10. Persisted envelope with all 256 byte values
+// 6. Persisted envelope with all 256 byte values
 // =============================================================================
 
 #[test]
@@ -240,14 +146,8 @@ fn persisted_envelope_binary_payload() {
     let payload: Vec<u8> = (0..=255).collect();
     assert_eq!(payload.len(), 256);
 
-    let persisted = PersistedEnvelope::<()>::new(
-        "binary-stream",
-        Version::from_persisted(1),
-        "BinaryEvent",
-        1,
-        &payload,
-        (),
-    );
+    let persisted =
+        PersistedEnvelope::<()>::new_unchecked(Version::INITIAL, "BinaryEvent", 1, &payload, ());
 
     assert_eq!(persisted.payload().len(), 256);
     for (i, &byte) in persisted.payload().iter().enumerate() {

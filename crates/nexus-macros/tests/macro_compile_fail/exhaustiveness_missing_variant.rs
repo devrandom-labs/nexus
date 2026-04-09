@@ -11,7 +11,7 @@ enum OrderEvent {
     Cancelled, // new variant added
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct OrderState {
     status: String,
 }
@@ -27,10 +27,6 @@ impl AggregateState for OrderState {
             // Missing: OrderEvent::Cancelled — MUST fail
         }
         self
-    }
-
-    fn name(&self) -> &'static str {
-        "Order"
     }
 }
 

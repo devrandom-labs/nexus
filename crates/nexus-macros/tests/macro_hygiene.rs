@@ -24,7 +24,7 @@ impl DomainEvent for HEvent {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct HState {
     count: u64,
 }
@@ -36,9 +36,6 @@ impl AggregateState for HState {
     fn apply(mut self, _: &HEvent) -> Self {
         self.count += 1;
         self
-    }
-    fn name(&self) -> &'static str {
-        "H"
     }
 }
 
@@ -57,7 +54,7 @@ struct AggWithRoot;
 fn user_variable_named_root_no_conflict() {
     let root = "I am a local variable named root";
     let mut agg = AggWithRoot::new(HId(1));
-    agg.apply(HEvent::A);
+    agg.root_mut().apply_event(&HEvent::A);
     assert_eq!(agg.state().count, 1);
     assert_eq!(root, "I am a local variable named root");
 }
@@ -77,16 +74,12 @@ fn two_aggregates_same_module_no_interference() {
     let mut first = FirstAggregate::new(HId(1));
     let mut second = SecondAggregate::new(HId(2));
 
-    first.apply(HEvent::A);
-    first.apply(HEvent::A);
-    second.apply(HEvent::A);
+    first.root_mut().apply_event(&HEvent::A);
+    first.root_mut().apply_event(&HEvent::A);
+    second.root_mut().apply_event(&HEvent::A);
 
     assert_eq!(first.state().count, 2);
     assert_eq!(second.state().count, 1);
-
-    // They have independent versions
-    assert_eq!(first.current_version(), Version::from_persisted(2));
-    assert_eq!(second.current_version(), Version::from_persisted(1));
 }
 
 // =============================================================================
@@ -106,7 +99,7 @@ fn aggregate_inside_function_body() {
         }
     }
 
-    #[derive(Default, Debug)]
+    #[derive(Default, Debug, Clone)]
     struct LocalState {
         ticks: u32,
     }
@@ -119,9 +112,6 @@ fn aggregate_inside_function_body() {
             self.ticks += 1;
             self
         }
-        fn name(&self) -> &'static str {
-            "Local"
-        }
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -132,9 +122,9 @@ fn aggregate_inside_function_body() {
     struct LocalAggregate;
 
     let mut agg = LocalAggregate::new(HId(1));
-    agg.apply(LocalEvent::Tick);
-    agg.apply(LocalEvent::Tick);
-    agg.apply(LocalEvent::Tick);
+    agg.root_mut().apply_event(&LocalEvent::Tick);
+    agg.root_mut().apply_event(&LocalEvent::Tick);
+    agg.root_mut().apply_event(&LocalEvent::Tick);
     assert_eq!(agg.state().ticks, 3);
 }
 
@@ -164,7 +154,7 @@ mod user_has_own_aggregate_trait {
     #[test]
     fn user_aggregate_trait_no_ambiguity() {
         let mut agg = MyAgg::new(HId(1));
-        agg.apply(HEvent::A); // from nexus::AggregateEntity
+        agg.root_mut().apply_event(&HEvent::A); // from nexus::AggregateEntity
         assert_eq!(agg.custom_method(), "custom"); // from user's Aggregate
         assert_eq!(agg.state().count, 1); // from nexus::AggregateEntity
     }
@@ -192,7 +182,7 @@ mod user_has_own_aggregate_root_type {
             data: "user".into(),
         };
         let mut agg = MyAgg::new(HId(1));
-        agg.apply(HEvent::A);
+        agg.root_mut().apply_event(&HEvent::A);
 
         assert_eq!(user_root.data, "user");
         assert_eq!(agg.state().count, 1);
@@ -222,11 +212,12 @@ struct FnConflictAgg;
 #[test]
 fn user_functions_named_like_trait_methods() {
     let mut agg = FnConflictAgg::new(HId(1));
-    agg.apply(HEvent::A);
+    agg.root_mut().apply_event(&HEvent::A);
 
     // Trait methods on agg
     assert_eq!(agg.state().count, 1);
-    assert_eq!(agg.version(), Version::INITIAL);
+    // Version is None because apply_event does not advance version
+    assert_eq!(agg.version(), None);
     assert_eq!(agg.id(), &HId(1));
 
     // Free functions still accessible

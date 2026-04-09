@@ -1,4 +1,4 @@
-//! Tests the newtype aggregate pattern — what #[derive(Aggregate)] will generate.
+//! Tests the newtype aggregate pattern — what `#[nexus::aggregate]` will generate.
 //! This tests the design manually before writing the macro.
 
 use nexus::*;
@@ -37,7 +37,7 @@ impl DomainEvent for UserEvent {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct UserState {
     name: String,
     active: bool,
@@ -54,9 +54,6 @@ impl AggregateState for UserState {
         }
         self
     }
-    fn name(&self) -> &'static str {
-        "User"
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -67,7 +64,7 @@ enum UserError {
     AlreadyActive,
 }
 
-// --- This is what #[derive(Aggregate)] would generate ---
+// --- This is what #[nexus::aggregate] would generate ---
 
 struct UserAggregate(AggregateRoot<Self>);
 
@@ -92,23 +89,28 @@ impl UserAggregate {
     }
 }
 
-// --- Business logic — the user writes this ---
+// --- Commands ---
+struct CreateUser {
+    name: String,
+}
+struct ActivateUser;
 
-impl UserAggregate {
-    fn create(&mut self, name: String) -> Result<(), UserError> {
+// --- Command handlers (decide pattern) — the user writes this ---
+impl Handle<CreateUser> for UserAggregate {
+    fn handle(&self, cmd: CreateUser) -> Result<Events<UserEvent>, UserError> {
         if !self.state().name.is_empty() {
             return Err(UserError::AlreadyExists);
         }
-        self.apply(UserEvent::Created(UserCreated { name }));
-        Ok(())
+        Ok(events![UserEvent::Created(UserCreated { name: cmd.name })])
     }
+}
 
-    fn activate(&mut self) -> Result<(), UserError> {
+impl Handle<ActivateUser> for UserAggregate {
+    fn handle(&self, _cmd: ActivateUser) -> Result<Events<UserEvent>, UserError> {
         if self.state().active {
             return Err(UserError::AlreadyActive);
         }
-        self.apply(UserEvent::Activated(UserActivated));
-        Ok(())
+        Ok(events![UserEvent::Activated(UserActivated)])
     }
 }
 
@@ -117,58 +119,87 @@ impl UserAggregate {
 #[test]
 fn newtype_aggregate_lifecycle() {
     let mut user = UserAggregate::new(UserId(1));
-    user.create("Alice".into()).unwrap();
-    user.activate().unwrap();
+
+    let events = user
+        .handle(CreateUser {
+            name: "Alice".into(),
+        })
+        .unwrap();
+    let v1 = Version::new(1).unwrap();
+    user.root_mut().advance_version(v1);
+    user.root_mut().apply_events(&events);
+
+    let events = user.handle(ActivateUser).unwrap();
+    let v2 = Version::new(2).unwrap();
+    user.root_mut().advance_version(v2);
+    user.root_mut().apply_events(&events);
 
     assert_eq!(user.state().name, "Alice");
     assert!(user.state().active);
-    assert_eq!(user.current_version(), Version::from_persisted(2));
-
-    let events = user.take_uncommitted_events();
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].version(), Version::from_persisted(1));
-    assert_eq!(events[1].version(), Version::from_persisted(2));
+    assert_eq!(user.version(), Some(v2));
 }
 
 #[test]
 fn newtype_aggregate_invariant_enforcement() {
     let mut user = UserAggregate::new(UserId(2));
-    user.create("Bob".into()).unwrap();
+
+    let events = user.handle(CreateUser { name: "Bob".into() }).unwrap();
+    user.root_mut().advance_version(Version::new(1).unwrap());
+    user.root_mut().apply_events(&events);
 
     assert!(matches!(
-        user.create("Charlie".into()),
+        user.handle(CreateUser {
+            name: "Charlie".into()
+        }),
         Err(UserError::AlreadyExists)
     ));
 
-    user.activate().unwrap();
-    assert!(matches!(user.activate(), Err(UserError::AlreadyActive)));
+    let events = user.handle(ActivateUser).unwrap();
+    user.root_mut().advance_version(Version::new(2).unwrap());
+    user.root_mut().apply_events(&events);
+
+    assert!(matches!(
+        user.handle(ActivateUser),
+        Err(UserError::AlreadyActive)
+    ));
 }
 
 #[test]
 fn newtype_aggregate_rehydrate() {
     let mut user = UserAggregate::new(UserId(3));
-    user.root_mut()
-        .replay(
-            Version::from_persisted(1),
-            &UserEvent::Created(UserCreated {
-                name: "Dave".into(),
-            }),
-        )
-        .unwrap();
-    user.root_mut()
-        .replay(
-            Version::from_persisted(2),
-            &UserEvent::Activated(UserActivated),
-        )
-        .unwrap();
+    user.replay(
+        Version::new(1).unwrap(),
+        &UserEvent::Created(UserCreated {
+            name: "Dave".into(),
+        }),
+    )
+    .unwrap();
+    user.replay(
+        Version::new(2).unwrap(),
+        &UserEvent::Activated(UserActivated),
+    )
+    .unwrap();
 
     assert_eq!(user.state().name, "Dave");
     assert!(user.state().active);
-    assert_eq!(user.version(), Version::from_persisted(2));
+    assert_eq!(user.version(), Some(Version::new(2).unwrap()));
 }
 
 #[test]
 fn newtype_aggregate_id_accessible() {
     let user = UserAggregate::new(UserId(42));
     assert_eq!(user.id(), &UserId(42));
+}
+
+#[test]
+fn newtype_aggregate_delegates_state() {
+    let user = UserAggregate::new(UserId(1));
+    assert_eq!(user.state().name, "");
+    assert!(!user.state().active);
+}
+
+#[test]
+fn newtype_aggregate_fresh_version_is_none() {
+    let user = UserAggregate::new(UserId(1));
+    assert_eq!(user.version(), None);
 }

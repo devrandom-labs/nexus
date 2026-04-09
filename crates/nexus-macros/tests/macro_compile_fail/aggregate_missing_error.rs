@@ -7,13 +7,12 @@ enum Ev { A }
 impl Message for Ev {}
 impl DomainEvent for Ev { fn name(&self) -> &'static str { "A" } }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct St;
 impl AggregateState for St {
     type Event = Ev;
     fn initial() -> Self { Self::default() }
     fn apply(self, _: &Ev) -> Self { self }
-    fn name(&self) -> &'static str { "S" }
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

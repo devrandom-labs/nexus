@@ -1,0 +1,5 @@
+error: duplicate transform for event 'OrderCreated' at source version 1
+  --> tests/macro_compile_fail/transforms_duplicate.rs:22:8
+   |
+22 |     fn v1_to_v2_b(payload: &[u8]) -> Result<Vec<u8>, MyError> {
+   |        ^^^^^^^^^^

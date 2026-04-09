@@ -25,15 +25,30 @@
     reason = "proptest macro generates code that triggers this lint"
 )]
 
+use std::fmt;
+
 use nexus::Version;
+use nexus_store::Upcaster;
 use nexus_store::envelope::PendingEnvelope;
 use nexus_store::pending_envelope;
-use nexus_store::raw::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::store::EventStream;
+use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::upcaster::EventUpcaster;
 
 use proptest::prelude::*;
+
+// ============================================================================
+// Test ID type
+// ============================================================================
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct TestId(String);
+impl fmt::Display for TestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl nexus::Id for TestId {}
 
 // ============================================================================
 // Helper: build envelopes from payloads
@@ -45,14 +60,13 @@ fn leak_event_type(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn build_envelopes(stream_id: &str, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
     payloads
         .iter()
         .enumerate()
         .map(|(i, p)| {
             let version_num = u64::try_from(i).unwrap_or(u64::MAX) + 1;
-            pending_envelope(stream_id.to_owned())
-                .version(Version::from_persisted(version_num))
+            pending_envelope(Version::new(version_num).unwrap())
                 .event_type(leak_event_type("TestEvent"))
                 .payload(p.clone())
                 .build_without_metadata()
@@ -64,8 +78,10 @@ fn build_envelopes(stream_id: &str, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope
 // Property-based tests
 // ============================================================================
 
-fn stream_id_strategy() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[a-z][a-z0-9-]{0,19}").unwrap()
+fn stream_id_strategy() -> impl Strategy<Value = TestId> {
+    prop::string::string_regex("[a-z][a-z0-9-]{0,19}")
+        .unwrap()
+        .prop_map(TestId)
 }
 
 fn payloads_strategy() -> impl Strategy<Value = Vec<Vec<u8>>> {
@@ -85,10 +101,10 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = InMemoryStore::new();
-            let envelopes = build_envelopes(&stream_id, &payloads);
+            let envelopes = build_envelopes(&payloads);
 
             store
-                .append(&stream_id, Version::INITIAL, &envelopes)
+                .append(&stream_id, None, &envelopes)
                 .await
                 .unwrap();
 
@@ -122,10 +138,10 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
             let payloads: Vec<Vec<u8>> = (0..n).map(|i| vec![u8::try_from(i % 256).unwrap_or(0)]).collect();
-            let envelopes = build_envelopes(&stream_id, &payloads);
+            let envelopes = build_envelopes(&payloads);
 
             store
-                .append(&stream_id, Version::INITIAL, &envelopes)
+                .append(&stream_id, None, &envelopes)
                 .await
                 .unwrap();
 
@@ -166,15 +182,15 @@ proptest! {
         rt.block_on(async {
             let store = InMemoryStore::new();
 
-            let envelopes_a = build_envelopes(&id_a, &payloads_a);
-            let envelopes_b = build_envelopes(&id_b, &payloads_b);
+            let envelopes_a = build_envelopes(&payloads_a);
+            let envelopes_b = build_envelopes(&payloads_b);
 
             store
-                .append(&id_a, Version::INITIAL, &envelopes_a)
+                .append(&id_a, None, &envelopes_a)
                 .await
                 .unwrap();
             store
-                .append(&id_b, Version::INITIAL, &envelopes_b)
+                .append(&id_b, None, &envelopes_b)
                 .await
                 .unwrap();
 
@@ -234,58 +250,42 @@ proptest! {
         })?;
     }
 
-    /// Chaining two upcasters (V1->V2 and V2->V3) produces final version 3
-    /// with payload preserved.
+    /// Upcaster that walks V1->V2->V3 produces final version 3 with payload preserved.
     #[test]
-    fn upcaster_chain_composition(
+    fn upcaster_composition(
         payload in prop::collection::vec(any::<u8>(), 0..256),
     ) {
-        struct V1ToV2;
-        impl EventUpcaster for V1ToV2 {
-            fn can_upcast(&self, _: &str, v: u32) -> bool {
-                v == 1
+        struct V1ToV3Upcaster;
+        impl Upcaster for V1ToV3Upcaster {
+            fn apply<'a>(&self, mut morsel: nexus_store::upcasting::EventMorsel<'a>) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError> {
+                loop {
+                    morsel = match (morsel.event_type(), morsel.schema_version()) {
+                        ("E", v) if v == Version::INITIAL => nexus_store::upcasting::EventMorsel::new("E", Version::new(2).unwrap(), morsel.payload().to_vec()),
+                        ("E", v) if v == Version::new(2).unwrap() => nexus_store::upcasting::EventMorsel::new("E", Version::new(3).unwrap(), morsel.payload().to_vec()),
+                        _ => break,
+                    };
+                }
+                Ok(morsel)
             }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("E".into(), 2, p.to_vec())
-            }
-        }
-
-        struct V2ToV3;
-        impl EventUpcaster for V2ToV3 {
-            fn can_upcast(&self, _: &str, v: u32) -> bool {
-                v == 2
-            }
-            fn upcast(&self, _: &str, _: u32, p: &[u8]) -> (String, u32, Vec<u8>) {
-                ("E".into(), 3, p.to_vec())
-            }
-        }
-
-        let chain: Vec<Box<dyn EventUpcaster>> =
-            vec![Box::new(V1ToV2), Box::new(V2ToV3)];
-
-        let event_type = "E";
-        let mut current_version: u32 = 1;
-        let mut current_payload = payload.clone();
-        let mut current_event_type = event_type.to_owned();
-
-        for upcaster in &chain {
-            if upcaster.can_upcast(&current_event_type, current_version) {
-                let (new_type, new_version, new_payload) =
-                    upcaster.upcast(&current_event_type, current_version, &current_payload);
-                current_event_type = new_type;
-                current_version = new_version;
-                current_payload = new_payload;
+            fn current_version(&self, event_type: &str) -> Option<Version> {
+                match event_type {
+                    "E" => Some(Version::new(3).unwrap()),
+                    _ => None,
+                }
             }
         }
 
-        prop_assert_eq!(current_version, 3, "final version should be 3");
+        let morsel = nexus_store::EventMorsel::borrowed("E", Version::INITIAL, &payload);
+        let result = V1ToV3Upcaster.apply(morsel).unwrap();
+
+        prop_assert_eq!(result.schema_version(), Version::new(3).unwrap(), "final version should be 3");
         prop_assert_eq!(
-            current_event_type, "E",
+            result.event_type(), "E",
             "event type should be preserved"
         );
         prop_assert_eq!(
-            current_payload, payload,
-            "payload should be preserved through upcaster chain"
+            result.payload(), payload.as_slice(),
+            "payload should be preserved through upcaster"
         );
     }
 }

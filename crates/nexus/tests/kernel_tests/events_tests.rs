@@ -23,29 +23,29 @@ impl DomainEvent for TestEvent {
 
 #[test]
 fn versioned_event_holds_version_and_event() {
-    let ve =
-        VersionedEvent::from_persisted(Version::from_persisted(1), TestEvent::Created(Created));
-    assert_eq!(ve.version(), Version::from_persisted(1));
+    let v1 = Version::new(1).unwrap();
+    let ve = VersionedEvent::new(v1, TestEvent::Created(Created));
+    assert_eq!(ve.version(), v1);
     assert_eq!(ve.event(), &TestEvent::Created(Created));
 }
 
 #[test]
 fn events_guarantees_non_empty() {
-    let events = Events::new(TestEvent::Created(Created));
+    let events: Events<_, 0> = Events::new(TestEvent::Created(Created));
     assert_eq!(events.len(), 1);
     assert!(!events.is_empty());
 }
 
 #[test]
 fn events_add_increases_len() {
-    let mut events = Events::new(TestEvent::Created(Created));
+    let mut events: Events<_, 1> = Events::new(TestEvent::Created(Created));
     events.add(TestEvent::Activated(Activated));
     assert_eq!(events.len(), 2);
 }
 
 #[test]
 fn events_into_iter() {
-    let mut events = Events::new(TestEvent::Created(Created));
+    let mut events: Events<_, 1> = Events::new(TestEvent::Created(Created));
     events.add(TestEvent::Activated(Activated));
     let collected: Vec<_> = events.into_iter().collect();
     assert_eq!(collected.len(), 2);
@@ -55,18 +55,26 @@ fn events_into_iter() {
 
 #[test]
 fn events_from_single() {
-    let events = Events::from(TestEvent::Created(Created));
+    let events: Events<_, 0> = Events::from(TestEvent::Created(Created));
     assert_eq!(events.len(), 1);
 }
 
 #[test]
 fn events_macro_single() {
-    let events = nexus::events![TestEvent::Created(Created)];
+    let events: Events<_, 0> = nexus::events![TestEvent::Created(Created)];
     assert_eq!(events.len(), 1);
 }
 
 #[test]
 fn events_macro_multiple() {
-    let events = nexus::events![TestEvent::Created(Created), TestEvent::Activated(Activated),];
+    let events: Events<_, 1> =
+        nexus::events![TestEvent::Created(Created), TestEvent::Activated(Activated),];
     assert_eq!(events.len(), 2);
+}
+
+#[test]
+#[should_panic(expected = "Events capacity exceeded")]
+fn add_panics_on_capacity_overflow() {
+    let mut events: Events<_, 0> = Events::new(TestEvent::Created(Created));
+    events.add(TestEvent::Activated(Activated)); // N=0, no room for additional events
 }

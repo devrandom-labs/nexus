@@ -13,7 +13,6 @@
 
 #![cfg(not(miri))]
 
-use nexus::AggregateRoot;
 use nexus::*;
 use proptest::prelude::*;
 use std::fmt;
@@ -65,9 +64,6 @@ impl AggregateState for CountState {
         }
         self
     }
-    fn name(&self) -> &'static str {
-        "Counter"
-    }
 }
 
 #[derive(Debug)]
@@ -94,15 +90,26 @@ fn arb_event() -> impl Strategy<Value = CountEvent> {
     ]
 }
 
-/// Generate a valid versioned event sequence (contiguous versions starting at 1)
-fn arb_versioned_events(max_len: usize) -> impl Strategy<Value = Vec<(Version, CountEvent)>> {
-    proptest::collection::vec(arb_event(), 0..max_len).prop_map(|events| {
-        events
-            .into_iter()
-            .enumerate()
-            .map(|(i, event)| (Version::from_persisted((i + 1) as u64), event))
-            .collect()
-    })
+/// Helper: replay events into a fresh aggregate, returns the aggregate.
+fn replay_events(events: &[CountEvent]) -> AggregateRoot<CountAgg> {
+    let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+    for (i, e) in events.iter().enumerate() {
+        let v = Version::new((i + 1) as u64).unwrap();
+        agg.replay(v, e).unwrap();
+    }
+    agg
+}
+
+/// Helper: apply events via `apply_events` (simulating post-persistence state update).
+fn apply_events_to(events: &[CountEvent]) -> AggregateRoot<CountAgg> {
+    let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+    for (i, e) in events.iter().enumerate() {
+        let v = Version::new((i + 1) as u64).unwrap();
+        let batch: Events<_, 0> = Events::new(e.clone());
+        agg.advance_version(v);
+        agg.apply_events(&batch);
+    }
+    agg
 }
 
 // =============================================================================
@@ -114,125 +121,61 @@ proptest! {
     ///
     /// Replaying the same event sequence twice must produce identical state.
     /// This is fundamental to event sourcing — state is a pure function of events.
-    /// We test by replaying the same raw events via two different aggregate instances.
     #[test]
     fn prop_replay_is_deterministic(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
-        let replay_all = |events: &[CountEvent]| -> AggregateRoot<CountAgg> {
-            let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
-            for (i, e) in events.iter().enumerate() {
-                agg.replay(Version::from_persisted((i + 1) as u64), e).unwrap();
-            }
-            agg
-        };
-
-        let agg1 = replay_all(&raw_events);
-        let agg2 = replay_all(&raw_events);
+        let agg1 = replay_events(&raw_events);
+        let agg2 = replay_events(&raw_events);
 
         prop_assert_eq!(agg1.state(), agg2.state());
         prop_assert_eq!(agg1.version(), agg2.version());
     }
 
-    /// Property 2: Version consistency
+    /// Property 2: Replay version equals event count
     ///
-    /// After applying N events, current_version must be INITIAL + N.
-    /// Version is a strict counter — no gaps, no jumps.
+    /// After replaying N events, version must be Some(N).
+    /// After replaying 0 events, version must be None.
     #[test]
-    fn prop_version_equals_event_count(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+    fn prop_replay_version_equals_event_count(events in proptest::collection::vec(arb_event(), 0..50)) {
+        let agg = replay_events(&events);
         let n = events.len() as u64;
 
-        for event in events {
-            agg.apply(event);
+        if n == 0 {
+            prop_assert_eq!(agg.version(), None);
+        } else {
+            prop_assert_eq!(agg.version(), Version::new(n));
         }
-
-        prop_assert_eq!(agg.current_version(), Version::from_persisted(n));
     }
 
-    /// Property 3: Uncommitted count matches version delta
+    /// Property 3: Replay-apply_events equivalence
     ///
-    /// current_version() - version() == number of uncommitted events.
-    /// This is the invariant that ties version tracking to event tracking.
+    /// Replaying events and applying them via apply_events must produce
+    /// the same state. Both paths are pure state transitions.
     #[test]
-    fn prop_uncommitted_count_matches_version_delta(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
-        for event in events {
-            agg.apply(event);
-        }
+    fn prop_replay_equals_apply_events(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
+        let replayed = replay_events(&raw_events);
+        let applied = apply_events_to(&raw_events);
 
-        let uncommitted = agg.take_uncommitted_events();
-        let delta = agg.current_version().as_u64() - agg.version().as_u64();
-        // After take, delta should be 0 (all events accounted for)
-        prop_assert_eq!(delta, 0);
-        // And version should equal what current_version was before take
-        prop_assert_eq!(agg.version().as_u64(), uncommitted.len() as u64);
+        prop_assert_eq!(replayed.state(), applied.state());
     }
 
-    /// Property 4: Rehydrate-apply equivalence
-    ///
-    /// Replaying versioned events produces the same state as
-    /// creating a new aggregate and applying the raw events.
-    /// This proves replay is equivalent to sequential apply.
-    #[test]
-    fn prop_rehydrate_equals_sequential_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
-        // Path A: new() + replay()
-        let mut agg_replayed = AggregateRoot::<CountAgg>::new(PId(1));
-        for (i, e) in raw_events.iter().enumerate() {
-            agg_replayed.replay(Version::from_persisted((i + 1) as u64), e).unwrap();
-        }
-
-        // Path B: new() + apply()
-        let mut agg_applied = AggregateRoot::<CountAgg>::new(PId(1));
-        for event in &raw_events {
-            agg_applied.apply(event.clone());
-        }
-
-        prop_assert_eq!(agg_replayed.state(), agg_applied.state());
-    }
-
-    /// Property 5: Version sequence integrity
-    ///
-    /// Every event in take_uncommitted_events() has strictly increasing
-    /// version numbers with no gaps.
-    #[test]
-    fn prop_uncommitted_versions_are_contiguous(events in proptest::collection::vec(arb_event(), 1..50)) {
-        let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
-        for event in events {
-            agg.apply(event);
-        }
-
-        let uncommitted = agg.take_uncommitted_events();
-        for (i, ve) in uncommitted.iter().enumerate() {
-            let expected = Version::from_persisted((i + 1) as u64);
-            prop_assert_eq!(
-                ve.version(), expected,
-                "Event at index {} has version {:?}, expected {:?}",
-                i, ve.version(), expected,
-            );
-        }
-    }
-
-    /// Property 6: Version gap rejection
+    /// Property 4: Version gap rejection
     ///
     /// replay must reject ANY sequence with a version gap.
     /// We generate a valid sequence then corrupt one version.
     #[test]
     fn prop_rejects_any_version_gap(
-        events in arb_versioned_events(50).prop_filter(
-            "need at least 2 events to create a gap",
-            |events| events.len() >= 2,
-        ),
+        events in proptest::collection::vec(arb_event(), 2..50),
         corrupt_idx in 1..50usize,
     ) {
         let corrupt_idx = corrupt_idx % (events.len() - 1) + 1; // ensure valid index > 0
-        let mut corrupted = events;
-        // Add 1 to create a gap (skip a version)
-        let (v, ref e) = corrupted[corrupt_idx];
-        corrupted[corrupt_idx] = (Version::from_persisted(v.as_u64() + 1), e.clone());
 
         let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
         let mut found_error = false;
-        for (version, event) in &corrupted {
-            if agg.replay(*version, event).is_err() {
+        for (i, event) in events.iter().enumerate() {
+            // At corrupt_idx, skip a version to create a gap
+            let v = if i >= corrupt_idx { i + 2 } else { i + 1 };
+            let version = Version::new(v as u64).unwrap();
+            if agg.replay(version, event).is_err() {
                 found_error = true;
                 break;
             }
@@ -240,81 +183,81 @@ proptest! {
         prop_assert!(found_error, "Should reject sequence with version gap");
     }
 
-    /// Property 7: Take is idempotent
+    /// Property 5: State is a pure function of events
     ///
-    /// Calling take_uncommitted_events twice in a row:
-    /// first call returns all events, second returns empty.
+    /// Replaying the same events in two separate aggregates must converge.
+    /// Split at any midpoint and verify both halves combined equal the whole.
     #[test]
-    fn prop_take_twice_second_is_empty(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
-        for event in events {
-            agg.apply(event);
-        }
+    fn prop_state_is_pure_function_of_events(
+        events in proptest::collection::vec(arb_event(), 1..50),
+        split_pct in 0..100u32,
+    ) {
+        // Full replay
+        let full = replay_events(&events);
 
-        let _first = agg.take_uncommitted_events();
-        let second = agg.take_uncommitted_events();
-        prop_assert!(second.is_empty(), "Second take should return empty");
-    }
-
-    /// Property 8: State is a pure function of events
-    ///
-    /// Building state from the same events via different paths
-    /// (apply vs replay vs apply-take-replay) must all converge.
-    /// This proves apply() behaves as a pure state transition.
-    #[test]
-    fn prop_state_is_pure_function_of_events(events in proptest::collection::vec(arb_event(), 1..50)) {
-        // Path A: apply all
-        let mut a = AggregateRoot::<CountAgg>::new(PId(1));
-        for e in &events { a.apply(e.clone()); }
-
-        // Path B: replay all
-        let mut b = AggregateRoot::<CountAgg>::new(PId(1));
-        for (i, e) in events.iter().enumerate() {
-            b.replay(Version::from_persisted((i + 1) as u64), e).unwrap();
-        }
-
-        // Path C: apply first half, take, then replay second half
-        let mid = events.len() / 2;
-        let mut c = AggregateRoot::<CountAgg>::new(PId(1));
-        for e in &events[..mid] { c.apply(e.clone()); }
-        let _ = c.take_uncommitted_events();
+        // Split: replay first half, then continue with second half
+        let mid = (events.len() * split_pct as usize) / 100;
+        let mut split = replay_events(&events[..mid]);
         for (i, e) in events[mid..].iter().enumerate() {
             let v = (mid + i + 1) as u64;
-            c.replay(Version::from_persisted(v), e).unwrap();
+            split.replay(Version::new(v).unwrap(), e).unwrap();
         }
 
-        prop_assert_eq!(a.state(), b.state(), "apply vs replay diverged");
-        prop_assert_eq!(b.state(), c.state(), "replay vs apply-take-replay diverged");
+        prop_assert_eq!(full.state(), split.state(), "full vs split diverged");
+        prop_assert_eq!(full.version(), split.version(), "full vs split version diverged");
     }
 
-    /// Property 9: Version continuity across take cycles
+    /// Property 6: Replay duplicate version rejection
     ///
-    /// After take + more events, new event versions continue from
-    /// where the previous batch ended. No version reuse.
-    #[allow(clippy::expect_used, reason = "property test needs unwrap")]
+    /// After replaying N events, replaying version N again must fail.
     #[test]
-    fn prop_version_continuity_across_takes(
-        batch1 in proptest::collection::vec(arb_event(), 1..20),
-        batch2 in proptest::collection::vec(arb_event(), 1..20),
-    ) {
+    fn prop_replay_rejects_duplicate_version(events in proptest::collection::vec(arb_event(), 1..50)) {
+        let mut agg = replay_events(&events);
+        let last_version = agg.version().unwrap();
+
+        let result = agg.replay(last_version, &CountEvent::Incremented);
+        prop_assert!(result.is_err(), "Should reject duplicate version");
+    }
+
+    /// Property 7: Version::new roundtrip
+    ///
+    /// For any non-zero u64, Version::new(v).unwrap().as_u64() == v.
+    /// For zero, Version::new returns None.
+    #[test]
+    fn prop_version_new_roundtrip(v in any::<u64>()) {
+        let version = Version::new(v);
+        if v == 0 {
+            prop_assert!(version.is_none(), "Version::new(0) must return None");
+        } else {
+            let version = version.unwrap();
+            prop_assert_eq!(version.as_u64(), v, "Version::new/as_u64 roundtrip failed");
+        }
+    }
+
+    /// Property 8: Version::next is strictly monotonic
+    ///
+    /// For any version v < MAX, v.next() > v.
+    #[test]
+    fn prop_version_next_is_monotonic(v in 1..u64::MAX) {
+        let version = Version::new(v).unwrap();
+        let next = version.next().unwrap();
+        prop_assert!(next > version, "next() must be strictly greater");
+        prop_assert_eq!(next.as_u64(), v + 1, "next() must increment by exactly 1");
+    }
+
+    /// Property 9: advance_version + apply_events is idempotent on version
+    ///
+    /// Calling advance_version with the same version is a no-op on version.
+    #[test]
+    fn prop_advance_version_is_idempotent(v in 1..=u64::MAX) {
         let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+        let version = Version::new(v).unwrap();
 
-        for event in &batch1 {
-            agg.apply(event.clone());
-        }
-        let taken1 = agg.take_uncommitted_events();
-        let last_v1 = taken1.last().unwrap().version();
+        agg.advance_version(version);
+        prop_assert_eq!(agg.version(), Some(version));
 
-        for event in &batch2 {
-            agg.apply(event.clone());
-        }
-        let taken2 = agg.take_uncommitted_events();
-        let first_v2 = taken2.first().unwrap().version();
-
-        prop_assert_eq!(
-            first_v2,
-            last_v1.next(),
-            "Second batch must continue from first batch's last version"
-        );
+        // Calling again with the same version doesn't change it
+        agg.advance_version(version);
+        prop_assert_eq!(agg.version(), Some(version));
     }
 }

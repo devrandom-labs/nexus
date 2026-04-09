@@ -10,13 +10,12 @@ impl DomainEvent for MyEvent {
     fn name(&self) -> &'static str { "A" }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct MyState;
 impl AggregateState for MyState {
     type Event = MyEvent;
     fn initial() -> Self { Self::default() }
     fn apply(self, _: &MyEvent) -> Self { self }
-    fn name(&self) -> &'static str { "My" }
 }
 
 // This error does NOT implement std::error::Error

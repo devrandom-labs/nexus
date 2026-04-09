@@ -3,13 +3,16 @@
 #![allow(clippy::unwrap_used, reason = "tests")]
 #![allow(clippy::expect_used, reason = "tests")]
 
+use std::fmt;
+
 use nexus::*;
 use nexus_store::Codec;
-use nexus_store::event_store::EventStore;
-use nexus_store::repository::Repository;
+use nexus_store::Store;
+use nexus_store::UpcastError;
+use nexus_store::Upcaster;
+use nexus_store::store::Repository;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::upcaster::EventUpcaster;
-use std::fmt;
+use nexus_store::upcasting::EventMorsel;
 
 // -- Test domain --
 
@@ -28,7 +31,7 @@ impl DomainEvent for TodoEvent {
     }
 }
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct TodoState {
     title: String,
     done: bool,
@@ -44,9 +47,6 @@ impl AggregateState for TodoState {
             TodoEvent::Done => self.done = true,
         }
         self
-    }
-    fn name(&self) -> &'static str {
-        "Todo"
     }
 }
 
@@ -107,108 +107,127 @@ impl Codec<TodoEvent> for TestCodec {
 
 #[tokio::test]
 async fn save_and_load_roundtrip() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
-    let sid = "todo-stream-1";
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository().codec(TestCodec).build();
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-    agg.apply(TodoEvent::Created("Buy milk".into()));
-    agg.apply(TodoEvent::Done);
-    es.save(sid, &mut agg).await.unwrap();
+    let events = [TodoEvent::Created("Buy milk".into()), TodoEvent::Done];
+    es.save(&mut agg, &events).await.unwrap();
 
-    let loaded: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
     assert_eq!(loaded.state().title, "Buy milk");
     assert!(loaded.state().done);
-    assert_eq!(loaded.version(), Version::from_persisted(2));
+    assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
 }
 
 #[tokio::test]
 async fn load_empty_stream_returns_fresh_aggregate() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
-    let loaded: AggregateRoot<TodoAggregate> = es.load("nonexistent", TodoId(1)).await.unwrap();
-    assert_eq!(loaded.version(), Version::INITIAL);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository().codec(TestCodec).build();
+    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    assert_eq!(loaded.version(), None);
     assert_eq!(loaded.state(), &TodoState::default());
 }
 
 #[tokio::test]
 async fn save_no_uncommitted_events_is_noop() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository().codec(TestCodec).build();
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-    es.save("s1", &mut agg).await.unwrap();
+    es.save(&mut agg, &[]).await.unwrap();
 }
 
 #[tokio::test]
 async fn save_then_append_more_events() {
-    let es = EventStore::new(InMemoryStore::new(), TestCodec);
-    let sid = "multi-save";
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository().codec(TestCodec).build();
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-    agg.apply(TodoEvent::Created("Task".into()));
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&mut agg, &[TodoEvent::Created("Task".into())])
+        .await
+        .unwrap();
 
-    let mut loaded: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
-    loaded.apply(TodoEvent::Done);
-    es.save(sid, &mut loaded).await.unwrap();
+    let mut loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    es.save(&mut loaded, &[TodoEvent::Done]).await.unwrap();
 
-    let final_agg: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let final_agg: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
     assert_eq!(final_agg.state().title, "Task");
     assert!(final_agg.state().done);
-    assert_eq!(final_agg.version(), Version::from_persisted(2));
+    assert_eq!(final_agg.version(), Some(Version::new(2).unwrap()));
 }
 
 #[tokio::test]
 async fn optimistic_concurrency_conflict() {
-    let store = InMemoryStore::new();
-    let es = EventStore::new(store, TestCodec);
-    let sid = "conflict-test";
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository().codec(TestCodec).build();
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-    agg.apply(TodoEvent::Created("Original".into()));
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&mut agg, &[TodoEvent::Created("Original".into())])
+        .await
+        .unwrap();
 
-    let mut agg_a: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
-    let mut agg_b: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    let mut agg_a: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    let mut agg_b: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
 
-    agg_a.apply(TodoEvent::Done);
-    es.save(sid, &mut agg_a).await.unwrap();
+    es.save(&mut agg_a, &[TodoEvent::Done]).await.unwrap();
 
-    agg_b.apply(TodoEvent::Done);
-    let result = es.save(sid, &mut agg_b).await;
+    let result = es.save(&mut agg_b, &[TodoEvent::Done]).await;
     assert!(result.is_err(), "should get concurrency conflict");
 }
 
 // =============================================================================
-// Upcaster integration tests
+// Transform integration tests
 // =============================================================================
 
 struct V1ToV2Upcaster;
-impl EventUpcaster for V1ToV2Upcaster {
-    fn can_upcast(&self, event_type: &str, v: u32) -> bool {
-        event_type == "Created" && v == 1
+impl Upcaster for V1ToV2Upcaster {
+    fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+        match (morsel.event_type(), morsel.schema_version()) {
+            ("Created", v) if v == Version::INITIAL => {
+                // Passthrough — payload format unchanged, just bump version.
+                Ok(EventMorsel::new(
+                    "Created",
+                    Version::new(2).unwrap(),
+                    morsel.payload().to_vec(),
+                ))
+            }
+            _ => Ok(morsel),
+        }
     }
-    fn upcast(&self, _: &str, _: u32, payload: &[u8]) -> (String, u32, Vec<u8>) {
-        ("Created".to_owned(), 2, payload.to_vec())
+
+    fn current_version(&self, event_type: &str) -> Option<Version> {
+        match event_type {
+            "Created" => Some(Version::new(2).unwrap()),
+            _ => None,
+        }
     }
 }
 
 #[tokio::test]
-async fn load_with_upcaster_transforms_events() {
+async fn load_with_transform_transforms_events() {
     // EventStore with upcaster — save then load through the same store
-    let es = EventStore::new(InMemoryStore::new(), TestCodec).with_upcaster(V1ToV2Upcaster);
-    let sid = "upcaster-stream";
+    let store = Store::new(InMemoryStore::new());
+    let es = store
+        .repository()
+        .codec(TestCodec)
+        .upcaster(V1ToV2Upcaster)
+        .build();
 
-    // Save — upcasters are only applied on reads, not writes
+    // Save — transforms are only applied on reads, not writes
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
-    agg.apply(TodoEvent::Created("Task".into()));
-    es.save(sid, &mut agg).await.unwrap();
+    es.save(&mut agg, &[TodoEvent::Created("Task".into())])
+        .await
+        .unwrap();
 
-    // Load — upcaster bumps schema version but payload format is unchanged
-    let loaded: AggregateRoot<TodoAggregate> = es.load(sid, TodoId(1)).await.unwrap();
+    // Load — transform bumps schema version but payload format is unchanged
+    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
     assert_eq!(loaded.state().title, "Task");
-    assert_eq!(loaded.version(), Version::from_persisted(1));
+    assert_eq!(loaded.version(), Some(Version::new(1).unwrap()));
 }
 
 #[tokio::test]
-async fn event_store_with_no_upcasters_is_zero_sized_chain() {
+async fn event_store_with_no_transforms_is_zero_sized_chain() {
     assert_eq!(std::mem::size_of::<()>(), 0);
-    let _es = EventStore::new(InMemoryStore::new(), TestCodec);
+    let store = Store::new(InMemoryStore::new());
+    let _es = store.repository().codec(TestCodec).build();
 }

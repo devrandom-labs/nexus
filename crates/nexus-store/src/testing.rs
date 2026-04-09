@@ -3,9 +3,10 @@
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::error::StoreError;
-use crate::raw::RawEventStore;
-use crate::stream::EventStream;
-use nexus::ErrorId;
+use crate::store::EventStream;
+use crate::store::RawEventStore;
+use crate::stream_label::ToStreamLabel;
+use nexus::Id;
 use nexus::Version;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
@@ -59,7 +60,6 @@ impl Default for InMemoryStore {
 
 /// Owned row for the stream cursor.
 struct ReadRow {
-    stream_id: String,
     version: u64,
     event_type: String,
     schema_version: u32,
@@ -95,9 +95,13 @@ impl EventStream for InMemoryStream {
             }
             self.prev_version = Some(row.version);
         }
-        Some(Ok(PersistedEnvelope::new(
-            &row.stream_id,
-            Version::from_persisted(row.version),
+        let Some(version) = Version::new(row.version) else {
+            return Some(Err(StoreError::Codec(
+                "stored event has version 0 — corrupt data".into(),
+            )));
+        };
+        Some(Ok(PersistedEnvelope::new_unchecked(
+            version,
             &row.event_type,
             row.schema_version,
             &row.payload,
@@ -116,33 +120,45 @@ impl RawEventStore for InMemoryStore {
     )]
     async fn append(
         &self,
-        stream_id: &str,
-        expected_version: Version,
+        id: &impl Id,
+        expected_version: Option<Version>,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
-        let stream = guard.entry(stream_id.to_owned()).or_default();
+        let key = id.to_string();
+        let stream = guard.entry(key).or_default();
 
         // Optimistic concurrency check.
-        let actual_version = u64::try_from(stream.len()).unwrap_or(u64::MAX);
-        if actual_version != expected_version.as_u64() {
+        // actual_version_raw is the number of events in the stream (0 = empty).
+        // expected_version: None = new stream (expect 0 events), Some(v) = expect v events.
+        let actual_version_raw = u64::try_from(stream.len()).unwrap_or(u64::MAX);
+        let expected_raw = expected_version.map_or(0, nexus::Version::as_u64);
+        if actual_version_raw != expected_raw {
             return Err(AppendError::Conflict {
-                stream_id: ErrorId::from_display(&stream_id),
+                stream_id: id.to_stream_label(),
                 expected: expected_version,
-                actual: Version::from_persisted(actual_version),
+                actual: Version::new(actual_version_raw),
             });
         }
 
         // Sequential version validation: each envelope must have version
-        // expected_version + 1 + i.
+        // expected_raw + 1 + i. Uses checked arithmetic to prevent
+        // overflow at version boundaries near u64::MAX.
         for (i, env) in envelopes.iter().enumerate() {
             let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
-            let expected_env_version = expected_version.as_u64() + 1 + i_u64;
+            let expected_env_version = expected_raw
+                .checked_add(1)
+                .and_then(|v| v.checked_add(i_u64))
+                .ok_or_else(|| AppendError::Conflict {
+                    stream_id: id.to_stream_label(),
+                    expected: expected_version,
+                    actual: Some(env.version()),
+                })?;
             if env.version().as_u64() != expected_env_version {
                 return Err(AppendError::Conflict {
-                    stream_id: ErrorId::from_display(&stream_id),
-                    expected: Version::from_persisted(expected_env_version),
-                    actual: env.version(),
+                    stream_id: id.to_stream_label(),
+                    expected: Version::new(expected_env_version),
+                    actual: Some(env.version()),
                 });
             }
         }
@@ -162,19 +178,19 @@ impl RawEventStore for InMemoryStore {
 
     async fn read_stream(
         &self,
-        stream_id: &str,
+        id: &impl Id,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
+        let key = id.to_string();
         let events = self
             .streams
             .lock()
             .await
-            .get(stream_id)
+            .get(&key)
             .map(|rows| {
                 rows.iter()
                     .filter(|r| r.version >= from.as_u64())
                     .map(|r| ReadRow {
-                        stream_id: stream_id.to_owned(),
                         version: r.version,
                         event_type: r.event_type.clone(),
                         schema_version: r.schema_version,

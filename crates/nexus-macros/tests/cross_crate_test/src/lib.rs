@@ -32,7 +32,7 @@ pub struct TaskCreated {
 pub struct TaskCompleted;
 
 // --- State ---
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct TaskState {
     pub title: String,
     pub done: bool,
@@ -50,9 +50,6 @@ impl AggregateState for TaskState {
         }
         self
     }
-    fn name(&self) -> &'static str {
-        "Task"
-    }
 }
 
 // --- Error ---
@@ -68,56 +65,84 @@ pub enum TaskError {
 #[nexus::aggregate(state = TaskState, error = TaskError, id = TaskId)]
 pub struct TaskAggregate;
 
-// --- Business logic on the generated type ---
-impl TaskAggregate {
-    pub fn create(&mut self, title: String) -> Result<(), TaskError> {
+// --- Commands ---
+pub struct CreateTask {
+    pub title: String,
+}
+
+pub struct CompleteTask;
+
+impl Handle<CreateTask> for TaskAggregate {
+    fn handle(&self, cmd: CreateTask) -> Result<Events<TaskEvent>, TaskError> {
         if !self.state().title.is_empty() {
             return Err(TaskError::AlreadyExists);
         }
-        self.apply(TaskEvent::Created(TaskCreated { title }));
-        Ok(())
+        Ok(events![TaskEvent::Created(TaskCreated {
+            title: cmd.title
+        })])
     }
+}
 
-    pub fn complete(&mut self) -> Result<(), TaskError> {
+impl Handle<CompleteTask> for TaskAggregate {
+    fn handle(&self, _cmd: CompleteTask) -> Result<Events<TaskEvent>, TaskError> {
         if self.state().done {
             return Err(TaskError::AlreadyDone);
         }
-        self.apply(TaskEvent::Completed(TaskCompleted));
-        Ok(())
+        Ok(events![TaskEvent::Completed(TaskCompleted)])
     }
 }
 
 // --- Verify AggregateEntity works generically ---
-pub fn generic_version<A: AggregateEntity>(agg: &A) -> Version {
+pub fn generic_version<A: AggregateEntity>(agg: &A) -> Option<Version> {
     agg.version()
 }
 
-pub fn generic_take<A: AggregateEntity>(agg: &mut A) -> usize {
-    agg.take_uncommitted_events().len()
-}
-
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
 
     #[test]
     fn cross_crate_lifecycle() {
         let mut task = TaskAggregate::new(TaskId(1));
-        task.create("Write tests".into()).unwrap();
-        task.complete().unwrap();
+        let decided = task
+            .handle(CreateTask {
+                title: "Write tests".into(),
+            })
+            .unwrap();
+        task.root_mut().apply_events(&decided);
+        task.root_mut().advance_version(Version::new(1).unwrap());
+
+        let decided = task.handle(CompleteTask).unwrap();
+        task.root_mut().apply_events(&decided);
+        task.root_mut().advance_version(Version::new(2).unwrap());
 
         assert_eq!(task.state().title, "Write tests");
         assert!(task.state().done);
-        assert_eq!(task.current_version(), Version::from_persisted(2));
+        assert_eq!(task.version(), Version::new(2));
     }
 
     #[test]
     fn cross_crate_invariants() {
         let mut task = TaskAggregate::new(TaskId(2));
-        task.create("Task".into()).unwrap();
-        assert!(task.create("Again".into()).is_err());
-        task.complete().unwrap();
-        assert!(task.complete().is_err());
+        let decided = task
+            .handle(CreateTask {
+                title: "Task".into(),
+            })
+            .unwrap();
+        task.root_mut().apply_events(&decided);
+
+        assert!(
+            task.handle(CreateTask {
+                title: "Again".into()
+            })
+            .is_err()
+        );
+
+        let decided = task.handle(CompleteTask).unwrap();
+        task.root_mut().apply_events(&decided);
+
+        assert!(task.handle(CompleteTask).is_err());
     }
 
     #[test]
@@ -125,24 +150,21 @@ mod tests {
         let mut task = TaskAggregate::new(TaskId(3));
         task.root_mut()
             .replay(
-                Version::from_persisted(1),
+                Version::new(1).unwrap(),
                 &TaskEvent::Created(TaskCreated {
                     title: "Loaded".into(),
                 }),
             )
             .unwrap();
         assert_eq!(task.state().title, "Loaded");
-        assert_eq!(task.version(), Version::from_persisted(1));
+        assert_eq!(task.version(), Version::new(1));
     }
 
     #[test]
     fn cross_crate_generic_aggregate_entity() {
-        let mut task = TaskAggregate::new(TaskId(4));
-        task.create("Generic".into()).unwrap();
-
-        // These functions accept any AggregateEntity — proves the trait works
-        assert_eq!(generic_version(&task), Version::INITIAL);
-        assert_eq!(generic_take(&mut task), 1);
+        let task = TaskAggregate::new(TaskId(4));
+        // This function accepts any AggregateEntity — proves the trait works
+        assert_eq!(generic_version(&task), None);
     }
 
     #[test]

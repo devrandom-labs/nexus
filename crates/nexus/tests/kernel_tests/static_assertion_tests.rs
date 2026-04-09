@@ -67,7 +67,7 @@ impl DomainEvent for StaticEvent {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct StaticState;
 impl AggregateState for StaticState {
     type Event = StaticEvent;
@@ -76,9 +76,6 @@ impl AggregateState for StaticState {
     }
     fn apply(self, _event: &StaticEvent) -> Self {
         self
-    }
-    fn name(&self) -> &'static str {
-        "Static"
     }
 }
 

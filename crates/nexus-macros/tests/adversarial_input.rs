@@ -26,7 +26,7 @@ enum SingleEvent {
     Only,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct SingleState {
     triggered: bool,
 }
@@ -41,9 +41,6 @@ impl AggregateState for SingleState {
         }
         self
     }
-    fn name(&self) -> &'static str {
-        "Single"
-    }
 }
 
 #[nexus::aggregate(state = SingleState, error = AError, id = AId)]
@@ -52,7 +49,7 @@ struct SingleAggregate;
 #[test]
 fn single_variant_event_enum() {
     let mut agg = SingleAggregate::new(AId(1));
-    agg.apply(SingleEvent::Only);
+    agg.root_mut().apply_event(&SingleEvent::Only);
     assert!(agg.state().triggered);
 }
 
@@ -104,7 +101,7 @@ enum VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro {
     SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(String),
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacro {
     data: String,
 }
@@ -122,9 +119,6 @@ impl AggregateState for VeryLongStateNameThatShouldStillWorkCorrectlyWithTheMacr
         }
         self
     }
-    fn name(&self) -> &'static str {
-        "Long"
-    }
 }
 
 #[nexus::aggregate(
@@ -137,8 +131,8 @@ struct VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro;
 #[test]
 fn very_long_type_names() {
     let mut agg = VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro::new(AId(1));
-    agg.apply(
-        VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(
+    agg.root_mut().apply_event(
+        &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(
             "hello".into(),
         ),
     );
@@ -157,7 +151,7 @@ mod inner {
         Ping,
     }
 
-    #[derive(Default, Debug)]
+    #[derive(Default, Debug, Clone)]
     pub struct InnerState {
         pub pings: u32,
     }
@@ -170,9 +164,6 @@ mod inner {
         fn apply(mut self, _: &InnerEvent) -> Self {
             self.pings += 1;
             self
-        }
-        fn name(&self) -> &'static str {
-            "Inner"
         }
     }
 
@@ -187,8 +178,8 @@ struct PathTypeAggregate;
 #[test]
 fn aggregate_with_path_types() {
     let mut agg = PathTypeAggregate::new(AId(1));
-    agg.apply(inner::InnerEvent::Ping);
-    agg.apply(inner::InnerEvent::Ping);
+    agg.root_mut().apply_event(&inner::InnerEvent::Ping);
+    agg.root_mut().apply_event(&inner::InnerEvent::Ping);
     assert_eq!(agg.state().pings, 2);
 }
 
@@ -236,5 +227,5 @@ struct r#Type; // `Type` is not a keyword but r# prefix works
 #[test]
 fn raw_identifier_aggregate_name() {
     let agg = r#Type::new(AId(1));
-    assert_eq!(agg.version(), Version::INITIAL);
+    assert_eq!(agg.version(), None);
 }

@@ -1,0 +1,6 @@
+---
+source: crates/nexus-fjall/tests/snapshot_wire_format.rs
+assertion_line: 147
+expression: hex_dump(&buf)
+---
+01 00 00 00 00 00 64 61 74 61
