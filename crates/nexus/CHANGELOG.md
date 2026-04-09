@@ -1,0 +1,326 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0](https://github.com/devrandom-labs/nexus/compare/nexus-v0.0.1...nexus-v0.1.0) - 2026-04-09
+
+### Added
+
+- [**breaking**] fjall adapter, store refactoring, serde codecs, repository builder ([#138](https://github.com/devrandom-labs/nexus/pull/138))
+- *(store)* [**breaking**] event store with save atomicity, schema versioning, and structured errors ([#122](https://github.com/devrandom-labs/nexus/pull/122))
+- *(kernel)* M3 — conditional Clone and PartialEq for AggregateRoot
+- *(macros)* add #[nexus::aggregate] attribute macro
+- add AggregateEntity trait for newtype aggregate pattern
+- flatten nexus crate — kernel becomes top-level, remove old modules
+- *(kernel)* add debug_assert! contract invariants to AggregateRoot
+- *(kernel)* add events![] macro for non-empty event collections
+- *(kernel)* add AggregateRoot<A> with apply_event, load_from_events, take_uncommitted_events
+- *(kernel)* add VersionedEvent and non-empty Events collection
+- *(kernel)* add Id, Message, DomainEvent, AggregateState, Aggregate traits
+- *(kernel)* add KernelError with VersionMismatch variant
+- *(kernel)* add Version newtype with INITIAL, next(), Display
+- *(kernel)* scaffold empty kernel module structure
+- *(nexus)* added handler
+- *(nexus)* addd name for command and queries
+- *(nexus)* added versioning in execute handle
+- *(nexus)* added streamable rehydration
+- *(nexus)* added snapshot stream and apply
+- *(nexus)* error check in history load
+- *(nexus)* added stream_name in pending event
+- *(nexus)* added event streamer trait
+- *(rusqlite)* added sequence check for events
+- *(nexus)* introduced boxed events
+- *(nexus)* validation in pending event builder
+- *(nexus)* added payload testing
+- *(helpers)* added prop test strategy module
+- *(nexus)* added faker for metadata
+- *(nexus)* added fake uuid for event_id
+- *(nexus)* added fake nexusId
+- *(nexus)* added downcast-sync for message
+- *(nexus)* made builder take serializeable event
+- *(nexus)* added small vec instead of events
+- *(nexus)* added custom result type
+- *(nexus)* added sqlite constraint error
+- *(nexus)* added serializer and deserialize
+- *(nexus)* made id trait more stricter
+- *(nexus)* added len for events
+- *(nexus)* added events intoiter
+- *(nexus)* added from for a single domain event
+- *(nexus)* added copy trait to nexus_id
+- *(nexus)* nexusid for aggregates and imp
+- *(nexus)* added name field for domain event
+- *(macros)* added aggregate macro
+- *(macros)* added message macro
+- *(rusqlite)* added read stream event fn
+- *(nexus)* added event record response
+- *(rusqlite)* storing records
+- *(rusqlite)* added version check
+- *(todo)* added refinery for migrations
+- *(nexus)* correlation_id and stream_id are arc
+- *(nexus)* added event metadata
+- *(nexus)* added typed metadata
+- *(nexus)* record builder takes metadata
+- *(nexus)* introduced StreamId for events
+- *(nexus)* added store error enum
+- *(nexus)* streamable event store read
+- *(nexus)* global error with store error
+- *(nexus)* added async_trait for clearity
+- *(nexus)* added event type to event record
+- *(nexus)* added store desrializer trait
+- *(nexus)* added event serializer trait
+- *(nexus)* added event store trait
+- *(nexus)* boxerror returned from serializer
+- *(nexus)* even record with serialization
+- *(nexus)* added event record with version
+- *(nexus)* added lowlevel event record
+- *(store)* added event records and source
+- *(nexus)* added events! macro
+- *(nexus)* repository now has static methods
+- *(nexus)* NonEmptyEvent for every command
+- *(nexus)* added smallvec and contraints
+- *(nexus)* added repo and shared services
+- *(nexus)* query fn for query dispatcher
+- *(nexus)* added build for query dispatcher bldr
+- *(nexus)* added register service feature
+- *(nexus)* added dispatch query handler
+- *(nexus)* added erased query handler trait
+- *(nexus)* added query handler adapter
+- added traits for cesr
+- *(nexus)* added read model and repository
+- *(nexus)* added query mod files
+- *(nexus)* added persistence and invoke handle
+- *(nexus)* added load service
+- *(nexus)* added load service impl skeleton
+- *(nexus)* added repository save function
+- *(nexus)* added respositor error
+- *(nexus)* added repository trait
+- *(nexus)* added aggregate id validation
+- *(nexus)* command handler is stronger with AT
+- *(nexus)* added command handler response
+- *(nexus)* made aggregate command handler async
+- *(nexus)* added aggregate traits and struct
+- *(nexus)* added base traits
+- *(nexus)* added domain event and dispatcher mod
+- *(nexus)* added domain event trait
+- *(tixlys)* meow_diator + cqrs = nexus
+
+### Fixed
+
+- *(ci)* resolve elite clippy errors for CI
+- *(ci)* regenerate workspace-hack + add pre-commit hook
+- *(kernel)* M2 — replace Default with AggregateState::initial()
+- *(kernel)* M5 — cap size_hint reservation to MAX_UNCOMMITTED
+- *(kernel)* H5 — event recorded before state mutation (panic-safe)
+- *(kernel)* H2 — zero-alloc error paths with stack-based ErrorId
+- *(kernel)* H1 — bounded rehydration with MAX_REHYDRATION_EVENTS
+- *(kernel)* add bounded uncommitted events (C3) + security tests
+- *(kernel)* prevent version overflow + add security test suite
+- pass nix flake check — elite clippy, audit ignore, trybuild refresh
+- *(kernel)* pass elite clippy with all+pedantic+nursery deny
+- *(kernel)* advance version on take_uncommitted_events + add edge case tests
+- *(nexus)* fixed test cases and clippy problems
+- *(rusqlite)* fixed stream_name inclusion
+- *(rusqlite)* fixed data integrity check
+- *(nexus)* fixed scripts and serde issue
+- *(rusqlite)* updated conflict error
+- *(rusqlite)* expected version check
+- *(rusqlte)* checking stream_id as uuid
+- *(nexus)* fixed pending event builder error
+- *(nexus)* fixed events iterator problems
+- *(nexus)* fixed even builder
+- *(nexus)* removed mismatch, didnt make sense
+- *(nexus)* removed integrity check
+- *(tixlys)* fixed schema migration for nix
+- *(macros)* fixed paths after macro addition
+- *(nexus)* updated event store trait
+- *(nexus)* fixed file problem and deps upgrade
+- *(nexus)* concurrency check on append_events
+- *(nexus)* fixed declartive macro
+- *(nexus)* made history ref type
+- *(nexus)* removed hash
+- *(nexus)* unwanted char
+- *(nexus)* formatting in docs
+- *(nexus)* fixed handler register bug
+- *(nexus)* fixed module name for persistence
+- *(nexus)* fixed clippy warning
+- *(nexus)* type aliased for complex types
+
+### Other
+
+- fix formatting from sed-inserted initial() methods
+- update deps, README, release-plz, fix flake (WIP)
+- add release-plz for automated crate publishing
+- update README with kernel documentation and verification table
+- *(kernel)* add architecture test verifying kernel layer isolation
+- *(kernel)* add doc comments with runnable examples
+- *(kernel)* eliminate redundant current_version() calls, pre-allocate SmallVec
+- *(kernel)* add criterion benchmarks for kernel hot paths
+- *(kernel)* verify version increments by exactly 1 with many uncommitted
+- *(kernel)* verify zero undefined behavior with Miri
+- *(kernel)* add trybuild compile-failure tests proving type safety
+- *(kernel)* restrict Version construction, remove From<u64>
+- *(kernel)* encapsulate VersionedEvent fields
+- *(kernel)* remove Clone from VersionedEvent, fix property tests
+- *(kernel)* add proptest property-based tests for algebraic invariants
+- *(kernel)* add static_assertions for compile-time trait and size invariants
+- *(kernel)* apply rustfmt to test files
+- *(kernel)* add full integration test for kernel user experience
+- *(nexus)* refactored execute method
+- *(rusqlite)* conflict prop test
+- *(helpers)* added size for arbitrary sequence
+- *(tixlys)* updated cargo deps
+- *(nexus)* deleted tests
+- *(helpers)* added user domain events
+- *(nexus)* removed aggregate type
+- *(nexus)* clippy fixes
+- *(nexus)* clippy lint fixes
+- *(nexus)* fixed query handler test
+- *(nexus)* fixed command handler test
+- *(nexus)* fixed aggregate tests
+- *(nexus)* changed mock tests
+- *(nexus)* updated test cases and macros
+- *(nexus)* fixing tests
+- *(nexus)* updated builder
+- *(nexus)* removed docs for a while
+- *(nexus)* removed id from domain events
+- *(nexus)* updated the tests
+- *(nexus)* fixing refactored tests
+- *(nexus)* added store mod
+- *(nexus)* added async_trait for repo
+- *(nexus)* added async_trait to read
+- *(nexus)* added async_trait in handlers
+- *(nexus)* updated integrations tests
+- *(nexus)* moved read side to test common
+- *(nexus)* refactoring to integration test
+- *(nexus)* refactored modules
+- *(nexus)* cleaned store functionality
+- *(nexus)* identity module for identity shit
+- *(nexus)* folder structure
+- *(rusqlite)* basic testing in rusqlite
+- *(nexus)* checking read side
+- *(nexus)* changed build to serialize
+- *(rusqlite)* added test for append
+- *(nexus)* fixed clippy warnings
+- *(tixlys)* removed v4 of uuid
+- *(todo)* added test skeleton
+- *(nexus)* refactored store module
+- *(nexus)* created a mod for event_records
+- *(todo)* EventStore impl for todo store
+- *(nexus)* passing stream_id by value to ES
+- *(nexus)* added documentation for root error
+- *(nexus)* heirarchical layered error
+- *(nexus)* centralized serde errors
+- *(nexus)* added tokio_stream
+- *(nexus)* core module for core traits
+- *(nexus)* cleaned up event record builder
+- *(nexus)* added test module for store
+- *(nexus)* updated trait fn name
+- *(nexus)* added event record with version
+- *(nexus)* added event record builder
+- *(nexus)* removed ulid
+- *(nexus)* added events and store module
+- *(auth)* added rusqlite for store
+- *(nexus)* removed double generic for Events
+- *(nexus)* renamed NonEmptyEvents to Events
+- *(nexus)* fixed clippy error
+- *(nexus)* added clone for QueryHandler
+- *(tixlys)* updated infra qemu settings
+- *(nexus)* added dyn service for query
+- *(nexus)* added extra tests for command handler
+- *(nexus)* added failure feature for query
+- *(nexus)* added query handler test
+- *(nexus)* added get user repository
+- *(nexus)* added read model
+- *(nexus)* removed unwanted char
+- *(nexus)* added test module
+- *(nexus)* added remaining tests
+- *(nexus)* fixed clippy errors
+- *(nexus)* added mock repository error type
+- *(nexus)* fixed clippy warnings
+- *(nexus)* replaced get_events with mock data
+- *(nexus)* added mock data & mismatch test
+- *(nexus)* added conflict test
+- *(nexus)* added load aggregate default state
+- *(nexus)* save aggregate in repo
+- *(nexus)* added aggregate not found error
+- *(nexus)* repository new fn
+- *(nexus)* optimized mock repo
+- *(nexus)* fixed save fn for repo
+- *(nexus)* optimized id cloning in repo
+- *(nexus)* added save feature for in memory repo
+- *(nexus)* refactored mock test
+- *(nexus)* added test skeleton
+- *(nexus)* updated mockusereventsourcerepo
+- *(nexus)* added skeleton for repository
+- *(tixlys)* updated cargo lock
+- *(nexus)* added dyn service test for handler
+- *(nexus)* added state service outcome
+- *(nexus)* enhances test 1 for handler
+- *(nexus)* trimmed test cases for handler
+- *(tixlys)* fixed clippy errors
+- *(nexus)* added state check test in handler
+- *(tixlys)* updated the flake lock
+- *(nexus)* added test skeleton for handlers
+- *(nexus)* added service test case
+- *(nexus)* sequential command execution
+- *(nexus)* added empty event command handler
+- *(nexus)* added current version revert
+- *(nexus)* added current version test
+- *(nexus)* changed the test cases name
+- *(nexus)* added empty event check test
+- *(nexus)* added unordered events test
+- *(nexus)* empty events added to user
+- *(nexus)* refactored test module
+- *(nexus)* added docs for core types
+- *(nexus)* added docs for command and query
+- *(nexus)* fix formatting in docs
+- *(nexus)* for aggregate traits and structs
+- *(nexus)* domain events are partialeq
+- *(nexus)* id is a separate trait
+- *(nexus)* docs for aggregate type
+- *(nexus)* aggregate state docs
+- *(nexus)* swapped state traits with event
+- *(nexus)* updated command mod doc
+- *(nexus)* added crate level documents
+- *(tixlys)* updated nexus todo
+- *(nexus)* removed dispatcher and pipeline
+- *(nexus)* added pipeline factory types
+- *(nexus)* moved erased types outside
+- *(nexus)* added command dispatcher builder
+- *(nexus)* added command side dispatcer mod
+- *(nexus)* added todos and removed error
+- *(nexus)* added proper error for builder
+- *(nexus)* returning error types
+- *(nexus)* added dispatcher error
+- *(nexus)* added query dispatcher module
+- *(nexus)* added read mode comment
+- *(nexus)* refactored the dirs
+- *(nexus)* refactored persist.rs
+- *(nexus)* added execute and persist modules
+- *(nexus)* removed dispatcher code
+- *(nexus)* polished the load test case
+- *(nexus)* added aggregate not found test
+- *(nexus)* load service success test
+- *(nexus)* added mock repository with load
+- *(nexus)* load service is always ready to run
+- *(nexus)* made associated type names readable
+- *(nexus)* completed aggregate root
+- *(nexus)* command handler tests
+- *(nexus)* added tokio command handler test
+- *(nexus)* added handler code in test
+- *(nexus)* removed type aliases, inderections..
+- *(nexus)* aggregate load from history
+- *(nexus)* extracted functions to be reused
+- *(nexus)* sharing setup structs
+- *(nexus)* idempotent test for handler
+- *(nexus)* apply order on state
+- *(nexus)* state default
+- *(nexus)* added readme file
+- *(nexus)* wrote test boilerplate
+- *(nexus)* basic aggregate root
+- *(tixlys)* added nexus removed cqrs/meow
