@@ -7,6 +7,10 @@ pub mod stream_label;
 pub mod testing;
 pub mod upcasting;
 
+#[cfg(feature = "json")]
+pub use codec::serde::json::{Json, JsonCodec};
+#[cfg(feature = "serde")]
+pub use codec::serde::{SerdeCodec, SerdeFormat};
 pub use codec::{BorrowingCodec, Codec};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};

@@ -50,7 +50,7 @@ const ELLIPSIS: &[u8; 3] = b"...";
 #[derive(Clone, PartialEq, Eq)]
 pub struct StreamLabel {
     buf: [u8; MAX_LEN],
-    /// Number of valid bytes in `buf`. Always <= MAX_LEN.
+    /// Number of valid bytes in `buf`. Always <= `MAX_LEN`.
     len: u8,
     /// Set to `true` by `write_str` when content was dropped due to
     /// the buffer being full. Used by `from_display` to decide whether
