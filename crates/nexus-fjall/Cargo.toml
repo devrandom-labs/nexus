@@ -10,6 +10,9 @@ readme = "../../README.md"
 keywords = ["event-sourcing", "event-store", "fjall", "embedded"]
 categories = ["database"]
 
+[features]
+snapshot = ["nexus-store/snapshot"]
+
 [dependencies]
 fjall = { workspace = true }
 nexus = { version = "0.1.0", path = "../nexus" }

@@ -1,5 +1,6 @@
 use super::event_store::version_to_nz32;
 use super::raw::RawEventStore;
+use super::replay::ReplayFrom;
 use super::repository::Repository;
 use super::store::Store;
 use super::stream::EventStream;
@@ -48,7 +49,7 @@ impl<S, C, U> ZeroCopyEventStore<S, C, U> {
     }
 }
 
-impl<A, S, C, U> Repository<A> for ZeroCopyEventStore<S, C, U>
+impl<A, S, C, U> ReplayFrom<A> for ZeroCopyEventStore<S, C, U>
 where
     A: Aggregate,
     S: RawEventStore,
@@ -57,17 +58,17 @@ where
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
-    type Error = StoreError;
-
-    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+    async fn replay_from(
+        &self,
+        mut root: AggregateRoot<A>,
+        from: Version,
+    ) -> Result<AggregateRoot<A>, StoreError> {
         let mut stream = self
             .store
             .raw()
-            .read_stream(&id, Version::INITIAL)
+            .read_stream(root.id(), from)
             .await
             .map_err(|e| StoreError::Adapter(Box::new(e)))?;
-
-        let mut root = AggregateRoot::<A>::new(id);
 
         while let Some(result) = stream.next().await {
             let env = result.map_err(|e| StoreError::Adapter(Box::new(e)))?;
@@ -95,6 +96,23 @@ where
         }
 
         Ok(root)
+    }
+}
+
+impl<A, S, C, U> Repository<A> for ZeroCopyEventStore<S, C, U>
+where
+    A: Aggregate,
+    S: RawEventStore,
+    C: BorrowingCodec<EventOf<A>>,
+    U: Upcaster,
+    EventOf<A>: DomainEvent,
+    for<'a> S::Stream<'a>: Send,
+{
+    type Error = StoreError;
+
+    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+        let root = AggregateRoot::<A>::new(id);
+        self.replay_from(root, Version::INITIAL).await
     }
 
     async fn save(

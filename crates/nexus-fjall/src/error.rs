@@ -8,8 +8,11 @@ pub enum FjallError {
     Io(#[from] fjall::Error),
 
     /// Stored value has corrupt or unrecognizable byte layout.
-    #[error("corrupt value in stream '{stream_id}' at version {version}")]
-    CorruptValue { stream_id: String, version: u64 },
+    #[error("corrupt value in stream '{stream_id}' at version {version:?}")]
+    CorruptValue {
+        stream_id: String,
+        version: Option<u64>,
+    },
 
     /// Stream metadata has wrong byte size.
     #[error("corrupt metadata for stream '{stream_id}'")]

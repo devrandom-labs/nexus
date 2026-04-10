@@ -538,3 +538,48 @@ fn version_new_accepts_nonzero() {
 fn version_initial_is_one() {
     assert_eq!(Version::INITIAL.as_u64(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Tests: restore from snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn restore_creates_root_at_given_state_and_version() {
+    let id = TestId("1".into());
+    let state = CounterState { value: 42 };
+    let version = Version::new(10).unwrap();
+
+    let root = AggregateRoot::<CounterAggregate>::restore(id.clone(), state, version);
+
+    assert_eq!(root.id(), &id);
+    assert_eq!(root.state().value, 42);
+    assert_eq!(root.version(), Some(version));
+}
+
+#[test]
+fn restore_then_replay_continues_from_snapshot_version() {
+    let id = TestId("1".into());
+    let state = CounterState { value: 42 };
+    let version = Version::new(10).unwrap();
+
+    let mut root = AggregateRoot::<CounterAggregate>::restore(id, state, version);
+
+    // Next replay must be version 11
+    let result = root.replay(Version::new(11).unwrap(), &CounterEvent::Incremented);
+    assert!(result.is_ok());
+    assert_eq!(root.state().value, 43);
+    assert_eq!(root.version(), Some(Version::new(11).unwrap()));
+}
+
+#[test]
+fn restore_then_replay_rejects_wrong_version() {
+    let id = TestId("1".into());
+    let state = CounterState { value: 42 };
+    let version = Version::new(10).unwrap();
+
+    let mut root = AggregateRoot::<CounterAggregate>::restore(id, state, version);
+
+    // Replaying version 10 (not 11) must fail
+    let result = root.replay(Version::new(10).unwrap(), &CounterEvent::Incremented);
+    assert!(result.is_err());
+}
