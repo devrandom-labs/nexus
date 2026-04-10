@@ -13,7 +13,9 @@ mod store;
 mod stream;
 mod zero_copy_event_store;
 
-pub use builder::{NeedsCodec, RepositoryBuilder};
+#[cfg(feature = "snapshot")]
+pub use builder::WithSnapshot;
+pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
 pub use event_store::EventStore;
 pub use raw::RawEventStore;
 pub use repository::Repository;

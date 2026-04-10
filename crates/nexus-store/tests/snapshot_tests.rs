@@ -260,3 +260,45 @@ mod in_memory_tests {
         assert!(result.is_ok());
     }
 }
+
+// ── Builder integration ─────────────────────────────────────────────
+
+#[cfg(all(feature = "testing", feature = "snapshot-json"))]
+mod builder_tests {
+    use super::*;
+    use nexus_store::Store;
+    use nexus_store::snapshot::InMemorySnapshotStore;
+    use nexus_store::testing::InMemoryStore;
+
+    /// Verify the builder API compiles: no snapshot → EventStore
+    #[test]
+    fn builder_without_snapshot_compiles() {
+        let raw = InMemoryStore::new();
+        let store = Store::new(raw);
+        let _repo = store.repository().build();
+    }
+
+    /// Verify the builder API compiles: with snapshot → Snapshotting<EventStore>
+    #[test]
+    fn builder_with_snapshot_compiles() {
+        let raw = InMemoryStore::new();
+        let store = Store::new(raw);
+        let snap = InMemorySnapshotStore::new();
+        let _repo = store.repository().snapshot_store(snap).build();
+    }
+
+    /// Verify the builder API compiles: with custom trigger
+    #[test]
+    fn builder_with_custom_trigger_compiles() {
+        let raw = InMemoryStore::new();
+        let store = Store::new(raw);
+        let snap = InMemorySnapshotStore::new();
+        let _repo = store
+            .repository()
+            .snapshot_store(snap)
+            .snapshot_trigger(AfterEventTypes::new(&["Done"]))
+            .snapshot_schema_version(2)
+            .snapshot_on_read(true)
+            .build();
+    }
+}
