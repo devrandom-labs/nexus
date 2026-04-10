@@ -1,6 +1,8 @@
 pub mod codec;
 pub mod envelope;
 pub mod error;
+#[cfg(feature = "snapshot")]
+pub mod snapshot;
 pub mod store;
 pub mod stream_label;
 #[cfg(feature = "testing")]
