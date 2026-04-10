@@ -281,6 +281,22 @@ Implements `SnapshotStore` behind `nexus-fjall/snapshot` feature.
 
 - `AggregateRoot::restore(id, state, version)` — new constructor for creating an aggregate from snapshot state. Minimal change: no new traits, no new bounds.
 
+## Performance Considerations
+
+**Snapshot overhead:** Each snapshot adds one read (load) and one write (save) per aggregate lifecycle. On the read path, a snapshot miss falls back to full replay with zero additional cost beyond the failed point-read. On the write path, snapshot saves are best-effort — failures never block event persistence.
+
+**When snapshots hurt:**
+- **Small aggregates (< 50 events):** The snapshot read + deserialization cost exceeds replaying 50 events. The crossover point depends on event size and `apply()` complexity.
+- **Write-heavy workloads:** Use `snapshot_on_read(true)` (lazy snapshotting) to move snapshot creation to the read path, avoiding write amplification.
+- **Rapidly-evolving state schemas:** Each schema version change invalidates all existing snapshots, forcing full replay until new snapshots are built. Frequent schema changes negate snapshot benefits.
+
+**When snapshots help:**
+- **10,000+ events per aggregate:** Essential. Even with efficient `apply()` and fast storage, deserializing 10K events measurably impacts latency.
+- **Expensive deserialization:** Aggregates with large event payloads or complex `apply()` logic benefit from snapshots at lower event counts.
+- **Latency-sensitive reads:** IoT/mobile scenarios where reload latency must be bounded regardless of aggregate history length.
+
+**Alternative: "Closing the Books" (#139):** Design aggregates with natural lifecycle boundaries (e.g., `CashierShift` per shift vs. `CashRegister` forever). When an aggregate completes its lifecycle, archive its stream and start a new one. This eliminates the need for snapshots entirely and is the preferred approach when domain semantics allow it.
+
 ## Related Issues
 
 - #139 — Document "Closing the Books" pattern as preferred alternative
