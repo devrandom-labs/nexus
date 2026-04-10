@@ -349,3 +349,472 @@ async fn multiple_save_load_cycles() {
     assert_eq!(agg.state().value, 6);
     assert_eq!(agg.version(), Some(Version::new(6).unwrap()));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. Sequence/Protocol Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn sequence_save_snapshot_save_more_snapshot_again() {
+    let repo = repo(EveryNEvents(NonZeroU64::new(3).unwrap()), false);
+    let id = CounterId(42);
+
+    // Save 3 → snapshot at v3
+    let mut agg = repo.load(id.clone()).await.unwrap();
+    repo.save(
+        &mut agg,
+        &[
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(agg.version(), Some(Version::new(3).unwrap()));
+
+    // Reload from snapshot → save 3 more → snapshot at v6
+    let mut agg = repo.load(id.clone()).await.unwrap();
+    assert_eq!(agg.state().value, 3);
+    repo.save(
+        &mut agg,
+        &[
+            CounterEvent::Decremented,
+            CounterEvent::Decremented,
+            CounterEvent::Incremented,
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Final reload — should use v6 snapshot
+    let agg = repo.load(id).await.unwrap();
+    assert_eq!(agg.state().value, 2); // 3 - 1 - 1 + 1
+    assert_eq!(agg.version(), Some(Version::new(6).unwrap()));
+}
+
+#[tokio::test]
+async fn sequence_batch_crossing_non_multiple_boundary() {
+    // EveryNEvents(5): batch 96→103 crosses 100-boundary
+    // We simulate with small numbers: EveryNEvents(5), batch 3→8 crosses 5
+    let repo = repo(EveryNEvents(NonZeroU64::new(5).unwrap()), false);
+    let id = CounterId(1);
+
+    // Save 3 events (v1-v3)
+    let mut agg = repo.load(id.clone()).await.unwrap();
+    repo.save(
+        &mut agg,
+        &[
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Save 5 events in batch (v4-v8) — crosses the 5 boundary
+    repo.save(
+        &mut agg,
+        &[
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Snapshot should exist at v8. Reload and verify.
+    let loaded = repo.load(id).await.unwrap();
+    assert_eq!(loaded.state().value, 8);
+    assert_eq!(loaded.version(), Some(Version::new(8).unwrap()));
+}
+
+#[tokio::test]
+async fn sequence_snapshot_invalidation_then_new_snapshot() {
+    let raw = InMemoryStore::new();
+    let store = Store::new(raw);
+    let snap_store = InMemorySnapshotStore::new();
+
+    // Save with schema v1, triggers snapshot
+    let inner = store.repository().build();
+    let repo_v1 = Snapshotting::new(
+        inner,
+        &snap_store,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+    let id = CounterId(1);
+    let mut agg: AggregateRoot<CounterAggregate> = repo_v1.load(id.clone()).await.unwrap();
+    repo_v1
+        .save(&mut agg, &[CounterEvent::Incremented])
+        .await
+        .unwrap();
+
+    // Switch to schema v2 — old snapshot ignored, full replay, new snapshot created
+    let inner2 = store.repository().build();
+    let repo_v2 = Snapshotting::new(
+        inner2,
+        &snap_store,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        2,
+        false,
+    );
+    let mut agg: AggregateRoot<CounterAggregate> = repo_v2.load(id.clone()).await.unwrap();
+    assert_eq!(agg.state().value, 1);
+
+    // Save another event → new snapshot with schema v2
+    repo_v2
+        .save(&mut agg, &[CounterEvent::Incremented])
+        .await
+        .unwrap();
+
+    // Reload should hit v2 snapshot
+    let loaded: AggregateRoot<CounterAggregate> = repo_v2.load(id.clone()).await.unwrap();
+    assert_eq!(loaded.state().value, 2);
+    assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
+
+    // Verify the snapshot has schema v2
+    let snap = snap_store.load_snapshot(&id).await.unwrap().unwrap();
+    assert_eq!(snap.schema_version(), 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. Lifecycle Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn lifecycle_create_save_snapshot_reload_verify() {
+    let repo = repo(EveryNEvents(NonZeroU64::new(2).unwrap()), false);
+    let id = CounterId(99);
+
+    // Create new aggregate
+    let mut agg = repo.load(id.clone()).await.unwrap();
+    assert_eq!(agg.version(), None);
+    assert_eq!(agg.state().value, 0);
+
+    // Save 2 events → snapshot
+    repo.save(
+        &mut agg,
+        &[CounterEvent::Incremented, CounterEvent::Decremented],
+    )
+    .await
+    .unwrap();
+
+    // Reload → from snapshot, state should match
+    let loaded = repo.load(id).await.unwrap();
+    assert_eq!(loaded.state().value, 0); // +1 -1
+    assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
+}
+
+#[tokio::test]
+async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
+    let raw = InMemoryStore::new();
+    let store = Store::new(raw);
+    let snap_store = InMemorySnapshotStore::new();
+
+    // Save events without snapshot
+    let inner = store.repository().build();
+    let repo_no_snap = Snapshotting::new(
+        inner,
+        &snap_store,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(10000).unwrap()),
+        1,
+        false,
+    );
+    let id = CounterId(1);
+    let mut agg: AggregateRoot<CounterAggregate> = repo_no_snap.load(id.clone()).await.unwrap();
+    repo_no_snap
+        .save(
+            &mut agg,
+            &[
+                CounterEvent::Incremented,
+                CounterEvent::Incremented,
+                CounterEvent::Incremented,
+                CounterEvent::Incremented,
+                CounterEvent::Incremented,
+            ],
+        )
+        .await
+        .unwrap();
+
+    // No snapshot yet
+    assert!(snap_store.load_snapshot(&id).await.unwrap().is_none());
+
+    // Load with on-read → creates lazy snapshot
+    let inner2 = store.repository().build();
+    let repo_on_read = Snapshotting::new(
+        inner2,
+        &snap_store,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(10000).unwrap()),
+        1,
+        true,
+    );
+    let _loaded: AggregateRoot<CounterAggregate> = repo_on_read.load(id.clone()).await.unwrap();
+
+    // Snapshot now exists
+    let snap = snap_store.load_snapshot(&id).await.unwrap().unwrap();
+    assert_eq!(snap.version(), Version::new(5).unwrap());
+
+    // Second load uses snapshot (we can't directly prove partial replay,
+    // but state correctness confirms the snapshot path works)
+    let loaded2: AggregateRoot<CounterAggregate> = repo_on_read.load(id).await.unwrap();
+    assert_eq!(loaded2.state().value, 5);
+    assert_eq!(loaded2.version(), Some(Version::new(5).unwrap()));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. Defensive Boundary Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
+    // Use a codec that always fails decode
+    struct FailCodec;
+    impl nexus_store::Codec<CounterState> for FailCodec {
+        type Error = std::io::Error;
+        fn encode(&self, _state: &CounterState) -> Result<Vec<u8>, Self::Error> {
+            Ok(vec![1, 2, 3])
+        }
+        fn decode(&self, _event_type: &str, _payload: &[u8]) -> Result<CounterState, Self::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "always fails",
+            ))
+        }
+    }
+
+    let raw = InMemoryStore::new();
+    let store = Store::new(raw);
+    let snap_store = InMemorySnapshotStore::new();
+
+    // Save events and manually insert a snapshot
+    let inner = store.repository().build();
+    let repo_good = Snapshotting::new(
+        inner,
+        &snap_store,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+    let id = CounterId(1);
+    let mut agg: AggregateRoot<CounterAggregate> = repo_good.load(id.clone()).await.unwrap();
+    repo_good
+        .save(&mut agg, &[CounterEvent::Incremented])
+        .await
+        .unwrap();
+
+    // Now load with the failing codec — should fall back to full replay
+    let inner2 = store.repository().build();
+    let repo_bad = Snapshotting::new(
+        inner2,
+        &snap_store,
+        FailCodec,
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+    let loaded: AggregateRoot<CounterAggregate> = repo_bad.load(id).await.unwrap();
+    assert_eq!(loaded.state().value, 1);
+    assert_eq!(loaded.version(), Some(Version::new(1).unwrap()));
+}
+
+#[tokio::test]
+async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
+    // A snapshot store that always errors on load
+    struct ErrorStore;
+    impl SnapshotStore for ErrorStore {
+        type Error = std::io::Error;
+        async fn load_snapshot(
+            &self,
+            _id: &impl nexus::Id,
+        ) -> Result<Option<nexus_store::snapshot::PersistedSnapshot>, Self::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "disk on fire",
+            ))
+        }
+        async fn save_snapshot(
+            &self,
+            _id: &impl nexus::Id,
+            _snapshot: &nexus_store::snapshot::PendingSnapshot,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        async fn delete_snapshot(&self, _id: &impl nexus::Id) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    let raw = InMemoryStore::new();
+    let store = Store::new(raw);
+
+    // Save some events first
+    let inner = store.repository().build();
+    let good_repo = Snapshotting::new(
+        inner,
+        InMemorySnapshotStore::new(),
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+    let id = CounterId(1);
+    let mut agg: AggregateRoot<CounterAggregate> = good_repo.load(id.clone()).await.unwrap();
+    good_repo
+        .save(
+            &mut agg,
+            &[CounterEvent::Incremented, CounterEvent::Incremented],
+        )
+        .await
+        .unwrap();
+
+    // Now load with error store — should fall back to full replay
+    let inner2 = store.repository().build();
+    let bad_repo = Snapshotting::new(
+        inner2,
+        ErrorStore,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+    let loaded: AggregateRoot<CounterAggregate> = bad_repo.load(id).await.unwrap();
+    assert_eq!(loaded.state().value, 2);
+}
+
+#[tokio::test]
+async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
+    // A snapshot store that always errors on save
+    struct SaveErrorStore;
+    impl SnapshotStore for SaveErrorStore {
+        type Error = std::io::Error;
+        async fn load_snapshot(
+            &self,
+            _id: &impl nexus::Id,
+        ) -> Result<Option<nexus_store::snapshot::PersistedSnapshot>, Self::Error> {
+            Ok(None)
+        }
+        async fn save_snapshot(
+            &self,
+            _id: &impl nexus::Id,
+            _snapshot: &nexus_store::snapshot::PendingSnapshot,
+        ) -> Result<(), Self::Error> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "snapshot write failed",
+            ))
+        }
+        async fn delete_snapshot(&self, _id: &impl nexus::Id) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    let raw = InMemoryStore::new();
+    let store = Store::new(raw);
+    let inner = store.repository().build();
+    let repo = Snapshotting::new(
+        inner,
+        SaveErrorStore,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+
+    let id = CounterId(1);
+    let mut agg: AggregateRoot<CounterAggregate> = repo.load(id.clone()).await.unwrap();
+
+    // Save should succeed despite snapshot save failure
+    let result = repo.save(&mut agg, &[CounterEvent::Incremented]).await;
+    assert!(result.is_ok());
+    assert_eq!(agg.state().value, 1);
+
+    // Events persist correctly — reload works via full replay
+    let loaded: AggregateRoot<CounterAggregate> = repo.load(id).await.unwrap();
+    assert_eq!(loaded.state().value, 1);
+}
+
+#[tokio::test]
+async fn defensive_after_event_types_empty_names_no_trigger() {
+    let trigger = AfterEventTypes::new(&["OrderCompleted"]);
+    // Empty event names should not trigger
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &[]));
+    // Non-matching should not trigger
+    assert!(!trigger.should_snapshot(
+        Some(Version::new(1).unwrap()),
+        Version::new(2).unwrap(),
+        &["ItemAdded"]
+    ));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4. Linearizability/Isolation Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn isolation_concurrent_loads_from_same_snapshot_get_independent_copies() {
+    let raw = InMemoryStore::new();
+    let store = Store::new(raw);
+    let snap_store = InMemorySnapshotStore::new();
+
+    // Save 3 events, snapshot at v3
+    let inner = store.repository().build();
+    let repo = Snapshotting::new(
+        inner,
+        &snap_store,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+    let id = CounterId(1);
+    let mut agg: AggregateRoot<CounterAggregate> = repo.load(id.clone()).await.unwrap();
+    repo.save(
+        &mut agg,
+        &[
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+            CounterEvent::Incremented,
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Load two copies concurrently
+    let inner2 = store.repository().build();
+    let repo2 = Snapshotting::new(
+        inner2,
+        &snap_store,
+        nexus_store::JsonCodec::default(),
+        EveryNEvents(NonZeroU64::new(1).unwrap()),
+        1,
+        false,
+    );
+
+    let (load_a, load_b) = tokio::join!(
+        async {
+            let agg: AggregateRoot<CounterAggregate> = repo2.load(id.clone()).await.unwrap();
+            agg
+        },
+        async {
+            let agg: AggregateRoot<CounterAggregate> = repo.load(id.clone()).await.unwrap();
+            agg
+        },
+    );
+
+    // Both should have identical state but be independent instances
+    assert_eq!(load_a.state().value, 3);
+    assert_eq!(load_b.state().value, 3);
+    assert_eq!(load_a.version(), Some(Version::new(3).unwrap()));
+    assert_eq!(load_b.version(), Some(Version::new(3).unwrap()));
+}
