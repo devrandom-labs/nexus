@@ -12,8 +12,13 @@
 
 use std::fmt;
 
+use std::num::NonZeroU64;
+
 use nexus::{Id, Version};
-use nexus_store::snapshot::{PendingSnapshot, PersistedSnapshot, SnapshotStore};
+use nexus_store::snapshot::{
+    AfterEventTypes, EveryNEvents, PendingSnapshot, PersistedSnapshot, SnapshotStore,
+    SnapshotTrigger,
+};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TestId(String);
@@ -79,4 +84,83 @@ async fn unit_snapshot_store_delete_succeeds() {
     let id = TestId("agg-1".into());
     let result = store.delete_snapshot(&id).await;
     assert!(result.is_ok());
+}
+
+// ── EveryNEvents ────────────────────────────────────────────────────
+
+#[test]
+fn every_n_events_triggers_on_boundary_crossing() {
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
+
+    // Single-event saves crossing the boundary
+    let v99 = Some(Version::new(99).unwrap());
+    let v100 = Version::new(100).unwrap();
+    assert!(trigger.should_snapshot(v99, v100, &[]));
+
+    // Not yet at boundary
+    let v98 = Some(Version::new(98).unwrap());
+    let v99_ver = Version::new(99).unwrap();
+    assert!(!trigger.should_snapshot(v98, v99_ver, &[]));
+}
+
+#[test]
+fn every_n_events_triggers_on_batch_crossing_boundary() {
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
+
+    // Batch of 7 events crossing the 100 boundary: 96 → 103
+    let old = Some(Version::new(96).unwrap());
+    let new = Version::new(103).unwrap();
+    assert!(trigger.should_snapshot(old, new, &[]));
+}
+
+#[test]
+fn every_n_events_first_save_triggers_at_boundary() {
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
+
+    // Fresh aggregate, first save crosses boundary
+    let new = Version::new(100).unwrap();
+    assert!(trigger.should_snapshot(None, new, &[]));
+
+    // Fresh aggregate, first save below boundary
+    let new_50 = Version::new(50).unwrap();
+    assert!(!trigger.should_snapshot(None, new_50, &[]));
+}
+
+#[test]
+fn every_1_event_always_triggers() {
+    let trigger = EveryNEvents(NonZeroU64::new(1).unwrap());
+    assert!(trigger.should_snapshot(None, Version::new(1).unwrap(), &[]));
+    assert!(trigger.should_snapshot(
+        Some(Version::new(1).unwrap()),
+        Version::new(2).unwrap(),
+        &[],
+    ));
+}
+
+// ── AfterEventTypes ─────────────────────────────────────────────────
+
+#[test]
+fn after_event_types_triggers_on_matching_event() {
+    let trigger = AfterEventTypes::new(&["OrderCompleted", "OrderCancelled"]);
+
+    assert!(trigger.should_snapshot(None, Version::new(5).unwrap(), &["OrderCompleted"]));
+    assert!(trigger.should_snapshot(None, Version::new(5).unwrap(), &["OrderCancelled"]));
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &["ItemAdded"]));
+}
+
+#[test]
+fn after_event_types_triggers_if_any_event_in_batch_matches() {
+    let trigger = AfterEventTypes::new(&["OrderCompleted"]);
+
+    assert!(trigger.should_snapshot(
+        None,
+        Version::new(5).unwrap(),
+        &["ItemAdded", "OrderCompleted"],
+    ));
+}
+
+#[test]
+fn after_event_types_does_not_trigger_on_empty_events() {
+    let trigger = AfterEventTypes::new(&["OrderCompleted"]);
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &[]));
 }
