@@ -287,6 +287,23 @@ impl<A: Aggregate> AggregateRoot<A> {
         }
     }
 
+    /// Create an aggregate root restored from a snapshot.
+    ///
+    /// The root is initialized with the given state and version,
+    /// as if those events had already been replayed. Subsequent
+    /// calls to [`replay`](Self::replay) will expect versions
+    /// starting at `version + 1`.
+    ///
+    /// Used by snapshot-aware repositories to skip full event replay.
+    #[must_use]
+    pub const fn restore(id: A::Id, state: A::State, version: Version) -> Self {
+        Self {
+            id,
+            state,
+            version: Some(version),
+        }
+    }
+
     /// The aggregate's identity.
     #[must_use]
     pub const fn id(&self) -> &A::Id {
