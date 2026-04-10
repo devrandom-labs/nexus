@@ -167,7 +167,18 @@ If a public method does 2+ database calls without a shared transaction, it is a 
 
 - **`Relaxed` memory ordering requires structural proof**, not a comment about external library behavior. If correctness depends on fjall's `write_tx()` serializing writers, that's an undocumented coupling. Use `Acquire`/`Release` or a mutex to make the invariant self-contained.
 
-### 6. Testing — 4 Cross-Cutting Categories (highest priority)
+### 6. Code Style — Functional-First, Allocate-Last
+
+- **Prefer combinators over imperative control flow.** Use `.map()`, `.and_then()`, `.map_or_else()`, `.filter()`, `.fold()`, and other iterator/`Option`/`Result` combinators instead of `if`/`else`/`match` when the transformation is a simple data flow. Reserve imperative style for cases where it measurably improves performance or enables compile-time safety that combinators cannot express.
+- **Lazy over eager.** Use iterators and lazy chains instead of collecting into intermediate `Vec`s. Only `.collect()` when you need the collection as a concrete value. `stream.filter().map().take()` is preferred over `let mut v = Vec::new(); for x in stream { if cond { v.push(f(x)); } }`.
+- **Borrow before own.** Default to `&T` and lifetimes. Only clone/allocate when borrowing is impossible (crossing `async` boundaries, returning owned data to callers, storing in long-lived containers). `Cow<'a, T>` bridges the gap when ownership is conditionally needed.
+- **No gratuitous allocations.** Every `Vec::new()`, `.to_owned()`, `.to_string()`, `Box::new()`, or `.clone()` in a hot path must justify itself. Prefer stack allocation (`ArrayVec`, `SmallVec`, `[T; N]`) for bounded collections. Use `&str` over `String`, `&[u8]` over `Vec<u8>`.
+- **Extension traits for GAT streams.** Our `EventStream` uses GAT lending iterators where standard `Iterator` combinators aren't available. Add extension trait methods (e.g., `EventStreamExt`) to keep call sites clean and composable rather than forcing every consumer into imperative `while let` loops.
+- **`let ... else` over `if let ... else { return }`.**  When the `else` branch is an early return/error, `let ... else` eliminates a nesting level and makes the happy path primary.
+- **Collapse redundant branches.** When both arms of an `if/else` compute the same expression except at a single boundary value, and the expressions produce identical results at that boundary, collapse them into one expression.
+- **All `use` imports at the top of the file.** Never scatter `use` statements mid-file. Never use deep inline path qualification like `crate::error::AppendError::Conflict { .. }` in match arms or expressions — import the type at the top and use the short name. The only exception is a genuinely one-off reference where adding an import would be more confusing than the inline path.
+
+### 7. Testing — 4 Cross-Cutting Categories (highest priority)
 
 Every new feature MUST include tests in these 4 categories BEFORE any other test methodology:
 
@@ -178,7 +189,7 @@ Every new feature MUST include tests in these 4 categories BEFORE any other test
 
 After the 4 categories above, apply the 21 testing methodologies (see test strategy docs).
 
-### 7. Test Quality Rules
+### 8. Test Quality Rules
 
 Every test must satisfy ALL of these:
 

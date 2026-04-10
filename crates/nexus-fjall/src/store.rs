@@ -188,14 +188,7 @@ impl RawEventStore for FjallStore {
         let id_string = id.to_string();
 
         // Look up numeric stream ID from streams partition.
-        let meta = self.streams.get(&id_string)?;
-        let numeric_id = if let Some(meta_bytes) = meta {
-            let (numeric_id, _version) =
-                decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
-                    stream_id: id_string.clone(),
-                })?;
-            numeric_id
-        } else {
+        let Some(meta_bytes) = self.streams.get(&id_string)? else {
             // Stream not found: return empty stream.
             return Ok(FjallStream {
                 events: vec![],
@@ -207,6 +200,11 @@ impl RawEventStore for FjallStore {
             });
         };
 
+        let (numeric_id, _version) =
+            decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
+                stream_id: id_string.clone(),
+            })?;
+
         // Range scan from (numeric_id, from_version) to (numeric_id, u64::MAX).
         let start = encode_event_key(numeric_id, from.as_u64());
         let end = encode_event_key(numeric_id, u64::MAX);
@@ -217,11 +215,12 @@ impl RawEventStore for FjallStore {
             "read_stream precondition: start key must sort <= end key"
         );
 
-        let mut events = Vec::new();
-        for kv_result in self.events.inner().range(start..=end) {
-            let kv = kv_result?;
-            events.push((kv.0, kv.1));
-        }
+        let events: Vec<_> = self
+            .events
+            .inner()
+            .range(start..=end)
+            .map(|r| r.map(|kv| (kv.0, kv.1)))
+            .collect::<Result<_, _>>()?;
 
         // Postcondition: events must be sorted by key (fjall guarantees this,
         // but we verify in debug mode).
