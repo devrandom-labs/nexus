@@ -15,6 +15,8 @@ testing = ["dep:tokio"]
 bounded-labels = []
 serde = ["dep:serde"]
 json = ["serde", "dep:serde_json"]
+snapshot = []
+snapshot-json = ["snapshot", "json"]
 
 [dependencies]
 nexus = { version = "0.1.0", path = "../nexus" }
