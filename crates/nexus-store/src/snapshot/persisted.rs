@@ -1,6 +1,6 @@
-use nexus::Version;
+use std::num::NonZeroU32;
 
-use crate::error::InvalidSchemaVersion;
+use nexus::Version;
 
 /// Persisted snapshot loaded from storage (read path).
 ///
@@ -10,46 +10,19 @@ use crate::error::InvalidSchemaVersion;
 #[derive(Debug, Clone)]
 pub struct PersistedSnapshot {
     version: Version,
-    schema_version: u32,
+    schema_version: NonZeroU32,
     payload: Vec<u8>,
 }
 
 impl PersistedSnapshot {
     /// Create a new persisted snapshot.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `schema_version` is 0.
     #[must_use]
-    #[allow(
-        clippy::panic,
-        reason = "convenience constructor with documented panic"
-    )]
-    pub fn new(version: Version, schema_version: u32, payload: Vec<u8>) -> Self {
-        match Self::try_new(version, schema_version, payload) {
-            Ok(snap) => snap,
-            Err(e) => panic!("{e}"),
-        }
-    }
-
-    /// Try to create a new persisted snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InvalidSchemaVersion`] if `schema_version` is 0.
-    pub fn try_new(
-        version: Version,
-        schema_version: u32,
-        payload: Vec<u8>,
-    ) -> Result<Self, InvalidSchemaVersion> {
-        if schema_version == 0 {
-            return Err(InvalidSchemaVersion);
-        }
-        Ok(Self {
+    pub const fn new(version: Version, schema_version: NonZeroU32, payload: Vec<u8>) -> Self {
+        Self {
             version,
             schema_version,
             payload,
-        })
+        }
     }
 
     /// The aggregate version at the time of the snapshot.
@@ -60,7 +33,7 @@ impl PersistedSnapshot {
 
     /// The schema version for invalidation checking.
     #[must_use]
-    pub const fn schema_version(&self) -> u32 {
+    pub const fn schema_version(&self) -> NonZeroU32 {
         self.schema_version
     }
 

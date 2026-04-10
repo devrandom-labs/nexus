@@ -12,7 +12,7 @@
 
 use std::fmt;
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{Id, Version};
 use nexus_store::snapshot::{
@@ -35,27 +35,22 @@ impl Id for TestId {}
 fn pending_snapshot_stores_version_and_payload() {
     let version = Version::new(42).unwrap();
     let payload = vec![1, 2, 3];
-    let snap = PendingSnapshot::new(version, 1, payload.clone());
+    let sv = NonZeroU32::new(1).unwrap();
+    let snap = PendingSnapshot::new(version, sv, payload.clone());
 
     assert_eq!(snap.version(), version);
-    assert_eq!(snap.schema_version(), 1);
+    assert_eq!(snap.schema_version(), sv);
     assert_eq!(snap.payload(), &payload);
-}
-
-#[test]
-fn pending_snapshot_schema_version_must_be_nonzero() {
-    let version = Version::new(1).unwrap();
-    let result = PendingSnapshot::try_new(version, 0, vec![]);
-    assert!(result.is_err());
 }
 
 #[test]
 fn persisted_snapshot_stores_version_and_payload() {
     let version = Version::new(10).unwrap();
-    let snap = PersistedSnapshot::new(version, 2, vec![4, 5, 6]);
+    let sv = NonZeroU32::new(2).unwrap();
+    let snap = PersistedSnapshot::new(version, sv, vec![4, 5, 6]);
 
     assert_eq!(snap.version(), version);
-    assert_eq!(snap.schema_version(), 2);
+    assert_eq!(snap.schema_version(), sv);
     assert_eq!(snap.payload(), &[4, 5, 6]);
 }
 
@@ -73,7 +68,11 @@ async fn unit_snapshot_store_returns_none() {
 async fn unit_snapshot_store_save_succeeds() {
     let store = ();
     let id = TestId("agg-1".into());
-    let snap = PendingSnapshot::new(Version::new(1).unwrap(), 1, vec![1, 2, 3]);
+    let snap = PendingSnapshot::new(
+        Version::new(1).unwrap(),
+        NonZeroU32::new(1).unwrap(),
+        vec![1, 2, 3],
+    );
     let result = store.save_snapshot(&id, &snap).await;
     assert!(result.is_ok());
 }
@@ -184,13 +183,13 @@ mod in_memory_tests {
         let store = InMemorySnapshotStore::new();
         let id = TestId("agg-1".into());
         let version = Version::new(10).unwrap();
-        let snap = PendingSnapshot::new(version, 1, vec![1, 2, 3]);
+        let snap = PendingSnapshot::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
 
         store.save_snapshot(&id, &snap).await.unwrap();
         let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
 
         assert_eq!(loaded.version(), version);
-        assert_eq!(loaded.schema_version(), 1);
+        assert_eq!(loaded.schema_version(), NonZeroU32::new(1).unwrap());
         assert_eq!(loaded.payload(), &[1, 2, 3]);
     }
 
@@ -199,10 +198,18 @@ mod in_memory_tests {
         let store = InMemorySnapshotStore::new();
         let id = TestId("agg-1".into());
 
-        let snap1 = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![1]);
+        let snap1 = PendingSnapshot::new(
+            Version::new(10).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![1],
+        );
         store.save_snapshot(&id, &snap1).await.unwrap();
 
-        let snap2 = PendingSnapshot::new(Version::new(20).unwrap(), 1, vec![2]);
+        let snap2 = PendingSnapshot::new(
+            Version::new(20).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![2],
+        );
         store.save_snapshot(&id, &snap2).await.unwrap();
 
         let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
@@ -214,13 +221,21 @@ mod in_memory_tests {
     async fn different_aggregates_have_separate_snapshots() {
         let store = InMemorySnapshotStore::new();
 
-        let snap1 = PendingSnapshot::new(Version::new(5).unwrap(), 1, vec![1]);
+        let snap1 = PendingSnapshot::new(
+            Version::new(5).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![1],
+        );
         store
             .save_snapshot(&TestId("agg-1".into()), &snap1)
             .await
             .unwrap();
 
-        let snap2 = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![2]);
+        let snap2 = PendingSnapshot::new(
+            Version::new(10).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![2],
+        );
         store
             .save_snapshot(&TestId("agg-2".into()), &snap2)
             .await
@@ -245,7 +260,11 @@ mod in_memory_tests {
         let store = InMemorySnapshotStore::new();
         let id = TestId("agg-1".into());
 
-        let snap = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![1]);
+        let snap = PendingSnapshot::new(
+            Version::new(10).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![1],
+        );
         store.save_snapshot(&id, &snap).await.unwrap();
 
         store.delete_snapshot(&id).await.unwrap();
@@ -297,7 +316,7 @@ mod builder_tests {
             .repository()
             .snapshot_store(snap)
             .snapshot_trigger(AfterEventTypes::new(&["Done"]))
-            .snapshot_schema_version(2)
+            .snapshot_schema_version(NonZeroU32::new(2).unwrap())
             .snapshot_on_read(true)
             .build();
     }

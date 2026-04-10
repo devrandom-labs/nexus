@@ -11,10 +11,13 @@
 )]
 
 use std::fmt;
+use std::num::NonZeroU32;
 
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
 use nexus_store::snapshot::{PendingSnapshot, SnapshotStore};
+
+const SV1: NonZeroU32 = NonZeroU32::MIN;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TestId(String);
@@ -62,12 +65,12 @@ async fn save_then_load_roundtrips() {
     let id = tid("agg-1");
     setup_stream(&store, &id, 5).await;
 
-    let snap = PendingSnapshot::new(Version::new(5).unwrap(), 1, vec![1, 2, 3]);
+    let snap = PendingSnapshot::new(Version::new(5).unwrap(), SV1, vec![1, 2, 3]);
     store.save_snapshot(&id, &snap).await.unwrap();
 
     let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
     assert_eq!(loaded.version(), Version::new(5).unwrap());
-    assert_eq!(loaded.schema_version(), 1);
+    assert_eq!(loaded.schema_version(), SV1);
     assert_eq!(loaded.payload(), &[1, 2, 3]);
 }
 
@@ -77,15 +80,19 @@ async fn save_overwrites_previous_snapshot() {
     let id = tid("agg-1");
     setup_stream(&store, &id, 10).await;
 
-    let snap1 = PendingSnapshot::new(Version::new(5).unwrap(), 1, vec![1]);
+    let snap1 = PendingSnapshot::new(Version::new(5).unwrap(), SV1, vec![1]);
     store.save_snapshot(&id, &snap1).await.unwrap();
 
-    let snap2 = PendingSnapshot::new(Version::new(10).unwrap(), 2, vec![2, 3]);
+    let snap2 = PendingSnapshot::new(
+        Version::new(10).unwrap(),
+        NonZeroU32::new(2).unwrap(),
+        vec![2, 3],
+    );
     store.save_snapshot(&id, &snap2).await.unwrap();
 
     let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
     assert_eq!(loaded.version(), Version::new(10).unwrap());
-    assert_eq!(loaded.schema_version(), 2);
+    assert_eq!(loaded.schema_version(), NonZeroU32::new(2).unwrap());
     assert_eq!(loaded.payload(), &[2, 3]);
 }
 
@@ -95,7 +102,7 @@ async fn delete_then_load_returns_none() {
     let id = tid("agg-1");
     setup_stream(&store, &id, 3).await;
 
-    let snap = PendingSnapshot::new(Version::new(3).unwrap(), 1, vec![1]);
+    let snap = PendingSnapshot::new(Version::new(3).unwrap(), SV1, vec![1]);
     store.save_snapshot(&id, &snap).await.unwrap();
     store.delete_snapshot(&id).await.unwrap();
 
@@ -114,7 +121,7 @@ async fn snapshot_persists_across_reopen() {
     {
         let store = FjallStore::builder(&db_path).open().unwrap();
         setup_stream(&store, &id, 5).await;
-        let snap = PendingSnapshot::new(Version::new(5).unwrap(), 1, vec![42, 43, 44]);
+        let snap = PendingSnapshot::new(Version::new(5).unwrap(), SV1, vec![42, 43, 44]);
         store.save_snapshot(&id, &snap).await.unwrap();
     }
 
@@ -123,7 +130,7 @@ async fn snapshot_persists_across_reopen() {
         let store = FjallStore::builder(&db_path).open().unwrap();
         let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
         assert_eq!(loaded.version(), Version::new(5).unwrap());
-        assert_eq!(loaded.schema_version(), 1);
+        assert_eq!(loaded.schema_version(), SV1);
         assert_eq!(loaded.payload(), &[42, 43, 44]);
     }
 }
@@ -158,7 +165,7 @@ async fn delete_nonexistent_is_ok() {
 async fn save_to_nonexistent_stream_is_noop() {
     let (store, _dir) = temp_store();
     // No stream exists — save should silently succeed (no-op)
-    let snap = PendingSnapshot::new(Version::new(1).unwrap(), 1, vec![1]);
+    let snap = PendingSnapshot::new(Version::new(1).unwrap(), SV1, vec![1]);
     let result = store.save_snapshot(&tid("nope"), &snap).await;
     assert!(result.is_ok());
 
@@ -176,10 +183,10 @@ async fn different_streams_have_separate_snapshots() {
     setup_stream(&store, &id1, 5).await;
     setup_stream(&store, &id2, 10).await;
 
-    let snap1 = PendingSnapshot::new(Version::new(5).unwrap(), 1, vec![1]);
+    let snap1 = PendingSnapshot::new(Version::new(5).unwrap(), SV1, vec![1]);
     store.save_snapshot(&id1, &snap1).await.unwrap();
 
-    let snap2 = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![2]);
+    let snap2 = PendingSnapshot::new(Version::new(10).unwrap(), SV1, vec![2]);
     store.save_snapshot(&id2, &snap2).await.unwrap();
 
     let loaded1 = store.load_snapshot(&id1).await.unwrap().unwrap();

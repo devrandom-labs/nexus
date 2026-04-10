@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use crate::codec::Codec;
 use crate::error::StoreError;
 use crate::snapshot::{PendingSnapshot, SnapshotStore, SnapshotTrigger};
@@ -30,7 +32,7 @@ pub struct Snapshotting<R, SS, SC, T> {
     snapshot_store: SS,
     snapshot_codec: SC,
     trigger: T,
-    schema_version: u32,
+    schema_version: NonZeroU32,
     snapshot_on_read: bool,
 }
 
@@ -45,7 +47,7 @@ impl<R, SS, SC, T> Snapshotting<R, SS, SC, T> {
         snapshot_store: SS,
         snapshot_codec: SC,
         trigger: T,
-        schema_version: u32,
+        schema_version: NonZeroU32,
         snapshot_on_read: bool,
     ) -> Self {
         Self {
@@ -153,9 +155,8 @@ where
         A: Aggregate,
         SC: Codec<A::State>,
     {
-        if let Ok(payload) = self.snapshot_codec.encode(aggregate.state())
-            && let Ok(snap) = PendingSnapshot::try_new(version, self.schema_version, payload)
-        {
+        if let Ok(payload) = self.snapshot_codec.encode(aggregate.state()) {
+            let snap = PendingSnapshot::new(version, self.schema_version, payload);
             let _ = self
                 .snapshot_store
                 .save_snapshot(aggregate.id(), &snap)

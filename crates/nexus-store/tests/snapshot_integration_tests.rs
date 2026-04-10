@@ -11,7 +11,14 @@
 )]
 
 use std::fmt;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
+
+const SV1: NonZeroU32 = NonZeroU32::MIN;
+
+#[allow(clippy::unwrap_used, reason = "test constant")]
+fn sv2() -> NonZeroU32 {
+    NonZeroU32::new(2).unwrap()
+}
 
 use nexus::*;
 use nexus_store::Store;
@@ -94,7 +101,7 @@ fn repo(
         InMemorySnapshotStore::new(),
         nexus_store::JsonCodec::default(),
         trigger,
-        1,
+        SV1,
         snapshot_on_read,
     )
 }
@@ -193,7 +200,7 @@ async fn schema_version_mismatch_falls_back_to_full_replay() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1, // schema v1
+        SV1, // schema v1
         false,
     );
 
@@ -211,7 +218,7 @@ async fn schema_version_mismatch_falls_back_to_full_replay() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        2, // schema v2 — mismatch!
+        sv2(), // schema v2 — mismatch!
         false,
     );
 
@@ -260,7 +267,7 @@ async fn lazy_snapshot_on_read_after_full_replay() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1000).unwrap()), // very high threshold
-        1,
+        SV1,
         false, // no on-read yet
     );
 
@@ -286,7 +293,7 @@ async fn lazy_snapshot_on_read_after_full_replay() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1000).unwrap()),
-        1,
+        SV1,
         true, // on-read enabled!
     );
 
@@ -446,7 +453,7 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
     let id = CounterId(1);
@@ -463,7 +470,7 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        2,
+        sv2(),
         false,
     );
     let mut agg: AggregateRoot<CounterAggregate> = repo_v2.load(id.clone()).await.unwrap();
@@ -482,7 +489,7 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
 
     // Verify the snapshot has schema v2
     let snap = snap_store.load_snapshot(&id).await.unwrap().unwrap();
-    assert_eq!(snap.schema_version(), 2);
+    assert_eq!(snap.schema_version(), sv2());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -526,7 +533,7 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(10000).unwrap()),
-        1,
+        SV1,
         false,
     );
     let id = CounterId(1);
@@ -555,7 +562,7 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(10000).unwrap()),
-        1,
+        SV1,
         true,
     );
     let _loaded: AggregateRoot<CounterAggregate> = repo_on_read.load(id.clone()).await.unwrap();
@@ -603,7 +610,7 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
     let id = CounterId(1);
@@ -620,7 +627,7 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
         &snap_store,
         FailCodec,
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
     let loaded: AggregateRoot<CounterAggregate> = repo_bad.load(id).await.unwrap();
@@ -665,7 +672,7 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
         InMemorySnapshotStore::new(),
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
     let id = CounterId(1);
@@ -685,7 +692,7 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
         ErrorStore,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
     let loaded: AggregateRoot<CounterAggregate> = bad_repo.load(id).await.unwrap();
@@ -727,7 +734,7 @@ async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
         SaveErrorStore,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
 
@@ -774,7 +781,7 @@ async fn isolation_concurrent_loads_from_same_snapshot_get_independent_copies() 
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
     let id = CounterId(1);
@@ -797,7 +804,7 @@ async fn isolation_concurrent_loads_from_same_snapshot_get_independent_copies() 
         &snap_store,
         nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
-        1,
+        SV1,
         false,
     );
 

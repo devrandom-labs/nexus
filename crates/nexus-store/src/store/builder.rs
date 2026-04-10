@@ -40,7 +40,7 @@ pub struct WithSnapshot<SS, SC, T> {
     store: SS,
     codec: SC,
     trigger: T,
-    schema_version: u32,
+    schema_version: std::num::NonZeroU32,
     snapshot_on_read: bool,
 }
 
@@ -151,6 +151,10 @@ use std::num::NonZeroU64;
 #[cfg(feature = "snapshot")]
 const DEFAULT_SNAPSHOT_INTERVAL: u64 = 100;
 
+/// Default snapshot schema version.
+#[cfg(feature = "snapshot")]
+const DEFAULT_SCHEMA_VERSION: std::num::NonZeroU32 = std::num::NonZeroU32::MIN;
+
 #[cfg(all(feature = "snapshot-json", feature = "snapshot"))]
 impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     /// Configure a snapshot store with JSON codec (default).
@@ -182,7 +186,7 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
                     NonZeroU64::new(DEFAULT_SNAPSHOT_INTERVAL)
                         .expect("DEFAULT_SNAPSHOT_INTERVAL is non-zero"),
                 ),
-                schema_version: 1,
+                schema_version: DEFAULT_SCHEMA_VERSION,
                 snapshot_on_read: false,
             },
         }
@@ -221,7 +225,7 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
                     NonZeroU64::new(DEFAULT_SNAPSHOT_INTERVAL)
                         .expect("DEFAULT_SNAPSHOT_INTERVAL is non-zero"),
                 ),
-                schema_version: 1,
+                schema_version: DEFAULT_SCHEMA_VERSION,
                 snapshot_on_read: false,
             },
         }
@@ -272,7 +276,7 @@ impl<S, C, U, SS, SC, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>> {
 
     /// Set the schema version for snapshot invalidation.
     #[must_use]
-    pub const fn snapshot_schema_version(mut self, version: u32) -> Self {
+    pub const fn snapshot_schema_version(mut self, version: std::num::NonZeroU32) -> Self {
         self.snapshot.schema_version = version;
         self
     }

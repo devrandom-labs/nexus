@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::num::NonZeroU32;
 
 use nexus::Id;
 use tokio::sync::RwLock;
@@ -19,7 +20,7 @@ pub struct InMemorySnapshotStore {
 #[derive(Debug, Clone)]
 struct StoredSnapshot {
     version: nexus::Version,
-    schema_version: u32,
+    schema_version: NonZeroU32,
     payload: Vec<u8>,
 }
 

@@ -283,7 +283,7 @@ mod snapshot_impl {
             let value = self.snapshots.get(key)?;
             match value {
                 Some(bytes) => {
-                    let (schema_version, version_raw, payload) = decode_snapshot_value(&bytes)
+                    let (schema_version_raw, version_raw, payload) = decode_snapshot_value(&bytes)
                         .map_err(|_| FjallError::CorruptValue {
                             stream_id: id_string,
                             version: None,
@@ -293,12 +293,14 @@ mod snapshot_impl {
                             stream_id: id.to_string(),
                             version: None,
                         })?;
-                    let snap =
-                        PersistedSnapshot::try_new(version, schema_version, payload.to_vec())
-                            .map_err(|_| FjallError::CorruptValue {
+                    let schema_version =
+                        std::num::NonZeroU32::new(schema_version_raw).ok_or_else(|| {
+                            FjallError::CorruptValue {
                                 stream_id: id.to_string(),
                                 version: Some(version_raw),
-                            })?;
+                            }
+                        })?;
+                    let snap = PersistedSnapshot::new(version, schema_version, payload.to_vec());
                     Ok(Some(snap))
                 }
                 None => Ok(None),
@@ -336,7 +338,7 @@ mod snapshot_impl {
             let mut buf = Vec::new();
             encode_snapshot_value(
                 &mut buf,
-                snapshot.schema_version(),
+                snapshot.schema_version().get(),
                 snapshot.version().as_u64(),
                 snapshot.payload(),
             );
