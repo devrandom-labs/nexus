@@ -202,7 +202,8 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     #[must_use]
     #[allow(
         clippy::expect_used,
-        reason = "DEFAULT_SNAPSHOT_INTERVAL is non-zero by inspection"
+        clippy::missing_panics_doc,
+        reason = "DEFAULT_SNAPSHOT_INTERVAL is non-zero by inspection — cannot panic"
     )]
     pub fn snapshot_store<SS: SnapshotStore, SC>(
         self,
@@ -271,20 +272,14 @@ impl<S, C, U, SS, SC, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>> {
 
     /// Set the schema version for snapshot invalidation.
     #[must_use]
-    pub const fn snapshot_schema_version(
-        mut self,
-        version: u32,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>> {
+    pub const fn snapshot_schema_version(mut self, version: u32) -> Self {
         self.snapshot.schema_version = version;
         self
     }
 
     /// Enable lazy snapshot creation on read (after full replay).
     #[must_use]
-    pub const fn snapshot_on_read(
-        mut self,
-        enabled: bool,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>> {
+    pub const fn snapshot_on_read(mut self, enabled: bool) -> Self {
         self.snapshot.snapshot_on_read = enabled;
         self
     }

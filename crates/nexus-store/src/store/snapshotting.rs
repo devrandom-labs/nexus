@@ -36,6 +36,10 @@ pub struct Snapshotting<R, SS, SC, T> {
 
 impl<R, SS, SC, T> Snapshotting<R, SS, SC, T> {
     /// Create a new snapshot-aware repository.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "snapshot config is flat — all fields are semantically distinct"
+    )]
     pub const fn new(
         inner: R,
         snapshot_store: SS,
@@ -68,7 +72,7 @@ where
 
     async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
         // Try snapshot first.
-        let snapshot_hit = self.try_load_from_snapshot(&id).await;
+        let snapshot_hit = self.try_load_from_snapshot::<A>(&id).await;
 
         if let Some((root, from)) = snapshot_hit {
             // Snapshot hit — partial replay from snapshot version.
@@ -79,10 +83,10 @@ where
         let root = self.inner.load(id).await?;
 
         // Lazy snapshot: if enabled and aggregate has events, snapshot now.
-        if self.snapshot_on_read {
-            if let Some(version) = root.version() {
-                self.try_save_snapshot(&root, version).await;
-            }
+        if self.snapshot_on_read
+            && let Some(version) = root.version()
+        {
+            self.try_save_snapshot::<A>(&root, version).await;
         }
 
         Ok(root)
@@ -99,15 +103,15 @@ where
         self.inner.save(aggregate, events).await?;
 
         // Check trigger — maybe snapshot.
-        if !events.is_empty() {
-            if let Some(new_version) = aggregate.version() {
-                let event_names: Vec<&str> = events.iter().map(|e| e.name()).collect();
-                if self
-                    .trigger
-                    .should_snapshot(old_version, new_version, &event_names)
-                {
-                    self.try_save_snapshot(aggregate, new_version).await;
-                }
+        if !events.is_empty()
+            && let Some(new_version) = aggregate.version()
+        {
+            let event_names: Vec<&str> = events.iter().map(DomainEvent::name).collect();
+            if self
+                .trigger
+                .should_snapshot(old_version, new_version, &event_names)
+            {
+                self.try_save_snapshot::<A>(aggregate, new_version).await;
             }
         }
 
@@ -117,10 +121,13 @@ where
 
 impl<R, SS, SC, T> Snapshotting<R, SS, SC, T>
 where
+    R: Send + Sync,
     SS: SnapshotStore,
+    SC: Send + Sync,
+    T: Send + Sync,
 {
-    /// Try to load a snapshot. Returns (root, next_version_to_replay) on hit.
-    /// Returns None on miss, schema mismatch, or any error (best-effort).
+    /// Try to load a snapshot. Returns `(root, next_version)` on hit.
+    /// Returns `None` on miss, schema mismatch, or any error (best-effort).
     async fn try_load_from_snapshot<A>(&self, id: &A::Id) -> Option<(AggregateRoot<A>, Version)>
     where
         A: Aggregate,
@@ -146,13 +153,13 @@ where
         A: Aggregate,
         SC: Codec<A::State>,
     {
-        if let Ok(payload) = self.snapshot_codec.encode(aggregate.state()) {
-            if let Ok(snap) = PendingSnapshot::try_new(version, self.schema_version, payload) {
-                let _ = self
-                    .snapshot_store
-                    .save_snapshot(aggregate.id(), &snap)
-                    .await;
-            }
+        if let Ok(payload) = self.snapshot_codec.encode(aggregate.state())
+            && let Ok(snap) = PendingSnapshot::try_new(version, self.schema_version, payload)
+        {
+            let _ = self
+                .snapshot_store
+                .save_snapshot(aggregate.id(), &snap)
+                .await;
         }
     }
 }

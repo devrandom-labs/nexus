@@ -21,6 +21,10 @@ impl PendingSnapshot {
     /// Panics if `schema_version` is 0. Use [`try_new`](Self::try_new)
     /// for a fallible alternative.
     #[must_use]
+    #[allow(
+        clippy::panic,
+        reason = "convenience constructor with documented panic"
+    )]
     pub fn new(version: Version, schema_version: u32, payload: Vec<u8>) -> Self {
         match Self::try_new(version, schema_version, payload) {
             Ok(snap) => snap,
@@ -30,7 +34,9 @@ impl PendingSnapshot {
 
     /// Try to create a new pending snapshot.
     ///
-    /// Returns `Err` if `schema_version` is 0.
+    /// # Errors
+    ///
+    /// Returns [`InvalidSchemaVersion`] if `schema_version` is 0.
     pub fn try_new(
         version: Version,
         schema_version: u32,

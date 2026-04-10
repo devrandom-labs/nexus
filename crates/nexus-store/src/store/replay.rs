@@ -8,7 +8,7 @@ use crate::error::StoreError;
 ///
 /// Both `EventStore` and `ZeroCopyEventStore` implement this to share
 /// replay logic with `Snapshotting`. Not public API.
-pub(crate) trait ReplayFrom<A: Aggregate>: Send + Sync {
+pub trait ReplayFrom<A: Aggregate>: Send + Sync {
     /// Replay events starting from `from` version (inclusive) into `root`.
     ///
     /// Returns the updated aggregate with all events applied.

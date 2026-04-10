@@ -21,6 +21,10 @@ impl PersistedSnapshot {
     ///
     /// Panics if `schema_version` is 0.
     #[must_use]
+    #[allow(
+        clippy::panic,
+        reason = "convenience constructor with documented panic"
+    )]
     pub fn new(version: Version, schema_version: u32, payload: Vec<u8>) -> Self {
         match Self::try_new(version, schema_version, payload) {
             Ok(snap) => snap,
@@ -29,6 +33,10 @@ impl PersistedSnapshot {
     }
 
     /// Try to create a new persisted snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidSchemaVersion`] if `schema_version` is 0.
     pub fn try_new(
         version: Version,
         schema_version: u32,
