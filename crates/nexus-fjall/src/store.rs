@@ -19,11 +19,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// stream metadata and `events` for event rows), and a monotonic
 /// counter for allocating stream numeric IDs.
 ///
+/// When the `snapshot` feature is enabled, an additional `snapshots`
+/// partition is available for storing aggregate snapshots.
+///
 /// Use [`FjallStore::builder`] to configure and open a store.
 pub struct FjallStore {
     pub(crate) db: fjall::TxKeyspace,
     pub(crate) streams: fjall::TxPartitionHandle,
     pub(crate) events: fjall::TxPartitionHandle,
+    #[cfg(feature = "snapshot")]
+    pub(crate) snapshots: fjall::TxPartitionHandle,
     pub(crate) next_stream_id: AtomicU64,
 }
 
@@ -236,6 +241,135 @@ impl RawEventStore for FjallStore {
             #[cfg(debug_assertions)]
             prev_version: None,
         })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SnapshotStore implementation
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "snapshot")]
+mod snapshot_impl {
+    use super::*;
+    use crate::encoding::{
+        decode_snapshot_value, decode_stream_meta, encode_snapshot_key, encode_snapshot_value,
+    };
+    use nexus_store::snapshot::{PendingSnapshot, PersistedSnapshot, SnapshotStore};
+
+    impl SnapshotStore for FjallStore {
+        type Error = FjallError;
+
+        async fn load_snapshot(
+            &self,
+            id: &impl Id,
+        ) -> Result<Option<PersistedSnapshot>, FjallError> {
+            let id_string = id.to_string();
+
+            // Single snapshot read: look up numeric ID then read snapshot.
+            // Both reads use the same point-in-time view (fjall LSM snapshot).
+            let meta = self.streams.get(&id_string)?;
+            let numeric_id = match meta {
+                Some(meta_bytes) => {
+                    let (numeric_id, _version) =
+                        decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
+                            stream_id: id_string.clone(),
+                        })?;
+                    numeric_id
+                }
+                None => return Ok(None),
+            };
+
+            let key = encode_snapshot_key(numeric_id);
+            let value = self.snapshots.get(key)?;
+            match value {
+                Some(bytes) => {
+                    let (schema_version, version_raw, payload) = decode_snapshot_value(&bytes)
+                        .map_err(|_| FjallError::CorruptValue {
+                            stream_id: id_string,
+                            version: None,
+                        })?;
+                    let version =
+                        Version::new(version_raw).ok_or_else(|| FjallError::CorruptValue {
+                            stream_id: id.to_string(),
+                            version: None,
+                        })?;
+                    let snap =
+                        PersistedSnapshot::try_new(version, schema_version, payload.to_vec())
+                            .map_err(|_| FjallError::CorruptValue {
+                                stream_id: id.to_string(),
+                                version: Some(version_raw),
+                            })?;
+                    Ok(Some(snap))
+                }
+                None => Ok(None),
+            }
+        }
+
+        async fn save_snapshot(
+            &self,
+            id: &impl Id,
+            snapshot: &PendingSnapshot,
+        ) -> Result<(), FjallError> {
+            let id_string = id.to_string();
+
+            // Atomic: look up numeric ID + write snapshot in one transaction.
+            let mut tx = self.db.write_tx();
+
+            let numeric_id = match tx
+                .get(&self.streams, &id_string)
+                .map_err(|e| FjallError::Io(e))?
+            {
+                Some(meta_bytes) => {
+                    let (numeric_id, _version) =
+                        decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
+                            stream_id: id_string.clone(),
+                        })?;
+                    numeric_id
+                }
+                None => {
+                    // No stream exists — can't snapshot an aggregate with no events.
+                    return Ok(());
+                }
+            };
+
+            let key = encode_snapshot_key(numeric_id);
+            let mut buf = Vec::new();
+            encode_snapshot_value(
+                &mut buf,
+                snapshot.schema_version(),
+                snapshot.version().as_u64(),
+                snapshot.payload(),
+            );
+            tx.insert(&self.snapshots, key, fjall::Slice::from(&*buf));
+
+            tx.commit().map_err(FjallError::Io)?;
+            Ok(())
+        }
+
+        async fn delete_snapshot(&self, id: &impl Id) -> Result<(), FjallError> {
+            let id_string = id.to_string();
+
+            let mut tx = self.db.write_tx();
+
+            let numeric_id = match tx
+                .get(&self.streams, &id_string)
+                .map_err(|e| FjallError::Io(e))?
+            {
+                Some(meta_bytes) => {
+                    let (numeric_id, _version) =
+                        decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
+                            stream_id: id_string.clone(),
+                        })?;
+                    numeric_id
+                }
+                None => return Ok(()),
+            };
+
+            let key = encode_snapshot_key(numeric_id);
+            tx.remove(&self.snapshots, key);
+            tx.commit().map_err(FjallError::Io)?;
+            Ok(())
+        }
     }
 }
 

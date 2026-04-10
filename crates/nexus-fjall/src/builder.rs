@@ -98,6 +98,15 @@ impl FjallStoreBuilder {
         };
         let events = db.open_partition("events", events_opts)?;
 
+        // --- snapshots partition: point-read-optimised (like streams) ---
+        #[cfg(feature = "snapshot")]
+        let snapshots = {
+            let snapshots_defaults = PartitionCreateOptions::default()
+                .block_size(4_096)
+                .bloom_filter_bits(Some(15));
+            db.open_partition("snapshots", snapshots_defaults)?
+        };
+
         // Recover `next_stream_id` by scanning all stream metadata entries
         // and finding the maximum numeric_id.
         let mut max_id: u64 = 0;
@@ -133,6 +142,8 @@ impl FjallStoreBuilder {
             db,
             streams,
             events,
+            #[cfg(feature = "snapshot")]
+            snapshots,
             next_stream_id: AtomicU64::new(next_id),
         })
     }

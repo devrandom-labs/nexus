@@ -37,7 +37,7 @@ impl EventStream for FjallStream {
             self.poisoned = true;
             return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id.clone(),
-                version: 0,
+                version: None,
             }));
         };
 
@@ -57,7 +57,7 @@ impl EventStream for FjallStream {
             self.poisoned = true;
             return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id.clone(),
-                version,
+                version: Some(version),
             }));
         };
 
@@ -65,7 +65,7 @@ impl EventStream for FjallStream {
             self.poisoned = true;
             return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id.clone(),
-                version,
+                version: Some(version),
             }));
         };
 
@@ -77,7 +77,7 @@ impl EventStream for FjallStream {
             self.poisoned = true;
             Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id.clone(),
-                version,
+                version: Some(version),
             }))
         }
     }
@@ -156,7 +156,7 @@ mod tests {
         match err {
             FjallError::CorruptValue { stream_id, version } => {
                 assert_eq!(stream_id, "corrupt-stream");
-                assert_eq!(version, 1);
+                assert_eq!(version, Some(1));
             }
             other => panic!("expected CorruptValue, got: {other:?}"),
         }
