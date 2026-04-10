@@ -164,3 +164,99 @@ fn after_event_types_does_not_trigger_on_empty_events() {
     let trigger = AfterEventTypes::new(&["OrderCompleted"]);
     assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &[]));
 }
+
+// ── InMemorySnapshotStore ───────────────────────────────────────────
+
+#[cfg(feature = "testing")]
+mod in_memory_tests {
+    use super::*;
+    use nexus_store::snapshot::InMemorySnapshotStore;
+
+    #[tokio::test]
+    async fn load_returns_none_when_empty() {
+        let store = InMemorySnapshotStore::new();
+        let result = store.load_snapshot(&TestId("agg-1".into())).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn save_then_load_roundtrips() {
+        let store = InMemorySnapshotStore::new();
+        let id = TestId("agg-1".into());
+        let version = Version::new(10).unwrap();
+        let snap = PendingSnapshot::new(version, 1, vec![1, 2, 3]);
+
+        store.save_snapshot(&id, &snap).await.unwrap();
+        let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+
+        assert_eq!(loaded.version(), version);
+        assert_eq!(loaded.schema_version(), 1);
+        assert_eq!(loaded.payload(), &[1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn save_overwrites_previous_snapshot() {
+        let store = InMemorySnapshotStore::new();
+        let id = TestId("agg-1".into());
+
+        let snap1 = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![1]);
+        store.save_snapshot(&id, &snap1).await.unwrap();
+
+        let snap2 = PendingSnapshot::new(Version::new(20).unwrap(), 1, vec![2]);
+        store.save_snapshot(&id, &snap2).await.unwrap();
+
+        let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+        assert_eq!(loaded.version(), Version::new(20).unwrap());
+        assert_eq!(loaded.payload(), &[2]);
+    }
+
+    #[tokio::test]
+    async fn different_aggregates_have_separate_snapshots() {
+        let store = InMemorySnapshotStore::new();
+
+        let snap1 = PendingSnapshot::new(Version::new(5).unwrap(), 1, vec![1]);
+        store
+            .save_snapshot(&TestId("agg-1".into()), &snap1)
+            .await
+            .unwrap();
+
+        let snap2 = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![2]);
+        store
+            .save_snapshot(&TestId("agg-2".into()), &snap2)
+            .await
+            .unwrap();
+
+        let loaded1 = store
+            .load_snapshot(&TestId("agg-1".into()))
+            .await
+            .unwrap()
+            .unwrap();
+        let loaded2 = store
+            .load_snapshot(&TestId("agg-2".into()))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded1.version(), Version::new(5).unwrap());
+        assert_eq!(loaded2.version(), Version::new(10).unwrap());
+    }
+
+    #[tokio::test]
+    async fn delete_removes_snapshot() {
+        let store = InMemorySnapshotStore::new();
+        let id = TestId("agg-1".into());
+
+        let snap = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![1]);
+        store.save_snapshot(&id, &snap).await.unwrap();
+
+        store.delete_snapshot(&id).await.unwrap();
+        let loaded = store.load_snapshot(&id).await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_is_ok() {
+        let store = InMemorySnapshotStore::new();
+        let result = store.delete_snapshot(&TestId("nope".into())).await;
+        assert!(result.is_ok());
+    }
+}
