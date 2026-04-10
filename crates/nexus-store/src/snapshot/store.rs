@@ -43,6 +43,30 @@ pub trait SnapshotStore: Send + Sync {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Delegation implementation — share via reference
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl<T: SnapshotStore> SnapshotStore for &T {
+    type Error = T::Error;
+
+    async fn load_snapshot(&self, id: &impl Id) -> Result<Option<PersistedSnapshot>, Self::Error> {
+        (**self).load_snapshot(id).await
+    }
+
+    async fn save_snapshot(
+        &self,
+        id: &impl Id,
+        snapshot: &PendingSnapshot,
+    ) -> Result<(), Self::Error> {
+        (**self).save_snapshot(id, snapshot).await
+    }
+
+    async fn delete_snapshot(&self, id: &impl Id) -> Result<(), Self::Error> {
+        (**self).delete_snapshot(id).await
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // No-op implementation — snapshots disabled
 // ═══════════════════════════════════════════════════════════════════════════
 
