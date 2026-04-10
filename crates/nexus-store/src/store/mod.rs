@@ -1,6 +1,7 @@
 mod builder;
 mod event_store;
 mod raw;
+pub(crate) mod replay;
 mod repository;
 #[allow(
     clippy::module_inception,
