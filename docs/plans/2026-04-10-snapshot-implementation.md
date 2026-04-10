@@ -4,9 +4,25 @@
 
 **Goal:** Add feature-gated aggregate snapshot support to nexus-store so rehydration skips replaying the full event stream.
 
-**Architecture:** `Snapshotting<R, SS, SC>` decorator wraps `EventStore`/`ZeroCopyEventStore`, intercepts `load()`/`save()` to check/write snapshots. Extract shared replay logic into a `pub(crate)` trait `ReplayFrom<A>` to avoid duplicating the stream replay loop. All snapshot types live behind `#[cfg(feature = "snapshot")]`. `()` serves as no-op `SnapshotStore`. Builder typestate gains a `Snap` param (`NoSnapshot` or `WithSnapshot<SS, SC>`) to produce either plain `EventStore` or `Snapshotting<EventStore, SS, SC>`.
+**Architecture:** `Snapshotting<R, SS, SC, T>` decorator wraps `EventStore`/`ZeroCopyEventStore`, intercepts `load()`/`save()` to check/write snapshots. Extract shared replay logic into a `pub(crate)` trait `ReplayFrom<A>` to avoid duplicating the stream replay loop. All snapshot types live behind `#[cfg(feature = "snapshot")]`. `()` serves as no-op `SnapshotStore`. Builder typestate gains a `Snap` param (`NoSnapshot` or `WithSnapshot<SS, SC, T>`) to produce either plain `EventStore` or `Snapshotting<EventStore, SS, SC, T>`.
 
 **Tech Stack:** Rust, nexus kernel (`AggregateRoot`), nexus-store traits, fjall LSM storage.
+
+**Audit applied:** Plan revised based on competitive analysis of Axon 5, Pekko, Marten, Equinox, eventsourced-rs, cqrs-es, disintegrate. See `docs/plans/2026-04-10-snapshot-design.md` for design decisions.
+
+---
+
+## Key Changes from Audit
+
+| Issue | Resolution |
+|-------|------------|
+| **Critical: modulo trigger bug** | `SnapshotTrigger::should_snapshot` now receives `old_version` + `new_version` + `event_names`; `EveryNEvents` uses boundary-crossing check instead of modulo |
+| **High: GAT Holder complexity** | Simplified to owned `PersistedSnapshot` struct; borrowing variant deferred to when benchmarks justify it |
+| **High: `Box<dyn SnapshotTrigger>`** | Trigger is now a type parameter `T` on `Snapshotting` — monomorphized, zero-cost |
+| **Medium: event-type triggers** | `AfterEventTypes` trigger added; trigger signature includes `event_names: &[&str]` |
+| **Medium: lazy snapshotting** | Snapshotting facade supports snapshot-on-read (after full replay exceeds threshold) |
+| **Low: snapshot retention** | `delete_snapshot` added to `SnapshotStore` trait |
+| **Low: performance docs** | Guidance on when snapshots help vs. hurt included in design doc |
 
 ---
 
@@ -42,10 +58,11 @@ feat(store): add snapshot and snapshot-json feature flags
 
 ---
 
-### Task 2: Create PendingSnapshot struct
+### Task 2: Create PendingSnapshot and PersistedSnapshot structs
 
 **Files:**
 - Create: `crates/nexus-store/src/snapshot/pending.rs`
+- Create: `crates/nexus-store/src/snapshot/persisted.rs`
 - Create: `crates/nexus-store/src/snapshot/mod.rs`
 - Modify: `crates/nexus-store/src/lib.rs`
 - Test: `crates/nexus-store/tests/snapshot_tests.rs`
@@ -57,8 +74,8 @@ Create `crates/nexus-store/tests/snapshot_tests.rs`:
 ```rust
 #![cfg(feature = "snapshot")]
 
-use nexus_store::snapshot::{PendingSnapshot};
 use nexus::Version;
+use nexus_store::snapshot::{PendingSnapshot, PersistedSnapshot};
 
 #[test]
 fn pending_snapshot_stores_version_and_payload() {
@@ -77,6 +94,16 @@ fn pending_snapshot_schema_version_must_be_nonzero() {
     let result = PendingSnapshot::try_new(version, 0, vec![]);
     assert!(result.is_err());
 }
+
+#[test]
+fn persisted_snapshot_stores_version_and_payload() {
+    let version = Version::new(10).unwrap();
+    let snap = PersistedSnapshot::new(version, 2, vec![4, 5, 6]);
+
+    assert_eq!(snap.version(), version);
+    assert_eq!(snap.schema_version(), 2);
+    assert_eq!(snap.payload(), &[4, 5, 6]);
+}
 ```
 
 **Step 2: Run test to verify it fails**
@@ -90,8 +117,10 @@ Create `crates/nexus-store/src/snapshot/mod.rs`:
 
 ```rust
 mod pending;
+mod persisted;
 
 pub use pending::PendingSnapshot;
+pub use persisted::PersistedSnapshot;
 ```
 
 Create `crates/nexus-store/src/snapshot/pending.rs`:
@@ -165,6 +194,75 @@ impl PendingSnapshot {
 }
 ```
 
+Create `crates/nexus-store/src/snapshot/persisted.rs`:
+
+```rust
+use nexus::Version;
+
+use crate::error::InvalidSchemaVersion;
+
+/// Persisted snapshot loaded from storage (read path).
+///
+/// Owns the payload bytes. This is the simplified owned variant —
+/// a borrowing variant with GAT lifetimes can be added later if
+/// benchmarks show the extra allocation matters for specific backends.
+#[derive(Debug, Clone)]
+pub struct PersistedSnapshot {
+    version: Version,
+    schema_version: u32,
+    payload: Vec<u8>,
+}
+
+impl PersistedSnapshot {
+    /// Create a new persisted snapshot.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `schema_version` is 0.
+    #[must_use]
+    pub fn new(version: Version, schema_version: u32, payload: Vec<u8>) -> Self {
+        match Self::try_new(version, schema_version, payload) {
+            Ok(snap) => snap,
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    /// Try to create a new persisted snapshot.
+    pub fn try_new(
+        version: Version,
+        schema_version: u32,
+        payload: Vec<u8>,
+    ) -> Result<Self, InvalidSchemaVersion> {
+        if schema_version == 0 {
+            return Err(InvalidSchemaVersion);
+        }
+        Ok(Self {
+            version,
+            schema_version,
+            payload,
+        })
+    }
+
+    /// The aggregate version at the time of the snapshot.
+    #[must_use]
+    pub const fn version(&self) -> Version {
+        self.version
+    }
+
+    /// The schema version for invalidation checking.
+    #[must_use]
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// The serialized state bytes.
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+}
+```
+
 Add to `crates/nexus-store/src/lib.rs`:
 
 ```rust
@@ -180,103 +278,12 @@ Expected: PASS
 **Step 5: Commit**
 
 ```
-feat(store): add PendingSnapshot type for snapshot write path
+feat(store): add PendingSnapshot and PersistedSnapshot types
 ```
 
 ---
 
-### Task 3: Create SnapshotRead trait
-
-**Files:**
-- Create: `crates/nexus-store/src/snapshot/read.rs`
-- Modify: `crates/nexus-store/src/snapshot/mod.rs`
-- Test: `crates/nexus-store/tests/snapshot_tests.rs`
-
-**Step 1: Write the failing test**
-
-Add to `snapshot_tests.rs`:
-
-```rust
-use nexus_store::snapshot::SnapshotRead;
-
-struct TestHolder {
-    version: Version,
-    schema_version: u32,
-    data: Vec<u8>,
-}
-
-impl SnapshotRead for TestHolder {
-    fn version(&self) -> Version { self.version }
-    fn schema_version(&self) -> u32 { self.schema_version }
-    fn payload(&self) -> &[u8] { &self.data }
-}
-
-#[test]
-fn snapshot_read_impl_provides_borrowed_access() {
-    let holder = TestHolder {
-        version: Version::new(10).unwrap(),
-        schema_version: 2,
-        data: vec![4, 5, 6],
-    };
-    assert_eq!(holder.version(), Version::new(10).unwrap());
-    assert_eq!(holder.schema_version(), 2);
-    assert_eq!(holder.payload(), &[4, 5, 6]);
-}
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cargo test -p nexus-store --features snapshot -- snapshot_read`
-Expected: FAIL — `SnapshotRead` doesn't exist
-
-**Step 3: Create SnapshotRead trait**
-
-Create `crates/nexus-store/src/snapshot/read.rs`:
-
-```rust
-use nexus::Version;
-
-/// Borrowed access to a persisted snapshot (read path).
-///
-/// Implemented by adapter-specific holder types. The holder owns
-/// the raw bytes read from storage; `payload()` borrows from it,
-/// enabling zero-copy decode via [`BorrowingCodec`](crate::BorrowingCodec).
-pub trait SnapshotRead {
-    /// The aggregate version at the time of the snapshot.
-    fn version(&self) -> Version;
-
-    /// The schema version for invalidation checking.
-    fn schema_version(&self) -> u32;
-
-    /// The serialized state bytes, borrowed from the holder.
-    fn payload(&self) -> &[u8];
-}
-```
-
-Update `snapshot/mod.rs`:
-
-```rust
-mod pending;
-mod read;
-
-pub use pending::PendingSnapshot;
-pub use read::SnapshotRead;
-```
-
-**Step 4: Run test**
-
-Run: `cargo test -p nexus-store --features snapshot -- snapshot_read`
-Expected: PASS
-
-**Step 5: Commit**
-
-```
-feat(store): add SnapshotRead trait for borrowed snapshot access
-```
-
----
-
-### Task 4: Create SnapshotStore trait + () no-op
+### Task 3: Create SnapshotStore trait + () no-op
 
 **Files:**
 - Create: `crates/nexus-store/src/snapshot/store.rs`
@@ -306,6 +313,14 @@ async fn unit_snapshot_store_save_succeeds() {
     let result = store.save_snapshot(&id, &snap).await;
     assert!(result.is_ok());
 }
+
+#[tokio::test]
+async fn unit_snapshot_store_delete_succeeds() {
+    let store = ();
+    let id = String::from("agg-1");
+    let result = store.delete_snapshot(&id).await;
+    assert!(result.is_ok());
+}
 ```
 
 **Step 2: Run test — expected FAIL**
@@ -321,26 +336,19 @@ use std::future::Future;
 use nexus::Id;
 
 use super::pending::PendingSnapshot;
-use super::read::SnapshotRead;
+use super::persisted::PersistedSnapshot;
 
 /// Byte-level snapshot storage trait.
 ///
 /// Adapters (fjall, postgres, etc.) implement this to persist and
-/// retrieve serialized aggregate state. The GAT `Holder<'a>` enables
-/// zero-copy reads — the holder owns the raw bytes and
-/// [`SnapshotRead::payload()`] borrows from it.
+/// retrieve serialized aggregate state.
 ///
 /// `()` is the no-op implementation: `load_snapshot` always returns
-/// `None`, `save_snapshot` silently discards. Used when snapshot
-/// support is not configured.
+/// `None`, `save_snapshot` and `delete_snapshot` silently discard.
+/// Used when snapshot support is not configured.
 pub trait SnapshotStore: Send + Sync {
     /// Adapter-specific error type.
     type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Type that owns snapshot bytes on the read path.
-    type Holder<'a>: SnapshotRead + 'a
-    where
-        Self: 'a;
 
     /// Load the most recent snapshot for the given aggregate.
     ///
@@ -348,7 +356,7 @@ pub trait SnapshotStore: Send + Sync {
     fn load_snapshot(
         &self,
         id: &impl Id,
-    ) -> impl Future<Output = Result<Option<Self::Holder<'_>>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<PersistedSnapshot>, Self::Error>> + Send;
 
     /// Persist a snapshot for the given aggregate.
     ///
@@ -358,38 +366,27 @@ pub trait SnapshotStore: Send + Sync {
         id: &impl Id,
         snapshot: &PendingSnapshot,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Delete the snapshot for the given aggregate.
+    ///
+    /// Returns `Ok(())` if no snapshot exists (idempotent).
+    fn delete_snapshot(
+        &self,
+        id: &impl Id,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // No-op implementation — snapshots disabled
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Uninhabited holder for the `()` no-op snapshot store.
-///
-/// This type can never be constructed, matching the fact that
-/// the no-op store always returns `None` from `load_snapshot`.
-pub enum NeverSnapshot {}
-
-impl SnapshotRead for NeverSnapshot {
-    fn version(&self) -> nexus::Version {
-        match *self {}
-    }
-    fn schema_version(&self) -> u32 {
-        match *self {}
-    }
-    fn payload(&self) -> &[u8] {
-        match *self {}
-    }
-}
-
 impl SnapshotStore for () {
     type Error = Infallible;
-    type Holder<'a> = NeverSnapshot;
 
     async fn load_snapshot(
         &self,
         _id: &impl Id,
-    ) -> Result<Option<NeverSnapshot>, Infallible> {
+    ) -> Result<Option<PersistedSnapshot>, Infallible> {
         Ok(None)
     }
 
@@ -400,6 +397,13 @@ impl SnapshotStore for () {
     ) -> Result<(), Infallible> {
         Ok(())
     }
+
+    async fn delete_snapshot(
+        &self,
+        _id: &impl Id,
+    ) -> Result<(), Infallible> {
+        Ok(())
+    }
 }
 ```
 
@@ -407,12 +411,12 @@ Update `snapshot/mod.rs`:
 
 ```rust
 mod pending;
-mod read;
+mod persisted;
 mod store;
 
 pub use pending::PendingSnapshot;
-pub use read::SnapshotRead;
-pub use store::{NeverSnapshot, SnapshotStore};
+pub use persisted::PersistedSnapshot;
+pub use store::SnapshotStore;
 ```
 
 **Step 4: Run tests — expected PASS**
@@ -420,12 +424,12 @@ pub use store::{NeverSnapshot, SnapshotStore};
 **Step 5: Commit**
 
 ```
-feat(store): add SnapshotStore trait with () no-op implementation
+feat(store): add SnapshotStore trait with () no-op and delete_snapshot
 ```
 
 ---
 
-### Task 5: Create SnapshotTrigger trait + EveryNEvents
+### Task 4: Create SnapshotTrigger trait + EveryNEvents + AfterEventTypes
 
 **Files:**
 - Create: `crates/nexus-store/src/snapshot/trigger.rs`
@@ -438,24 +442,85 @@ Add to `snapshot_tests.rs`:
 
 ```rust
 use std::num::NonZeroU64;
-use nexus_store::snapshot::{SnapshotTrigger, EveryNEvents};
+use nexus_store::snapshot::{SnapshotTrigger, EveryNEvents, AfterEventTypes};
+
+// ── EveryNEvents ────────────────────────────────────────────────
 
 #[test]
-fn every_n_events_triggers_at_multiples() {
+fn every_n_events_triggers_on_boundary_crossing() {
     let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
-    assert!(!trigger.should_snapshot(Version::new(1).unwrap()));
-    assert!(!trigger.should_snapshot(Version::new(99).unwrap()));
-    assert!(trigger.should_snapshot(Version::new(100).unwrap()));
-    assert!(!trigger.should_snapshot(Version::new(101).unwrap()));
-    assert!(trigger.should_snapshot(Version::new(200).unwrap()));
+
+    // Single-event saves crossing the boundary
+    let v99 = Some(Version::new(99).unwrap());
+    let v100 = Version::new(100).unwrap();
+    assert!(trigger.should_snapshot(v99, v100, &[]));
+
+    // Not yet at boundary
+    let v98 = Some(Version::new(98).unwrap());
+    let v99_ver = Version::new(99).unwrap();
+    assert!(!trigger.should_snapshot(v98, v99_ver, &[]));
+}
+
+#[test]
+fn every_n_events_triggers_on_batch_crossing_boundary() {
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
+
+    // Batch of 7 events crossing the 100 boundary: 96 → 103
+    let old = Some(Version::new(96).unwrap());
+    let new = Version::new(103).unwrap();
+    assert!(trigger.should_snapshot(old, new, &[]));
+}
+
+#[test]
+fn every_n_events_first_save_triggers_at_boundary() {
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
+
+    // Fresh aggregate, first save crosses boundary
+    let new = Version::new(100).unwrap();
+    assert!(trigger.should_snapshot(None, new, &[]));
+
+    // Fresh aggregate, first save below boundary
+    let new_50 = Version::new(50).unwrap();
+    assert!(!trigger.should_snapshot(None, new_50, &[]));
 }
 
 #[test]
 fn every_1_event_always_triggers() {
     let trigger = EveryNEvents(NonZeroU64::new(1).unwrap());
-    assert!(trigger.should_snapshot(Version::new(1).unwrap()));
-    assert!(trigger.should_snapshot(Version::new(2).unwrap()));
-    assert!(trigger.should_snapshot(Version::new(999).unwrap()));
+    assert!(trigger.should_snapshot(None, Version::new(1).unwrap(), &[]));
+    assert!(trigger.should_snapshot(
+        Some(Version::new(1).unwrap()),
+        Version::new(2).unwrap(),
+        &[],
+    ));
+}
+
+// ── AfterEventTypes ─────────────────────────────────────────────
+
+#[test]
+fn after_event_types_triggers_on_matching_event() {
+    let trigger = AfterEventTypes::new(&["OrderCompleted", "OrderCancelled"]);
+
+    assert!(trigger.should_snapshot(None, Version::new(5).unwrap(), &["OrderCompleted"]));
+    assert!(trigger.should_snapshot(None, Version::new(5).unwrap(), &["OrderCancelled"]));
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &["ItemAdded"]));
+}
+
+#[test]
+fn after_event_types_triggers_if_any_event_in_batch_matches() {
+    let trigger = AfterEventTypes::new(&["OrderCompleted"]);
+
+    assert!(trigger.should_snapshot(
+        None,
+        Version::new(5).unwrap(),
+        &["ItemAdded", "OrderCompleted"],
+    ));
+}
+
+#[test]
+fn after_event_types_does_not_trigger_on_empty_events() {
+    let trigger = AfterEventTypes::new(&["OrderCompleted"]);
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &[]));
 }
 ```
 
@@ -472,39 +537,94 @@ use nexus::Version;
 
 /// Strategy for deciding when to take a snapshot.
 ///
-/// Checked after each successful `save()`. The trigger receives the
-/// aggregate's new version and returns whether a snapshot should be taken.
+/// Checked after each successful `save()`. The trigger receives both the
+/// old and new aggregate version (to detect boundary crossings regardless
+/// of batch size) and the names of events just persisted (for semantic
+/// triggers).
 pub trait SnapshotTrigger: Send + Sync {
-    /// Whether a snapshot should be taken at this version.
-    fn should_snapshot(&self, new_version: Version) -> bool;
+    /// Whether a snapshot should be taken after this save.
+    ///
+    /// - `old_version`: aggregate version before save (`None` for new aggregates)
+    /// - `new_version`: aggregate version after save
+    /// - `event_names`: names of events just persisted (from `DomainEvent::name()`)
+    fn should_snapshot(
+        &self,
+        old_version: Option<Version>,
+        new_version: Version,
+        event_names: &[&str],
+    ) -> bool;
 }
 
-/// Trigger a snapshot every N events (at version multiples of N).
+/// Trigger a snapshot every N events.
 ///
-/// For example, `EveryNEvents(100)` triggers at versions 100, 200, 300, etc.
+/// Detects when a save crosses an N-event boundary, regardless of batch
+/// size. For example, `EveryNEvents(100)` triggers when the aggregate
+/// crosses version 100, 200, 300, etc. — even if the batch was 7 events
+/// jumping from version 96 to 103.
 #[derive(Debug, Clone, Copy)]
 pub struct EveryNEvents(pub NonZeroU64);
 
 impl SnapshotTrigger for EveryNEvents {
-    fn should_snapshot(&self, new_version: Version) -> bool {
-        new_version.as_u64() % self.0.get() == 0
+    fn should_snapshot(
+        &self,
+        old_version: Option<Version>,
+        new_version: Version,
+        _event_names: &[&str],
+    ) -> bool {
+        let n = self.0.get();
+        let old_bucket = old_version.map_or(0, |v| v.as_u64() / n);
+        let new_bucket = new_version.as_u64() / n;
+        new_bucket > old_bucket
+    }
+}
+
+/// Trigger a snapshot after specific event types are persisted.
+///
+/// Useful for domain milestones (e.g., `OrderCompleted`, `AccountClosed`)
+/// where the aggregate is unlikely to change further, or where a stable
+/// snapshot point aligns with business semantics.
+#[derive(Debug, Clone)]
+pub struct AfterEventTypes {
+    types: Vec<&'static str>,
+}
+
+impl AfterEventTypes {
+    /// Create a trigger that fires when any of the given event types is persisted.
+    #[must_use]
+    pub fn new(types: &[&'static str]) -> Self {
+        Self {
+            types: types.to_vec(),
+        }
+    }
+}
+
+impl SnapshotTrigger for AfterEventTypes {
+    fn should_snapshot(
+        &self,
+        _old_version: Option<Version>,
+        _new_version: Version,
+        event_names: &[&str],
+    ) -> bool {
+        event_names
+            .iter()
+            .any(|name| self.types.iter().any(|t| t == name))
     }
 }
 ```
 
-Update `snapshot/mod.rs` to export `SnapshotTrigger` and `EveryNEvents`.
+Update `snapshot/mod.rs` to export `SnapshotTrigger`, `EveryNEvents`, and `AfterEventTypes`.
 
 **Step 4: Run tests — expected PASS**
 
 **Step 5: Commit**
 
 ```
-feat(store): add SnapshotTrigger trait and EveryNEvents strategy
+feat(store): add SnapshotTrigger trait with EveryNEvents and AfterEventTypes
 ```
 
 ---
 
-### Task 6: Add AggregateRoot::restore to kernel
+### Task 5: Add AggregateRoot::restore to kernel
 
 **Files:**
 - Modify: `crates/nexus/src/aggregate.rs`
@@ -605,7 +725,7 @@ feat(kernel): add AggregateRoot::restore for snapshot rehydration
 
 ---
 
-### Task 7: Extract ReplayFrom trait from EventStore/ZeroCopyEventStore
+### Task 6: Extract ReplayFrom trait from EventStore/ZeroCopyEventStore
 
 **Files:**
 - Create: `crates/nexus-store/src/store/replay.rs`
@@ -645,13 +765,7 @@ pub(crate) trait ReplayFrom<A: Aggregate>: Send + Sync {
 
 **Step 3: Implement for EventStore**
 
-In `event_store.rs`, add:
-
-```rust
-use super::replay::ReplayFrom;
-```
-
-Then add the impl block:
+In `event_store.rs`, add `use super::replay::ReplayFrom;` and implement:
 
 ```rust
 impl<A, S, C, U> ReplayFrom<A> for EventStore<S, C, U>
@@ -709,64 +823,11 @@ async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
 
 **Step 4: Implement for ZeroCopyEventStore**
 
-Same pattern but using `BorrowingCodec`:
-
-```rust
-impl<A, S, C, U> ReplayFrom<A> for ZeroCopyEventStore<S, C, U>
-where
-    A: Aggregate,
-    S: RawEventStore,
-    C: BorrowingCodec<EventOf<A>>,
-    U: Upcaster,
-    EventOf<A>: DomainEvent,
-    for<'a> S::Stream<'a>: Send,
-{
-    async fn replay_from(
-        &self,
-        mut root: AggregateRoot<A>,
-        from: Version,
-    ) -> Result<AggregateRoot<A>, StoreError> {
-        let mut stream = self
-            .store
-            .raw()
-            .read_stream(root.id(), from)
-            .await
-            .map_err(|e| StoreError::Adapter(Box::new(e)))?;
-
-        while let Some(result) = stream.next().await {
-            let env = result.map_err(|e| StoreError::Adapter(Box::new(e)))?;
-            let morsel = EventMorsel::borrowed(
-                env.event_type(),
-                env.schema_version_as_version(),
-                env.payload(),
-            );
-            let transformed = self
-                .upcaster
-                .apply(morsel)
-                .map_err(|e| StoreError::Codec(Box::new(e)))?;
-            let event: &EventOf<A> = self
-                .codec
-                .decode(transformed.event_type(), transformed.payload())
-                .map_err(|e| StoreError::Codec(Box::new(e)))?;
-            root.replay(env.version(), event)?;
-        }
-
-        Ok(root)
-    }
-}
-```
-
-Refactor `ZeroCopyEventStore::load` to delegate similarly.
+Same pattern using `BorrowingCodec`. Refactor its `load()` to delegate to `replay_from` as well.
 
 **Step 5: Update store/mod.rs**
 
-Add:
-
-```rust
-mod replay;
-```
-
-No public re-export — `replay` is `pub(crate)`.
+Add `mod replay;` — no public re-export (it's `pub(crate)`).
 
 **Step 6: Run all existing tests — expected PASS (no behavior change)**
 
@@ -780,7 +841,7 @@ refactor(store): extract ReplayFrom trait for shared replay logic
 
 ---
 
-### Task 8: Create InMemorySnapshotStore for testing
+### Task 7: Create InMemorySnapshotStore for testing
 
 **Files:**
 - Create: `crates/nexus-store/src/snapshot/testing.rs`
@@ -850,6 +911,26 @@ mod in_memory_tests {
         assert_eq!(loaded1.version(), Version::new(5).unwrap());
         assert_eq!(loaded2.version(), Version::new(10).unwrap());
     }
+
+    #[tokio::test]
+    async fn delete_removes_snapshot() {
+        let store = InMemorySnapshotStore::new();
+        let id = String::from("agg-1");
+
+        let snap = PendingSnapshot::new(Version::new(10).unwrap(), 1, vec![1]);
+        store.save_snapshot(&id, &snap).await.unwrap();
+
+        store.delete_snapshot(&id).await.unwrap();
+        let loaded = store.load_snapshot(&id).await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_is_ok() {
+        let store = InMemorySnapshotStore::new();
+        let result = store.delete_snapshot(&String::from("nope")).await;
+        assert!(result.is_ok());
+    }
 }
 ```
 
@@ -863,11 +944,11 @@ Create `crates/nexus-store/src/snapshot/testing.rs`:
 use std::collections::HashMap;
 use std::convert::Infallible;
 
-use nexus::{Id, Version};
+use nexus::Id;
 use tokio::sync::RwLock;
 
 use super::pending::PendingSnapshot;
-use super::read::SnapshotRead;
+use super::persisted::PersistedSnapshot;
 use super::store::SnapshotStore;
 
 /// In-memory snapshot store for tests.
@@ -880,29 +961,9 @@ pub struct InMemorySnapshotStore {
 
 #[derive(Debug, Clone)]
 struct StoredSnapshot {
-    version: Version,
+    version: nexus::Version,
     schema_version: u32,
     payload: Vec<u8>,
-}
-
-/// Holder type for borrowed snapshot access.
-#[derive(Debug)]
-pub struct InMemorySnapshotHolder {
-    version: Version,
-    schema_version: u32,
-    payload: Vec<u8>,
-}
-
-impl SnapshotRead for InMemorySnapshotHolder {
-    fn version(&self) -> Version {
-        self.version
-    }
-    fn schema_version(&self) -> u32 {
-        self.schema_version
-    }
-    fn payload(&self) -> &[u8] {
-        &self.payload
-    }
 }
 
 impl InMemorySnapshotStore {
@@ -915,18 +976,15 @@ impl InMemorySnapshotStore {
 
 impl SnapshotStore for InMemorySnapshotStore {
     type Error = Infallible;
-    type Holder<'a> = InMemorySnapshotHolder;
 
     async fn load_snapshot(
         &self,
         id: &impl Id,
-    ) -> Result<Option<InMemorySnapshotHolder>, Infallible> {
+    ) -> Result<Option<PersistedSnapshot>, Infallible> {
         let snapshots = self.snapshots.read().await;
         let key = id.to_string();
-        Ok(snapshots.get(&key).map(|s| InMemorySnapshotHolder {
-            version: s.version,
-            schema_version: s.schema_version,
-            payload: s.payload.clone(),
+        Ok(snapshots.get(&key).map(|s| {
+            PersistedSnapshot::new(s.version, s.schema_version, s.payload.clone())
         }))
     }
 
@@ -947,6 +1005,15 @@ impl SnapshotStore for InMemorySnapshotStore {
         );
         Ok(())
     }
+
+    async fn delete_snapshot(
+        &self,
+        id: &impl Id,
+    ) -> Result<(), Infallible> {
+        let mut snapshots = self.snapshots.write().await;
+        snapshots.remove(&id.to_string());
+        Ok(())
+    }
 }
 ```
 
@@ -956,7 +1023,7 @@ Feature-gate in `snapshot/mod.rs`:
 #[cfg(feature = "testing")]
 mod testing;
 #[cfg(feature = "testing")]
-pub use testing::{InMemorySnapshotStore, InMemorySnapshotHolder};
+pub use testing::InMemorySnapshotStore;
 ```
 
 **Step 4: Run tests — expected PASS**
@@ -971,30 +1038,29 @@ feat(store): add InMemorySnapshotStore for snapshot testing
 
 ---
 
-### Task 9: Create Snapshotting facade
+### Task 8: Create Snapshotting facade
 
 **Files:**
 - Create: `crates/nexus-store/src/store/snapshotting.rs`
 - Modify: `crates/nexus-store/src/store/mod.rs`
+- Modify: `crates/nexus-store/src/lib.rs`
 - Test: `crates/nexus-store/tests/snapshot_integration_tests.rs`
 
-This is the core task — the `Snapshotting` decorator that wraps a `Repository` and adds snapshot load/save logic.
+This is the core task — the `Snapshotting` decorator that wraps a `Repository` and adds snapshot load/save logic. The trigger is a type parameter (monomorphized, zero-cost) instead of `Box<dyn>`.
 
 **Step 1: Write integration tests**
 
-Create `crates/nexus-store/tests/snapshot_integration_tests.rs`. These tests need a full test aggregate. Reference existing test aggregates from `event_store_tests.rs` or define test helpers.
-
-Key test cases:
+Create `crates/nexus-store/tests/snapshot_integration_tests.rs`. Define or reuse test aggregate types. Key test cases:
 
 ```rust
-#![cfg(feature = "snapshot")]
+#![cfg(all(feature = "snapshot", feature = "json", feature = "testing"))]
 
-// (Use existing test aggregate types or define minimal ones)
+// (use existing test aggregate types or define minimal ones)
 
 #[tokio::test]
 async fn load_without_snapshot_does_full_replay() {
     // Setup: EventStore with InMemoryStore, save 5 events
-    // Add Snapshotting with InMemorySnapshotStore (empty)
+    // Wrap with Snapshotting + empty InMemorySnapshotStore
     // Load: should replay all 5 events, aggregate at version 5
 }
 
@@ -1006,8 +1072,15 @@ async fn save_triggers_snapshot_at_threshold() {
 }
 
 #[tokio::test]
+async fn save_triggers_snapshot_on_boundary_crossing_batch() {
+    // Setup: Snapshotting with EveryNEvents(5)
+    // Save 3 events (v1-3), then 3 more (v4-6, crossing 5-boundary)
+    // Verify snapshot taken at v6
+}
+
+#[tokio::test]
 async fn load_from_snapshot_skips_replayed_events() {
-    // Setup: Save 10 events, snapshot at version 5
+    // Setup: Save 10 events, manually insert snapshot at version 5
     // Load: should restore from snapshot + replay events 6-10
     // Verify aggregate state matches full replay
 }
@@ -1020,15 +1093,24 @@ async fn schema_version_mismatch_falls_back_to_full_replay() {
 }
 
 #[tokio::test]
-async fn snapshot_load_failure_falls_back_to_full_replay() {
-    // Setup: Use a SnapshotStore that returns Err on load
-    // Load: should fall back to full event replay, not propagate error
-}
-
-#[tokio::test]
 async fn snapshot_save_failure_does_not_fail_event_save() {
     // Setup: Use a SnapshotStore that returns Err on save
     // Save: should succeed (events persisted), snapshot failure ignored
+}
+
+#[tokio::test]
+async fn after_event_types_trigger_snapshots_on_domain_milestone() {
+    // Setup: Snapshotting with AfterEventTypes(["OrderCompleted"])
+    // Save ItemAdded events → no snapshot
+    // Save OrderCompleted → snapshot taken
+}
+
+#[tokio::test]
+async fn lazy_snapshot_on_read_after_full_replay() {
+    // Setup: Snapshotting with EveryNEvents(5) + on_read=true
+    // Save 10 events without any snapshot
+    // Load: full replay → snapshot created as side effect
+    // Load again: snapshot hit + partial replay
 }
 ```
 
@@ -1041,8 +1123,8 @@ Create `crates/nexus-store/src/store/snapshotting.rs`:
 ```rust
 use crate::codec::Codec;
 use crate::error::StoreError;
-use crate::snapshot::{PendingSnapshot, SnapshotStore, SnapshotTrigger};
-use nexus::{Aggregate, AggregateRoot, EventOf, Version};
+use crate::snapshot::{PendingSnapshot, PersistedSnapshot, SnapshotStore, SnapshotTrigger};
+use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
 use super::replay::ReplayFrom;
 use super::repository::Repository;
@@ -1055,27 +1137,34 @@ use super::repository::Repository;
 /// - **Load:** tries the snapshot store first; on hit with matching schema
 ///   version, restores state from snapshot and replays only subsequent events.
 ///   On miss or schema mismatch, falls back to full event replay via the
-///   inner repository.
+///   inner repository. Optionally creates a snapshot after a full replay
+///   (lazy/on-read snapshotting) if `snapshot_on_read` is enabled.
 ///
 /// - **Save:** delegates event persistence to the inner repository, then
 ///   checks the trigger to optionally persist a snapshot of the current state.
 ///   Snapshot save is best-effort — failures are silently ignored.
-pub struct Snapshotting<R, SS, SC> {
+///
+/// The trigger type `T` is a generic parameter (not `Box<dyn>`) for
+/// zero-cost monomorphization — the compiler inlines `should_snapshot()`
+/// calls entirely.
+pub struct Snapshotting<R, SS, SC, T> {
     inner: R,
     snapshot_store: SS,
     snapshot_codec: SC,
-    trigger: Box<dyn SnapshotTrigger>,
+    trigger: T,
     schema_version: u32,
+    snapshot_on_read: bool,
 }
 
-impl<R, SS, SC> Snapshotting<R, SS, SC> {
+impl<R, SS, SC, T> Snapshotting<R, SS, SC, T> {
     /// Create a new snapshot-aware repository.
     pub(crate) fn new(
         inner: R,
         snapshot_store: SS,
         snapshot_codec: SC,
-        trigger: Box<dyn SnapshotTrigger>,
+        trigger: T,
         schema_version: u32,
+        snapshot_on_read: bool,
     ) -> Self {
         Self {
             inner,
@@ -1083,48 +1172,42 @@ impl<R, SS, SC> Snapshotting<R, SS, SC> {
             snapshot_codec,
             trigger,
             schema_version,
+            snapshot_on_read,
         }
     }
 }
 
-impl<A, R, SS, SC> Repository<A> for Snapshotting<R, SS, SC>
+impl<A, R, SS, SC, T> Repository<A> for Snapshotting<R, SS, SC, T>
 where
     A: Aggregate,
     R: Repository<A, Error = StoreError> + ReplayFrom<A>,
     SS: SnapshotStore,
     SC: Codec<A::State>,
-    EventOf<A>: nexus::DomainEvent,
+    T: SnapshotTrigger,
+    EventOf<A>: DomainEvent,
 {
     type Error = StoreError;
 
     async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
         // Try snapshot first.
-        if let Ok(Some(holder)) = self
-            .snapshot_store
-            .load_snapshot(&id)
-            .await
-            .map_err(|_| ()) // discard error — snapshot is best-effort
-        {
-            if holder.schema_version() == self.schema_version {
-                // Schema matches — decode state.
-                if let Ok(state) = self
-                    .snapshot_codec
-                    .decode("", holder.payload())
-                    .map_err(|_| ()) // discard decode error
-                {
-                    let root = AggregateRoot::<A>::restore(id, state, holder.version());
-                    // Replay events after snapshot version.
-                    if let Some(next) = holder.version().next() {
-                        return self.inner.replay_from(root, next).await;
-                    }
-                    // Snapshot is at u64::MAX — no more events possible.
-                    return Ok(root);
-                }
-            }
+        let snapshot_hit = self.try_load_from_snapshot(&id).await;
+
+        if let Some((root, from)) = snapshot_hit {
+            // Snapshot hit — partial replay from snapshot version.
+            return self.inner.replay_from(root, from).await;
         }
 
         // Fallback: full replay.
-        self.inner.load(id).await
+        let root = self.inner.load(id.clone()).await?;
+
+        // Lazy snapshot: if enabled and aggregate has events, snapshot now.
+        if self.snapshot_on_read {
+            if let Some(version) = root.version() {
+                self.try_save_snapshot(&root, version).await;
+            }
+        }
+
+        Ok(root)
     }
 
     async fn save(
@@ -1132,22 +1215,70 @@ where
         aggregate: &mut AggregateRoot<A>,
         events: &[EventOf<A>],
     ) -> Result<(), StoreError> {
+        let old_version = aggregate.version();
+
         // Delegate event persistence to inner.
         self.inner.save(aggregate, events).await?;
 
         // Check trigger — maybe snapshot.
-        if let Some(version) = aggregate.version() {
-            if self.trigger.should_snapshot(version) {
-                // Best-effort: encode state and save snapshot.
-                if let Ok(payload) = self.snapshot_codec.encode(aggregate.state()) {
-                    let snap = PendingSnapshot::new(version, self.schema_version, payload);
-                    // Ignore save errors — snapshot is an optimization.
-                    let _ = self.snapshot_store.save_snapshot(aggregate.id(), &snap).await;
+        if !events.is_empty() {
+            if let Some(new_version) = aggregate.version() {
+                let event_names: Vec<&str> = events.iter().map(|e| e.name()).collect();
+                if self.trigger.should_snapshot(old_version, new_version, &event_names) {
+                    self.try_save_snapshot(aggregate, new_version).await;
                 }
             }
         }
 
         Ok(())
+    }
+}
+
+impl<R, SS, SC, T> Snapshotting<R, SS, SC, T>
+where
+    SS: SnapshotStore,
+{
+    /// Try to load a snapshot. Returns (root, next_version_to_replay) on hit.
+    /// Returns None on miss, schema mismatch, or any error (best-effort).
+    async fn try_load_from_snapshot<A>(
+        &self,
+        id: &A::Id,
+    ) -> Option<(AggregateRoot<A>, Version)>
+    where
+        A: Aggregate,
+        SC: Codec<A::State>,
+    {
+        let holder = self.snapshot_store.load_snapshot(id).await.ok()??;
+
+        if holder.schema_version() != self.schema_version {
+            return None;
+        }
+
+        let state = self
+            .snapshot_codec
+            .decode("", holder.payload())
+            .ok()?;
+
+        let version = holder.version();
+        let root = AggregateRoot::<A>::restore(id.clone(), state, version);
+        let next = version.next()?;
+        Some((root, next))
+    }
+
+    /// Best-effort snapshot save. Errors are silently ignored.
+    async fn try_save_snapshot<A>(
+        &self,
+        aggregate: &AggregateRoot<A>,
+        version: Version,
+    )
+    where
+        A: Aggregate,
+        SC: Codec<A::State>,
+    {
+        if let Ok(payload) = self.snapshot_codec.encode(aggregate.state()) {
+            let snap = PendingSnapshot::new(version, self.schema_version, payload);
+            let _ = self.snapshot_store.save_snapshot(aggregate.id(), &snap).await;
+        }
     }
 }
 ```
@@ -1164,12 +1295,7 @@ mod snapshotting;
 pub use snapshotting::Snapshotting;
 ```
 
-Update `lib.rs` to re-export:
-
-```rust
-#[cfg(feature = "snapshot")]
-pub use store::Snapshotting;
-```
+Update `lib.rs` to re-export `Snapshotting`.
 
 **Step 4: Run tests**
 
@@ -1179,12 +1305,12 @@ Expected: PASS
 **Step 5: Commit**
 
 ```
-feat(store): add Snapshotting repository decorator
+feat(store): add Snapshotting repository decorator with lazy on-read support
 ```
 
 ---
 
-### Task 10: Builder integration
+### Task 9: Builder integration
 
 **Files:**
 - Modify: `crates/nexus-store/src/store/builder.rs`
@@ -1194,64 +1320,24 @@ feat(store): add Snapshotting repository decorator
 
 **Step 1: Write builder tests**
 
-Add to `snapshot_tests.rs`:
-
-```rust
-#[cfg(all(feature = "snapshot", feature = "testing", feature = "json"))]
-mod builder_tests {
-    use std::num::NonZeroU64;
-    use nexus_store::{Store, Repository};
-    use nexus_store::snapshot::{EveryNEvents, InMemorySnapshotStore};
-    use nexus_store::testing::InMemoryStore;
-
-    #[tokio::test]
-    async fn builder_produces_snapshotting_repository() {
-        let raw = InMemoryStore::default();
-        let store = Store::new(raw);
-        let snap_store = InMemorySnapshotStore::new();
-
-        let repo = store
-            .repository()
-            .snapshot_store(snap_store)
-            .snapshot_trigger(EveryNEvents(NonZeroU64::new(100).unwrap()))
-            .snapshot_schema_version(1)
-            .build();
-
-        // Verify it compiles and implements Repository — load an empty aggregate
-        // (use existing test aggregate type)
-    }
-
-    #[tokio::test]
-    async fn builder_without_snapshot_produces_plain_event_store() {
-        let raw = InMemoryStore::default();
-        let store = Store::new(raw);
-
-        let repo = store.repository().build();
-        // This should still work exactly as before
-    }
-}
-```
+Add to `snapshot_tests.rs` a `builder_tests` module that verifies the builder API compiles and produces working repositories. Test both `build()` and `build_zero_copy()` with snapshot config.
 
 **Step 2: Implement builder changes**
 
 Add typestate marker and snapshot config to `builder.rs`:
 
 ```rust
-#[cfg(feature = "snapshot")]
-use crate::snapshot::{SnapshotStore, SnapshotTrigger, EveryNEvents};
-#[cfg(feature = "snapshot")]
-use super::snapshotting::Snapshotting;
-
 /// Marker: no snapshot configured (default).
 pub struct NoSnapshot;
 
-/// Snapshot configuration.
+/// Snapshot configuration, created by builder methods.
 #[cfg(feature = "snapshot")]
-pub struct WithSnapshot<SS, SC> {
+pub struct WithSnapshot<SS, SC, T> {
     store: SS,
     codec: SC,
-    trigger: Box<dyn SnapshotTrigger>,
+    trigger: T,
     schema_version: u32,
+    snapshot_on_read: bool,
 }
 ```
 
@@ -1266,80 +1352,80 @@ pub struct RepositoryBuilder<S, C, U, Snap = NoSnapshot> {
 }
 ```
 
+Existing `.codec()` and `.upcaster()` methods carry `Snap` through. Existing `.build()` for `NoSnapshot` returns `EventStore` unchanged.
+
 Add snapshot builder methods (feature-gated):
 
 ```rust
 #[cfg(feature = "snapshot")]
 impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     /// Configure a snapshot store, transitioning the builder to snapshot mode.
-    ///
-    /// After calling this, `.build()` will produce a `Snapshotting` repository
-    /// instead of a plain `EventStore`.
-    #[must_use]
     pub fn snapshot_store<SS: SnapshotStore>(
         self,
         snapshot_store: SS,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, NeedsSnapshotCodec>> {
-        // NeedsSnapshotCodec is !Send, like NeedsCodec
-        // ... (or default to JsonCodec with snapshot-json feature)
+    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, /* codec */, EveryNEvents>> {
+        // Default trigger: EveryNEvents(100)
+        // Default schema_version: 1
+        // Default snapshot_on_read: false
+        // Snapshot codec: NeedsSnapshotCodec or JsonCodec (with snapshot-json feature)
     }
 }
 ```
 
-Handle snapshot codec defaulting (with `snapshot-json` feature):
-
-```rust
-#[cfg(all(feature = "snapshot-json"))]
-impl<S, C, U, SS> RepositoryBuilder<S, C, U, WithSnapshot<SS, NeedsSnapshotCodec>> {
-    // Auto-fill JsonCodec as default snapshot codec
-}
-```
+Add `.snapshot_codec()`, `.snapshot_trigger()`, `.snapshot_schema_version()`, `.snapshot_on_read()` methods on the `WithSnapshot` state.
 
 Add `.build()` for `WithSnapshot`:
 
 ```rust
 #[cfg(feature = "snapshot")]
-impl<S, C, U, SS, SC> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC>>
+impl<S, C, U, SS, SC, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>>
 where
     S: RawEventStore,
     C: Send + Sync + 'static,
     SC: Send + Sync + 'static,
 {
     #[must_use]
-    pub fn build(self) -> Snapshotting<EventStore<S, C, U>, SS, SC> {
+    pub fn build(self) -> Snapshotting<EventStore<S, C, U>, SS, SC, T> {
         let inner = EventStore::new(self.store, self.codec, self.upcaster);
         let snap = self.snapshot;
-        Snapshotting::new(inner, snap.store, snap.codec, snap.trigger, snap.schema_version)
+        Snapshotting::new(inner, snap.store, snap.codec, snap.trigger, snap.schema_version, snap.snapshot_on_read)
     }
 
     #[must_use]
-    pub fn build_zero_copy(self) -> Snapshotting<ZeroCopyEventStore<S, C, U>, SS, SC> {
+    pub fn build_zero_copy(self) -> Snapshotting<ZeroCopyEventStore<S, C, U>, SS, SC, T> {
         let inner = ZeroCopyEventStore::new(self.store, self.codec, self.upcaster);
         let snap = self.snapshot;
-        Snapshotting::new(inner, snap.store, snap.codec, snap.trigger, snap.schema_version)
+        Snapshotting::new(inner, snap.store, snap.codec, snap.trigger, snap.schema_version, snap.snapshot_on_read)
     }
 }
 ```
 
-**Note:** The existing `.build()` for `NoSnapshot` returns `EventStore` — unchanged. The new `.build()` for `WithSnapshot` returns `Snapshotting<EventStore, ...>`. Both implement `Repository<A>`, so callers don't care which one they get.
-
-Exact method signatures, `NeedsSnapshotCodec` guard, and `snapshot-json` defaulting should follow the same pattern as the existing `NeedsCodec` / `json` feature for event codecs.
-
-**Step 3: Update module exports**
-
-In `store/mod.rs`, add:
+**Usage:**
 
 ```rust
-pub use builder::NoSnapshot;
-#[cfg(feature = "snapshot")]
-pub use builder::WithSnapshot;
+// No snapshots — unchanged
+let repo = store.repository().build();
+
+// With snapshots (snapshot-json feature auto-wires JsonCodec)
+let repo = store.repository()
+    .snapshot_store(fjall_snapshots)
+    .snapshot_trigger(EveryNEvents(NonZeroU64::new(100).unwrap()))
+    .build();
+
+// Custom snapshot codec + semantic trigger + lazy on-read
+let repo = store.repository()
+    .snapshot_store(fjall_snapshots)
+    .snapshot_codec(RkyvCodec)
+    .snapshot_trigger(AfterEventTypes::new(&["OrderCompleted"]))
+    .snapshot_on_read(true)
+    .build();
 ```
 
-**Step 4: Run tests**
+**Step 3: Run tests**
 
 Run: `cargo test -p nexus-store --features "snapshot,json,testing" -- builder_tests`
 
-**Step 5: Commit**
+**Step 4: Commit**
 
 ```
 feat(store): integrate snapshot config into RepositoryBuilder
@@ -1347,7 +1433,7 @@ feat(store): integrate snapshot config into RepositoryBuilder
 
 ---
 
-### Task 11: Full integration test suite
+### Task 10: Full integration test suite
 
 **Files:**
 - Modify: `crates/nexus-store/tests/snapshot_integration_tests.rs`
@@ -1358,10 +1444,12 @@ Write comprehensive tests covering the 4 mandatory test categories from CLAUDE.m
 - Save N events → snapshot triggers → load → partial replay → save more → snapshot again
 - Save below threshold → no snapshot → save more → crosses threshold → snapshot
 - Multiple save/load cycles with snapshot invalidation in between
+- Batch saves that cross boundaries at non-multiples (the audit-discovered bug scenario)
 
 **2. Lifecycle Tests:**
 - Create aggregate → save → snapshot → load from snapshot → verify state
 - Load from snapshot → save more events → load again → verify new snapshot version used
+- Lazy on-read: full replay creates snapshot → subsequent load uses it
 
 **3. Defensive Boundary Tests:**
 - Empty event slice save (no-op, no snapshot trigger)
@@ -1370,6 +1458,7 @@ Write comprehensive tests covering the 4 mandatory test categories from CLAUDE.m
 - Snapshot codec returns error → fallback to full replay
 - Snapshot store returns error on load → fallback to full replay
 - Snapshot store returns error on save → event save still succeeds
+- AfterEventTypes with empty event names → no trigger
 
 **4. Linearizability/Isolation Tests:**
 - Concurrent loads from same snapshot → each gets independent copy
@@ -1385,7 +1474,7 @@ test(store): comprehensive snapshot integration tests
 
 ---
 
-### Task 12: Fjall snapshot adapter
+### Task 11: Fjall snapshot adapter
 
 **Files:**
 - Modify: `crates/nexus-fjall/Cargo.toml`
@@ -1443,7 +1532,7 @@ pub(crate) fn decode_snapshot_value(
     value: &[u8],
 ) -> Result<(u32, u64, &[u8]), DecodeError> {
     if value.len() < SNAPSHOT_VALUE_HEADER_SIZE {
-        return Err(DecodeError::ValueTooShort { ... });
+        return Err(DecodeError::ValueTooShort { min: SNAPSHOT_VALUE_HEADER_SIZE, actual: value.len() });
     }
     let schema_version = u32::from_le_bytes(value[0..4].try_into().unwrap());
     let version = u64::from_be_bytes(value[4..12].try_into().unwrap());
@@ -1463,17 +1552,17 @@ Extend `FjallStoreBuilder` with `.snapshots_config()` method and create the part
 The implementation needs to:
 1. Look up numeric stream ID from the `streams` partition
 2. Read/write the `snapshots` partition using that numeric ID as key
+3. `delete_snapshot`: remove the key from the `snapshots` partition
 
 Implement behind `#[cfg(feature = "snapshot")]`.
 
 **Step 6: Write tests**
 
-Key tests:
-- Save snapshot → load snapshot roundtrip
-- Overwrite snapshot → latest returned
-- Load from nonexistent stream → None
-- Corrupt snapshot value → error
-- Close and reopen → snapshot persisted
+Key tests (4 categories):
+- **Sequence:** Save snapshot → load → overwrite → load latest
+- **Lifecycle:** Save → close → reopen → snapshot persisted
+- **Defensive:** Load from nonexistent stream → None; corrupt snapshot value → error
+- **Isolation:** Concurrent snapshot reads don't interfere
 
 **Step 7: Commit**
 
@@ -1483,7 +1572,7 @@ feat(fjall): add FjallSnapshotStore with dedicated snapshot partition
 
 ---
 
-### Task 13: Update re-exports and run full CI suite
+### Task 12: Update re-exports and run full CI suite
 
 **Files:**
 - Modify: `crates/nexus-store/src/lib.rs` (ensure all snapshot types re-exported)
@@ -1496,9 +1585,11 @@ Ensure `lib.rs` has:
 ```rust
 #[cfg(feature = "snapshot")]
 pub use snapshot::{
-    EveryNEvents, InMemorySnapshotStore, NeverSnapshot,
-    PendingSnapshot, SnapshotRead, SnapshotStore, SnapshotTrigger,
+    AfterEventTypes, EveryNEvents, PendingSnapshot, PersistedSnapshot,
+    SnapshotStore, SnapshotTrigger,
 };
+#[cfg(all(feature = "snapshot", feature = "testing"))]
+pub use snapshot::InMemorySnapshotStore;
 ```
 
 **Step 2: Run full test suite**
@@ -1534,4 +1625,29 @@ cargo hakari verify
 
 ```
 chore(store): finalize snapshot re-exports and verify CI
+```
+
+---
+
+### Task 13: Update design doc with performance guidance
+
+**Files:**
+- Modify: `docs/plans/2026-04-10-snapshot-design.md`
+
+Add a "When to use snapshots" section with benchmark guidance:
+
+| Event Count | Snapshot Value |
+|-------------|---------------|
+| < 50 | Always hurts — overhead exceeds benefit |
+| 50–200 | Rarely helps unless deserialization is expensive |
+| 200–500 | Measure. Depends on event size and apply complexity |
+| 500+ | Likely helps |
+| 10,000+ | Essential — but also consider "Closing the Books" pattern (see #139) |
+
+Document the preferred alternative: short-lived streams with natural lifecycle boundaries eliminate the need for snapshots entirely. Reference issue #139.
+
+**Commit:**
+
+```
+docs: add snapshot performance guidance and alternatives
 ```
