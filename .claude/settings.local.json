@@ -168,7 +168,10 @@
       "WebFetch(domain:docs.ecotone.tech)",
       "Bash(gh issue:*)",
       "Bash(for i:*)",
-      "Bash(do echo:*)"
+      "Bash(do echo:*)",
+      "Bash(gpg:*)",
+      "Bash(gh pr:*)",
+      "Bash(git branch:*)"
     ]
   },
   "hooks": {
