@@ -132,9 +132,7 @@ impl FjallStoreBuilder {
         // Next assignable ID is max + 1 (or 1 if no streams exist yet,
         // since 0 is reserved as "no stream"). Uses checked_add to prevent
         // silent wrap-around to 0 when the full ID space is exhausted.
-        let next_id = max_id
-            .checked_add(1)
-            .ok_or(FjallError::IdSpaceExhausted)?;
+        let next_id = max_id.checked_add(1).ok_or(FjallError::IdSpaceExhausted)?;
 
         Ok(FjallStore {
             db,
