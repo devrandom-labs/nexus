@@ -22,5 +22,5 @@ pub use repository::Repository;
 #[cfg(feature = "snapshot")]
 pub use snapshotting::Snapshotting;
 pub use store::Store;
-pub use stream::EventStream;
+pub use stream::{EventStream, EventStreamExt};
 pub use zero_copy_event_store::ZeroCopyEventStore;

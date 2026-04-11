@@ -7,7 +7,7 @@ use super::store::Store;
 use super::stream::EventStream;
 use crate::codec::Codec;
 use crate::envelope::pending_envelope;
-use crate::error::StoreError;
+use crate::error::{AppendError, StoreError};
 use crate::upcasting::{EventMorsel, Upcaster};
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
@@ -183,36 +183,34 @@ where
         }
 
         // Append to store.
-        match self
-            .store
+        self.store
             .raw()
             .append(aggregate.id(), expected_version, &envelopes)
             .await
-        {
-            Ok(()) => {
-                // The last envelope's version is the new aggregate version.
-                #[allow(
-                    clippy::expect_used,
-                    reason = "envelopes is non-empty: checked events.is_empty() above"
-                )]
-                let last_version = envelopes.last().expect("envelopes is non-empty").version();
+            .map_err(|err| match err {
+                AppendError::Conflict {
+                    stream_id,
+                    expected,
+                    actual,
+                } => StoreError::Conflict {
+                    stream_id,
+                    expected,
+                    actual,
+                },
+                AppendError::Store(e) => StoreError::Adapter(Box::new(e)),
+            })?;
 
-                aggregate.advance_version(last_version);
-                for event in events {
-                    aggregate.apply_event(event);
-                }
-                Ok(())
-            }
-            Err(crate::error::AppendError::Conflict {
-                stream_id,
-                expected,
-                actual,
-            }) => Err(StoreError::Conflict {
-                stream_id,
-                expected,
-                actual,
-            }),
-            Err(crate::error::AppendError::Store(e)) => Err(StoreError::Adapter(Box::new(e))),
+        // The last envelope's version is the new aggregate version.
+        #[allow(
+            clippy::expect_used,
+            reason = "envelopes is non-empty: checked events.is_empty() above"
+        )]
+        let last_version = envelopes.last().expect("envelopes is non-empty").version();
+
+        aggregate.advance_version(last_version);
+        for event in events {
+            aggregate.apply_event(event);
         }
+        Ok(())
     }
 }

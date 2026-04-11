@@ -164,14 +164,12 @@ impl RawEventStore for InMemoryStore {
         }
 
         // Store the events.
-        for env in envelopes {
-            stream.push(StoredRow {
-                version: env.version().as_u64(),
-                event_type: env.event_type().to_owned(),
-                schema_version: env.schema_version(),
-                payload: env.payload().to_vec(),
-            });
-        }
+        stream.extend(envelopes.iter().map(|env| StoredRow {
+            version: env.version().as_u64(),
+            event_type: env.event_type().to_owned(),
+            schema_version: env.schema_version(),
+            payload: env.payload().to_vec(),
+        }));
 
         Ok(())
     }
