@@ -12,6 +12,7 @@ use nexus_store::error::AppendError;
 use nexus_store::store::RawEventStore;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::Notify;
 
 /// Fjall-backed event store.
 ///
@@ -30,6 +31,7 @@ pub struct FjallStore {
     #[cfg(feature = "snapshot")]
     pub(crate) snapshots: fjall::TxPartitionHandle,
     pub(crate) next_stream_id: AtomicU64,
+    pub(crate) notify: Notify,
 }
 
 impl FjallStore {
@@ -176,6 +178,8 @@ impl RawEventStore for FjallStore {
         // Atomic cross-partition commit.
         tx.commit()
             .map_err(|e| AppendError::Store(FjallError::Io(e)))?;
+
+        self.notify.notify_waiters();
 
         Ok(())
     }

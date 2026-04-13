@@ -4,6 +4,7 @@ use crate::store::FjallStore;
 use fjall::{CompressionType, PartitionCreateOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
+use tokio::sync::Notify;
 
 /// Builder for [`FjallStore`].
 ///
@@ -141,6 +142,7 @@ impl FjallStoreBuilder {
             #[cfg(feature = "snapshot")]
             snapshots,
             next_stream_id: AtomicU64::new(next_id),
+            notify: Notify::new(),
         })
     }
 }
