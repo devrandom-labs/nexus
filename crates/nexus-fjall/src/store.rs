@@ -4,12 +4,13 @@ use crate::encoding::{
 };
 use crate::error::FjallError;
 use crate::stream::FjallStream;
+use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
 use fjall::Slice;
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::ToStreamLabel;
 use nexus_store::error::AppendError;
-use nexus_store::store::RawEventStore;
+use nexus_store::store::{RawEventStore, Subscription};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Notify;
@@ -375,6 +376,27 @@ mod snapshot_impl {
             tx.commit().map_err(FjallError::Io)?;
             Ok(())
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Subscription implementation
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl Subscription<()> for FjallStore {
+    type Stream<'a> = FjallSubscriptionStream<'a>;
+    type Error = FjallError;
+
+    async fn subscribe<'a>(
+        &'a self,
+        id: &'a impl Id,
+        from: Option<Version>,
+    ) -> Result<FjallSubscriptionStream<'a>, FjallError> {
+        let stream_id = id.to_string();
+        let start = from.and_then(Version::next).unwrap_or(Version::INITIAL);
+        let owned_id = OwnedStreamId(stream_id.clone());
+        let inner = self.read_stream(&owned_id, start).await?;
+        Ok(FjallSubscriptionStream::new(self, stream_id, inner, from))
     }
 }
 
