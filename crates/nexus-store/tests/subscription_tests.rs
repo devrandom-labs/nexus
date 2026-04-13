@@ -268,6 +268,42 @@ async fn checkpoint_save_overwrites() {
     assert_eq!(loaded, Some(Version::new(5).unwrap()));
 }
 
+/// Subscribe with `from` version beyond current stream head.
+#[tokio::test]
+async fn subscribe_from_beyond_head() {
+    let store = InMemoryStore::new();
+    let id = TestId::new("stream-1");
+
+    // Append 2 events (head is at version 2).
+    append_one(&store, &id, 1, None, "E1").await;
+    append_one(&store, &id, 2, Version::new(1), "E2").await;
+
+    // Subscribe from version 5 — beyond the current head.
+    let mut stream = store
+        .subscribe(&id, Some(Version::new(5).unwrap()))
+        .await
+        .unwrap();
+
+    // Should block — no events at version 6+.
+    let result = tokio::time::timeout(Duration::from_millis(50), stream.next()).await;
+    assert!(result.is_err(), "expected timeout, but got an event");
+
+    // Append events up to and beyond version 5.
+    append_one(&store, &id, 3, Version::new(2), "E3").await;
+    append_one(&store, &id, 4, Version::new(3), "E4").await;
+    append_one(&store, &id, 5, Version::new(4), "E5").await;
+    append_one(&store, &id, 6, Version::new(5), "E6").await;
+
+    // Should receive version 6 (first event AFTER from=5).
+    let env = timeout(TIMEOUT, stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(env.event_type(), "E6");
+    assert_eq!(env.version(), Version::new(6).unwrap());
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 4. Linearizability/Isolation Tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -313,6 +349,44 @@ async fn concurrent_append_and_subscribe() {
     }
 
     writer.await.unwrap();
+}
+
+/// Append during catch-up phase doesn't lose events.
+#[tokio::test]
+async fn append_during_catchup_no_loss() {
+    let store = Arc::new(InMemoryStore::new());
+    let id = TestId::new("stream-1");
+
+    // Pre-populate 20 events.
+    for i in 1..=20u64 {
+        let expected = if i == 1 { None } else { Version::new(i - 1) };
+        append_one(&store, &id, i, expected, "Prepop").await;
+    }
+
+    let mut stream = store.subscribe(&id, None).await.unwrap();
+
+    // Read first 5 events (mid-catch-up).
+    for expected_v in 1..=5u64 {
+        let env = timeout(TIMEOUT, stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.version(), Version::new(expected_v).unwrap());
+    }
+
+    // Append a new event while we're mid-catch-up.
+    append_one(&store, &id, 21, Version::new(20), "Live").await;
+
+    // Continue reading: should get events 6-20 (remaining catch-up) then 21 (live).
+    for expected_v in 6..=21u64 {
+        let env = timeout(TIMEOUT, stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.version(), Version::new(expected_v).unwrap());
+    }
 }
 
 #[tokio::test]

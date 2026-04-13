@@ -119,10 +119,6 @@ impl RawEventStore for InMemoryStore {
     type Error = StoreError;
     type Stream<'a> = InMemoryStream;
 
-    #[allow(
-        clippy::significant_drop_tightening,
-        reason = "guard must be held across concurrency check + push"
-    )]
     async fn append(
         &self,
         id: &impl Id,
@@ -176,8 +172,13 @@ impl RawEventStore for InMemoryStore {
             payload: env.payload().to_vec(),
         }));
 
-        // Signal subscribers only when events were actually written.
-        if !envelopes.is_empty() {
+        let should_notify = !envelopes.is_empty();
+
+        // Release lock before notifying to avoid contention: subscribers
+        // wake up and immediately try to acquire the same Mutex.
+        drop(guard);
+
+        if should_notify {
             self.notify.notify_waiters();
         }
 
@@ -262,10 +263,20 @@ impl InMemorySubscriptionStream<'_> {
     }
 
     /// Compute the version to read from next: `last_version` + 1, or `INITIAL`.
-    fn next_read_version(&self) -> Version {
-        self.last_version
-            .and_then(Version::next)
-            .unwrap_or(Version::INITIAL)
+    ///
+    /// Returns an error on overflow instead of silently wrapping back
+    /// to `Version::INITIAL`.
+    fn next_read_version(&self) -> Result<Version, StoreError> {
+        self.last_version.map_or_else(
+            || Ok(Version::INITIAL),
+            |v| {
+                v.next().ok_or_else(|| {
+                    StoreError::Codec(
+                        "subscription version overflow: cannot advance past u64::MAX".into(),
+                    )
+                })
+            },
+        )
     }
 }
 
@@ -313,7 +324,10 @@ impl EventStream for InMemorySubscriptionStream<'_> {
             // between our read and our wait.
             let notified = self.store.notify.notified();
 
-            let from = self.next_read_version();
+            let from = match self.next_read_version() {
+                Ok(v) => v,
+                Err(err) => return Some(Err(err)),
+            };
             self.refill(from).await;
 
             // If refill found new events, loop back to yield them.
@@ -337,7 +351,14 @@ impl Subscription<()> for InMemoryStore {
         from: Option<Version>,
     ) -> Result<InMemorySubscriptionStream<'a>, StoreError> {
         let stream_id = id.to_string();
-        let from_version = from.and_then(Version::next).unwrap_or(Version::INITIAL);
+        let from_version = match from {
+            None => Version::INITIAL,
+            Some(v) => v.next().ok_or_else(|| {
+                StoreError::Codec(
+                    "subscription version overflow: cannot advance past u64::MAX".into(),
+                )
+            })?,
+        };
 
         let mut sub = InMemorySubscriptionStream {
             store: self,

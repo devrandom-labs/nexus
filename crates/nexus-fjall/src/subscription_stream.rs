@@ -9,7 +9,7 @@ use nexus_store::store::{EventStream, RawEventStore};
 /// Owned wrapper to satisfy the [`Id`] trait's `'static` bound when
 /// re-reading from the store by a string stream ID.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct OwnedStreamId(pub String);
+pub struct OwnedStreamId(pub(crate) String);
 
 impl std::fmt::Display for OwnedStreamId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -38,7 +38,7 @@ impl<'a> FjallSubscriptionStream<'a> {
     /// Create a new subscription stream.
     ///
     /// `inner` should already contain the initial catch-up batch.
-    pub const fn new(
+    pub(crate) const fn new(
         store: &'a FjallStore,
         stream_id: String,
         inner: FjallStream,
@@ -55,11 +55,12 @@ impl<'a> FjallSubscriptionStream<'a> {
     /// Compute the version to start reading from next.
     ///
     /// Returns `last_version + 1`, or `Version::INITIAL` if no events
-    /// have been yielded yet.
-    fn next_read_version(&self) -> Version {
-        self.last_version
-            .and_then(Version::next)
-            .unwrap_or(Version::INITIAL)
+    /// have been yielded yet. Returns an error on overflow instead of
+    /// silently wrapping back to `Version::INITIAL`.
+    fn next_read_version(&self) -> Result<Version, FjallError> {
+        self.last_version.map_or(Ok(Version::INITIAL), |v| {
+            v.next().ok_or(FjallError::VersionOverflow)
+        })
     }
 
     /// Replace the inner stream with a fresh read starting at `from`.
@@ -141,7 +142,10 @@ impl EventStream for FjallSubscriptionStream<'_> {
             // append happens between our read and our wait.
             let notified = self.store.notify.notified();
 
-            let from = self.next_read_version();
+            let from = match self.next_read_version() {
+                Ok(v) => v,
+                Err(err) => return Some(Err(err)),
+            };
             if let Err(err) = self.refill(from).await {
                 return Some(Err(err));
             }

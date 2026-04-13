@@ -394,7 +394,10 @@ impl Subscription<()> for FjallStore {
         from: Option<Version>,
     ) -> Result<FjallSubscriptionStream<'a>, FjallError> {
         let stream_id = id.to_string();
-        let start = from.and_then(Version::next).unwrap_or(Version::INITIAL);
+        let start = match from {
+            None => Version::INITIAL,
+            Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
+        };
         let owned_id = OwnedStreamId(stream_id.clone());
         let inner = self.read_stream(&owned_id, start).await?;
         Ok(FjallSubscriptionStream::new(self, stream_id, inner, from))

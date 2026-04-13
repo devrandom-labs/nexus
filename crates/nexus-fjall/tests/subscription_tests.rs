@@ -335,6 +335,44 @@ async fn concurrent_append_and_subscribe() {
     writer.await.unwrap();
 }
 
+/// Append during catch-up phase doesn't lose events.
+#[tokio::test]
+async fn append_during_catchup_no_loss() {
+    let (store, _dir) = temp_store();
+    let id = TestId::new("stream-1");
+
+    // Pre-populate 20 events.
+    for i in 1..=20u64 {
+        let expected = if i == 1 { None } else { Version::new(i - 1) };
+        append_one(&store, &id, i, expected, "Prepop").await;
+    }
+
+    let mut stream = store.subscribe(&id, None).await.unwrap();
+
+    // Read first 5 events (mid-catch-up).
+    for expected_v in 1..=5u64 {
+        let env = timeout(TIMEOUT, stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.version(), Version::new(expected_v).unwrap());
+    }
+
+    // Append a new event while we're mid-catch-up.
+    append_one(&store, &id, 21, Version::new(20), "Live").await;
+
+    // Continue reading: should get events 6-20 (remaining catch-up) then 21 (live).
+    for expected_v in 6..=21u64 {
+        let env = timeout(TIMEOUT, stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(env.version(), Version::new(expected_v).unwrap());
+    }
+}
+
 #[tokio::test]
 async fn multiple_subscribers_same_stream() {
     let (store, _dir) = temp_store();

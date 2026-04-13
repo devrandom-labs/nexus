@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Errors produced by the fjall event store adapter.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FjallError {
     /// Fjall I/O or internal database error.
     #[error("fjall error: {0}")]
@@ -36,6 +37,10 @@ pub enum FjallError {
         version: u64,
         reason: String,
     },
+
+    /// Event version would overflow `u64::MAX`.
+    #[error("version overflow: cannot advance past u64::MAX")]
+    VersionOverflow,
 }
 
 #[cfg(test)]
