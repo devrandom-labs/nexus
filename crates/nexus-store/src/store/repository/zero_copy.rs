@@ -1,12 +1,12 @@
 use super::event_store::version_to_nz32;
-use super::raw::RawEventStore;
 use super::replay::ReplayFrom;
 use super::repository::Repository;
-use super::store::Store;
-use super::stream::EventStream;
 use crate::codec::BorrowingCodec;
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
+use crate::store::raw::RawEventStore;
+use crate::store::store::Store;
+use crate::store::stream::EventStream;
 use crate::upcasting::{EventMorsel, Upcaster};
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
@@ -21,7 +21,7 @@ use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 ///
 /// # Construction
 ///
-/// Created via [`Store::repository()`](super::store::Store::repository):
+/// Created via [`Store::repository()`](crate::store::store::Store::repository):
 ///
 /// ```ignore
 /// let store = Store::new(backend);

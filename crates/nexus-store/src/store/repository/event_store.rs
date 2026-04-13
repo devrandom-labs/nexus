@@ -1,13 +1,13 @@
 use std::num::NonZeroU32;
 
-use super::raw::RawEventStore;
 use super::replay::ReplayFrom;
 use super::repository::Repository;
-use super::store::Store;
-use super::stream::EventStream;
 use crate::codec::Codec;
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
+use crate::store::raw::RawEventStore;
+use crate::store::store::Store;
+use crate::store::stream::EventStream;
 use crate::upcasting::{EventMorsel, Upcaster};
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
@@ -37,7 +37,7 @@ pub(super) fn version_to_nz32(version: Version) -> Result<NonZeroU32, StoreError
 ///
 /// # Construction
 ///
-/// Created via [`Store::repository()`](super::store::Store::repository):
+/// Created via [`Store::repository()`](crate::store::store::Store::repository):
 ///
 /// ```ignore
 /// let store = Store::new(backend);

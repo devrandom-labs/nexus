@@ -5,8 +5,8 @@ use crate::error::StoreError;
 use crate::snapshot::{PendingSnapshot, SnapshotStore, SnapshotTrigger};
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
-use super::replay::ReplayFrom;
-use super::repository::Repository;
+use crate::store::repository::Repository;
+use crate::store::repository::replay::ReplayFrom;
 
 /// Snapshot-aware repository decorator.
 ///

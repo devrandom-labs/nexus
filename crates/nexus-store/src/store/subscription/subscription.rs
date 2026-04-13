@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use super::stream::EventStream;
+use crate::store::stream::EventStream;
 use nexus::{Id, Version};
 
 /// A subscription to events in a single stream.

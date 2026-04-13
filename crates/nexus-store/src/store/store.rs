@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// aggregate binding — it is just a database handle.
 ///
 /// Use [`repository()`](Store::repository) to obtain a
-/// [`RepositoryBuilder`](super::builder::RepositoryBuilder), then
+/// [`RepositoryBuilder`](super::RepositoryBuilder), then
 /// configure a codec and upcaster before calling `.build()`.
 ///
 /// # Example
