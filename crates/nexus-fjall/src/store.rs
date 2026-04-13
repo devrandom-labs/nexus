@@ -10,7 +10,7 @@ use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::ToStreamLabel;
 use nexus_store::error::AppendError;
-use nexus_store::store::{RawEventStore, Subscription};
+use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Notify;
@@ -31,6 +31,7 @@ pub struct FjallStore {
     pub(crate) events: fjall::TxPartitionHandle,
     #[cfg(feature = "snapshot")]
     pub(crate) snapshots: fjall::TxPartitionHandle,
+    pub(crate) checkpoints: fjall::TxPartitionHandle,
     pub(crate) next_stream_id: AtomicU64,
     pub(crate) notify: Notify,
 }
@@ -397,6 +398,58 @@ impl Subscription<()> for FjallStore {
         let owned_id = OwnedStreamId(stream_id.clone());
         let inner = self.read_stream(&owned_id, start).await?;
         Ok(FjallSubscriptionStream::new(self, stream_id, inner, from))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CheckpointStore implementation
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl CheckpointStore for FjallStore {
+    type Error = FjallError;
+
+    fn load(
+        &self,
+        subscription_id: &impl Id,
+    ) -> impl std::future::Future<Output = Result<Option<Version>, FjallError>> + Send + '_ {
+        let key = subscription_id.to_string();
+        async move {
+            let Some(bytes) = self.checkpoints.get(&key)? else {
+                return Ok(None);
+            };
+            // Value: u64 big-endian (8 bytes)
+            let raw_bytes: [u8; 8] =
+                bytes
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| FjallError::CorruptValue {
+                        stream_id: key.clone(),
+                        version: None,
+                    })?;
+            let raw = u64::from_be_bytes(raw_bytes);
+            Version::new(raw).map_or_else(
+                || {
+                    Err(FjallError::CorruptValue {
+                        stream_id: key,
+                        version: Some(raw),
+                    })
+                },
+                |v| Ok(Some(v)),
+            )
+        }
+    }
+
+    fn save(
+        &self,
+        subscription_id: &impl Id,
+        version: Version,
+    ) -> impl std::future::Future<Output = Result<(), FjallError>> + Send + '_ {
+        let key = subscription_id.to_string();
+        async move {
+            self.checkpoints
+                .insert(&key, version.as_u64().to_be_bytes())?;
+            Ok(())
+        }
     }
 }
 

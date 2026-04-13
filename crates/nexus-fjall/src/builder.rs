@@ -108,6 +108,15 @@ impl FjallStoreBuilder {
             db.open_partition("snapshots", snapshots_defaults)?
         };
 
+        // --- checkpoints partition: point-read-optimised for subscription positions ---
+        // 4 KiB blocks and bloom filter for fast single-key lookups by subscription ID.
+        let checkpoints = db.open_partition(
+            "checkpoints",
+            PartitionCreateOptions::default()
+                .block_size(4_096)
+                .bloom_filter_bits(Some(15)),
+        )?;
+
         // Recover `next_stream_id` by scanning all stream metadata entries
         // and finding the maximum numeric_id.
         let mut max_id: u64 = 0;
@@ -141,6 +150,7 @@ impl FjallStoreBuilder {
             events,
             #[cfg(feature = "snapshot")]
             snapshots,
+            checkpoints,
             next_stream_id: AtomicU64::new(next_id),
             notify: Notify::new(),
         })
