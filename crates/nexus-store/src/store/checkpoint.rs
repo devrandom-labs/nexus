@@ -6,7 +6,7 @@ use nexus::{Id, Version};
 ///
 /// A checkpoint records how far a subscription has processed events
 /// in a stream. On restart, the subscriber loads its checkpoint and
-/// passes it as `from` to [`Subscription::subscribe`].
+/// passes it as `from` to [`Subscription::subscribe`](super::Subscription::subscribe).
 ///
 /// # Contract
 ///
