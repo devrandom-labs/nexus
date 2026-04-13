@@ -25,8 +25,8 @@ pub use snapshot::{
     SnapshotTrigger,
 };
 pub use store::{
-    EventStore, EventStream, EventStreamExt, NeedsCodec, NoSnapshot, RawEventStore, Repository,
-    RepositoryBuilder, Store, ZeroCopyEventStore,
+    CheckpointStore, EventStore, EventStream, EventStreamExt, NeedsCodec, NoSnapshot,
+    RawEventStore, Repository, RepositoryBuilder, Store, Subscription, ZeroCopyEventStore,
 };
 #[cfg(feature = "snapshot")]
 pub use store::{Snapshotting, WithSnapshot};

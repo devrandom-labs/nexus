@@ -1,4 +1,5 @@
 mod builder;
+mod checkpoint;
 mod event_store;
 mod raw;
 pub(crate) mod replay;
@@ -11,11 +12,13 @@ mod snapshotting;
 )]
 mod store;
 mod stream;
+mod subscription;
 mod zero_copy_event_store;
 
 #[cfg(feature = "snapshot")]
 pub use builder::WithSnapshot;
 pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
+pub use checkpoint::CheckpointStore;
 pub use event_store::EventStore;
 pub use raw::RawEventStore;
 pub use repository::Repository;
@@ -23,4 +26,5 @@ pub use repository::Repository;
 pub use snapshotting::Snapshotting;
 pub use store::Store;
 pub use stream::{EventStream, EventStreamExt};
+pub use subscription::Subscription;
 pub use zero_copy_event_store::ZeroCopyEventStore;
