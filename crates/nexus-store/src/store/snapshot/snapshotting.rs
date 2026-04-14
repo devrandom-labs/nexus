@@ -131,10 +131,9 @@ where
     {
         let holder = self
             .snapshot_store
-            .load_snapshot(id)
+            .load_snapshot(id, self.schema_version)
             .await
-            .ok()?
-            .filter(|h| h.schema_version() == self.schema_version)?;
+            .ok()??;
 
         let state = self
             .snapshot_codec

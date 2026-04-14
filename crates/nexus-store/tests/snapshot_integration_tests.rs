@@ -302,7 +302,7 @@ async fn lazy_snapshot_on_read_after_full_replay() {
     assert_eq!(loaded.state().value, 3);
 
     // Verify snapshot was created by checking load_snapshot directly
-    let snap = snap_store.load_snapshot(&id).await.unwrap();
+    let snap = snap_store.load_snapshot(&id, SV1).await.unwrap();
     assert!(snap.is_some());
     assert_eq!(snap.unwrap().version(), Version::new(3).unwrap());
 }
@@ -488,7 +488,7 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
     assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
 
     // Verify the snapshot has schema v2
-    let snap = snap_store.load_snapshot(&id).await.unwrap().unwrap();
+    let snap = snap_store.load_snapshot(&id, SV1).await.unwrap().unwrap();
     assert_eq!(snap.schema_version(), sv2());
 }
 
@@ -553,7 +553,7 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
         .unwrap();
 
     // No snapshot yet
-    assert!(snap_store.load_snapshot(&id).await.unwrap().is_none());
+    assert!(snap_store.load_snapshot(&id, SV1).await.unwrap().is_none());
 
     // Load with on-read → creates lazy snapshot
     let inner2 = store.repository().build();
@@ -568,7 +568,7 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
     let _loaded: AggregateRoot<CounterAggregate> = repo_on_read.load(id.clone()).await.unwrap();
 
     // Snapshot now exists
-    let snap = snap_store.load_snapshot(&id).await.unwrap().unwrap();
+    let snap = snap_store.load_snapshot(&id, SV1).await.unwrap().unwrap();
     assert_eq!(snap.version(), Version::new(5).unwrap());
 
     // Second load uses snapshot (we can't directly prove partial replay,
@@ -644,6 +644,7 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
         async fn load_snapshot(
             &self,
             _id: &impl nexus::Id,
+            _schema_version: NonZeroU32,
         ) -> Result<Option<nexus_store::snapshot::PersistedSnapshot>, Self::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -708,6 +709,7 @@ async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
         async fn load_snapshot(
             &self,
             _id: &impl nexus::Id,
+            _schema_version: NonZeroU32,
         ) -> Result<Option<nexus_store::snapshot::PersistedSnapshot>, Self::Error> {
             Ok(None)
         }

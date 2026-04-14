@@ -15,6 +15,8 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{Id, Version};
+
+const SV1: NonZeroU32 = NonZeroU32::MIN;
 use nexus_store::snapshot::{
     AfterEventTypes, EveryNEvents, PendingSnapshot, PersistedSnapshot, SnapshotStore,
     SnapshotTrigger,
@@ -60,7 +62,7 @@ fn persisted_snapshot_stores_version_and_payload() {
 async fn unit_snapshot_store_returns_none() {
     let store = ();
     let id = TestId("agg-1".into());
-    let result = store.load_snapshot(&id).await;
+    let result = store.load_snapshot(&id, SV1).await;
     assert!(result.unwrap().is_none());
 }
 
@@ -132,7 +134,7 @@ fn every_1_event_always_triggers() {
     assert!(trigger.should_snapshot(
         Some(Version::new(1).unwrap()),
         Version::new(2).unwrap(),
-        &[],
+        std::iter::empty::<&str>(),
     ));
 }
 
@@ -182,7 +184,10 @@ mod in_memory_tests {
     #[tokio::test]
     async fn load_returns_none_when_empty() {
         let store = InMemorySnapshotStore::new();
-        let result = store.load_snapshot(&TestId("agg-1".into())).await.unwrap();
+        let result = store
+            .load_snapshot(&TestId("agg-1".into()), SV1)
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -194,7 +199,7 @@ mod in_memory_tests {
         let snap = PendingSnapshot::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
 
         store.save_snapshot(&id, &snap).await.unwrap();
-        let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+        let loaded = store.load_snapshot(&id, SV1).await.unwrap().unwrap();
 
         assert_eq!(loaded.version(), version);
         assert_eq!(loaded.schema_version(), NonZeroU32::new(1).unwrap());
@@ -220,7 +225,7 @@ mod in_memory_tests {
         );
         store.save_snapshot(&id, &snap2).await.unwrap();
 
-        let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+        let loaded = store.load_snapshot(&id, SV1).await.unwrap().unwrap();
         assert_eq!(loaded.version(), Version::new(20).unwrap());
         assert_eq!(loaded.payload(), &[2]);
     }
@@ -250,12 +255,12 @@ mod in_memory_tests {
             .unwrap();
 
         let loaded1 = store
-            .load_snapshot(&TestId("agg-1".into()))
+            .load_snapshot(&TestId("agg-1".into()), SV1)
             .await
             .unwrap()
             .unwrap();
         let loaded2 = store
-            .load_snapshot(&TestId("agg-2".into()))
+            .load_snapshot(&TestId("agg-2".into()), SV1)
             .await
             .unwrap()
             .unwrap();
@@ -276,7 +281,7 @@ mod in_memory_tests {
         store.save_snapshot(&id, &snap).await.unwrap();
 
         store.delete_snapshot(&id).await.unwrap();
-        let loaded = store.load_snapshot(&id).await.unwrap();
+        let loaded = store.load_snapshot(&id, SV1).await.unwrap();
         assert!(loaded.is_none());
     }
 

@@ -1,5 +1,6 @@
 use std::convert::Infallible;
 use std::future::Future;
+use std::num::NonZeroU32;
 
 use nexus::Id;
 
@@ -20,10 +21,13 @@ pub trait SnapshotStore: Send + Sync {
 
     /// Load the most recent snapshot for the given aggregate.
     ///
-    /// Returns `None` if no snapshot exists.
+    /// Returns `None` if no snapshot exists or if the stored snapshot's
+    /// schema version does not match `schema_version`. Filtering at the
+    /// store level avoids loading payload bytes for stale snapshots.
     fn load_snapshot(
         &self,
         id: &impl Id,
+        schema_version: NonZeroU32,
     ) -> impl Future<Output = Result<Option<PersistedSnapshot>, Self::Error>> + Send;
 
     /// Persist a snapshot for the given aggregate.
@@ -49,8 +53,12 @@ pub trait SnapshotStore: Send + Sync {
 impl<T: SnapshotStore> SnapshotStore for &T {
     type Error = T::Error;
 
-    async fn load_snapshot(&self, id: &impl Id) -> Result<Option<PersistedSnapshot>, Self::Error> {
-        (**self).load_snapshot(id).await
+    async fn load_snapshot(
+        &self,
+        id: &impl Id,
+        schema_version: NonZeroU32,
+    ) -> Result<Option<PersistedSnapshot>, Self::Error> {
+        (**self).load_snapshot(id, schema_version).await
     }
 
     async fn save_snapshot(
@@ -73,7 +81,11 @@ impl<T: SnapshotStore> SnapshotStore for &T {
 impl SnapshotStore for () {
     type Error = Infallible;
 
-    async fn load_snapshot(&self, _id: &impl Id) -> Result<Option<PersistedSnapshot>, Infallible> {
+    async fn load_snapshot(
+        &self,
+        _id: &impl Id,
+        _schema_version: NonZeroU32,
+    ) -> Result<Option<PersistedSnapshot>, Infallible> {
         Ok(None)
     }
 

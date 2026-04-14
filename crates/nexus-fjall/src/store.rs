@@ -267,49 +267,43 @@ mod snapshot_impl {
         async fn load_snapshot(
             &self,
             id: &impl Id,
+            expected_schema_version: std::num::NonZeroU32,
         ) -> Result<Option<PersistedSnapshot>, FjallError> {
             let id_string = id.to_string();
 
             // Single snapshot read: look up numeric ID then read snapshot.
             // Both reads use the same point-in-time view (fjall LSM snapshot).
-            let meta = self.streams.get(&id_string)?;
-            let numeric_id = match meta {
-                Some(meta_bytes) => {
-                    let (numeric_id, _version) =
-                        decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
-                            stream_id: id_string.clone(),
-                        })?;
-                    numeric_id
-                }
-                None => return Ok(None),
+            let Some(meta_bytes) = self.streams.get(&id_string)? else {
+                return Ok(None);
             };
+            let (numeric_id, _version) =
+                decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
+                    stream_id: id_string.clone(),
+                })?;
 
             let key = encode_snapshot_key(numeric_id);
-            let value = self.snapshots.get(key)?;
-            match value {
-                Some(bytes) => {
-                    let (schema_version_raw, version_raw, payload) = decode_snapshot_value(&bytes)
-                        .map_err(|_| FjallError::CorruptValue {
-                            stream_id: id_string,
-                            version: None,
-                        })?;
-                    let version =
-                        Version::new(version_raw).ok_or_else(|| FjallError::CorruptValue {
-                            stream_id: id.to_string(),
-                            version: None,
-                        })?;
-                    let schema_version =
-                        std::num::NonZeroU32::new(schema_version_raw).ok_or_else(|| {
-                            FjallError::CorruptValue {
-                                stream_id: id.to_string(),
-                                version: Some(version_raw),
-                            }
-                        })?;
-                    let snap = PersistedSnapshot::new(version, schema_version, payload.to_vec());
-                    Ok(Some(snap))
-                }
-                None => Ok(None),
+            let Some(bytes) = self.snapshots.get(key)? else {
+                return Ok(None);
+            };
+
+            let (schema_version_raw, version_raw, payload) = decode_snapshot_value(&bytes)
+                .map_err(|_| FjallError::CorruptValue {
+                    stream_id: id_string,
+                    version: None,
+                })?;
+
+            // Filter by schema version before constructing the snapshot
+            // (avoids cloning payload bytes for stale snapshots).
+            if schema_version_raw != expected_schema_version.get() {
+                return Ok(None);
             }
+
+            let version = Version::new(version_raw).ok_or_else(|| FjallError::CorruptValue {
+                stream_id: id.to_string(),
+                version: None,
+            })?;
+            let snap = PersistedSnapshot::new(version, expected_schema_version, payload.to_vec());
+            Ok(Some(snap))
         }
 
         async fn save_snapshot(

@@ -75,7 +75,7 @@ impl SnapshotTrigger for AfterEventTypes {
         &self,
         _old_version: Option<Version>,
         _new_version: Version,
-        event_names: impl Iterator<Item: AsRef<str>>,
+        mut event_names: impl Iterator<Item: AsRef<str>>,
     ) -> bool {
         event_names.any(|name| self.types.iter().any(|t| *t == name.as_ref()))
     }
