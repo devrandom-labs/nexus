@@ -19,7 +19,9 @@ impl AsRef<[u8]> for TestId {
         self.0.as_bytes()
     }
 }
-impl Id for TestId {}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[tokio::test]
 async fn append_and_read_back() {

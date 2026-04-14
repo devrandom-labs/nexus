@@ -10,8 +10,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{
-    decode_event_key, decode_event_value, decode_stream_meta, encode_event_key, encode_event_value,
-    encode_stream_meta,
+    decode_event_key, decode_event_value, decode_stream_version, encode_event_key,
+    encode_event_value, encode_stream_version,
 };
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
@@ -37,7 +37,9 @@ impl AsRef<[u8]> for BenchId {
         self.0.as_bytes()
     }
 }
-impl nexus::Id for BenchId {}
+impl nexus::Id for BenchId {
+    const BYTE_LEN: usize = 0;
+}
 fn bid(s: &str) -> BenchId {
     BenchId(s.to_owned())
 }
@@ -75,21 +77,21 @@ fn encoding_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("encoding");
 
     group.bench_function("encode_event_key", |b| {
-        b.iter(|| encode_event_key(42, 100));
+        b.iter(|| encode_event_key(b"stream-42", 100).unwrap());
     });
 
-    let key = encode_event_key(42, 100);
+    let key = encode_event_key(b"stream-42", 100).unwrap();
     group.bench_function("decode_event_key", |b| {
         b.iter(|| decode_event_key(&key).unwrap());
     });
 
-    group.bench_function("encode_stream_meta", |b| {
-        b.iter(|| encode_stream_meta(7, 999));
+    group.bench_function("encode_stream_version", |b| {
+        b.iter(|| encode_stream_version(999));
     });
 
-    let meta = encode_stream_meta(7, 999);
-    group.bench_function("decode_stream_meta", |b| {
-        b.iter(|| decode_stream_meta(&meta).unwrap());
+    let ver = encode_stream_version(999);
+    group.bench_function("decode_stream_version", |b| {
+        b.iter(|| decode_stream_version(&ver).unwrap());
     });
 
     for &(label, size) in &[

@@ -22,7 +22,9 @@ impl AsRef<[u8]> for TodoId {
         &self.0
     }
 }
-impl Id for TodoId {}
+impl Id for TodoId {
+    const BYTE_LEN: usize = 8;
+}
 
 #[derive(Debug, Clone)]
 struct TodoCreated {

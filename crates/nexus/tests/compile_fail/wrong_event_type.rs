@@ -52,7 +52,9 @@ impl std::fmt::Display for UserId {
 impl AsRef<[u8]> for UserId {
     fn as_ref(&self) -> &[u8] { self.0.as_bytes() }
 }
-impl Id for UserId {}
+impl Id for UserId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn main() {
     let mut user = AggregateRoot::<UserAggregate>::new(UserId::new(1));

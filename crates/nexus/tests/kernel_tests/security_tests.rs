@@ -26,7 +26,9 @@ impl AsRef<[u8]> for SId {
         self.0.as_bytes()
     }
 }
-impl Id for SId {}
+impl Id for SId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum SEvent {

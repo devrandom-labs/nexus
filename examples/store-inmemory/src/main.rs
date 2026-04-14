@@ -45,7 +45,9 @@ impl fmt::Display for TodoId {
     }
 }
 
-impl Id for TodoId {}
+impl Id for TodoId {
+    const BYTE_LEN: usize = 0;
+}
 
 impl AsRef<[u8]> for TodoId {
     fn as_ref(&self) -> &[u8] {

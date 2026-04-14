@@ -40,7 +40,9 @@ impl AsRef<[u8]> for BId {
         self.0.as_bytes()
     }
 }
-impl Id for BId {}
+impl Id for BId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code, reason = "Set variant exists for realistic bench domain")]

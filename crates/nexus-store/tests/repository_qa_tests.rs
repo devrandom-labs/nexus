@@ -113,7 +113,9 @@ impl AsRef<[u8]> for CounterId {
     }
 }
 
-impl Id for CounterId {}
+impl Id for CounterId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("counter error")]

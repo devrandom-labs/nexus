@@ -32,7 +32,9 @@ impl AsRef<[u8]> for TestId {
         self.0.as_bytes()
     }
 }
-impl Id for TestId {}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone)]
 enum CounterEvent {

@@ -87,7 +87,9 @@ impl AsRef<[u8]> for StreamName {
         self.0.as_bytes()
     }
 }
-impl nexus::Id for StreamName {}
+impl nexus::Id for StreamName {
+    const BYTE_LEN: usize = 0;
+}
 fn sn(s: &str) -> StreamName {
     StreamName(s.to_owned())
 }
@@ -146,7 +148,9 @@ impl AsRef<[u8]> for TestId {
         self.0.as_bytes()
     }
 }
-impl nexus::Id for TestId {}
+impl nexus::Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("test error")]

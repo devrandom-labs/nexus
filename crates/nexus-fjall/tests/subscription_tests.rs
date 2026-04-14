@@ -42,7 +42,9 @@ impl AsRef<[u8]> for TestId {
     }
 }
 
-impl Id for TestId {}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope<()> {
     pending_envelope(Version::new(version).expect("test version must be > 0"))

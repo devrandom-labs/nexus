@@ -26,7 +26,7 @@ impl std::fmt::Display for MyId {
 impl AsRef<[u8]> for MyId {
     fn as_ref(&self) -> &[u8] { &self.0 }
 }
-impl Id for MyId {}
+impl Id for MyId { const BYTE_LEN: usize = 8; }
 
 #[nexus::aggregate(state = St, id = MyId)]
 struct MissingError;

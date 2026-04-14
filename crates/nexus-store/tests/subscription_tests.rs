@@ -30,7 +30,9 @@ impl AsRef<[u8]> for TestId {
         self.0.as_bytes()
     }
 }
-impl Id for TestId {}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 /// Helper: build a pending envelope with a given version and event type.
 fn make_envelope(version: u64, event_type: &'static str) -> nexus_store::PendingEnvelope<()> {

@@ -38,7 +38,9 @@ impl AsRef<[u8]> for PId {
         self.0.as_bytes()
     }
 }
-impl Id for PId {}
+impl Id for PId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum CountEvent {

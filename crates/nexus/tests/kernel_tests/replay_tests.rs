@@ -31,7 +31,9 @@ impl AsRef<[u8]> for RId {
         self.0.as_bytes()
     }
 }
-impl Id for RId {}
+impl Id for RId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum REvent {

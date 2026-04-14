@@ -42,7 +42,9 @@ impl AsRef<[u8]> for TId {
     }
 }
 
-impl Id for TId {}
+impl Id for TId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct Added(String);

@@ -98,7 +98,7 @@ pub trait AggregateState: Send + Sync + Debug + Clone + 'static {
 /// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct MyId(String);
 /// # impl std::fmt::Display for MyId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
 /// # impl AsRef<[u8]> for MyId { fn as_ref(&self) -> &[u8] { self.0.as_bytes() } }
-/// # impl Id for MyId {}
+/// # impl Id for MyId { const BYTE_LEN: usize = 0; }
 /// # #[derive(Debug, thiserror::Error)] #[error("e")] struct MyError;
 ///
 /// struct MyAggregate(AggregateRoot<Self>);
@@ -153,7 +153,7 @@ pub trait Aggregate: Sized {
 /// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct TodoId(String);
 /// # impl std::fmt::Display for TodoId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
 /// # impl AsRef<[u8]> for TodoId { fn as_ref(&self) -> &[u8] { self.0.as_bytes() } }
-/// # impl Id for TodoId {}
+/// # impl Id for TodoId { const BYTE_LEN: usize = 0; }
 /// # #[derive(Debug, thiserror::Error)] #[error("e")] struct TodoError;
 /// # struct Todo(AggregateRoot<Self>);
 /// # impl Aggregate for Todo { type State = TodoState; type Error = TodoError; type Id = TodoId; }

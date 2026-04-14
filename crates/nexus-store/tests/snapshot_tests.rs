@@ -36,7 +36,9 @@ impl AsRef<[u8]> for TestId {
         self.0.as_bytes()
     }
 }
-impl Id for TestId {}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[test]
 fn pending_snapshot_stores_version_and_payload() {

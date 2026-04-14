@@ -38,7 +38,9 @@ impl fmt::Display for AccountId {
     }
 }
 
-impl Id for AccountId {}
+impl Id for AccountId {
+    const BYTE_LEN: usize = 0;
+}
 
 impl AsRef<[u8]> for AccountId {
     fn as_ref(&self) -> &[u8] {

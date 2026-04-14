@@ -29,7 +29,9 @@ impl AsRef<[u8]> for RtId {
         &self.0
     }
 }
-impl Id for RtId {}
+impl Id for RtId {
+    const BYTE_LEN: usize = 8;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum RtEvent {

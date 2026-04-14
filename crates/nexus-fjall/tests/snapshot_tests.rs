@@ -34,7 +34,9 @@ impl AsRef<[u8]> for TestId {
     }
 }
 
-impl Id for TestId {}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn tid(s: &str) -> TestId {
     TestId(s.to_owned())

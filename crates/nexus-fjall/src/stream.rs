@@ -33,7 +33,7 @@ impl EventStream for FjallStream {
         let (key, value) = &self.events[self.pos];
         self.pos += 1;
 
-        let Ok((_stream_num, version)) = decode_event_key(key) else {
+        let Ok((_id_bytes, version)) = decode_event_key(key) else {
             self.poisoned = true;
             return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id.clone(),
@@ -91,13 +91,13 @@ mod tests {
     use crate::encoding::{encode_event_key, encode_event_value};
 
     fn make_row(
-        stream_num: u64,
+        id: &[u8],
         version: u64,
         schema_ver: u32,
         event_type: &str,
         payload: &[u8],
     ) -> (Slice, Slice) {
-        let key = encode_event_key(stream_num, version);
+        let key = encode_event_key(id, version).unwrap();
         let mut val_buf = Vec::new();
         encode_event_value(&mut val_buf, schema_ver, event_type, payload).unwrap();
         (Slice::from(key), Slice::from(val_buf))
@@ -105,8 +105,8 @@ mod tests {
 
     #[tokio::test]
     async fn yields_events_in_order() {
-        let row1 = make_row(1, 1, 1, "UserCreated", b"payload-1");
-        let row2 = make_row(1, 2, 1, "UserUpdated", b"payload-2");
+        let row1 = make_row(b"user-123", 1, 1, "UserCreated", b"payload-1");
+        let row2 = make_row(b"user-123", 2, 1, "UserUpdated", b"payload-2");
 
         let mut stream = FjallStream {
             events: vec![row1, row2],
@@ -137,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn corrupt_value_returns_error() {
         // Valid key, but truncated value (only 3 bytes, header requires 6).
-        let key = encode_event_key(1, 1);
+        let key = encode_event_key(b"corrupt-stream", 1).unwrap();
         let truncated_value: &[u8] = &[0, 1, 2];
 
         let mut stream = FjallStream {

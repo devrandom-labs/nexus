@@ -20,7 +20,9 @@ impl AsRef<[u8]> for AttrId {
         &self.0
     }
 }
-impl Id for AttrId {}
+impl Id for AttrId {
+    const BYTE_LEN: usize = 8;
+}
 
 #[derive(Debug, Clone)]
 #[allow(

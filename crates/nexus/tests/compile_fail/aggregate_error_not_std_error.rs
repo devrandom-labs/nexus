@@ -44,6 +44,8 @@ impl std::fmt::Display for MyId {
 impl AsRef<[u8]> for MyId {
     fn as_ref(&self) -> &[u8] { self.0.as_bytes() }
 }
-impl Id for MyId {}
+impl Id for MyId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn main() {}

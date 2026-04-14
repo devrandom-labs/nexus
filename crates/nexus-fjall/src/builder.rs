@@ -1,10 +1,8 @@
-use crate::encoding::{NEXT_STREAM_ID_KEY, NEXT_STREAM_ID_SIZE, decode_stream_meta};
 use crate::error::FjallError;
 use crate::partition::{PartitionConfig, point_read_defaults, scan_defaults};
 use crate::store::FjallStore;
 use fjall::PartitionCreateOptions;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
 use tokio::sync::Notify;
 
 /// Builder for [`FjallStore`].
@@ -77,8 +75,8 @@ impl<S: PartitionConfig, E: PartitionConfig> FjallStoreBuilder<S, E> {
     /// Open (or create) the fjall database and return a [`FjallStore`].
     ///
     /// On first open the partitions are created with their default
-    /// configurations. On reopen, existing partitions are recovered and
-    /// the `next_stream_id` counter is rebuilt by scanning `streams` metadata.
+    /// configurations. On reopen, existing partitions are recovered
+    /// automatically by fjall.
     ///
     /// # Errors
     ///
@@ -96,43 +94,6 @@ impl<S: PartitionConfig, E: PartitionConfig> FjallStoreBuilder<S, E> {
 
         let checkpoints = db.open_partition("checkpoints", point_read_defaults())?;
 
-        // Recover `next_stream_id`: read the persisted counter (O(1)).
-        // Falls back to a full scan for databases created before the counter
-        // was persisted, then writes the counter for future opens.
-        let next_id = match streams.get(NEXT_STREAM_ID_KEY)? {
-            Some(bytes) if bytes.len() == NEXT_STREAM_ID_SIZE => {
-                u64::from_le_bytes(bytes.as_ref().try_into().map_err(|_| {
-                    FjallError::CorruptMeta {
-                        stream_id: String::from("__next_stream_id"),
-                    }
-                })?)
-            }
-            Some(_) => {
-                return Err(FjallError::CorruptMeta {
-                    stream_id: String::from("__next_stream_id"),
-                });
-            }
-            None => {
-                // Fresh DB or pre-migration: scan to recover, then persist.
-                let max_id = streams.inner().iter().try_fold(0u64, |max_id, kv_result| {
-                    let kv = kv_result?;
-                    let (numeric_id, _version) =
-                        decode_stream_meta(&kv.1).map_err(|_| FjallError::CorruptMeta {
-                            stream_id: String::from_utf8_lossy(&kv.0).into_owned(),
-                        })?;
-                    if numeric_id == 0 {
-                        return Err(FjallError::CorruptMeta {
-                            stream_id: String::from_utf8_lossy(&kv.0).into_owned(),
-                        });
-                    }
-                    Ok(max_id.max(numeric_id))
-                })?;
-                let next_id = max_id.checked_add(1).ok_or(FjallError::IdSpaceExhausted)?;
-                streams.insert(NEXT_STREAM_ID_KEY, next_id.to_le_bytes())?;
-                next_id
-            }
-        };
-
         Ok(FjallStore {
             db,
             streams,
@@ -140,7 +101,6 @@ impl<S: PartitionConfig, E: PartitionConfig> FjallStoreBuilder<S, E> {
             #[cfg(feature = "snapshot")]
             snapshots,
             checkpoints,
-            next_stream_id: AtomicU64::new(next_id),
             notify: Notify::new(),
         })
     }
@@ -166,25 +126,12 @@ mod tests {
         // First open — creates partitions.
         {
             let store = FjallStore::builder(&db_path).open().unwrap();
-            // next_stream_id should start at 1 for an empty database.
-            assert_eq!(
-                store
-                    .next_stream_id
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                1
-            );
             drop(store);
         }
 
         // Second open — recovers from existing data.
         {
             let store = FjallStore::builder(&db_path).open().unwrap();
-            assert_eq!(
-                store
-                    .next_stream_id
-                    .load(std::sync::atomic::Ordering::Relaxed),
-                1
-            );
             drop(store);
         }
     }

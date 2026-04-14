@@ -50,7 +50,9 @@ impl AsRef<[u8]> for BenchId {
         self.0.as_bytes()
     }
 }
-impl nexus::Id for BenchId {}
+impl nexus::Id for BenchId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn bid(s: &str) -> BenchId {
     BenchId(s.to_owned())

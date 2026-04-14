@@ -26,7 +26,9 @@ impl AsRef<[u8]> for TaskId {
     }
 }
 
-impl Id for TaskId {}
+impl Id for TaskId {
+    const BYTE_LEN: usize = 8;
+}
 
 // --- Events (derive macro from external crate) ---
 #[derive(Debug, Clone, DomainEvent)]

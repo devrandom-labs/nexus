@@ -58,7 +58,9 @@ impl AsRef<[u8]> for StaticId {
         self.0.as_bytes()
     }
 }
-impl Id for StaticId {}
+impl Id for StaticId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code, reason = "test-only event type used for static assertions")]

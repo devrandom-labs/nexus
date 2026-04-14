@@ -1,7 +1,6 @@
 use crate::builder::FjallStoreBuilder;
 use crate::encoding::{
-    NEXT_STREAM_ID_KEY, decode_stream_meta, encode_event_key, encode_event_value,
-    encode_stream_meta,
+    decode_stream_version, encode_event_key, encode_event_value, encode_stream_version,
 };
 use crate::error::FjallError;
 use crate::stream::FjallStream;
@@ -13,14 +12,13 @@ use nexus_store::ToStreamLabel;
 use nexus_store::error::AppendError;
 use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Notify;
 
 /// Fjall-backed event store.
 ///
-/// Holds the transactional keyspace, two partitions (`streams` for
-/// stream metadata and `events` for event rows), and a monotonic
-/// counter for allocating stream numeric IDs.
+/// Holds the transactional keyspace and partitions: `streams` maps
+/// ID bytes to a version counter for optimistic concurrency, `events`
+/// stores event rows keyed by `[u16 BE id_len][id_bytes][u64 BE version]`.
 ///
 /// When the `snapshot` feature is enabled, an additional `snapshots`
 /// partition is available for storing aggregate snapshots.
@@ -33,7 +31,6 @@ pub struct FjallStore {
     #[cfg(feature = "snapshot")]
     pub(crate) snapshots: fjall::TxPartitionHandle,
     pub(crate) checkpoints: fjall::TxPartitionHandle,
-    pub(crate) next_stream_id: AtomicU64,
     pub(crate) notify: Notify,
 }
 
@@ -42,15 +39,6 @@ impl FjallStore {
     #[must_use]
     pub fn builder(path: impl AsRef<Path>) -> FjallStoreBuilder {
         FjallStoreBuilder::new(path)
-    }
-
-    /// Force the internal stream ID counter to a specific value.
-    ///
-    /// This is intended for testing overflow and exhaustion scenarios.
-    /// Production code should never call this.
-    #[doc(hidden)]
-    pub fn set_next_stream_id_for_testing(&self, value: u64) {
-        self.next_stream_id.store(value, Ordering::Relaxed);
     }
 }
 
@@ -72,7 +60,7 @@ impl RawEventStore for FjallStore {
         expected_version: Option<Version>,
         envelopes: &[PendingEnvelope<()>],
     ) -> Result<(), AppendError<Self::Error>> {
-        let id_string = id.to_string();
+        let id_bytes = id.as_ref();
         let expected_raw = expected_version.map_or(0, Version::as_u64);
 
         // Version check BEFORE empty-batch early return. An empty append
@@ -80,13 +68,13 @@ impl RawEventStore for FjallStore {
         // conflict even though no data would be written.
         let mut tx = self.db.write_tx();
 
-        let (numeric_id, current_version) = if let Some(meta_bytes) = tx
-            .get(&self.streams, &id_string)
+        let current_version = if let Some(version_bytes) = tx
+            .get(&self.streams, id_bytes)
             .map_err(|e| AppendError::Store(FjallError::Io(e)))?
         {
-            let (numeric_id, current_version) = decode_stream_meta(&meta_bytes).map_err(|_| {
+            let current_version = decode_stream_version(&version_bytes).map_err(|_| {
                 AppendError::Store(FjallError::CorruptMeta {
-                    stream_id: id_string.clone(),
+                    stream_id: id.to_string(),
                 })
             })?;
             // Optimistic concurrency check.
@@ -97,7 +85,7 @@ impl RawEventStore for FjallStore {
                     actual: Version::new(current_version),
                 });
             }
-            (numeric_id, current_version)
+            current_version
         } else {
             // New stream: expected_version must be None.
             if expected_version.is_some() {
@@ -107,26 +95,10 @@ impl RawEventStore for FjallStore {
                     actual: None,
                 });
             }
-            // Empty batch on a new stream: validate version but don't
-            // allocate a numeric ID or create metadata.
-            if envelopes.is_empty() {
-                return Ok(());
-            }
-            // Relaxed ordering is safe: write_tx() serializes all writers, so only
-            // one thread can reach this code at a time. We use load + checked_add
-            // + store instead of fetch_add to prevent silent wrap-around to 0,
-            // which would cause numeric ID collision and data corruption.
-            let numeric_id = self.next_stream_id.load(Ordering::Relaxed);
-            let next_id = numeric_id
-                .checked_add(1)
-                .ok_or(AppendError::Store(FjallError::IdSpaceExhausted))?;
-            self.next_stream_id.store(next_id, Ordering::Relaxed);
-            // Persist the updated counter atomically with the stream creation.
-            tx.insert(&self.streams, NEXT_STREAM_ID_KEY, next_id.to_le_bytes());
-            (numeric_id, 0)
+            0
         };
 
-        // Empty batch on an existing stream: version was checked, no work to do.
+        // Empty batch: version was checked (or new stream with None), no work to do.
         if envelopes.is_empty() {
             return Ok(());
         }
@@ -155,7 +127,13 @@ impl RawEventStore for FjallStore {
         // Write each envelope into the events partition.
         let mut value_buf = Vec::new();
         for env in envelopes {
-            let key = encode_event_key(numeric_id, env.version().as_u64());
+            let key = encode_event_key(id_bytes, env.version().as_u64()).map_err(|e| {
+                AppendError::Store(FjallError::InvalidInput {
+                    stream_id: id.to_string(),
+                    version: env.version().as_u64(),
+                    reason: e.to_string(),
+                })
+            })?;
             encode_event_value(
                 &mut value_buf,
                 env.schema_version(),
@@ -164,21 +142,20 @@ impl RawEventStore for FjallStore {
             )
             .map_err(|e| {
                 AppendError::Store(FjallError::InvalidInput {
-                    stream_id: id_string.clone(),
+                    stream_id: id.to_string(),
                     version: env.version().as_u64(),
                     reason: e.to_string(),
                 })
             })?;
-            tx.insert(&self.events, key, Slice::from(&*value_buf));
+            tx.insert(&self.events, &key, Slice::from(&*value_buf));
         }
 
-        // Update stream meta with new version.
+        // Update stream version.
         let new_version = envelopes
             .last()
             .map_or(current_version, |last| last.version().as_u64());
 
-        let meta = encode_stream_meta(numeric_id, new_version);
-        tx.insert(&self.streams, &id_string, meta);
+        tx.insert(&self.streams, id_bytes, encode_stream_version(new_version));
 
         // Atomic cross-partition commit.
         tx.commit()
@@ -194,31 +171,34 @@ impl RawEventStore for FjallStore {
         id: &impl Id,
         from: Version,
     ) -> Result<Self::Stream<'_>, Self::Error> {
-        let id_string = id.to_string();
+        let id_bytes = id.as_ref();
 
-        // Look up numeric stream ID from streams partition.
-        let Some(meta_bytes) = self.streams.get(&id_string)? else {
-            // Stream not found: return empty stream.
+        // Check if the stream exists. If not, return an empty stream.
+        if self.streams.get(id_bytes)?.is_none() {
             return Ok(FjallStream {
                 events: vec![],
                 pos: 0,
-                stream_id: id_string,
+                stream_id: id.to_string(),
                 poisoned: false,
                 #[cfg(debug_assertions)]
                 prev_version: None,
             });
-        };
+        }
 
-        let (numeric_id, _version) =
-            decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
-                stream_id: id_string.clone(),
+        // Range scan from (id_bytes, from_version) to (id_bytes, u64::MAX).
+        let start =
+            encode_event_key(id_bytes, from.as_u64()).map_err(|e| FjallError::InvalidInput {
+                stream_id: id.to_string(),
+                version: from.as_u64(),
+                reason: e.to_string(),
             })?;
+        let end = encode_event_key(id_bytes, u64::MAX).map_err(|e| FjallError::InvalidInput {
+            stream_id: id.to_string(),
+            version: u64::MAX,
+            reason: e.to_string(),
+        })?;
 
-        // Range scan from (numeric_id, from_version) to (numeric_id, u64::MAX).
-        let start = encode_event_key(numeric_id, from.as_u64());
-        let end = encode_event_key(numeric_id, u64::MAX);
-
-        // Precondition: start key must sort <= end key (same numeric_id).
+        // Precondition: start key must sort <= end key (same ID bytes).
         debug_assert!(
             start <= end,
             "read_stream precondition: start key must sort <= end key"
@@ -244,7 +224,7 @@ impl RawEventStore for FjallStore {
         Ok(FjallStream {
             events,
             pos: 0,
-            stream_id: id_string,
+            stream_id: id.to_string(),
             poisoned: false,
             #[cfg(debug_assertions)]
             prev_version: None,
@@ -259,9 +239,7 @@ impl RawEventStore for FjallStore {
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
     use super::*;
-    use crate::encoding::{
-        decode_snapshot_value, decode_stream_meta, encode_snapshot_key, encode_snapshot_value,
-    };
+    use crate::encoding::{decode_snapshot_value, encode_snapshot_value};
     use nexus_store::snapshot::{PendingSnapshot, PersistedSnapshot, SnapshotStore};
 
     impl SnapshotStore for FjallStore {
@@ -272,26 +250,21 @@ mod snapshot_impl {
             id: &impl Id,
             expected_schema_version: std::num::NonZeroU32,
         ) -> Result<Option<PersistedSnapshot>, FjallError> {
-            let id_string = id.to_string();
+            let id_bytes = id.as_ref();
 
-            // Single snapshot read: look up numeric ID then read snapshot.
-            // Both reads use the same point-in-time view (fjall LSM snapshot).
-            let Some(meta_bytes) = self.streams.get(&id_string)? else {
+            // Check if the stream exists.
+            if self.streams.get(id_bytes)?.is_none() {
                 return Ok(None);
-            };
-            let (numeric_id, _version) =
-                decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
-                    stream_id: id_string.clone(),
-                })?;
+            }
 
-            let key = encode_snapshot_key(numeric_id);
-            let Some(bytes) = self.snapshots.get(key)? else {
+            // Snapshot key is the ID bytes directly.
+            let Some(bytes) = self.snapshots.get(id_bytes)? else {
                 return Ok(None);
             };
 
             let (schema_version_raw, version_raw, payload) = decode_snapshot_value(&bytes)
                 .map_err(|_| FjallError::CorruptValue {
-                    stream_id: id_string,
+                    stream_id: id.to_string(),
                     version: None,
                 })?;
 
@@ -314,29 +287,18 @@ mod snapshot_impl {
             id: &impl Id,
             snapshot: &PendingSnapshot,
         ) -> Result<(), FjallError> {
-            let id_string = id.to_string();
+            let id_bytes = id.as_ref();
 
-            // Atomic: look up numeric ID + write snapshot in one transaction.
+            // Check if stream exists — can't snapshot an aggregate with no events.
             let mut tx = self.db.write_tx();
-
-            let numeric_id = match tx
-                .get(&self.streams, &id_string)
-                .map_err(|e| FjallError::Io(e))?
+            if tx
+                .get(&self.streams, id_bytes)
+                .map_err(FjallError::Io)?
+                .is_none()
             {
-                Some(meta_bytes) => {
-                    let (numeric_id, _version) =
-                        decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
-                            stream_id: id_string.clone(),
-                        })?;
-                    numeric_id
-                }
-                None => {
-                    // No stream exists — can't snapshot an aggregate with no events.
-                    return Ok(());
-                }
-            };
+                return Ok(());
+            }
 
-            let key = encode_snapshot_key(numeric_id);
             let mut buf = Vec::new();
             encode_snapshot_value(
                 &mut buf,
@@ -344,33 +306,25 @@ mod snapshot_impl {
                 snapshot.version().as_u64(),
                 snapshot.payload(),
             );
-            tx.insert(&self.snapshots, key, fjall::Slice::from(&*buf));
+            tx.insert(&self.snapshots, id_bytes, fjall::Slice::from(&*buf));
 
             tx.commit().map_err(FjallError::Io)?;
             Ok(())
         }
 
         async fn delete_snapshot(&self, id: &impl Id) -> Result<(), FjallError> {
-            let id_string = id.to_string();
-
+            let id_bytes = id.as_ref();
             let mut tx = self.db.write_tx();
 
-            let numeric_id = match tx
-                .get(&self.streams, &id_string)
-                .map_err(|e| FjallError::Io(e))?
+            if tx
+                .get(&self.streams, id_bytes)
+                .map_err(FjallError::Io)?
+                .is_none()
             {
-                Some(meta_bytes) => {
-                    let (numeric_id, _version) =
-                        decode_stream_meta(&meta_bytes).map_err(|_| FjallError::CorruptMeta {
-                            stream_id: id_string.clone(),
-                        })?;
-                    numeric_id
-                }
-                None => return Ok(()),
-            };
+                return Ok(());
+            }
 
-            let key = encode_snapshot_key(numeric_id);
-            tx.remove(&self.snapshots, key);
+            tx.remove(&self.snapshots, id_bytes);
             tx.commit().map_err(FjallError::Io)?;
             Ok(())
         }
@@ -390,14 +344,16 @@ impl Subscription<()> for FjallStore {
         id: &'a impl Id,
         from: Option<Version>,
     ) -> Result<FjallSubscriptionStream<'a>, FjallError> {
-        let stream_id = id.to_string();
         let start = match from {
             None => Version::INITIAL,
             Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
         };
-        let owned_id = OwnedStreamId(stream_id.clone());
+        let owned_id = OwnedStreamId::from_id(id);
+        let label = id.to_string();
         let inner = self.read_stream(&owned_id, start).await?;
-        Ok(FjallSubscriptionStream::new(self, stream_id, inner, from))
+        Ok(FjallSubscriptionStream::new(
+            self, owned_id, label, inner, from,
+        ))
     }
 }
 
@@ -412,7 +368,7 @@ impl CheckpointStore for FjallStore {
         &self,
         subscription_id: &impl Id,
     ) -> impl std::future::Future<Output = Result<Option<Version>, FjallError>> + Send + '_ {
-        let key = subscription_id.to_string();
+        let key: Vec<u8> = subscription_id.as_ref().to_vec();
         async move {
             let Some(bytes) = self.checkpoints.get(&key)? else {
                 return Ok(None);
@@ -423,14 +379,14 @@ impl CheckpointStore for FjallStore {
                     .as_ref()
                     .try_into()
                     .map_err(|_| FjallError::CorruptValue {
-                        stream_id: key.clone(),
+                        stream_id: String::from_utf8_lossy(&key).into_owned(),
                         version: None,
                     })?;
             let raw = u64::from_be_bytes(raw_bytes);
             Version::new(raw).map_or_else(
                 || {
                     Err(FjallError::CorruptValue {
-                        stream_id: key,
+                        stream_id: String::from_utf8_lossy(&key).into_owned(),
                         version: Some(raw),
                     })
                 },
@@ -444,7 +400,7 @@ impl CheckpointStore for FjallStore {
         subscription_id: &impl Id,
         version: Version,
     ) -> impl std::future::Future<Output = Result<(), FjallError>> + Send + '_ {
-        let key = subscription_id.to_string();
+        let key: Vec<u8> = subscription_id.as_ref().to_vec();
         async move {
             self.checkpoints
                 .insert(&key, version.as_u64().to_be_bytes())?;
@@ -476,7 +432,9 @@ mod tests {
         }
     }
 
-    impl nexus::Id for TestId {}
+    impl nexus::Id for TestId {
+        const BYTE_LEN: usize = 0;
+    }
 
     fn tid(s: &str) -> TestId {
         TestId(s.to_owned())

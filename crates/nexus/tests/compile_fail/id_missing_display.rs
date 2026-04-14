@@ -6,6 +6,8 @@ use nexus::Id;
 struct BadId(u64);
 // Missing: impl Display for BadId
 
-impl Id for BadId {}
+impl Id for BadId {
+    const BYTE_LEN: usize = 8;
+}
 
 fn main() {}

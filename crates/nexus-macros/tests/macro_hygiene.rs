@@ -21,7 +21,9 @@ impl AsRef<[u8]> for HId {
         &self.0
     }
 }
-impl Id for HId {}
+impl Id for HId {
+    const BYTE_LEN: usize = 8;
+}
 
 #[derive(Debug, Clone)]
 enum HEvent {
