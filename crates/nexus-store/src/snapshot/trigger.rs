@@ -13,12 +13,14 @@ pub trait SnapshotTrigger: Send + Sync {
     ///
     /// - `old_version`: aggregate version before save (`None` for new aggregates)
     /// - `new_version`: aggregate version after save
-    /// - `event_names`: names of events just persisted (from `DomainEvent::name()`)
+    /// - `event_names`: names of events just persisted (from `DomainEvent::name()`).
+    ///   Passed as a mutable iterator to avoid allocation at the call site.
+    ///   Implementations that don't need event names should ignore this parameter.
     fn should_snapshot(
         &self,
         old_version: Option<Version>,
         new_version: Version,
-        event_names: &[&str],
+        event_names: &mut dyn Iterator<Item = &str>,
     ) -> bool;
 }
 
@@ -39,7 +41,7 @@ impl SnapshotTrigger for EveryNEvents {
         &self,
         old_version: Option<Version>,
         new_version: Version,
-        _event_names: &[&str],
+        _event_names: &mut dyn Iterator<Item = &str>,
     ) -> bool {
         let n = self.0.get();
         let old_bucket = old_version.map_or(0, |v| v.as_u64() / n);
@@ -73,10 +75,8 @@ impl SnapshotTrigger for AfterEventTypes {
         &self,
         _old_version: Option<Version>,
         _new_version: Version,
-        event_names: &[&str],
+        event_names: &mut dyn Iterator<Item = &str>,
     ) -> bool {
-        event_names
-            .iter()
-            .any(|name| self.types.iter().any(|t| t == name))
+        event_names.any(|name| self.types.iter().any(|t| *t == name))
     }
 }

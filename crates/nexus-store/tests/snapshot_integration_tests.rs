@@ -755,12 +755,12 @@ async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
 async fn defensive_after_event_types_empty_names_no_trigger() {
     let trigger = AfterEventTypes::new(&["OrderCompleted"]);
     // Empty event names should not trigger
-    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &[]));
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &mut std::iter::empty()));
     // Non-matching should not trigger
     assert!(!trigger.should_snapshot(
         Some(Version::new(1).unwrap()),
         Version::new(2).unwrap(),
-        &["ItemAdded"]
+        &mut ["ItemAdded"].into_iter(),
     ));
 }
 

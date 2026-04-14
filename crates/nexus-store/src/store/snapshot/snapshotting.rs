@@ -103,11 +103,11 @@ where
         let Some(new_version) = aggregate.version().filter(|_| !events.is_empty()) else {
             return Ok(());
         };
-        let event_names: Vec<&str> = events.iter().map(DomainEvent::name).collect();
-        if self
-            .trigger
-            .should_snapshot(old_version, new_version, &event_names)
-        {
+        if self.trigger.should_snapshot(
+            old_version,
+            new_version,
+            &mut events.iter().map(DomainEvent::name),
+        ) {
             self.try_save_snapshot::<A>(aggregate, new_version).await;
         }
 
@@ -136,7 +136,10 @@ where
             .ok()?
             .filter(|h| h.schema_version() == self.schema_version)?;
 
-        let state = self.snapshot_codec.decode("", holder.payload()).ok()?;
+        let state = self
+            .snapshot_codec
+            .decode(&id.to_string(), holder.payload())
+            .ok()?;
         let version = holder.version();
         let root = AggregateRoot::<A>::restore(id.clone(), state, version);
         let next = version.next()?;
