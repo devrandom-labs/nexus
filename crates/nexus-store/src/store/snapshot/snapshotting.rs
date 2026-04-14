@@ -73,21 +73,16 @@ where
     type Error = StoreError;
 
     async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
-        // Try snapshot first.
-        let snapshot_hit = self.try_load_from_snapshot::<A>(&id).await;
-
-        if let Some((root, from)) = snapshot_hit {
-            // Snapshot hit — partial replay from snapshot version.
+        // Snapshot hit → partial replay from snapshot version.
+        if let Some((root, from)) = self.try_load_from_snapshot::<A>(&id).await {
             return self.inner.replay_from(root, from).await;
         }
 
         // Fallback: full replay.
         let root = self.inner.load(id).await?;
 
-        // Lazy snapshot: if enabled and aggregate has events, snapshot now.
-        if self.snapshot_on_read
-            && let Some(version) = root.version()
-        {
+        // Lazy snapshot on full replay when enabled.
+        if let (true, Some(version)) = (self.snapshot_on_read, root.version()) {
             self.try_save_snapshot::<A>(&root, version).await;
         }
 
@@ -104,17 +99,16 @@ where
         // Delegate event persistence to inner.
         self.inner.save(aggregate, events).await?;
 
-        // Check trigger — maybe snapshot.
-        if !events.is_empty()
-            && let Some(new_version) = aggregate.version()
+        // Snapshot after save when trigger fires on non-empty batches.
+        let Some(new_version) = aggregate.version().filter(|_| !events.is_empty()) else {
+            return Ok(());
+        };
+        let event_names: Vec<&str> = events.iter().map(DomainEvent::name).collect();
+        if self
+            .trigger
+            .should_snapshot(old_version, new_version, &event_names)
         {
-            let event_names: Vec<&str> = events.iter().map(DomainEvent::name).collect();
-            if self
-                .trigger
-                .should_snapshot(old_version, new_version, &event_names)
-            {
-                self.try_save_snapshot::<A>(aggregate, new_version).await;
-            }
+            self.try_save_snapshot::<A>(aggregate, new_version).await;
         }
 
         Ok(())
@@ -135,14 +129,14 @@ where
         A: Aggregate,
         SC: Codec<A::State>,
     {
-        let holder = self.snapshot_store.load_snapshot(id).await.ok()??;
-
-        if holder.schema_version() != self.schema_version {
-            return None;
-        }
+        let holder = self
+            .snapshot_store
+            .load_snapshot(id)
+            .await
+            .ok()?
+            .filter(|h| h.schema_version() == self.schema_version)?;
 
         let state = self.snapshot_codec.decode("", holder.payload()).ok()?;
-
         let version = holder.version();
         let root = AggregateRoot::<A>::restore(id.clone(), state, version);
         let next = version.next()?;
@@ -155,12 +149,13 @@ where
         A: Aggregate,
         SC: Codec<A::State>,
     {
-        if let Ok(payload) = self.snapshot_codec.encode(aggregate.state()) {
-            let snap = PendingSnapshot::new(version, self.schema_version, payload);
-            let _ = self
-                .snapshot_store
-                .save_snapshot(aggregate.id(), &snap)
-                .await;
-        }
+        let Ok(payload) = self.snapshot_codec.encode(aggregate.state()) else {
+            return;
+        };
+        let snap = PendingSnapshot::new(version, self.schema_version, payload);
+        let _ = self
+            .snapshot_store
+            .save_snapshot(aggregate.id(), &snap)
+            .await;
     }
 }
