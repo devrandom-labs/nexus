@@ -106,7 +106,7 @@ where
         if self.trigger.should_snapshot(
             old_version,
             new_version,
-            &mut events.iter().map(DomainEvent::name),
+            events.iter().map(DomainEvent::name),
         ) {
             self.try_save_snapshot::<A>(aggregate, new_version).await;
         }

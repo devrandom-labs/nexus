@@ -20,7 +20,7 @@ pub trait SnapshotTrigger: Send + Sync {
         &self,
         old_version: Option<Version>,
         new_version: Version,
-        event_names: &mut dyn Iterator<Item = &str>,
+        event_names: impl Iterator<Item: AsRef<str>>,
     ) -> bool;
 }
 
@@ -41,7 +41,7 @@ impl SnapshotTrigger for EveryNEvents {
         &self,
         old_version: Option<Version>,
         new_version: Version,
-        _event_names: &mut dyn Iterator<Item = &str>,
+        _event_names: impl Iterator<Item: AsRef<str>>,
     ) -> bool {
         let n = self.0.get();
         let old_bucket = old_version.map_or(0, |v| v.as_u64() / n);
@@ -75,8 +75,8 @@ impl SnapshotTrigger for AfterEventTypes {
         &self,
         _old_version: Option<Version>,
         _new_version: Version,
-        event_names: &mut dyn Iterator<Item = &str>,
+        event_names: impl Iterator<Item: AsRef<str>>,
     ) -> bool {
-        event_names.any(|name| self.types.iter().any(|t| *t == name))
+        event_names.any(|name| self.types.iter().any(|t| *t == name.as_ref()))
     }
 }
