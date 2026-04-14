@@ -1,6 +1,10 @@
 mod builder;
 mod event_store;
-pub mod replay;
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "replay is crate-internal; pub(crate) documents intent even though parent is private"
+)]
+pub(crate) mod replay;
 #[allow(
     clippy::module_inception,
     reason = "Repository trait is the primary public type of the repository module"
