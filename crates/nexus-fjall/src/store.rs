@@ -1,6 +1,7 @@
 use crate::builder::FjallStoreBuilder;
 use crate::encoding::{
-    decode_stream_meta, encode_event_key, encode_event_value, encode_stream_meta,
+    NEXT_STREAM_ID_KEY, decode_stream_meta, encode_event_key, encode_event_value,
+    encode_stream_meta,
 };
 use crate::error::FjallError;
 use crate::stream::FjallStream;
@@ -120,6 +121,8 @@ impl RawEventStore for FjallStore {
                 .checked_add(1)
                 .ok_or(AppendError::Store(FjallError::IdSpaceExhausted))?;
             self.next_stream_id.store(next_id, Ordering::Relaxed);
+            // Persist the updated counter atomically with the stream creation.
+            tx.insert(&self.streams, NEXT_STREAM_ID_KEY, next_id.to_le_bytes());
             (numeric_id, 0)
         };
 
@@ -464,6 +467,12 @@ mod tests {
     impl std::fmt::Display for TestId {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str(&self.0)
+        }
+    }
+
+    impl AsRef<[u8]> for TestId {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
         }
     }
 

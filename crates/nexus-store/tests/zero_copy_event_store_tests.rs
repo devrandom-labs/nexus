@@ -46,10 +46,15 @@ impl AggregateState for CounterState {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct CounterId(u64);
+struct CounterId(String);
 impl fmt::Display for CounterId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ctr-{}", self.0)
+        f.write_str(&self.0)
+    }
+}
+impl AsRef<[u8]> for CounterId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 impl Id for CounterId {}
@@ -108,11 +113,11 @@ async fn zero_copy_save_and_load_roundtrip() {
         .codec(CounterBorrowingCodec)
         .build_zero_copy();
 
-    let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId(1));
+    let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("ctr-1".into()));
     let events = [CounterEvent { delta: 10 }, CounterEvent { delta: -3 }];
     es.save(&mut agg, &events).await.unwrap();
 
-    let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId("ctr-1".into())).await.unwrap();
     assert_eq!(loaded.state().value, 7);
     assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
 }
@@ -124,7 +129,7 @@ async fn zero_copy_load_empty_stream() {
         .repository()
         .codec(CounterBorrowingCodec)
         .build_zero_copy();
-    let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId(1)).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId("ctr-1".into())).await.unwrap();
     assert_eq!(loaded.state().value, 0);
     assert_eq!(loaded.version(), None);
 }
@@ -137,17 +142,19 @@ async fn zero_copy_multi_save_load() {
         .codec(CounterBorrowingCodec)
         .build_zero_copy();
 
-    let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId(1));
+    let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId("ctr-1".into()));
     es.save(&mut agg1, &[CounterEvent { delta: 5 }])
         .await
         .unwrap();
 
-    let mut agg2: AggregateRoot<CounterAggregate> = es.load(CounterId(1)).await.unwrap();
+    let mut agg2: AggregateRoot<CounterAggregate> =
+        es.load(CounterId("ctr-1".into())).await.unwrap();
     es.save(&mut agg2, &[CounterEvent { delta: 3 }])
         .await
         .unwrap();
 
-    let final_agg: AggregateRoot<CounterAggregate> = es.load(CounterId(1)).await.unwrap();
+    let final_agg: AggregateRoot<CounterAggregate> =
+        es.load(CounterId("ctr-1".into())).await.unwrap();
     assert_eq!(final_agg.state().value, 8);
     assert_eq!(final_agg.version(), Some(Version::new(2).unwrap()));
 }

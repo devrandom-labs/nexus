@@ -82,6 +82,11 @@ impl fmt::Display for StreamName {
         f.write_str(&self.0)
     }
 }
+impl AsRef<[u8]> for StreamName {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 impl nexus::Id for StreamName {}
 fn sn(s: &str) -> StreamName {
     StreamName(s.to_owned())
@@ -130,10 +135,15 @@ impl nexus::AggregateState for TestState {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(u64);
+struct TestId(String);
 impl fmt::Display for TestId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "test-{}", self.0)
+        f.write_str(&self.0)
+    }
+}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 impl nexus::Id for TestId {}
@@ -909,14 +919,14 @@ proptest! {
             let es = store.repository().codec(JsonCodec).build();
 
             // Build events for the aggregate
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(42));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-42".into()));
             let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
 
             // Save
             es.save(&mut root, &events).await.unwrap();
 
             // Load into fresh aggregate
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(42)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-42".into())).await.unwrap();
 
             // Verify state matches
             prop_assert_eq!(
@@ -947,11 +957,11 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = strings.iter().map(|s| TestEvent::Happened(s.clone())).collect();
 
             es.save(&mut root, &events).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
 
             prop_assert_eq!(&loaded.state().log, &strings, "event log mismatch after roundtrip");
             Ok(())
@@ -975,7 +985,7 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(99));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-99".into()));
             let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
 
             // First save — should work
@@ -998,7 +1008,8 @@ async fn attack_event_store_load_empty_stream() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(JsonCodec).build();
 
-    let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+    let loaded: nexus::AggregateRoot<TestAggregate> =
+        es.load(TestId("test-1".into())).await.unwrap();
 
     assert_eq!(loaded.version(), None);
     assert_eq!(loaded.state().events_applied, 0);
@@ -1023,13 +1034,13 @@ proptest! {
             let es = store.repository().codec(JsonCodec).build();
 
             // Seed the aggregate with n events
-            let mut root_a = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root_a = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
             es.save(&mut root_a, &events).await.unwrap();
 
             // Load into two separate aggregates
-            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
-            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
+            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
 
             // First save succeeds
             es.save(&mut copy1, &[TestEvent::ValueSet(100)]).await.unwrap();
@@ -1094,7 +1105,8 @@ async fn attack_event_store_transforms_applied_on_load() {
         .upcaster(HappenedV1ToV2)
         .build();
 
-    let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+    let loaded: nexus::AggregateRoot<TestAggregate> =
+        es.load(TestId("test-1".into())).await.unwrap();
     assert_eq!(loaded.state().events_applied, 1);
     assert_eq!(loaded.state().log, vec!["hello".to_owned()]);
 }
@@ -1334,9 +1346,9 @@ proptest! {
             for (cycle_idx, values) in cycles.iter().enumerate() {
                 // Load current state
                 let mut root: nexus::AggregateRoot<TestAggregate> = if cycle_idx == 0 {
-                    nexus::AggregateRoot::<TestAggregate>::new(TestId(1))
+                    nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()))
                 } else {
-                    es.load(TestId(1)).await.unwrap()
+                    es.load(TestId("test-1".into())).await.unwrap()
                 };
 
                 // Verify loaded state
@@ -1361,7 +1373,7 @@ proptest! {
                 total_events += u64::try_from(values.len()).unwrap();
 
                 // Verify by loading again
-                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
                 prop_assert_eq!(
                     loaded.state().last_value, expected_last_value,
                     "last_value wrong after cycle {}", cycle_idx,
@@ -1558,7 +1570,7 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(7));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-7".into()));
 
             // Interleave different event types
             let mut events: Vec<TestEvent> = Vec::new();
@@ -1581,7 +1593,7 @@ proptest! {
             }
 
             es.save(&mut root, &events).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(7)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-7".into())).await.unwrap();
 
             prop_assert_eq!(loaded.state().last_value, expected_last_value);
             prop_assert_eq!(&loaded.state().log, &expected_log);
@@ -1866,7 +1878,7 @@ proptest! {
             let es = store.repository().codec(JsonCodec).build();
 
             // Batch 1: create, save events
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events1: Vec<TestEvent> = batch1.iter().map(|&v| TestEvent::ValueSet(v)).collect();
             es.save(&mut root, &events1).await.unwrap();
             let v1 = root.version().unwrap().as_u64();
@@ -1879,13 +1891,13 @@ proptest! {
             prop_assert_eq!(v2, u64::try_from(batch1.len() + batch2.len()).unwrap());
 
             // Batch 3: load fresh, save more
-            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             prop_assert_eq!(fresh.version().unwrap().as_u64(), v2);
             let events3: Vec<TestEvent> = batch3.iter().map(|&v| TestEvent::ValueSet(v)).collect();
             es.save(&mut fresh, &events3).await.unwrap();
 
             // Final verification
-            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             let total = batch1.len() + batch2.len() + batch3.len();
             prop_assert_eq!(
                 final_root.version().unwrap().as_u64(),
@@ -2038,7 +2050,7 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
 
             // After save, version should advance
@@ -2051,7 +2063,7 @@ proptest! {
             // Can still save more events
             es.save(&mut root, &[TestEvent::ValueSet(999)]).await.unwrap();
 
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             prop_assert_eq!(loaded.state().last_value, 999);
             prop_assert_eq!(loaded.state().events_applied, u64::try_from(n + 1).unwrap());
             Ok(())

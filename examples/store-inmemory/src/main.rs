@@ -47,6 +47,12 @@ impl fmt::Display for TodoId {
 
 impl Id for TodoId {}
 
+impl AsRef<[u8]> for TodoId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
 // =============================================================================
 // 1. Domain events — a simple Todo aggregate
 // =============================================================================

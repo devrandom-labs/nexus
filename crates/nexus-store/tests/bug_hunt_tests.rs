@@ -45,6 +45,11 @@ impl fmt::Display for TestId {
         f.write_str(&self.0)
     }
 }
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 impl nexus::Id for TestId {}
 fn tid(s: &str) -> TestId {
     TestId(s.to_owned())

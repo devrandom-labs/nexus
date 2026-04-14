@@ -6,10 +6,20 @@ use std::fmt;
 // --- Domain types ---
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TodoId(u64);
+struct TodoId([u8; 8]);
+impl TodoId {
+    fn new(id: u64) -> Self {
+        Self(id.to_be_bytes())
+    }
+}
 impl fmt::Display for TodoId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "todo-{}", self.0)
+        write!(f, "todo-{}", u64::from_be_bytes(self.0))
+    }
+}
+impl AsRef<[u8]> for TodoId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 impl Id for TodoId {}
@@ -85,7 +95,7 @@ impl TodoAggregate {
 
 #[test]
 fn derive_aggregate_lifecycle() {
-    let mut todo = TodoAggregate::new(TodoId(1));
+    let mut todo = TodoAggregate::new(TodoId::new(1));
     todo.create("Buy milk".into()).unwrap();
     todo.complete().unwrap();
 
@@ -98,7 +108,7 @@ fn derive_aggregate_lifecycle() {
 
 #[test]
 fn derive_aggregate_invariants() {
-    let mut todo = TodoAggregate::new(TodoId(2));
+    let mut todo = TodoAggregate::new(TodoId::new(2));
     todo.create("Test".into()).unwrap();
 
     assert!(matches!(
@@ -112,7 +122,7 @@ fn derive_aggregate_invariants() {
 
 #[test]
 fn derive_aggregate_rehydrate() {
-    let mut todo = TodoAggregate::new(TodoId(3));
+    let mut todo = TodoAggregate::new(TodoId::new(3));
     todo.root_mut()
         .replay(
             Version::INITIAL,
@@ -127,13 +137,13 @@ fn derive_aggregate_rehydrate() {
 
 #[test]
 fn derive_aggregate_id() {
-    let todo = TodoAggregate::new(TodoId(42));
-    assert_eq!(todo.id(), &TodoId(42));
+    let todo = TodoAggregate::new(TodoId::new(42));
+    assert_eq!(todo.id(), &TodoId::new(42));
 }
 
 #[test]
 fn derive_aggregate_debug_shows_name_and_version() {
-    let todo = TodoAggregate::new(TodoId(1));
+    let todo = TodoAggregate::new(TodoId::new(1));
     let debug = format!("{todo:?}");
     assert!(debug.contains("TodoAggregate"));
     assert!(debug.contains("version"));
@@ -142,7 +152,7 @@ fn derive_aggregate_debug_shows_name_and_version() {
 
 #[test]
 fn derive_aggregate_debug_does_not_leak_state() {
-    let mut todo = TodoAggregate::new(TodoId(1));
+    let mut todo = TodoAggregate::new(TodoId::new(1));
     todo.create("SECRET_TITLE".into()).unwrap();
     let debug = format!("{todo:?}");
     // State must NOT appear in debug output

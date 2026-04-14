@@ -17,6 +17,12 @@ impl std::fmt::Display for OwnedStreamId {
     }
 }
 
+impl AsRef<[u8]> for OwnedStreamId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
 impl nexus::Id for OwnedStreamId {}
 
 /// Subscription stream backed by fjall.

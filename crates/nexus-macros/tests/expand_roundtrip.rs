@@ -13,10 +13,20 @@ use std::fmt;
 // --- Domain types (same as used with macro) ---
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct RtId(u64);
+struct RtId([u8; 8]);
+impl RtId {
+    fn new(id: u64) -> Self {
+        Self(id.to_be_bytes())
+    }
+}
 impl fmt::Display for RtId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", u64::from_be_bytes(self.0))
+    }
+}
+impl AsRef<[u8]> for RtId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 impl Id for RtId {}
@@ -115,7 +125,7 @@ impl RtAggregate {
 
 #[test]
 fn expanded_lifecycle() {
-    let mut agg = RtAggregate::new(RtId(1));
+    let mut agg = RtAggregate::new(RtId::new(1));
     agg.add("one".into());
     agg.add("two".into());
     agg.remove();
@@ -127,7 +137,7 @@ fn expanded_lifecycle() {
 
 #[test]
 fn expanded_rehydrate() {
-    let mut agg = RtAggregate::new(RtId(1));
+    let mut agg = RtAggregate::new(RtId::new(1));
     agg.root_mut()
         .replay(Version::INITIAL, &RtEvent::Added("a".into()))
         .unwrap();
@@ -143,11 +153,11 @@ fn expanded_rehydrate() {
 
 #[test]
 fn expanded_entity_trait_works() {
-    let mut agg = RtAggregate::new(RtId(1));
+    let mut agg = RtAggregate::new(RtId::new(1));
     agg.add("test".into());
 
     // AggregateEntity methods
-    assert_eq!(agg.id(), &RtId(1));
+    assert_eq!(agg.id(), &RtId::new(1));
     assert_eq!(agg.state().items, vec!["test"]);
     // Version is None because apply_event does not advance version
     assert_eq!(agg.version(), None);
@@ -155,7 +165,7 @@ fn expanded_entity_trait_works() {
 
 #[test]
 fn expanded_debug() {
-    let agg = RtAggregate::new(RtId(1));
+    let agg = RtAggregate::new(RtId::new(1));
     let debug = format!("{agg:?}");
     assert!(debug.contains("RtAggregate"));
 }
@@ -166,6 +176,6 @@ fn expanded_generic_entity_bound() {
         agg.version()
     }
 
-    let agg = RtAggregate::new(RtId(1));
+    let agg = RtAggregate::new(RtId::new(1));
     assert_eq!(takes_entity(&agg), None);
 }

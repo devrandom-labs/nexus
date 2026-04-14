@@ -36,6 +36,12 @@ impl std::fmt::Display for TestId {
     }
 }
 
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
 impl Id for TestId {}
 
 fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope<()> {

@@ -10,10 +10,20 @@ use std::num::NonZeroUsize;
 
 // --- Minimal test domain ---
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct SId(u64);
+struct SId(String);
+impl SId {
+    fn new(v: u64) -> Self {
+        Self(v.to_string())
+    }
+}
 impl fmt::Display for SId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+impl AsRef<[u8]> for SId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 impl Id for SId {}
@@ -77,7 +87,7 @@ fn c1_replay_at_max_version_returns_overflow_error() {
     // by replaying version 1, then attempting to advance beyond what's possible.
     // Instead, test that Version::next() returning None is correctly mapped
     // to KernelError::VersionOverflow by the replay method.
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<SAgg>::new(SId::new(1));
 
     // Replay version 1 so the aggregate has a version
     agg.replay(Version::INITIAL, &SEvent::Tick)
@@ -126,7 +136,7 @@ fn c4_version_new_zero_returns_none() {
 
 #[test]
 fn c4_replay_rejects_backwards_version() {
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<SAgg>::new(SId::new(1));
     agg.replay(Version::INITIAL, &SEvent::Tick)
         .expect("version 1 should succeed");
     let v2 = Version::new(2).expect("2 is non-zero");
@@ -151,7 +161,7 @@ fn c4_replay_rejects_backwards_version() {
 
 #[test]
 fn c4_replay_rejects_duplicate_version() {
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<SAgg>::new(SId::new(1));
     agg.replay(Version::INITIAL, &SEvent::Tick)
         .expect("version 1 should succeed");
 
@@ -170,7 +180,7 @@ fn c4_replay_rejects_duplicate_version() {
 
 #[test]
 fn c4_replay_rejects_gap_in_versions() {
-    let mut agg = AggregateRoot::<SAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<SAgg>::new(SId::new(1));
     agg.replay(Version::INITIAL, &SEvent::Tick)
         .expect("version 1 should succeed");
 
@@ -206,7 +216,7 @@ impl Aggregate for TinyRehydrationAgg {
 
 #[test]
 fn h1_replay_enforces_rehydration_limit() {
-    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId::new(1));
     for i in 1..=5u64 {
         let v = Version::new(i).expect("1..=5 are non-zero");
         agg.replay(v, &SEvent::Tick).expect("within limit");
@@ -225,7 +235,7 @@ fn h1_replay_enforces_rehydration_limit() {
 
 #[test]
 fn h1_replay_within_limit_succeeds() {
-    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<TinyRehydrationAgg>::new(SId::new(1));
     for i in 1..=5u64 {
         let v = Version::new(i).expect("1..=5 are non-zero");
         agg.replay(v, &SEvent::Tick).expect("within limit");
@@ -246,7 +256,7 @@ fn h1_default_rehydration_limit_is_one_million() {
 
 #[test]
 fn h2_version_mismatch_contains_expected_and_actual() {
-    let mut agg = AggregateRoot::<SAgg>::new(SId(42));
+    let mut agg = AggregateRoot::<SAgg>::new(SId::new(42));
     agg.replay(Version::INITIAL, &SEvent::Tick)
         .expect("version 1 should succeed");
 
@@ -336,7 +346,7 @@ fn h5_replay_panic_preserves_original_state() {
         type Id = SId;
     }
 
-    let mut agg = AggregateRoot::<BombAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<BombAgg>::new(SId::new(1));
     agg.replay(Version::INITIAL, &BombEvent::Safe)
         .expect("safe replay should succeed");
 
@@ -413,7 +423,7 @@ fn h5_apply_events_panic_preserves_partial_state() {
         type Id = SId;
     }
 
-    let mut agg = AggregateRoot::<SeqAgg>::new(SId(1));
+    let mut agg = AggregateRoot::<SeqAgg>::new(SId::new(1));
 
     // apply_events with a panic in the middle
     let events: Events<_, 1> = events![SeqEvent::Inc, SeqEvent::Boom];

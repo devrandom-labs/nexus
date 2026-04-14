@@ -42,14 +42,20 @@ impl Aggregate for UserAggregate {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct UserId(u64);
+struct UserId(String);
+impl UserId {
+    fn new(v: u64) -> Self { Self(v.to_string()) }
+}
 impl std::fmt::Display for UserId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl AsRef<[u8]> for UserId {
+    fn as_ref(&self) -> &[u8] { self.0.as_bytes() }
 }
 impl Id for UserId {}
 
 fn main() {
-    let mut user = AggregateRoot::<UserAggregate>::new(UserId(1));
+    let mut user = AggregateRoot::<UserAggregate>::new(UserId::new(1));
     // This MUST fail: OrderEvent is not UserEvent
     user.replay(Version::INITIAL, &OrderEvent::Placed);
 }

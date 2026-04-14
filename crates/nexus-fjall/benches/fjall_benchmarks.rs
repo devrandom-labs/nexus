@@ -32,6 +32,11 @@ impl fmt::Display for BenchId {
         f.write_str(&self.0)
     }
 }
+impl AsRef<[u8]> for BenchId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 impl nexus::Id for BenchId {}
 fn bid(s: &str) -> BenchId {
     BenchId(s.to_owned())

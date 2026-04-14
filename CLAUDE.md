@@ -11,37 +11,14 @@ Nexus is an event-sourcing and DDD kernel for Rust. It provides composable trait
 **Prerequisites:** Nix with flakes enabled. Use `nix develop` (or `direnv allow`) to enter the dev shell.
 
 ```bash
-# Build everything
-cargo build --all
-
-# Run all tests
-cargo test --all
-
-# Run tests for a specific crate
-cargo test -p nexus
-cargo test -p nexus-store
-cargo test -p nexus-fjall
-cargo test -p nexus-macros
+# Run ALL checks (clippy, fmt, tests, taplo, audit, deny, hakari)
+nix flake check
 
 # Run a single test by name
 cargo test -p nexus-store -- envelope_tests
 
-# Check formatting
-cargo fmt --all --check
-
 # Apply formatting
 cargo fmt --all
-
-# Lint (CI runs with --deny warnings)
-cargo clippy --all-targets -- --deny warnings
-
-# Format TOML files (taplo)
-taplo fmt
-
-# Check workspace-hack crate is up-to-date
-cargo hakari generate --diff
-cargo hakari manage-deps --dry-run
-cargo hakari verify
 ```
 
 ## Architecture
@@ -59,7 +36,7 @@ nexus-macros <-- nexus (kernel, optional via "derive" feature)
 - **`version.rs`** — `Version` newtype over `NonZeroU64` (event versions always >= 1). `Version::new(u64) -> Option<Self>` (mirrors `NonZeroU64::new`), `Version::INITIAL` = 1, `Version::next() -> Option<Self>`. `VersionedEvent<E>` pairs an event with its version.
 - **`event.rs`** / **`events.rs`** — `DomainEvent` trait (extends `Message`, provides `name() -> &'static str`). `Events<E, const N: usize = 0>` is an `ArrayVec`-backed collection guaranteeing at least one event with compile-time capacity N+1; constructed via `events![e1, e2]` macro. N=0 (default) = single event, no heap allocation, `no_std`/`no_alloc` compatible.
 - **`error.rs`** — `KernelError`: `VersionMismatch { expected, actual }`, `RehydrationLimitExceeded { max }`, `VersionOverflow`. All `#[non_exhaustive]`.
-- **`id.rs`** — `Id` marker trait requiring `Clone + Send + Sync + Debug + Hash + Eq + Display + 'static`.
+- **`id.rs`** — `Id` marker trait requiring `Clone + Send + Sync + Debug + Hash + Eq + Display + AsRef<[u8]> + 'static`. `AsRef<[u8]>` provides stable byte representation for storage keys (not `Display`, which is for humans).
 - **`message.rs`** — `Message` base marker trait (`Send + Sync + Debug + 'static`).
 
 ### Store Crate (`nexus-store`) — Persistence Edge Layer

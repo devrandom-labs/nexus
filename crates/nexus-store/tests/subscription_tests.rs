@@ -25,6 +25,11 @@ impl std::fmt::Display for TestId {
         f.write_str(&self.0)
     }
 }
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 impl Id for TestId {}
 
 /// Helper: build a pending envelope with a given version and event type.

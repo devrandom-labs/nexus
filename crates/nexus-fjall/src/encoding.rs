@@ -226,6 +226,19 @@ pub(crate) fn decode_snapshot_value(value: &[u8]) -> Result<(u32, u64, &[u8]), D
     Ok((schema_version, version, payload))
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Stream ID counter
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Key for the persisted stream ID counter in the `streams` partition.
+///
+/// `0xFF` is an invalid UTF-8 lead byte, guaranteeing no collision with
+/// any stream ID (which are UTF-8 strings from [`Display`]).
+pub(crate) const NEXT_STREAM_ID_KEY: &[u8] = b"\xff";
+
+/// Size of the persisted counter value: `[u64 LE next_stream_id]`.
+pub(crate) const NEXT_STREAM_ID_SIZE: usize = 8;
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {

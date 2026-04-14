@@ -9,6 +9,11 @@ impl fmt::Display for TestId {
         write!(f, "{}", self.0)
     }
 }
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 impl Id for TestId {}
 
 // --- Test Events ---

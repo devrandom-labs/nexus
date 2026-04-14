@@ -5,10 +5,20 @@ use std::fmt;
 
 // Shared helpers
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct AId(u64);
+struct AId([u8; 8]);
+impl AId {
+    fn new(id: u64) -> Self {
+        Self(id.to_be_bytes())
+    }
+}
 impl fmt::Display for AId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", u64::from_be_bytes(self.0))
+    }
+}
+impl AsRef<[u8]> for AId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 impl Id for AId {}
@@ -48,7 +58,7 @@ struct SingleAggregate;
 
 #[test]
 fn single_variant_event_enum() {
-    let mut agg = SingleAggregate::new(AId(1));
+    let mut agg = SingleAggregate::new(AId::new(1));
     agg.root_mut().apply_event(&SingleEvent::Only);
     assert!(agg.state().triggered);
 }
@@ -130,7 +140,7 @@ struct VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro;
 
 #[test]
 fn very_long_type_names() {
-    let mut agg = VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro::new(AId(1));
+    let mut agg = VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro::new(AId::new(1));
     agg.root_mut().apply_event(
         &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(
             "hello".into(),
@@ -177,7 +187,7 @@ struct PathTypeAggregate;
 
 #[test]
 fn aggregate_with_path_types() {
-    let mut agg = PathTypeAggregate::new(AId(1));
+    let mut agg = PathTypeAggregate::new(AId::new(1));
     agg.root_mut().apply_event(&inner::InnerEvent::Ping);
     agg.root_mut().apply_event(&inner::InnerEvent::Ping);
     assert_eq!(agg.state().pings, 2);
@@ -226,6 +236,6 @@ struct r#Type; // `Type` is not a keyword but r# prefix works
 
 #[test]
 fn raw_identifier_aggregate_name() {
-    let agg = r#Type::new(AId(1));
+    let agg = r#Type::new(AId::new(1));
     assert_eq!(agg.version(), None);
 }

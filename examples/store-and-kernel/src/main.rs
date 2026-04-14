@@ -45,6 +45,12 @@ impl fmt::Display for AccountId {
 
 impl Id for AccountId {}
 
+impl AsRef<[u8]> for AccountId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
 // --- Events (with serde for codec integration) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

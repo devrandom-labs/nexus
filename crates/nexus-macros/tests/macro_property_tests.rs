@@ -10,10 +10,20 @@ use std::fmt;
 // --- Domain ---
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct PId(u64);
+struct PId([u8; 8]);
+impl PId {
+    fn new(id: u64) -> Self {
+        Self(id.to_be_bytes())
+    }
+}
 impl fmt::Display for PId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", u64::from_be_bytes(self.0))
+    }
+}
+impl AsRef<[u8]> for PId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 impl Id for PId {}
@@ -82,7 +92,7 @@ proptest! {
     #[test]
     fn prop_macro_replay_deterministic(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         let make_agg = |events: &[CountEvent]| {
-            let mut agg = CounterAggregate::new(PId(1));
+            let mut agg = CounterAggregate::new(PId::new(1));
             let mut ver = Version::INITIAL;
             for (i, e) in events.iter().enumerate() {
                 let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
@@ -104,7 +114,7 @@ proptest! {
     /// After replaying N events, version == Some(N).
     #[test]
     fn prop_macro_version_equals_event_count(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = CounterAggregate::new(PId(1));
+        let mut agg = CounterAggregate::new(PId::new(1));
         let n = events.len() as u64;
 
         let mut ver = Version::INITIAL;
@@ -122,7 +132,7 @@ proptest! {
     /// apply_event is for post-persistence sync, so version stays None.
     #[test]
     fn prop_macro_apply_event_no_version(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = CounterAggregate::new(PId(1));
+        let mut agg = CounterAggregate::new(PId::new(1));
         for event in &events {
             agg.root_mut().apply_event(event);
         }
@@ -137,7 +147,7 @@ proptest! {
     #[test]
     fn prop_macro_rehydrate_equals_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         // Path A: new() + replay()
-        let mut agg_replayed = CounterAggregate::new(PId(1));
+        let mut agg_replayed = CounterAggregate::new(PId::new(1));
         let mut ver = Version::INITIAL;
         for (i, e) in raw_events.iter().enumerate() {
             let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
@@ -146,7 +156,7 @@ proptest! {
         }
 
         // Path B: new() + apply_event()
-        let mut agg_applied = CounterAggregate::new(PId(1));
+        let mut agg_applied = CounterAggregate::new(PId::new(1));
         for event in &raw_events {
             agg_applied.root_mut().apply_event(event);
         }
@@ -162,7 +172,7 @@ proptest! {
         batch1 in proptest::collection::vec(arb_event(), 1..20usize),
         batch2 in proptest::collection::vec(arb_event(), 1..20usize),
     ) {
-        let mut agg = CounterAggregate::new(PId(1));
+        let mut agg = CounterAggregate::new(PId::new(1));
 
         // Apply batch1 events and advance version
         for event in &batch1 {
@@ -186,7 +196,7 @@ proptest! {
     /// A freshly created aggregate always has version None.
     #[test]
     fn prop_macro_fresh_no_version(_id in 0..1000u64) {
-        let agg = CounterAggregate::new(PId(_id));
+        let agg = CounterAggregate::new(PId::new(_id));
         prop_assert_eq!(agg.version(), None);
     }
 
@@ -196,7 +206,7 @@ proptest! {
     /// calling the methods directly on the inner AggregateRoot.
     #[test]
     fn prop_macro_entity_matches_root(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = CounterAggregate::new(PId(1));
+        let mut agg = CounterAggregate::new(PId::new(1));
         for event in &events {
             agg.root_mut().apply_event(event);
         }

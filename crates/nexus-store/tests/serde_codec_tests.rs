@@ -53,11 +53,17 @@ impl AggregateState for TodoState {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TodoId(u64);
+struct TodoId(String);
 
 impl fmt::Display for TodoId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "todo-{}", self.0)
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<[u8]> for TodoId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 
@@ -173,7 +179,7 @@ mod integration {
         let repo = store.repository().build();
 
         // Save a "Created" event
-        let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
+        let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
         repo.save(
             &mut agg,
             &[TodoEvent::Created {
@@ -184,7 +190,8 @@ mod integration {
         .unwrap();
 
         // Load and verify state after Created
-        let mut loaded: AggregateRoot<TodoAggregate> = repo.load(TodoId(1)).await.unwrap();
+        let mut loaded: AggregateRoot<TodoAggregate> =
+            repo.load(TodoId("todo-1".into())).await.unwrap();
         assert_eq!(loaded.state().title, "Write tests");
         assert!(!loaded.state().done);
         assert_eq!(loaded.version(), Some(Version::new(1).unwrap()));
@@ -193,7 +200,8 @@ mod integration {
         repo.save(&mut loaded, &[TodoEvent::Done]).await.unwrap();
 
         // Reload and verify full state
-        let final_agg: AggregateRoot<TodoAggregate> = repo.load(TodoId(1)).await.unwrap();
+        let final_agg: AggregateRoot<TodoAggregate> =
+            repo.load(TodoId("todo-1".into())).await.unwrap();
         assert_eq!(final_agg.state().title, "Write tests");
         assert!(final_agg.state().done);
         assert_eq!(final_agg.version(), Some(Version::new(2).unwrap()));

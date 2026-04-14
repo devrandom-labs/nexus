@@ -7,10 +7,20 @@ use std::fmt;
 // --- Domain types ---
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct UserId(u64);
+struct UserId(String);
+impl UserId {
+    fn new(v: u64) -> Self {
+        Self(format!("user-{v}"))
+    }
+}
 impl fmt::Display for UserId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "user-{}", self.0)
+        write!(f, "{}", self.0)
+    }
+}
+impl AsRef<[u8]> for UserId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 impl Id for UserId {}
@@ -118,7 +128,7 @@ impl Handle<ActivateUser> for UserAggregate {
 
 #[test]
 fn newtype_aggregate_lifecycle() {
-    let mut user = UserAggregate::new(UserId(1));
+    let mut user = UserAggregate::new(UserId::new(1));
 
     let events = user
         .handle(CreateUser {
@@ -141,7 +151,7 @@ fn newtype_aggregate_lifecycle() {
 
 #[test]
 fn newtype_aggregate_invariant_enforcement() {
-    let mut user = UserAggregate::new(UserId(2));
+    let mut user = UserAggregate::new(UserId::new(2));
 
     let events = user.handle(CreateUser { name: "Bob".into() }).unwrap();
     user.root_mut().advance_version(Version::new(1).unwrap());
@@ -166,7 +176,7 @@ fn newtype_aggregate_invariant_enforcement() {
 
 #[test]
 fn newtype_aggregate_rehydrate() {
-    let mut user = UserAggregate::new(UserId(3));
+    let mut user = UserAggregate::new(UserId::new(3));
     user.replay(
         Version::new(1).unwrap(),
         &UserEvent::Created(UserCreated {
@@ -187,19 +197,19 @@ fn newtype_aggregate_rehydrate() {
 
 #[test]
 fn newtype_aggregate_id_accessible() {
-    let user = UserAggregate::new(UserId(42));
-    assert_eq!(user.id(), &UserId(42));
+    let user = UserAggregate::new(UserId::new(42));
+    assert_eq!(user.id(), &UserId::new(42));
 }
 
 #[test]
 fn newtype_aggregate_delegates_state() {
-    let user = UserAggregate::new(UserId(1));
+    let user = UserAggregate::new(UserId::new(1));
     assert_eq!(user.state().name, "");
     assert!(!user.state().active);
 }
 
 #[test]
 fn newtype_aggregate_fresh_version_is_none() {
-    let user = UserAggregate::new(UserId(1));
+    let user = UserAggregate::new(UserId::new(1));
     assert_eq!(user.version(), None);
 }
