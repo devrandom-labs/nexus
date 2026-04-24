@@ -95,6 +95,18 @@ Two macros:
 
 These rules are non-negotiable. Every one exists because of a real bug found in this codebase.
 
+### 0. No Assumptions, No Opinions — Facts Only
+
+- **Never assume.** If you don't know something, say so and research it. Do not fill gaps with plausible-sounding guesses about APIs, crate behavior, algorithm properties, or performance characteristics.
+- **Never give opinions.** No "I think," "it would be cleaner," "this feels better," "my preference is." Claims must be grounded in verifiable evidence.
+- **Facts must cite sources.** Every technical claim about algorithms, data structures, concurrency, cryptography, or systems behavior must be backed by:
+  - **arXiv papers** (preferred for algorithmic/theoretical claims)
+  - **Peer-reviewed research papers** (conferences: SOSP, OSDI, VLDB, SIGMOD, PLDI, POPL, CRYPTO, etc.)
+  - **Primary source GitHub repositories** (the actual implementation being discussed, not blog posts about it)
+  - **Official specifications / RFCs** for protocols and standards
+- **"Common knowledge" is not a source.** If a claim is worth making, it is worth citing. If no source exists, do not make the claim.
+- **Uncertainty is a fact too.** When evidence is incomplete or contradictory, state the uncertainty explicitly rather than collapsing it into a confident-sounding opinion.
+
 ### 1. Database Atomicity
 
 Every database interaction in store adapters MUST be atomic:
