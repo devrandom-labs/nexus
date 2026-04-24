@@ -1,6 +1,8 @@
 use nexus::*;
 use std::fmt;
 
+use arrayvec::ArrayString;
+
 // --- Test ID type ---
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TestId(String);
@@ -114,4 +116,21 @@ fn aggregate_state_apply_mutates() {
     assert!(!state.active);
     let state = state.apply(&ThingEvent::Activated(ThingActivated));
     assert!(state.active);
+}
+
+#[test]
+fn id_to_label_returns_display_as_array_string() {
+    let id = TestId("order-123".into());
+    let label: ArrayString<64> = id.to_label();
+    assert_eq!(label.as_str(), "order-123");
+}
+
+#[test]
+fn id_to_label_truncates_long_ids() {
+    // Create an ID whose Display output exceeds 64 bytes
+    let long_name = "x".repeat(100);
+    let id = TestId(long_name);
+    let label = id.to_label();
+    assert!(label.len() <= 64);
+    assert_eq!(label.len(), 64);
 }
