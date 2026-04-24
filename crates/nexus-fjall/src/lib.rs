@@ -1,3 +1,8 @@
+#![allow(
+    clippy::result_large_err,
+    reason = "FjallError is intentionally stack-allocated (~208 bytes) for IoT targets"
+)]
+
 pub mod builder;
 pub mod encoding;
 pub mod error;

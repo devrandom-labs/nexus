@@ -2,6 +2,7 @@ use crate::encoding::{decode_event_key, decode_event_value};
 use crate::error::FjallError;
 use crate::store::FjallStore;
 use crate::stream::FjallStream;
+use arrayvec::ArrayString;
 use nexus::{Id, Version};
 use nexus_store::PersistedEnvelope;
 use nexus_store::store::{EventStream, RawEventStore};
@@ -48,7 +49,7 @@ pub struct FjallSubscriptionStream<'a> {
     /// Owned byte key for re-reading from the store on refill.
     stream_key: OwnedStreamId,
     /// Human-readable label for error messages.
-    label: String,
+    label: ArrayString<64>,
     /// The inner batch of eagerly-loaded events from the current read.
     inner: FjallStream,
     /// The last version yielded (tracks position for re-reads).
@@ -62,7 +63,7 @@ impl<'a> FjallSubscriptionStream<'a> {
     pub(crate) const fn new(
         store: &'a FjallStore,
         stream_key: OwnedStreamId,
-        label: String,
+        label: ArrayString<64>,
         inner: FjallStream,
         last_version: Option<Version>,
     ) -> Self {
@@ -112,7 +113,7 @@ impl EventStream for FjallSubscriptionStream<'_> {
                 let Ok((_id_bytes, version_raw)) = decode_event_key(key) else {
                     self.inner.poisoned = true;
                     return Some(Err(FjallError::CorruptValue {
-                        stream_id: self.label.clone(),
+                        stream_id: self.label,
                         version: None,
                     }));
                 };
@@ -132,7 +133,7 @@ impl EventStream for FjallSubscriptionStream<'_> {
                 let Ok((schema_version, event_type, payload)) = decode_event_value(value) else {
                     self.inner.poisoned = true;
                     return Some(Err(FjallError::CorruptValue {
-                        stream_id: self.label.clone(),
+                        stream_id: self.label,
                         version: Some(version_raw),
                     }));
                 };
@@ -140,7 +141,7 @@ impl EventStream for FjallSubscriptionStream<'_> {
                 let Some(version) = Version::new(version_raw) else {
                     self.inner.poisoned = true;
                     return Some(Err(FjallError::CorruptValue {
-                        stream_id: self.label.clone(),
+                        stream_id: self.label,
                         version: Some(version_raw),
                     }));
                 };
@@ -150,7 +151,7 @@ impl EventStream for FjallSubscriptionStream<'_> {
                 else {
                     self.inner.poisoned = true;
                     return Some(Err(FjallError::CorruptValue {
-                        stream_id: self.label.clone(),
+                        stream_id: self.label,
                         version: Some(version_raw),
                     }));
                 };

@@ -8,12 +8,22 @@ use nexus::Version;
 /// on the write path. The proc macro `#[nexus::transforms]` generates
 /// implementations; `()` is the no-op passthrough.
 pub trait Upcaster: Send + Sync {
+    /// The error type produced by transform functions.
+    ///
+    /// Each upcaster implementation specifies its own concrete error type.
+    /// The no-op `()` impl uses [`Infallible`](std::convert::Infallible).
+    type Error: std::error::Error + Send + Sync + 'static;
+
     /// Run all matching transforms until the morsel is at the current schema version.
     ///
     /// # Errors
     ///
-    /// Returns [`UpcastError::TransformFailed`] if a transform function fails.
-    fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError>;
+    /// Returns [`UpcastError`] if a transform function fails or validation detects
+    /// an invariant violation (version not advanced, empty event type, chain limit).
+    fn apply<'a>(
+        &self,
+        morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>>;
 
     /// Current schema version for an event type (stamped on new events).
     /// Returns `None` if the event type has no transforms.
@@ -22,8 +32,13 @@ pub trait Upcaster: Send + Sync {
 
 /// No-op upcaster — passthrough, no transforms.
 impl Upcaster for () {
+    type Error = std::convert::Infallible;
+
     #[inline]
-    fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+    fn apply<'a>(
+        &self,
+        morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
         Ok(morsel)
     }
 

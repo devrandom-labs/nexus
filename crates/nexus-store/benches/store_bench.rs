@@ -25,6 +25,11 @@
     reason = "benchmark functions do not need panic docs"
 )]
 
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::fmt;
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::Version;
 use nexus_store::AppendError;
@@ -33,9 +38,6 @@ use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
-use std::collections::HashMap;
-use std::fmt;
-use std::hint::black_box;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -162,10 +164,13 @@ impl RawEventStore for InMemoryRawStore {
 struct NoopV1ToV6;
 
 impl Upcaster for NoopV1ToV6 {
+    type Error = Infallible;
+
     fn apply<'a>(
         &self,
         mut morsel: nexus_store::upcasting::EventMorsel<'a>,
-    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError> {
+    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError<Self::Error>>
+    {
         loop {
             morsel = match (morsel.event_type(), morsel.schema_version()) {
                 ("UserCreated", v) if v == Version::new(1).unwrap() => {

@@ -11,7 +11,7 @@ impl std::fmt::Display for MyError {
 }
 impl std::error::Error for MyError {}
 
-#[transforms(aggregate = Order)]
+#[transforms(aggregate = Order, error = MyError)]
 impl OrderTransforms {
     #[transform(event = "OrderCreated", from = 1, to = 2)]
     fn v1_to_v2_a(payload: &[u8]) -> Result<Vec<u8>, MyError> {

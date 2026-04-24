@@ -5,14 +5,31 @@ use crate::encoding::{
 use crate::error::FjallError;
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
+use arrayvec::ArrayString;
 use fjall::Slice;
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
-use nexus_store::ToStreamLabel;
 use nexus_store::error::AppendError;
 use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
+use std::fmt::Write;
 use std::path::Path;
 use tokio::sync::Notify;
+
+/// Format a `Display` value into a stack-allocated reason label,
+/// silently truncating at 128 bytes on a char boundary.
+fn reason_label(value: &impl std::fmt::Display) -> ArrayString<128> {
+    let mut buf = ArrayString::<128>::new();
+    let _ = write!(buf, "{value}");
+    buf
+}
+
+/// Format a lossy UTF-8 representation into a stack-allocated label,
+/// silently truncating at 64 bytes on a char boundary.
+fn lossy_label(bytes: &[u8]) -> ArrayString<64> {
+    let mut buf = ArrayString::<64>::new();
+    let _ = write!(buf, "{}", String::from_utf8_lossy(bytes));
+    buf
+}
 
 /// Fjall-backed event store.
 ///
@@ -74,13 +91,13 @@ impl RawEventStore for FjallStore {
         {
             let current_version = decode_stream_version(&version_bytes).map_err(|_| {
                 AppendError::Store(FjallError::CorruptMeta {
-                    stream_id: id.to_string(),
+                    stream_id: id.to_label(),
                 })
             })?;
             // Optimistic concurrency check.
             if current_version != expected_raw {
                 return Err(AppendError::Conflict {
-                    stream_id: id.to_stream_label(),
+                    stream_id: id.to_label(),
                     expected: expected_version,
                     actual: Version::new(current_version),
                 });
@@ -90,7 +107,7 @@ impl RawEventStore for FjallStore {
             // New stream: expected_version must be None.
             if expected_version.is_some() {
                 return Err(AppendError::Conflict {
-                    stream_id: id.to_stream_label(),
+                    stream_id: id.to_label(),
                     expected: expected_version,
                     actual: None,
                 });
@@ -111,13 +128,13 @@ impl RawEventStore for FjallStore {
                 .checked_add(1)
                 .and_then(|v| v.checked_add(i_u64))
                 .ok_or_else(|| AppendError::Conflict {
-                    stream_id: id.to_stream_label(),
+                    stream_id: id.to_label(),
                     expected: Version::new(current_version),
                     actual: Some(env.version()),
                 })?;
             if env.version().as_u64() != expected_env_version {
                 return Err(AppendError::Conflict {
-                    stream_id: id.to_stream_label(),
+                    stream_id: id.to_label(),
                     expected: Version::new(expected_env_version),
                     actual: Some(env.version()),
                 });
@@ -129,9 +146,9 @@ impl RawEventStore for FjallStore {
         for env in envelopes {
             let key = encode_event_key(id_bytes, env.version().as_u64()).map_err(|e| {
                 AppendError::Store(FjallError::InvalidInput {
-                    stream_id: id.to_string(),
+                    stream_id: id.to_label(),
                     version: env.version().as_u64(),
-                    reason: e.to_string(),
+                    reason: reason_label(&e),
                 })
             })?;
             encode_event_value(
@@ -142,9 +159,9 @@ impl RawEventStore for FjallStore {
             )
             .map_err(|e| {
                 AppendError::Store(FjallError::InvalidInput {
-                    stream_id: id.to_string(),
+                    stream_id: id.to_label(),
                     version: env.version().as_u64(),
-                    reason: e.to_string(),
+                    reason: reason_label(&e),
                 })
             })?;
             tx.insert(&self.events, &key, Slice::from(&*value_buf));
@@ -178,7 +195,7 @@ impl RawEventStore for FjallStore {
             return Ok(FjallStream {
                 events: vec![],
                 pos: 0,
-                stream_id: id.to_string(),
+                stream_id: id.to_label(),
                 poisoned: false,
                 #[cfg(debug_assertions)]
                 prev_version: None,
@@ -188,14 +205,14 @@ impl RawEventStore for FjallStore {
         // Range scan from (id_bytes, from_version) to (id_bytes, u64::MAX).
         let start =
             encode_event_key(id_bytes, from.as_u64()).map_err(|e| FjallError::InvalidInput {
-                stream_id: id.to_string(),
+                stream_id: id.to_label(),
                 version: from.as_u64(),
-                reason: e.to_string(),
+                reason: reason_label(&e),
             })?;
         let end = encode_event_key(id_bytes, u64::MAX).map_err(|e| FjallError::InvalidInput {
-            stream_id: id.to_string(),
+            stream_id: id.to_label(),
             version: u64::MAX,
-            reason: e.to_string(),
+            reason: reason_label(&e),
         })?;
 
         // Precondition: start key must sort <= end key (same ID bytes).
@@ -224,7 +241,7 @@ impl RawEventStore for FjallStore {
         Ok(FjallStream {
             events,
             pos: 0,
-            stream_id: id.to_string(),
+            stream_id: id.to_label(),
             poisoned: false,
             #[cfg(debug_assertions)]
             prev_version: None,
@@ -264,7 +281,7 @@ mod snapshot_impl {
 
             let (schema_version_raw, version_raw, payload) = decode_snapshot_value(&bytes)
                 .map_err(|_| FjallError::CorruptValue {
-                    stream_id: id.to_string(),
+                    stream_id: id.to_label(),
                     version: None,
                 })?;
 
@@ -275,7 +292,7 @@ mod snapshot_impl {
             }
 
             let version = Version::new(version_raw).ok_or_else(|| FjallError::CorruptValue {
-                stream_id: id.to_string(),
+                stream_id: id.to_label(),
                 version: None,
             })?;
             let snap = PersistedSnapshot::new(version, expected_schema_version, payload.to_vec());
@@ -349,7 +366,7 @@ impl Subscription<()> for FjallStore {
             Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
         };
         let owned_id = OwnedStreamId::from_id(id);
-        let label = id.to_string();
+        let label = id.to_label();
         let inner = self.read_stream(&owned_id, start).await?;
         Ok(FjallSubscriptionStream::new(
             self, owned_id, label, inner, from,
@@ -379,14 +396,14 @@ impl CheckpointStore for FjallStore {
                     .as_ref()
                     .try_into()
                     .map_err(|_| FjallError::CorruptValue {
-                        stream_id: String::from_utf8_lossy(&key).into_owned(),
+                        stream_id: lossy_label(&key),
                         version: None,
                     })?;
             let raw = u64::from_be_bytes(raw_bytes);
             Version::new(raw).map_or_else(
                 || {
                     Err(FjallError::CorruptValue {
-                        stream_id: String::from_utf8_lossy(&key).into_owned(),
+                        stream_id: lossy_label(&key),
                         version: Some(raw),
                     })
                 },

@@ -25,6 +25,7 @@
     reason = "proptest macro generates code that triggers this lint"
 )]
 
+use std::convert::Infallible;
 use std::fmt;
 
 use nexus::Version;
@@ -264,7 +265,9 @@ proptest! {
     ) {
         struct V1ToV3Upcaster;
         impl Upcaster for V1ToV3Upcaster {
-            fn apply<'a>(&self, mut morsel: nexus_store::upcasting::EventMorsel<'a>) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError> {
+            type Error = Infallible;
+
+            fn apply<'a>(&self, mut morsel: nexus_store::upcasting::EventMorsel<'a>) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError<Self::Error>> {
                 loop {
                     morsel = match (morsel.event_type(), morsel.schema_version()) {
                         ("E", v) if v == Version::INITIAL => nexus_store::upcasting::EventMorsel::new("E", Version::new(2).unwrap(), morsel.payload().to_vec()),

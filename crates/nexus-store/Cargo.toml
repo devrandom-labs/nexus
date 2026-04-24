@@ -12,13 +12,13 @@ categories = ["data-structures"]
 
 [features]
 testing = ["dep:tokio"]
-bounded-labels = []
 serde = ["dep:serde"]
 json = ["serde", "dep:serde_json"]
 snapshot = []
 snapshot-json = ["snapshot", "json"]
 
 [dependencies]
+arrayvec = { workspace = true }
 nexus = { version = "0.1.0", path = "../nexus" }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

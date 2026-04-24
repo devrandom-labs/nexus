@@ -26,13 +26,21 @@
 )]
 #![allow(clippy::str_to_string, reason = "tests use to_string/to_owned freely")]
 
+use arrayvec::ArrayString;
 use nexus::{Id, Version};
-use nexus_store::ToStreamLabel;
+use nexus_store::InMemoryStoreError;
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
+
+/// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
+type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::convert::Infallible>;
+
+fn label(s: &str) -> ArrayString<64> {
+    ArrayString::try_from(s).unwrap()
+}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TestId(&'static str);
@@ -152,17 +160,17 @@ async fn h5_append_with_duplicate_versions() {
 }
 
 // =============================================================================
-// H4: StoreError has heap-allocated Box<dyn Error>
+// H4: StoreError has concrete typed errors — no heap allocation
 // =============================================================================
 
 #[test]
 fn h4_store_error_size() {
     // Document the size of StoreError for IoT awareness.
-    // Box<dyn Error> means heap allocation on error paths.
-    let size = std::mem::size_of::<StoreError>();
+    // With concrete types, no Box<dyn Error> heap allocation on error paths.
+    let size = std::mem::size_of::<TestStoreError>();
     // This should be reasonable — if it's too large, consider boxing the whole error
     assert!(
-        size <= 128,
+        size <= 256,
         "StoreError is {size} bytes — too large for stack on constrained devices"
     );
 }
@@ -260,14 +268,16 @@ async fn streams_are_isolated() {
 
 #[test]
 fn store_error_variants_are_known() {
-    let err = StoreError::StreamNotFound {
-        stream_id: "test".to_stream_label(),
+    let err: TestStoreError = StoreError::StreamNotFound {
+        stream_id: label("test"),
     };
     match err {
         StoreError::Conflict { .. } => {}
         StoreError::StreamNotFound { .. } => {}
         StoreError::Codec(_) => {}
         StoreError::Adapter(_) => {}
-        StoreError::Kernel(_) => {} // If you add a variant, add it here
+        StoreError::Upcast(_) => {}
+        StoreError::Kernel(_) => {}
+        StoreError::VersionOverflow => {} // If you add a variant, add it here
     }
 }

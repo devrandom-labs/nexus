@@ -57,10 +57,13 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 
+use arrayvec::ArrayString;
 use nexus::Version;
+use nexus_store::InMemoryStoreError;
 use nexus_store::Store;
 use nexus_store::Upcaster;
 use nexus_store::codec::Codec;
@@ -74,6 +77,13 @@ use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 
 use proptest::prelude::*;
+
+/// Concrete `StoreError` for tests using `InMemoryStore` + `JsonCodec` + no upcaster.
+type TestStoreError = StoreError<InMemoryStoreError, JsonCodecError, Infallible>;
+
+fn label(s: &str) -> ArrayString<64> {
+    ArrayString::try_from(s).unwrap()
+}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct StreamName(String);
@@ -828,7 +838,12 @@ fn attack_upcaster_correct_final_state() {
     // Upcaster that steps "E" from V1->V2->V3->V4, preserving payload.
     struct ThreeStepUpcaster;
     impl Upcaster for ThreeStepUpcaster {
-        fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+        type Error = Infallible;
+
+        fn apply<'a>(
+            &self,
+            mut morsel: EventMorsel<'a>,
+        ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
             loop {
                 match (morsel.event_type(), morsel.schema_version()) {
                     ("E", v) if v == Version::INITIAL => {
@@ -1066,7 +1081,12 @@ async fn attack_event_store_transforms_applied_on_load() {
     // Upcaster that bumps "Happened" from schema V1 to V2 (payload unchanged)
     struct HappenedV1ToV2;
     impl Upcaster for HappenedV1ToV2 {
-        fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+        type Error = Infallible;
+
+        fn apply<'a>(
+            &self,
+            morsel: EventMorsel<'a>,
+        ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
             match (morsel.event_type(), morsel.schema_version()) {
                 ("Happened", v) if v == Version::INITIAL => Ok(EventMorsel::new(
                     "Happened",
@@ -1502,9 +1522,8 @@ proptest! {
     ) {
         prop_assume!(expected != actual);
 
-        use nexus_store::ToStreamLabel;
-        let err = StoreError::Conflict {
-            stream_id: "test-stream".to_stream_label(),
+        let err: TestStoreError = StoreError::Conflict {
+            stream_id: label("test-stream"),
             expected: Version::new(expected),
             actual: Version::new(actual),
         };
@@ -1697,23 +1716,25 @@ proptest! {
     ) {
         let ver = Version::new(schema_version).unwrap();
 
-        let err1 = UpcastError::VersionNotAdvanced {
-            event_type: event_type.clone(),
+        let et_label = label(&event_type);
+
+        let err1 = UpcastError::<Infallible>::VersionNotAdvanced {
+            event_type: et_label,
             input_version: ver,
             output_version: ver,
         };
         let msg1 = err1.to_string();
         prop_assert!(msg1.contains(&event_type), "event_type missing from error: {}", msg1);
 
-        let err2 = UpcastError::EmptyEventType {
-            input_event_type: event_type.clone(),
+        let err2 = UpcastError::<Infallible>::EmptyEventType {
+            input_event_type: et_label,
             schema_version: ver,
         };
         let msg2 = err2.to_string();
         prop_assert!(msg2.contains(&event_type), "event_type missing from error: {}", msg2);
 
-        let err3 = UpcastError::ChainLimitExceeded {
-            event_type: event_type.clone(),
+        let err3 = UpcastError::<Infallible>::ChainLimitExceeded {
+            event_type: et_label,
             schema_version: ver,
             limit: 100,
         };
@@ -1781,7 +1802,9 @@ proptest! {
         // Upcaster: "OldEvent" v1 -> "MiddleEvent" v2 -> "NewEvent" v3
         struct RenamingUpcaster;
         impl Upcaster for RenamingUpcaster {
-            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+            type Error = Infallible;
+
+            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
                 loop {
                     match (morsel.event_type(), morsel.schema_version()) {
                         ("OldEvent", v) if v == Version::INITIAL => {
@@ -1831,7 +1854,9 @@ proptest! {
         // Upcaster that prefixes payload with a magic header
         struct PrefixUpcaster;
         impl Upcaster for PrefixUpcaster {
-            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+            type Error = Infallible;
+
+            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
                 loop {
                     match (morsel.event_type(), morsel.schema_version()) {
                         ("E", v) if v == Version::INITIAL => {

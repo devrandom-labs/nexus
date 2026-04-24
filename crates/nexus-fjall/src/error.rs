@@ -1,8 +1,11 @@
+use arrayvec::ArrayString;
 use thiserror::Error;
 
 /// Errors produced by the fjall event store adapter.
+///
+/// Intentionally stack-allocated (~208 bytes) for IoT/embedded targets.
+/// All diagnostic fields use `ArrayString` — no heap allocation on error paths.
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum FjallError {
     /// Fjall I/O or internal database error.
     #[error("fjall error: {0}")]
@@ -11,13 +14,13 @@ pub enum FjallError {
     /// Stored value has corrupt or unrecognizable byte layout.
     #[error("corrupt value in stream '{stream_id}' at version {version:?}")]
     CorruptValue {
-        stream_id: String,
+        stream_id: ArrayString<64>,
         version: Option<u64>,
     },
 
     /// Stream metadata has wrong byte size.
     #[error("corrupt metadata for stream '{stream_id}'")]
-    CorruptMeta { stream_id: String },
+    CorruptMeta { stream_id: ArrayString<64> },
 
     /// Invalid input on the write path (e.g. event type name too long).
     ///
@@ -25,9 +28,9 @@ pub enum FjallError {
     /// is unreadable. This error fires before any data is written.
     #[error("invalid input for stream '{stream_id}' at version {version}: {reason}")]
     InvalidInput {
-        stream_id: String,
+        stream_id: ArrayString<64>,
         version: u64,
-        reason: String,
+        reason: ArrayString<128>,
     },
 
     /// Event version would overflow `u64::MAX`.

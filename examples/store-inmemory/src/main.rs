@@ -146,10 +146,12 @@ impl Codec<TodoEvent> for JsonCodec {
 struct RenameUpcaster;
 
 impl Upcaster for RenameUpcaster {
+    type Error = std::convert::Infallible;
+
     fn apply<'a>(
         &self,
         morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, nexus_store::UpcastError> {
+    ) -> Result<EventMorsel<'a>, nexus_store::UpcastError<Self::Error>> {
         if morsel.event_type() != "TaskCreated" || morsel.schema_version().as_u64() >= 2 {
             return Ok(morsel);
         }

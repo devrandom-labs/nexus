@@ -4,11 +4,11 @@ pub mod error;
 #[cfg(feature = "snapshot")]
 pub mod snapshot;
 pub mod store;
-pub mod stream_label;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod upcasting;
 
+pub use arrayvec::ArrayString;
 #[cfg(feature = "json")]
 pub use codec::serde::json::{Json, JsonCodec};
 #[cfg(feature = "serde")]
@@ -30,5 +30,6 @@ pub use store::{
 };
 #[cfg(feature = "snapshot")]
 pub use store::{Snapshotting, WithSnapshot};
-pub use stream_label::{StreamLabel, ToStreamLabel};
+#[cfg(feature = "testing")]
+pub use testing::InMemoryStoreError;
 pub use upcasting::{EventMorsel, Upcaster};

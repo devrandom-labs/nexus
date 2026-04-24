@@ -1,9 +1,8 @@
 use std::num::NonZeroU32;
 
 use crate::codec::Codec;
-use crate::error::StoreError;
 use crate::snapshot::{PendingSnapshot, SnapshotStore, SnapshotTrigger};
-use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
+use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, KernelError, Version};
 
 use crate::store::repository::Repository;
 use crate::store::repository::replay::ReplayFrom;
@@ -64,15 +63,16 @@ impl<R, SS, SC, T> Snapshotting<R, SS, SC, T> {
 impl<A, R, SS, SC, T> Repository<A> for Snapshotting<R, SS, SC, T>
 where
     A: Aggregate,
-    R: Repository<A, Error = StoreError> + ReplayFrom<A>,
+    R: Repository<A> + ReplayFrom<A, Error = <R as Repository<A>>::Error>,
+    <R as Repository<A>>::Error: From<KernelError>,
     SS: SnapshotStore,
     SC: Codec<A::State>,
     T: SnapshotTrigger,
     EventOf<A>: DomainEvent,
 {
-    type Error = StoreError;
+    type Error = <R as Repository<A>>::Error;
 
-    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, Self::Error> {
         // Snapshot hit → partial replay from snapshot version.
         if let Some((root, from)) = self.try_load_from_snapshot::<A>(&id).await {
             return self.inner.replay_from(root, from).await;
@@ -93,7 +93,7 @@ where
         &self,
         aggregate: &mut AggregateRoot<A>,
         events: &[EventOf<A>],
-    ) -> Result<(), StoreError> {
+    ) -> Result<(), Self::Error> {
         let old_version = aggregate.version();
 
         // Delegate event persistence to inner.

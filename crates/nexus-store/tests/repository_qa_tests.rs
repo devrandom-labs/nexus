@@ -35,6 +35,7 @@
     reason = "test codec uses pointer cast to simulate zero-copy"
 )]
 
+use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -364,7 +365,12 @@ impl BorrowingCodec<DeltaEvent> for DeltaBorrowingCodec {
 struct IncrementedV1ToV2;
 
 impl Upcaster for IncrementedV1ToV2 {
-    fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+    type Error = Infallible;
+
+    fn apply<'a>(
+        &self,
+        morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
         match (morsel.event_type(), morsel.schema_version()) {
             ("Incremented", v) if v == Version::INITIAL => Ok(EventMorsel::new(
                 "Incremented",
@@ -387,7 +393,12 @@ impl Upcaster for IncrementedV1ToV2 {
 struct IncrementedV1ToV3;
 
 impl Upcaster for IncrementedV1ToV3 {
-    fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+    type Error = Infallible;
+
+    fn apply<'a>(
+        &self,
+        mut morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
         loop {
             morsel = match (morsel.event_type(), morsel.schema_version()) {
                 ("Incremented", v) if v == Version::INITIAL => EventMorsel::new(
@@ -418,7 +429,12 @@ impl Upcaster for IncrementedV1ToV3 {
 struct DeltaDoublingUpcaster;
 
 impl Upcaster for DeltaDoublingUpcaster {
-    fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+    type Error = Infallible;
+
+    fn apply<'a>(
+        &self,
+        morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
         match (morsel.event_type(), morsel.schema_version()) {
             ("Delta", v) if v == Version::INITIAL => {
                 let delta = i32::from_le_bytes(morsel.payload()[0..4].try_into().unwrap());

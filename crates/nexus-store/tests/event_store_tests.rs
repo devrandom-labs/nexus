@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, reason = "tests")]
 #![allow(clippy::expect_used, reason = "tests")]
 
+use std::convert::Infallible;
 use std::fmt;
 
 use nexus::*;
@@ -188,7 +189,12 @@ async fn optimistic_concurrency_conflict() {
 
 struct V1ToV2Upcaster;
 impl Upcaster for V1ToV2Upcaster {
-    fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+    type Error = Infallible;
+
+    fn apply<'a>(
+        &self,
+        morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
         match (morsel.event_type(), morsel.schema_version()) {
             ("Created", v) if v == Version::INITIAL => {
                 // Passthrough — payload format unchanged, just bump version.

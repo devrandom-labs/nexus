@@ -2,15 +2,26 @@
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::error::StoreError;
 use crate::store::{CheckpointStore, EventStream, RawEventStore, Subscription};
-use crate::stream_label::ToStreamLabel;
 use nexus::Id;
 use nexus::Version;
 use std::collections::HashMap;
 use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+
+/// Error type for the [`InMemoryStore`] adapter.
+#[derive(Debug, Error)]
+pub enum InMemoryStoreError {
+    /// Stored event has version 0 — corrupt data.
+    #[error("stored event has version 0 — corrupt data")]
+    CorruptVersion,
+
+    /// Version overflow: cannot advance past `u64::MAX`.
+    #[error("version overflow: cannot advance past u64::MAX")]
+    VersionOverflow,
+}
 
 /// A row stored in the in-memory database.
 struct StoredRow {
@@ -80,7 +91,7 @@ pub struct InMemoryStream {
 }
 
 impl EventStream for InMemoryStream {
-    type Error = StoreError;
+    type Error = InMemoryStoreError;
 
     async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
         if self.pos >= self.events.len() {
@@ -101,9 +112,7 @@ impl EventStream for InMemoryStream {
             self.prev_version = Some(row.version);
         }
         let Some(version) = Version::new(row.version) else {
-            return Some(Err(StoreError::Codec(
-                "stored event has version 0 — corrupt data".into(),
-            )));
+            return Some(Err(InMemoryStoreError::CorruptVersion));
         };
         Some(Ok(PersistedEnvelope::new_unchecked(
             version,
@@ -116,7 +125,7 @@ impl EventStream for InMemoryStream {
 }
 
 impl RawEventStore for InMemoryStore {
-    type Error = StoreError;
+    type Error = InMemoryStoreError;
     type Stream<'a> = InMemoryStream;
 
     async fn append(
@@ -136,7 +145,7 @@ impl RawEventStore for InMemoryStore {
         let expected_raw = expected_version.map_or(0, nexus::Version::as_u64);
         if actual_version_raw != expected_raw {
             return Err(AppendError::Conflict {
-                stream_id: id.to_stream_label(),
+                stream_id: id.to_label(),
                 expected: expected_version,
                 actual: Version::new(actual_version_raw),
             });
@@ -151,13 +160,13 @@ impl RawEventStore for InMemoryStore {
                 .checked_add(1)
                 .and_then(|v| v.checked_add(i_u64))
                 .ok_or_else(|| AppendError::Conflict {
-                    stream_id: id.to_stream_label(),
+                    stream_id: id.to_label(),
                     expected: expected_version,
                     actual: Some(env.version()),
                 })?;
             if env.version().as_u64() != expected_env_version {
                 return Err(AppendError::Conflict {
-                    stream_id: id.to_stream_label(),
+                    stream_id: id.to_label(),
                     expected: Version::new(expected_env_version),
                     actual: Some(env.version()),
                 });
@@ -266,22 +275,16 @@ impl InMemorySubscriptionStream<'_> {
     ///
     /// Returns an error on overflow instead of silently wrapping back
     /// to `Version::INITIAL`.
-    fn next_read_version(&self) -> Result<Version, StoreError> {
+    fn next_read_version(&self) -> Result<Version, InMemoryStoreError> {
         self.last_version.map_or_else(
             || Ok(Version::INITIAL),
-            |v| {
-                v.next().ok_or_else(|| {
-                    StoreError::Codec(
-                        "subscription version overflow: cannot advance past u64::MAX".into(),
-                    )
-                })
-            },
+            |v| v.next().ok_or(InMemoryStoreError::VersionOverflow),
         )
     }
 }
 
 impl EventStream for InMemorySubscriptionStream<'_> {
-    type Error = StoreError;
+    type Error = InMemoryStoreError;
 
     async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
         loop {
@@ -304,9 +307,7 @@ impl EventStream for InMemorySubscriptionStream<'_> {
                 }
 
                 let Some(version) = Version::new(row.version) else {
-                    return Some(Err(StoreError::Codec(
-                        "stored event has version 0 — corrupt data".into(),
-                    )));
+                    return Some(Err(InMemoryStoreError::CorruptVersion));
                 };
                 self.last_version = Some(version);
 
@@ -343,21 +344,17 @@ impl EventStream for InMemorySubscriptionStream<'_> {
 
 impl Subscription<()> for InMemoryStore {
     type Stream<'a> = InMemorySubscriptionStream<'a>;
-    type Error = StoreError;
+    type Error = InMemoryStoreError;
 
     async fn subscribe<'a>(
         &'a self,
         id: &'a impl Id,
         from: Option<Version>,
-    ) -> Result<InMemorySubscriptionStream<'a>, StoreError> {
+    ) -> Result<InMemorySubscriptionStream<'a>, InMemoryStoreError> {
         let stream_id = id.to_string();
         let from_version = match from {
             None => Version::INITIAL,
-            Some(v) => v.next().ok_or_else(|| {
-                StoreError::Codec(
-                    "subscription version overflow: cannot advance past u64::MAX".into(),
-                )
-            })?,
+            Some(v) => v.next().ok_or(InMemoryStoreError::VersionOverflow)?,
         };
 
         let mut sub = InMemorySubscriptionStream {
@@ -382,12 +379,13 @@ impl Subscription<()> for InMemoryStore {
 // ═══════════════════════════════════════════════════════════════════════════
 
 impl CheckpointStore for InMemoryStore {
-    type Error = StoreError;
+    type Error = InMemoryStoreError;
 
     fn load(
         &self,
         subscription_id: &impl Id,
-    ) -> impl std::future::Future<Output = Result<Option<Version>, StoreError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<Option<Version>, InMemoryStoreError>> + Send + '_
+    {
         let key = subscription_id.to_string();
         async move { Ok(self.checkpoints.lock().await.get(&key).copied()) }
     }
@@ -396,7 +394,7 @@ impl CheckpointStore for InMemoryStore {
         &self,
         subscription_id: &impl Id,
         version: Version,
-    ) -> impl std::future::Future<Output = Result<(), StoreError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<(), InMemoryStoreError>> + Send + '_ {
         let key = subscription_id.to_string();
         async move {
             self.checkpoints.lock().await.insert(key, version);

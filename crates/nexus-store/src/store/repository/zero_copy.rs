@@ -58,20 +58,22 @@ where
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
+    type Error = StoreError<S::Error, C::Error, U::Error>;
+
     async fn replay_from(
         &self,
         mut root: AggregateRoot<A>,
         from: Version,
-    ) -> Result<AggregateRoot<A>, StoreError> {
+    ) -> Result<AggregateRoot<A>, Self::Error> {
         let mut stream = self
             .store
             .raw()
             .read_stream(root.id(), from)
             .await
-            .map_err(|e| StoreError::Adapter(Box::new(e)))?;
+            .map_err(StoreError::Adapter)?;
 
         while let Some(result) = stream.next().await {
-            let env = result.map_err(|e| StoreError::Adapter(Box::new(e)))?;
+            let env = result.map_err(StoreError::Adapter)?;
 
             // Build morsel from envelope — all Cow::Borrowed (zero-alloc).
             let morsel = EventMorsel::borrowed(
@@ -81,16 +83,13 @@ where
             );
 
             // Run through upcaster — zero-alloc when no transform fires.
-            let transformed = self
-                .upcaster
-                .apply(morsel)
-                .map_err(|e| StoreError::Codec(Box::new(e)))?;
+            let transformed = self.upcaster.apply(morsel).map_err(StoreError::Upcast)?;
 
             // Decode — zero-copy: &E borrows from morsel payload.
             let event: &EventOf<A> = self
                 .codec
                 .decode(transformed.event_type(), transformed.payload())
-                .map_err(|e| StoreError::Codec(Box::new(e)))?;
+                .map_err(StoreError::Codec)?;
 
             root.replay(env.version(), event)?;
         }
@@ -108,9 +107,9 @@ where
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
-    type Error = StoreError;
+    type Error = StoreError<S::Error, C::Error, U::Error>;
 
-    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, StoreError> {
+    async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, Self::Error> {
         let root = AggregateRoot::<A>::new(id);
         self.replay_from(root, Version::INITIAL).await
     }
@@ -119,7 +118,7 @@ where
         &self,
         aggregate: &mut AggregateRoot<A>,
         events: &[EventOf<A>],
-    ) -> Result<(), StoreError> {
+    ) -> Result<(), Self::Error> {
         if events.is_empty() {
             return Ok(());
         }
@@ -129,25 +128,20 @@ where
         // Compute the first event's version.
         let mut next_version = match expected_version {
             None => Version::INITIAL,
-            Some(v) => v.next().ok_or(StoreError::Codec(
-                "version overflow: cannot advance past u64::MAX".into(),
-            ))?,
+            Some(v) => v.next().ok_or(StoreError::VersionOverflow)?,
         };
 
         let mut envelopes = Vec::with_capacity(events.len());
 
         for event in events {
-            let payload = self
-                .codec
-                .encode(event)
-                .map_err(|e| StoreError::Codec(Box::new(e)))?;
+            let payload = self.codec.encode(event).map_err(StoreError::Codec)?;
 
             let event_name = event.name();
             let schema_version = self
                 .upcaster
                 .current_version(event_name)
                 .unwrap_or(Version::INITIAL);
-            let schema_nz32 = version_to_nz32(schema_version)?;
+            let schema_nz32 = version_to_nz32(schema_version).ok_or(StoreError::VersionOverflow)?;
 
             let envelope = pending_envelope(next_version)
                 .event_type(event_name)
@@ -159,9 +153,7 @@ where
 
             // Advance version for next event (if any).
             if envelopes.len() < events.len() {
-                next_version = next_version.next().ok_or(StoreError::Codec(
-                    "version overflow during batch construction".into(),
-                ))?;
+                next_version = next_version.next().ok_or(StoreError::VersionOverflow)?;
             }
         }
 
@@ -180,7 +172,7 @@ where
                     expected,
                     actual,
                 },
-                AppendError::Store(e) => StoreError::Adapter(Box::new(e)),
+                AppendError::Store(e) => StoreError::Adapter(e),
             })?;
 
         #[allow(
