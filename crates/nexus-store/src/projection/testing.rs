@@ -49,9 +49,8 @@ impl StateStore for InMemoryStateStore {
     }
 
     async fn save(&self, id: &impl Id, state: &PendingState) -> Result<(), Infallible> {
-        let mut states = self.states.write().await;
         let key = id.to_string();
-        states.insert(
+        self.states.write().await.insert(
             key,
             StoredState {
                 version: state.version(),
@@ -63,8 +62,7 @@ impl StateStore for InMemoryStateStore {
     }
 
     async fn delete(&self, id: &impl Id) -> Result<(), Infallible> {
-        let mut states = self.states.write().await;
-        states.remove(&id.to_string());
+        self.states.write().await.remove(&id.to_string());
         Ok(())
     }
 }

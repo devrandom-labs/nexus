@@ -35,5 +35,10 @@ pub trait Projector: Send + Sync + 'static {
     /// Must use checked arithmetic for all computations. Return `Err`
     /// on overflow, underflow, or any domain-specific invariant
     /// violation. The framework decides recovery policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the event cannot be applied — e.g.,
+    /// arithmetic overflow, underflow, or domain invariant violation.
     fn apply(&self, state: Self::State, event: &Self::Event) -> Result<Self::State, Self::Error>;
 }
