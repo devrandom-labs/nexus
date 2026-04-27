@@ -19,6 +19,8 @@ pub use codec::{BorrowingCodec, Codec};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use nexus::Version;
+#[cfg(all(feature = "projection", feature = "testing"))]
+pub use projection::InMemoryStateStore;
 #[cfg(feature = "projection")]
 pub use projection::{
     AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,

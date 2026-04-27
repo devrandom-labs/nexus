@@ -175,3 +175,134 @@ fn proj_after_event_types_does_not_trigger_on_empty_events() {
     let trigger = ProjAfterEventTypes::new(&["OrderCompleted"]);
     assert!(!trigger.should_project(None, Version::new(5).unwrap(), std::iter::empty::<&str>()));
 }
+
+// ── InMemoryStateStore ───────────────────────────────────────────
+
+#[cfg(feature = "testing")]
+mod in_memory_tests {
+    use super::*;
+    use nexus_store::projection::InMemoryStateStore;
+
+    #[tokio::test]
+    async fn load_returns_none_when_empty() {
+        let store = InMemoryStateStore::new();
+        let result = store.load(&TestId("proj-1".into()), SV1).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn save_then_load_roundtrips() {
+        let store = InMemoryStateStore::new();
+        let id = TestId("proj-1".into());
+        let version = Version::new(10).unwrap();
+        let state = PendingState::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
+
+        store.save(&id, &state).await.unwrap();
+        let loaded = store.load(&id, SV1).await.unwrap().unwrap();
+
+        assert_eq!(loaded.version(), version);
+        assert_eq!(loaded.schema_version(), NonZeroU32::new(1).unwrap());
+        assert_eq!(loaded.payload(), &[1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn save_overwrites_previous_state() {
+        let store = InMemoryStateStore::new();
+        let id = TestId("proj-1".into());
+
+        let state1 = PendingState::new(
+            Version::new(10).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![1],
+        );
+        store.save(&id, &state1).await.unwrap();
+
+        let state2 = PendingState::new(
+            Version::new(20).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![2],
+        );
+        store.save(&id, &state2).await.unwrap();
+
+        let loaded = store.load(&id, SV1).await.unwrap().unwrap();
+        assert_eq!(loaded.version(), Version::new(20).unwrap());
+        assert_eq!(loaded.payload(), &[2]);
+    }
+
+    #[tokio::test]
+    async fn different_projections_have_separate_state() {
+        let store = InMemoryStateStore::new();
+
+        let state1 = PendingState::new(
+            Version::new(5).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![1],
+        );
+        store.save(&TestId("proj-1".into()), &state1).await.unwrap();
+
+        let state2 = PendingState::new(
+            Version::new(10).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![2],
+        );
+        store.save(&TestId("proj-2".into()), &state2).await.unwrap();
+
+        let loaded1 = store
+            .load(&TestId("proj-1".into()), SV1)
+            .await
+            .unwrap()
+            .unwrap();
+        let loaded2 = store
+            .load(&TestId("proj-2".into()), SV1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded1.version(), Version::new(5).unwrap());
+        assert_eq!(loaded2.version(), Version::new(10).unwrap());
+    }
+
+    #[tokio::test]
+    async fn delete_removes_state() {
+        let store = InMemoryStateStore::new();
+        let id = TestId("proj-1".into());
+
+        let state = PendingState::new(
+            Version::new(10).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![1],
+        );
+        store.save(&id, &state).await.unwrap();
+
+        store.delete(&id).await.unwrap();
+        let loaded = store.load(&id, SV1).await.unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_nonexistent_is_ok() {
+        let store = InMemoryStateStore::new();
+        let result = store.delete(&TestId("nope".into())).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn load_filters_by_schema_version() {
+        let store = InMemoryStateStore::new();
+        let id = TestId("proj-1".into());
+
+        let state = PendingState::new(
+            Version::new(10).unwrap(),
+            NonZeroU32::new(1).unwrap(),
+            vec![1, 2, 3],
+        );
+        store.save(&id, &state).await.unwrap();
+
+        // Matching schema version returns state
+        let loaded = store.load(&id, NonZeroU32::new(1).unwrap()).await.unwrap();
+        assert!(loaded.is_some());
+
+        // Mismatched schema version returns None
+        let loaded = store.load(&id, NonZeroU32::new(2).unwrap()).await.unwrap();
+        assert!(loaded.is_none());
+    }
+}
