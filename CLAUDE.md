@@ -11,37 +11,14 @@ Nexus is an event-sourcing and DDD kernel for Rust. It provides composable trait
 **Prerequisites:** Nix with flakes enabled. Use `nix develop` (or `direnv allow`) to enter the dev shell.
 
 ```bash
-# Build everything
-cargo build --all
-
-# Run all tests
-cargo test --all
-
-# Run tests for a specific crate
-cargo test -p nexus
-cargo test -p nexus-store
-cargo test -p nexus-fjall
-cargo test -p nexus-macros
+# Run ALL checks (clippy, fmt, tests, taplo, audit, deny, hakari)
+nix flake check
 
 # Run a single test by name
 cargo test -p nexus-store -- envelope_tests
 
-# Check formatting
-cargo fmt --all --check
-
 # Apply formatting
 cargo fmt --all
-
-# Lint (CI runs with --deny warnings)
-cargo clippy --all-targets -- --deny warnings
-
-# Format TOML files (taplo)
-taplo fmt
-
-# Check workspace-hack crate is up-to-date
-cargo hakari generate --diff
-cargo hakari manage-deps --dry-run
-cargo hakari verify
 ```
 
 ## Architecture
@@ -58,8 +35,8 @@ nexus-macros <-- nexus (kernel, optional via "derive" feature)
 - **`aggregate.rs`** — `Aggregate` trait (binds State + Error + Id), `AggregateRoot<A>` (read-only state container with version tracking + `replay` + `advance_version` + `apply_events`), `AggregateState` trait (`initial()`, `apply(self, &Event) -> Self`; requires `Clone` for panic safety), `AggregateEntity` trait (newtype delegation pattern with default methods: `id`, `state`, `version`, `replay`), `Handle<C, const N: usize = 0>` trait (per-command decide function returning `Events<E, N>`; N declares max additional events, default 0 = single event). Configurable limit: `MAX_REHYDRATION_EVENTS` (default 1M, `NonZeroUsize`).
 - **`version.rs`** — `Version` newtype over `NonZeroU64` (event versions always >= 1). `Version::new(u64) -> Option<Self>` (mirrors `NonZeroU64::new`), `Version::INITIAL` = 1, `Version::next() -> Option<Self>`. `VersionedEvent<E>` pairs an event with its version.
 - **`event.rs`** / **`events.rs`** — `DomainEvent` trait (extends `Message`, provides `name() -> &'static str`). `Events<E, const N: usize = 0>` is an `ArrayVec`-backed collection guaranteeing at least one event with compile-time capacity N+1; constructed via `events![e1, e2]` macro. N=0 (default) = single event, no heap allocation, `no_std`/`no_alloc` compatible.
-- **`error.rs`** — `KernelError`: `VersionMismatch { expected, actual }`, `RehydrationLimitExceeded { max }`, `VersionOverflow`. All `#[non_exhaustive]`.
-- **`id.rs`** — `Id` marker trait requiring `Clone + Send + Sync + Debug + Hash + Eq + Display + 'static`.
+- **`error.rs`** — `KernelError`: `VersionMismatch { expected, actual }`, `RehydrationLimitExceeded { max }`, `VersionOverflow`.
+- **`id.rs`** — `Id` marker trait requiring `Clone + Send + Sync + Debug + Hash + Eq + Display + AsRef<[u8]> + 'static`. `AsRef<[u8]>` provides stable byte representation for storage keys (not `Display`, which is for humans). Default method `to_label() -> ArrayString<64>` provides allocation-free diagnostic labels for error messages.
 - **`message.rs`** — `Message` base marker trait (`Send + Sync + Debug + 'static`).
 
 ### Store Crate (`nexus-store`) — Persistence Edge Layer
@@ -74,7 +51,7 @@ Organized into 4 module directories + 3 cross-cutting files:
   - `persisted.rs` — `PersistedEnvelope<'a, M>` (borrowed, read-path) returned by cursors.
 - **`upcasting/`** — Schema evolution.
   - `morsel.rs` — `EventMorsel<'a>`: zero-copy-when-possible data unit flowing through transforms.
-  - `upcaster.rs` — `Upcaster` trait for raw-byte schema migrations. `()` is the no-op passthrough.
+  - `upcaster.rs` — `Upcaster` trait for raw-byte schema migrations with associated `type Error`. `()` is the no-op passthrough (`Error = Infallible`).
 - **`store/`** — Storage infrastructure: traits adapters implement + facades users interact with.
   - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap. Factory methods: `repository(codec, upcaster) -> EventStore`, `zero_copy_repository(codec, upcaster) -> ZeroCopyEventStore`.
   - `raw.rs` — `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
@@ -82,9 +59,8 @@ Organized into 4 module directories + 3 cross-cutting files:
   - `event_store.rs` — `EventStore<S, C, U>` facade (owning codec). Holds `Store<S>`. Implements `Repository<A>`.
   - `zero_copy_event_store.rs` — `ZeroCopyEventStore<S, C, U>` facade (borrowing codec). Holds `Store<S>`. Implements `Repository<A>`.
   - `repository.rs` — `Repository<A>` trait: high-level `load` and `save`.
-- **`error.rs`** — `StoreError`, `AppendError<E>`, `UpcastError`, `InvalidSchemaVersion`.
-- **`stream_label.rs`** — `StreamLabel` (diagnostic ID for error messages), `ToStreamLabel` (blanket impl for `Display`).
-- **`testing.rs`** — `InMemoryStore` and `InMemoryStream` (feature-gated behind `testing`).
+- **`error.rs`** — `StoreError<A, C, U>` (generic over adapter/codec/upcaster errors, allocation-free), `AppendError<E>`, `UpcastError<U>` (generic over transform error), `InvalidSchemaVersion`. All use `ArrayString<64>` for stream IDs instead of heap-allocated strings.
+- **`testing.rs`** — `InMemoryStore`, `InMemoryStream`, `InMemoryStoreError` (feature-gated behind `testing`).
 
 ### Fjall Adapter Crate (`nexus-fjall`) — Embedded LSM-Tree Event Store
 
@@ -92,7 +68,7 @@ Organized into 4 module directories + 3 cross-cutting files:
 - **`builder.rs`** — `FjallStoreBuilder`: `FjallStore::builder(path).streams_config(fn).events_config(fn).open()`.
 - **`stream.rs`** — `FjallStream` implements `EventStream` as a lending cursor over eagerly-loaded rows.
 - **`encoding.rs`** — Binary key/value encoding. Event keys: `[u64 BE stream_id][u64 BE version]` (16 bytes). Values: `[u32 LE schema_version][u16 LE event_type_len][event_type][payload]`.
-- **`error.rs`** — `FjallError`: `Io`, `CorruptValue`, `CorruptMeta`, `StreamIdExhausted`.
+- **`error.rs`** — `FjallError`: `Io`, `CorruptValue`, `CorruptMeta`, `InvalidInput`, `VersionOverflow`. All diagnostic fields use `ArrayString<64>` / `ArrayString<128>` — no heap allocation on error paths.
 
 ### Aggregate Lifecycle (Key Flow)
 
@@ -104,9 +80,10 @@ Organized into 4 module directories + 3 cross-cutting files:
 
 ### `nexus-macros` — Proc Macros
 
-Two macros:
+Three macros:
 - **`#[nexus::aggregate(state = S, error = E, id = I)]`** — Attribute macro on a unit struct. Generates `Aggregate` impl, `AggregateEntity` impl, newtype wrapping `AggregateRoot`, `new(id)` constructor, and redacted `Debug` (shows only id + version).
 - **`#[derive(DomainEvent)]`** — Derive macro for enums only. Generates `Message` + `DomainEvent` impls, with `name()` returning variant names as `&'static str`.
+- **`#[nexus::transforms(aggregate = A, error = E)]`** — Attribute macro on an impl block. Generates `Upcaster` impl with `type Error = E`, iterative apply loop, and `current_version()` lookup. Transform functions annotated with `#[transform(event = "...", from = N, to = N+1)]`.
 
 ### Examples
 
@@ -117,6 +94,18 @@ Two macros:
 ## Mandatory Rules
 
 These rules are non-negotiable. Every one exists because of a real bug found in this codebase.
+
+### 0. No Assumptions, No Opinions — Facts Only
+
+- **Never assume.** If you don't know something, say so and research it. Do not fill gaps with plausible-sounding guesses about APIs, crate behavior, algorithm properties, or performance characteristics.
+- **Never give opinions.** No "I think," "it would be cleaner," "this feels better," "my preference is." Claims must be grounded in verifiable evidence.
+- **Facts must cite sources.** Every technical claim about algorithms, data structures, concurrency, cryptography, or systems behavior must be backed by:
+  - **arXiv papers** (preferred for algorithmic/theoretical claims)
+  - **Peer-reviewed research papers** (conferences: SOSP, OSDI, VLDB, SIGMOD, PLDI, POPL, CRYPTO, etc.)
+  - **Primary source GitHub repositories** (the actual implementation being discussed, not blog posts about it)
+  - **Official specifications / RFCs** for protocols and standards
+- **"Common knowledge" is not a source.** If a claim is worth making, it is worth citing. If no source exists, do not make the claim.
+- **Uncertainty is a fact too.** When evidence is incomplete or contradictory, state the uncertainty explicitly rather than collapsing it into a confident-sounding opinion.
 
 ### 1. Database Atomicity
 
@@ -142,7 +131,8 @@ If a public method does 2+ database calls without a shared transaction, it is a 
 - **Unknown values must be `Option`, not sentinels.** When a version is unknowable (e.g., corrupt key), use `Option<u64>`, not `version: 0`.
 - **Overflow/limit errors are not concurrency conflicts.** Never reuse a retry-eligible error code (`Conflict`) for a non-retryable condition (arithmetic overflow).
 - **Write-path and read-path must enforce the same invariants the same way.** If the read path rejects `schema_version == 0`, the write path must too — not silently clamp it to 1.
-- **All public enums must be `#[non_exhaustive]`** — adding a variant should never be a breaking change.
+- **Never use `#[non_exhaustive]` on enums.** During experimental/unstable API development, it adds friction (forces `_ =>` wildcard arms) without value — breaking changes are expected. Use exhaustive matching to catch real match bugs.
+- **All error types must use `thiserror`.** No manual `Display` or `Error` impls on error enums/structs. `thiserror` derives are the single source of truth for error formatting and source chains.
 - **Input validation errors are not corruption errors.** `EventTypeTooLong` (input error) mapped to `CorruptValue` (data error) causes wrong remediation. Use distinct variants.
 - **Adapter error types must be distinct from facade error types.** `InMemoryStore::Error = StoreError` causes `StoreError::Adapter(Box::new(StoreError::...))` double-wrapping.
 - **Provide `From` impls** for errors that cross crate boundaries at known mapping points. Don't manually map in 4+ places with identical code.

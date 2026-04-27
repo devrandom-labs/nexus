@@ -22,15 +22,29 @@ use std::fmt;
 // --- Minimal test domain ---
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TId(u64);
+struct TId(String);
 
-impl fmt::Display for TId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "t-{}", self.0)
+impl TId {
+    fn new(v: u64) -> Self {
+        Self(format!("t-{v}"))
     }
 }
 
-impl Id for TId {}
+impl fmt::Display for TId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<[u8]> for TId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl Id for TId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct Added(String);
@@ -97,7 +111,7 @@ impl Aggregate for TAgg {
 
 #[test]
 fn new_aggregate_without_replay_has_default_state_and_none_version() {
-    let agg = AggregateRoot::<TAgg>::new(TId(1));
+    let agg = AggregateRoot::<TAgg>::new(TId::new(1));
     assert_eq!(agg.version(), None);
     assert!(agg.state().items.is_empty());
 }
@@ -108,7 +122,7 @@ fn new_aggregate_without_replay_has_default_state_and_none_version() {
 
 #[test]
 fn replay_rejects_first_event_not_version_1() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let version_5 = Version::new(5).expect("5 is non-zero");
     let err = agg
         .replay(version_5, &TEvent::Added(Added("x".into())))
@@ -135,7 +149,7 @@ fn replay_rejects_version_zero() {
 
 #[test]
 fn version_tracks_replay_sequence() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let v1 = Version::new(1).expect("non-zero");
     let v2 = Version::new(2).expect("non-zero");
     let v3 = Version::new(3).expect("non-zero");
@@ -158,7 +172,7 @@ fn version_tracks_replay_sequence() {
 
 #[test]
 fn advance_version_and_apply_events_after_replay() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let v1 = Version::new(1).expect("non-zero");
     let v2 = Version::new(2).expect("non-zero");
     let v3 = Version::new(3).expect("non-zero");
@@ -184,7 +198,7 @@ fn advance_version_and_apply_events_after_replay() {
 // Separate clean test for advance + apply correctness
 #[test]
 fn advance_version_and_apply_events_state_correctness() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let v1 = Version::new(1).expect("non-zero");
     let v2 = Version::new(2).expect("non-zero");
 
@@ -242,7 +256,7 @@ fn events_iter_method() {
 
 #[test]
 fn multiple_replays_in_strict_sequence() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(42));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(42));
 
     for i in 1..=10 {
         let version = Version::new(i).expect("non-zero");
@@ -258,7 +272,7 @@ fn multiple_replays_in_strict_sequence() {
 
 #[test]
 fn replay_rejects_gap_in_sequence() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let v1 = Version::new(1).expect("non-zero");
     let v3 = Version::new(3).expect("non-zero");
 
@@ -281,7 +295,7 @@ fn replay_rejects_gap_in_sequence() {
 
 #[test]
 fn replay_rejects_duplicate_version() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let v1 = Version::new(1).expect("non-zero");
 
     agg.replay(v1, &TEvent::Added(Added("a".into()))).unwrap();
@@ -307,7 +321,7 @@ fn replay_rejects_duplicate_version() {
 
 #[test]
 fn replay_then_advance_and_apply_continues_correctly() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(7));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(7));
     let v1 = Version::new(1).expect("non-zero");
     let v2 = Version::new(2).expect("non-zero");
     let v3 = Version::new(3).expect("non-zero");
@@ -334,7 +348,7 @@ fn replay_then_advance_and_apply_continues_correctly() {
 
 #[test]
 fn advance_version_on_fresh_aggregate() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     assert_eq!(agg.version(), None);
 
     // Simulate: first-ever command produces events, repository persists them
@@ -349,7 +363,7 @@ fn advance_version_on_fresh_aggregate() {
 
 #[test]
 fn apply_events_with_single_event() {
-    let mut agg = AggregateRoot::<TAgg>::new(TId(1));
+    let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let decided: Events<_, 0> = events![TEvent::Added(Added("only".into()))];
     let v1 = Version::new(1).expect("non-zero");
 
@@ -361,6 +375,6 @@ fn apply_events_with_single_event() {
 
 #[test]
 fn id_is_preserved() {
-    let agg = AggregateRoot::<TAgg>::new(TId(42));
-    assert_eq!(*agg.id(), TId(42));
+    let agg = AggregateRoot::<TAgg>::new(TId::new(42));
+    assert_eq!(*agg.id(), TId::new(42));
 }

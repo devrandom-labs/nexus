@@ -22,13 +22,25 @@ use std::fmt;
 // =============================================================================
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct PId(u64);
-impl fmt::Display for PId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "p-{}", self.0)
+struct PId(String);
+impl PId {
+    fn new(v: u64) -> Self {
+        Self(format!("p-{v}"))
     }
 }
-impl Id for PId {}
+impl fmt::Display for PId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl AsRef<[u8]> for PId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for PId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum CountEvent {
@@ -92,7 +104,7 @@ fn arb_event() -> impl Strategy<Value = CountEvent> {
 
 /// Helper: replay events into a fresh aggregate, returns the aggregate.
 fn replay_events(events: &[CountEvent]) -> AggregateRoot<CountAgg> {
-    let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+    let mut agg = AggregateRoot::<CountAgg>::new(PId::new(1));
     for (i, e) in events.iter().enumerate() {
         let v = Version::new((i + 1) as u64).unwrap();
         agg.replay(v, e).unwrap();
@@ -102,7 +114,7 @@ fn replay_events(events: &[CountEvent]) -> AggregateRoot<CountAgg> {
 
 /// Helper: apply events via `apply_events` (simulating post-persistence state update).
 fn apply_events_to(events: &[CountEvent]) -> AggregateRoot<CountAgg> {
-    let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+    let mut agg = AggregateRoot::<CountAgg>::new(PId::new(1));
     for (i, e) in events.iter().enumerate() {
         let v = Version::new((i + 1) as u64).unwrap();
         let batch: Events<_, 0> = Events::new(e.clone());
@@ -169,7 +181,7 @@ proptest! {
     ) {
         let corrupt_idx = corrupt_idx % (events.len() - 1) + 1; // ensure valid index > 0
 
-        let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+        let mut agg = AggregateRoot::<CountAgg>::new(PId::new(1));
         let mut found_error = false;
         for (i, event) in events.iter().enumerate() {
             // At corrupt_idx, skip a version to create a gap
@@ -250,7 +262,7 @@ proptest! {
     /// Calling advance_version with the same version is a no-op on version.
     #[test]
     fn prop_advance_version_is_idempotent(v in 1..=u64::MAX) {
-        let mut agg = AggregateRoot::<CountAgg>::new(PId(1));
+        let mut agg = AggregateRoot::<CountAgg>::new(PId::new(1));
         let version = Version::new(v).unwrap();
 
         agg.advance_version(version);

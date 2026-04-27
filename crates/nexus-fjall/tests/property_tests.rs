@@ -46,8 +46,8 @@ use std::num::NonZeroU32;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{
-    decode_event_key, decode_event_value, decode_stream_meta, encode_event_key, encode_event_value,
-    encode_stream_meta,
+    decode_event_key, decode_event_value, decode_stream_version, encode_event_key,
+    encode_event_value, encode_stream_version,
 };
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
@@ -64,7 +64,14 @@ impl std::fmt::Display for TestId {
         f.write_str(&self.0)
     }
 }
-impl nexus::Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl nexus::Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 fn tid(s: &str) -> TestId {
     TestId(s.to_owned())
 }
@@ -136,8 +143,7 @@ async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -149,8 +155,7 @@ async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         versions.push(env.version().as_u64());
     }
     versions
@@ -162,8 +167,7 @@ async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<Str
         .await
         .unwrap();
     let mut types = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         types.push(env.event_type().to_owned());
     }
     types
@@ -175,8 +179,8 @@ async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
         .await
         .unwrap();
     let mut count = 0u64;
-    while let Some(result) = stream.next().await {
-        let _ = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
+        let _ = env;
         count += 1;
     }
     count
@@ -240,28 +244,26 @@ fn evil_payload_strategy() -> impl Strategy<Value = Vec<u8>> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
-    /// For any (u64, u64) pair, encode_event_key -> decode_event_key is identity.
+    /// For any (id_bytes, version) pair, encode_event_key -> decode_event_key is identity.
     #[test]
     fn attack_encoding_event_key_round_trip_any_values(
-        stream_num in any::<u64>(),
+        id_bytes in prop::collection::vec(any::<u8>(), 0..200),
         version in any::<u64>(),
     ) {
-        let encoded = encode_event_key(stream_num, version);
-        let (decoded_stream, decoded_version) = decode_event_key(&encoded).unwrap();
-        prop_assert_eq!(decoded_stream, stream_num, "stream_num round-trip failed");
+        let encoded = encode_event_key(&id_bytes, version).unwrap();
+        let (decoded_id, decoded_version) = decode_event_key(&encoded).unwrap();
+        prop_assert_eq!(decoded_id, id_bytes.as_slice(), "id_bytes round-trip failed");
         prop_assert_eq!(decoded_version, version, "version round-trip failed");
     }
 
-    /// For any (u64, u64) pair, encode_stream_meta -> decode_stream_meta is identity.
+    /// For any u64, encode_stream_version -> decode_stream_version is identity.
     #[test]
-    fn attack_encoding_stream_meta_round_trip_any_values(
-        numeric_id in any::<u64>(),
+    fn attack_encoding_stream_version_round_trip_any_values(
         version in any::<u64>(),
     ) {
-        let encoded = encode_stream_meta(numeric_id, version);
-        let (decoded_id, decoded_ver) = decode_stream_meta(&encoded).unwrap();
-        prop_assert_eq!(decoded_id, numeric_id, "numeric_id round-trip failed");
-        prop_assert_eq!(decoded_ver, version, "version round-trip failed");
+        let encoded = encode_stream_version(version);
+        let decoded = decode_stream_version(&encoded).unwrap();
+        prop_assert_eq!(decoded, version, "version round-trip failed");
     }
 
     /// For any (u32, String, Vec<u8>) triple where event_type.len() <= u16::MAX,
@@ -280,30 +282,33 @@ proptest! {
         prop_assert_eq!(dec_payload, payload.as_slice(), "payload round-trip failed");
     }
 
-    /// For any a < b (u64), encode_event_key(stream, a) < encode_event_key(stream, b).
-    /// Also: for any s1 < s2, encode_event_key(s1, v) < encode_event_key(s2, v).
+    /// For any a < b (u64), encode_event_key(id, a) < encode_event_key(id, b).
     #[test]
     fn attack_encoding_event_key_byte_ordering(
-        stream in any::<u64>(),
+        id_bytes in prop::collection::vec(any::<u8>(), 0..50),
         a in 0..u64::MAX,
     ) {
         let b = a + 1;
-        let key_a = encode_event_key(stream, a);
-        let key_b = encode_event_key(stream, b);
+        let key_a = encode_event_key(&id_bytes, a).unwrap();
+        let key_b = encode_event_key(&id_bytes, b).unwrap();
         prop_assert!(key_a < key_b,
-            "version ordering violated: key({}, {}) >= key({}, {})", stream, a, stream, b);
+            "version ordering violated for same ID");
     }
 
+    /// For IDs with different length prefixes, shorter ID sorts before longer.
     #[test]
-    fn attack_encoding_event_key_stream_ordering(
+    fn attack_encoding_event_key_length_prefix_ordering(
+        base in prop::collection::vec(any::<u8>(), 1..50),
+        extra in prop::collection::vec(any::<u8>(), 1..10),
         version in any::<u64>(),
-        s1 in 0..u64::MAX,
     ) {
-        let s2 = s1 + 1;
-        let key_s1 = encode_event_key(s1, version);
-        let key_s2 = encode_event_key(s2, version);
-        prop_assert!(key_s1 < key_s2,
-            "stream ordering violated: key({}, {}) >= key({}, {})", s1, version, s2, version);
+        let mut longer = base.clone();
+        longer.extend_from_slice(&extra);
+        let key_short = encode_event_key(&base, version).unwrap();
+        let key_long = encode_event_key(&longer, version).unwrap();
+        // Shorter length prefix (u16 BE) sorts before longer
+        prop_assert!(key_short < key_long,
+            "length prefix ordering violated: shorter ID must sort before longer");
     }
 }
 
@@ -855,9 +860,9 @@ async fn attack_persistence_across_many_reopens() {
     }
 }
 
-/// Create streams "a", "b", "c", close, reopen, create "d" — should get a unique numeric ID.
+/// Create streams "a", "b", "c", close, reopen, create "d" — all must be isolated and readable.
 #[tokio::test]
-async fn attack_numeric_id_counter_recovery() {
+async fn attack_stream_recovery_across_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("db");
 
@@ -902,7 +907,7 @@ async fn attack_numeric_id_counter_recovery() {
             assert_eq!(env.event_type(), expected_type, "stream {} type wrong", id);
             assert_eq!(env.payload(), expected_payload, "stream {} data wrong", id);
             assert!(
-                stream.next().await.is_none(),
+                stream.next().await.unwrap().is_none(),
                 "stream {} has extra events",
                 id
             );
@@ -1029,8 +1034,7 @@ async fn attack_large_event_stream() {
         .unwrap();
     let mut count = 0u64;
     let mut prev_version = 0u64;
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         count += 1;
         let v = env.version().as_u64();
         assert!(v > prev_version, "versions not monotonic at {}", v);
@@ -1291,11 +1295,10 @@ async fn attack_read_from_initial_version() {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         versions.push(env.version().as_u64());
     }
-    // The range scan starts from encode_event_key(numeric_id, 0), so it should
+    // The range scan starts from encode_event_key(id_bytes, 0), so it should
     // find all events (version 1, 2, 3) since they are >= 0.
     assert_eq!(
         versions,
@@ -1323,9 +1326,18 @@ async fn attack_stream_fused_after_exhaustion() {
     let _ = stream.next().await.unwrap().unwrap();
 
     // All subsequent calls must return None (fused)
-    assert!(stream.next().await.is_none(), "fused: call 1 after None");
-    assert!(stream.next().await.is_none(), "fused: call 2 after None");
-    assert!(stream.next().await.is_none(), "fused: call 3 after None");
+    assert!(
+        stream.next().await.unwrap().is_none(),
+        "fused: call 1 after None"
+    );
+    assert!(
+        stream.next().await.unwrap().is_none(),
+        "fused: call 2 after None"
+    );
+    assert!(
+        stream.next().await.unwrap().is_none(),
+        "fused: call 3 after None"
+    );
 }
 
 /// Empty stream ID must return an error, not panic.
@@ -1391,8 +1403,7 @@ async fn attack_read_with_from_version_filters() {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         versions.push(env.version().as_u64());
     }
     assert_eq!(

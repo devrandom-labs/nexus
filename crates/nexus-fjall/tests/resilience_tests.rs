@@ -14,6 +14,7 @@
 //! G. Recovery torture (100 streams, 5 reopen cycles)
 //! H. Concurrent append storm (50 tasks)
 //! I. Encoding boundary attacks (`u16::MAX` event type)
+//! K. Append-then-read version consistency
 
 #![allow(clippy::unwrap_used, reason = "test code")]
 #![allow(clippy::panic, reason = "test code")]
@@ -59,7 +60,14 @@ impl std::fmt::Display for TestId {
         f.write_str(&self.0)
     }
 }
-impl nexus::Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl nexus::Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 fn tid(s: &str) -> TestId {
     TestId(s.to_owned())
 }
@@ -87,8 +95,7 @@ async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -100,8 +107,7 @@ async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         versions.push(env.version().as_u64());
     }
     versions
@@ -113,8 +119,7 @@ async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<Str
         .await
         .unwrap();
     let mut types = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         types.push(env.event_type().to_owned());
     }
     types
@@ -126,8 +131,8 @@ async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
         .await
         .unwrap();
     let mut count: u64 = 0;
-    while let Some(result) = stream.next().await {
-        let _ = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
+        let _ = env;
         count += 1;
     }
     count
@@ -231,8 +236,7 @@ async fn attack_dual_instance_same_path() {
 
     // Try opening a second instance on the same path
     let result = FjallStore::builder(&path).open();
-    // If fjall allows this: both stores have independent AtomicU64 counters
-    // → numeric ID collision when both create new streams
+    // If fjall allows this: both stores could have write conflicts
     // If fjall rejects this: we get an error (safe)
 
     match result {
@@ -254,12 +258,9 @@ async fn attack_dual_instance_same_path() {
             assert_eq!(r1, vec!["A"], "store1 stream corrupted by dual instance");
             assert_eq!(r2, vec!["B"], "store2 stream corrupted by dual instance");
 
-            // Now test the REAL danger: both create a NEW stream simultaneously
-            // They both start with next_stream_id = 1 (or recovered value)
-            // If they both allocate numeric_id=1, the event key spaces collide
             println!(
                 "WARNING: dual instance opened successfully — \
-                 numeric ID collision risk exists if both create new streams concurrently"
+                 concurrent writes may conflict"
             );
         }
         Err(e) => {
@@ -451,7 +452,7 @@ async fn attack_version_u64_max_read() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "reading from u64::MAX should return empty"
     );
 }
@@ -477,7 +478,7 @@ async fn attack_read_nonexistent_stream() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "nonexistent stream should return empty"
     );
 }
@@ -498,7 +499,7 @@ async fn attack_read_past_end_of_stream() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "reading past end of stream should return empty"
     );
 }
@@ -755,79 +756,6 @@ fn attack_encoding_large_payload() {
     );
     assert_eq!(payload[0], 0xAB);
     assert_eq!(payload[1_048_575], 0xAB);
-}
-
-// ============================================================================
-// CATEGORY J: Stream ID Exhaustion
-// ============================================================================
-
-#[tokio::test]
-async fn attack_stream_id_exhaustion() {
-    // Set the next_stream_id counter to u64::MAX, then try to create a new stream.
-    // Should get IdSpaceExhausted error, NOT a silent wrap to 0.
-    let (store, _dir) = temp_store();
-    store.set_next_stream_id_for_testing(u64::MAX);
-
-    let env = make_envelope(1, "A", b"data");
-    let result = store.append(&tid("exhaust-test"), None, &[env]).await;
-
-    match result {
-        Err(AppendError::Store(e)) => {
-            let msg = format!("{e}");
-            assert!(
-                msg.contains("exhausted"),
-                "error should mention exhaustion, got: {msg}"
-            );
-        }
-        Ok(()) => panic!("BUG: stream ID exhaustion should have been caught"),
-        Err(other) => panic!("unexpected error type: {other}"),
-    }
-}
-
-#[tokio::test]
-async fn attack_stream_id_near_exhaustion() {
-    // Set counter to u64::MAX - 1, should be able to create ONE more stream.
-    let (store, _dir) = temp_store();
-    store.set_next_stream_id_for_testing(u64::MAX - 1);
-
-    // This should succeed (allocates numeric_id = u64::MAX - 1, counter becomes u64::MAX)
-    let env1 = make_envelope(1, "A", b"data");
-    store
-        .append(&tid("near-exhaust-1"), None, &[env1])
-        .await
-        .unwrap();
-
-    // This should succeed (allocates numeric_id = u64::MAX, counter becomes... overflow check!)
-    let env2 = make_envelope(1, "B", b"data");
-    let result = store.append(&tid("near-exhaust-2"), None, &[env2]).await;
-
-    // The counter is at u64::MAX. It tries checked_add(1) which returns None → error
-    match result {
-        Err(AppendError::Store(e)) => {
-            let msg = format!("{e}");
-            assert!(
-                msg.contains("exhausted"),
-                "second stream creation should fail with exhaustion: {msg}"
-            );
-        }
-        Ok(()) => {
-            println!(
-                "NOTE: second stream creation succeeded. \
-                 Counter was at u64::MAX-1, allocated u64::MAX-1, then tried to store u64::MAX."
-            );
-            // This means the check is: allocate numeric_id THEN try to increment.
-            // So u64::MAX-1 gets allocated, counter becomes u64::MAX.
-            // Next allocation: load u64::MAX, checked_add(1) fails → error.
-            // That means we can create one more:
-            let env3 = make_envelope(1, "C", b"data");
-            let result3 = store.append(&tid("near-exhaust-3"), None, &[env3]).await;
-            assert!(
-                result3.is_err(),
-                "third stream creation should definitely fail"
-            );
-        }
-        Err(other) => panic!("unexpected error: {other}"),
-    }
 }
 
 // ============================================================================

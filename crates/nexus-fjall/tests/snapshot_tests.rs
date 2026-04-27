@@ -28,7 +28,15 @@ impl fmt::Display for TestId {
     }
 }
 
-impl Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn tid(s: &str) -> TestId {
     TestId(s.to_owned())
@@ -68,7 +76,7 @@ async fn save_then_load_roundtrips() {
     let snap = PendingSnapshot::new(Version::new(5).unwrap(), SV1, vec![1, 2, 3]);
     store.save_snapshot(&id, &snap).await.unwrap();
 
-    let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+    let loaded = store.load_snapshot(&id, SV1).await.unwrap().unwrap();
     assert_eq!(loaded.version(), Version::new(5).unwrap());
     assert_eq!(loaded.schema_version(), SV1);
     assert_eq!(loaded.payload(), &[1, 2, 3]);
@@ -90,10 +98,14 @@ async fn save_overwrites_previous_snapshot() {
     );
     store.save_snapshot(&id, &snap2).await.unwrap();
 
-    let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+    let sv2 = NonZeroU32::new(2).unwrap();
+    let loaded = store.load_snapshot(&id, sv2).await.unwrap().unwrap();
     assert_eq!(loaded.version(), Version::new(10).unwrap());
-    assert_eq!(loaded.schema_version(), NonZeroU32::new(2).unwrap());
+    assert_eq!(loaded.schema_version(), sv2);
     assert_eq!(loaded.payload(), &[2, 3]);
+
+    // Old schema version should return None (filtered at store level).
+    assert!(store.load_snapshot(&id, SV1).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -106,7 +118,7 @@ async fn delete_then_load_returns_none() {
     store.save_snapshot(&id, &snap).await.unwrap();
     store.delete_snapshot(&id).await.unwrap();
 
-    assert!(store.load_snapshot(&id).await.unwrap().is_none());
+    assert!(store.load_snapshot(&id, SV1).await.unwrap().is_none());
 }
 
 // ── 2. Lifecycle Tests ─────────────────────────────────────────────
@@ -128,7 +140,7 @@ async fn snapshot_persists_across_reopen() {
     // Second session: reopen + verify snapshot
     {
         let store = FjallStore::builder(&db_path).open().unwrap();
-        let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+        let loaded = store.load_snapshot(&id, SV1).await.unwrap().unwrap();
         assert_eq!(loaded.version(), Version::new(5).unwrap());
         assert_eq!(loaded.schema_version(), SV1);
         assert_eq!(loaded.payload(), &[42, 43, 44]);
@@ -140,7 +152,7 @@ async fn snapshot_persists_across_reopen() {
 #[tokio::test]
 async fn load_nonexistent_stream_returns_none() {
     let (store, _dir) = temp_store();
-    let result = store.load_snapshot(&tid("nope")).await.unwrap();
+    let result = store.load_snapshot(&tid("nope"), SV1).await.unwrap();
     assert!(result.is_none());
 }
 
@@ -150,7 +162,7 @@ async fn load_existing_stream_without_snapshot_returns_none() {
     let id = tid("agg-1");
     setup_stream(&store, &id, 3).await;
 
-    let result = store.load_snapshot(&id).await.unwrap();
+    let result = store.load_snapshot(&id, SV1).await.unwrap();
     assert!(result.is_none());
 }
 
@@ -170,7 +182,13 @@ async fn save_to_nonexistent_stream_is_noop() {
     assert!(result.is_ok());
 
     // And loading returns None
-    assert!(store.load_snapshot(&tid("nope")).await.unwrap().is_none());
+    assert!(
+        store
+            .load_snapshot(&tid("nope"), SV1)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 // ── 4. Isolation Tests ─────────────────────────────────────────────
@@ -189,8 +207,8 @@ async fn different_streams_have_separate_snapshots() {
     let snap2 = PendingSnapshot::new(Version::new(10).unwrap(), SV1, vec![2]);
     store.save_snapshot(&id2, &snap2).await.unwrap();
 
-    let loaded1 = store.load_snapshot(&id1).await.unwrap().unwrap();
-    let loaded2 = store.load_snapshot(&id2).await.unwrap().unwrap();
+    let loaded1 = store.load_snapshot(&id1, SV1).await.unwrap().unwrap();
+    let loaded2 = store.load_snapshot(&id2, SV1).await.unwrap().unwrap();
 
     assert_eq!(loaded1.version(), Version::new(5).unwrap());
     assert_eq!(loaded1.payload(), &[1]);

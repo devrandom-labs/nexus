@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 
 use super::event_store::EventStore;
-use super::raw::RawEventStore;
-use super::store::Store;
-use super::zero_copy_event_store::ZeroCopyEventStore;
+use super::zero_copy::ZeroCopyEventStore;
+use crate::store::raw::RawEventStore;
+use crate::store::store::Store;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NeedsCodec — compile-time guard
@@ -141,9 +141,9 @@ where
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
-use super::snapshotting::Snapshotting;
-#[cfg(feature = "snapshot")]
 use crate::snapshot::{EveryNEvents, SnapshotStore, SnapshotTrigger};
+#[cfg(feature = "snapshot")]
+use crate::store::snapshot::Snapshotting;
 #[cfg(feature = "snapshot")]
 use std::num::NonZeroU64;
 

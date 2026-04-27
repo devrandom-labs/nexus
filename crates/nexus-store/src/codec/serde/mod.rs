@@ -42,8 +42,8 @@ pub trait SerdeFormat: Send + Sync + 'static {
 ///
 /// # Variant dispatch
 ///
-/// Unlike raw `Codec<E>` implementations that may use `event_type` to
-/// select which variant to deserialize, `SerdeCodec` ignores `event_type`
+/// Unlike raw `Codec<E>` implementations that may use `name` to
+/// select which variant to deserialize, `SerdeCodec` ignores `name`
 /// entirely. Serde formats embed variant discriminants in the payload
 /// (e.g. `{"Credited": {...}}` in JSON), so the codec delegates dispatch
 /// to serde itself.
@@ -87,7 +87,7 @@ where
         self.format.serialize(event)
     }
 
-    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<E, Self::Error> {
+    fn decode(&self, _name: &str, payload: &[u8]) -> Result<E, Self::Error> {
         self.format.deserialize(payload)
     }
 }

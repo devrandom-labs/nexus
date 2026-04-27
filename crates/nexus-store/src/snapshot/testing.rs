@@ -35,11 +35,16 @@ impl InMemorySnapshotStore {
 impl SnapshotStore for InMemorySnapshotStore {
     type Error = Infallible;
 
-    async fn load_snapshot(&self, id: &impl Id) -> Result<Option<PersistedSnapshot>, Infallible> {
+    async fn load_snapshot(
+        &self,
+        id: &impl Id,
+        schema_version: NonZeroU32,
+    ) -> Result<Option<PersistedSnapshot>, Infallible> {
         let snapshots = self.snapshots.read().await;
         let key = id.to_string();
         Ok(snapshots
             .get(&key)
+            .filter(|s| s.schema_version == schema_version)
             .map(|s| PersistedSnapshot::new(s.version, s.schema_version, s.payload.clone())))
     }
 

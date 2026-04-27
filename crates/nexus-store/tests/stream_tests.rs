@@ -18,13 +18,13 @@ impl EventStream for VecStream {
     type Error = std::convert::Infallible;
 
     #[allow(clippy::expect_used, reason = "test data always has non-zero versions")]
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         if self.pos >= self.rows.len() {
-            return None;
+            return Ok(None);
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Some(Ok(PersistedEnvelope::new_unchecked(
+        Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).expect("test version must be non-zero"),
             &row.1,
             1,
@@ -53,13 +53,13 @@ async fn event_stream_yields_envelopes() {
         assert_eq!(e2.event_type(), "Updated");
     }
 
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn event_stream_empty() {
     let mut stream = VecStream::new(vec![]);
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -71,7 +71,7 @@ async fn event_stream_envelope_borrows_from_cursor() {
         assert_eq!(envelope.payload(), &[42]);
     }
 
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -82,10 +82,10 @@ async fn event_stream_fused_after_none() {
     let _ = stream.next().await.unwrap().unwrap();
 
     // First None
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
     // Calling again must also return None (fused)
-    assert!(stream.next().await.is_none());
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -96,5 +96,5 @@ async fn event_stream_single_event() {
         assert_eq!(env.event_type(), "OnlyEvent");
         assert_eq!(env.payload(), &[99]);
     }
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }

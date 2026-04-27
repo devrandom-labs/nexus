@@ -45,7 +45,15 @@ impl fmt::Display for TodoId {
     }
 }
 
-impl Id for TodoId {}
+impl Id for TodoId {
+    const BYTE_LEN: usize = 0;
+}
+
+impl AsRef<[u8]> for TodoId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 
 // =============================================================================
 // 1. Domain events — a simple Todo aggregate
@@ -138,10 +146,12 @@ impl Codec<TodoEvent> for JsonCodec {
 struct RenameUpcaster;
 
 impl Upcaster for RenameUpcaster {
+    type Error = std::convert::Infallible;
+
     fn apply<'a>(
         &self,
         morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, nexus_store::UpcastError> {
+    ) -> Result<EventMorsel<'a>, nexus_store::UpcastError<Self::Error>> {
         if morsel.event_type() != "TaskCreated" || morsel.schema_version().as_u64() >= 2 {
             return Ok(morsel);
         }
@@ -286,10 +296,13 @@ async fn main() {
 
     let mut read_events: Vec<(String, u32, Vec<u8>, u64)> = Vec::new();
     loop {
-        let item = event_stream.next().await;
-        match item {
-            None => break,
-            Some(Ok(env)) => {
+        match event_stream.next().await {
+            Err(e) => {
+                println!("  Error reading event: {e}");
+                break;
+            }
+            Ok(None) => break,
+            Ok(Some(env)) => {
                 let event_type = env.event_type().to_owned();
                 let payload = env.payload().to_vec();
                 let version = env.version().as_u64();
@@ -302,10 +315,6 @@ async fn main() {
                 );
 
                 read_events.push((event_type, schema_version, payload, version));
-            }
-            Some(Err(e)) => {
-                println!("  Error reading event: {e}");
-                break;
             }
         }
     }

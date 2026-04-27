@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "test code")]
 #![allow(clippy::expect_used, reason = "test code")]
 
-use nexus_fjall::encoding::{encode_event_key, encode_event_value, encode_stream_meta};
+use nexus_fjall::encoding::{encode_event_key, encode_event_value, encode_stream_version};
 
 fn hex_dump(bytes: &[u8]) -> String {
     bytes
@@ -12,51 +12,39 @@ fn hex_dump(bytes: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Event key snapshots
+// Event key snapshots (new format: [u16 BE id_len][id_bytes][u64 BE version])
 // ---------------------------------------------------------------------------
 
 #[test]
-fn event_key_zero_zero() {
-    let encoded = encode_event_key(0, 0);
-    insta::assert_snapshot!("event_key_zero_zero", hex_dump(&encoded));
+fn event_key_empty_id_v0() {
+    let encoded = encode_event_key(b"", 0).unwrap();
+    insta::assert_snapshot!("event_key_empty_id_v0", hex_dump(&encoded));
 }
 
 #[test]
-fn event_key_one_one() {
-    let encoded = encode_event_key(1, 1);
-    insta::assert_snapshot!("event_key_one_one", hex_dump(&encoded));
+fn event_key_a_v1() {
+    let encoded = encode_event_key(b"a", 1).unwrap();
+    insta::assert_snapshot!("event_key_a_v1", hex_dump(&encoded));
 }
 
 #[test]
-fn event_key_42_7() {
-    let encoded = encode_event_key(42, 7);
-    insta::assert_snapshot!("event_key_42_7", hex_dump(&encoded));
+fn event_key_stream42_v7() {
+    let encoded = encode_event_key(b"stream-42", 7).unwrap();
+    insta::assert_snapshot!("event_key_stream42_v7", hex_dump(&encoded));
 }
 
 #[test]
-fn event_key_max_max() {
-    let encoded = encode_event_key(u64::MAX, u64::MAX);
-    insta::assert_snapshot!("event_key_max_max", hex_dump(&encoded));
-}
-
-#[test]
-fn event_key_zero_max() {
-    let encoded = encode_event_key(0, u64::MAX);
-    insta::assert_snapshot!("event_key_zero_max", hex_dump(&encoded));
-}
-
-#[test]
-fn event_key_max_zero() {
-    let encoded = encode_event_key(u64::MAX, 0);
-    insta::assert_snapshot!("event_key_max_zero", hex_dump(&encoded));
+fn event_key_empty_id_vmax() {
+    let encoded = encode_event_key(b"", u64::MAX).unwrap();
+    insta::assert_snapshot!("event_key_empty_id_vmax", hex_dump(&encoded));
 }
 
 #[test]
 fn event_key_ordering_version() {
-    let key_v1 = encode_event_key(1, 1);
-    let key_v2 = encode_event_key(1, 2);
-    insta::assert_snapshot!("event_key_stream1_version1", hex_dump(&key_v1));
-    insta::assert_snapshot!("event_key_stream1_version2", hex_dump(&key_v2));
+    let key_v1 = encode_event_key(b"s1", 1).unwrap();
+    let key_v2 = encode_event_key(b"s1", 2).unwrap();
+    insta::assert_snapshot!("event_key_s1_v1", hex_dump(&key_v1));
+    insta::assert_snapshot!("event_key_s1_v2", hex_dump(&key_v2));
     assert!(
         key_v1 < key_v2,
         "version 1 must sort before version 2 in byte order"
@@ -65,54 +53,43 @@ fn event_key_ordering_version() {
 
 #[test]
 fn event_key_stream_grouping() {
-    let key_s1_v100 = encode_event_key(1, 100);
-    let key_s2_v1 = encode_event_key(2, 1);
-    insta::assert_snapshot!("event_key_stream1_version100", hex_dump(&key_s1_v100));
-    insta::assert_snapshot!("event_key_stream2_version1", hex_dump(&key_s2_v1));
+    let key_foo_v100 = encode_event_key(b"foo", 100).unwrap();
+    let key_foobar_v1 = encode_event_key(b"foobar", 1).unwrap();
+    insta::assert_snapshot!("event_key_foo_v100", hex_dump(&key_foo_v100));
+    insta::assert_snapshot!("event_key_foobar_v1", hex_dump(&key_foobar_v1));
+    // Length prefix ensures "foo" range doesn't overlap "foobar"
     assert!(
-        key_s1_v100 < key_s2_v1,
-        "stream 1 version 100 must sort before stream 2 version 1"
+        key_foo_v100 < key_foobar_v1,
+        "shorter ID must sort before longer ID with same prefix"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Stream meta snapshots
+// Stream version snapshots
 // ---------------------------------------------------------------------------
 
 #[test]
-fn stream_meta_zero_zero() {
-    let encoded = encode_stream_meta(0, 0);
-    insta::assert_snapshot!("stream_meta_zero_zero", hex_dump(&encoded));
+fn stream_version_zero() {
+    let encoded = encode_stream_version(0);
+    insta::assert_snapshot!("stream_version_zero", hex_dump(&encoded));
 }
 
 #[test]
-fn stream_meta_one_one() {
-    let encoded = encode_stream_meta(1, 1);
-    insta::assert_snapshot!("stream_meta_one_one", hex_dump(&encoded));
+fn stream_version_one() {
+    let encoded = encode_stream_version(1);
+    insta::assert_snapshot!("stream_version_one", hex_dump(&encoded));
 }
 
 #[test]
-fn stream_meta_999_5() {
-    let encoded = encode_stream_meta(999, 5);
-    insta::assert_snapshot!("stream_meta_999_5", hex_dump(&encoded));
+fn stream_version_999() {
+    let encoded = encode_stream_version(999);
+    insta::assert_snapshot!("stream_version_999", hex_dump(&encoded));
 }
 
 #[test]
-fn stream_meta_max_max() {
-    let encoded = encode_stream_meta(u64::MAX, u64::MAX);
-    insta::assert_snapshot!("stream_meta_max_max", hex_dump(&encoded));
-}
-
-#[test]
-fn stream_meta_zero_max() {
-    let encoded = encode_stream_meta(0, u64::MAX);
-    insta::assert_snapshot!("stream_meta_zero_max", hex_dump(&encoded));
-}
-
-#[test]
-fn stream_meta_max_zero() {
-    let encoded = encode_stream_meta(u64::MAX, 0);
-    insta::assert_snapshot!("stream_meta_max_zero", hex_dump(&encoded));
+fn stream_version_max() {
+    let encoded = encode_stream_version(u64::MAX);
+    insta::assert_snapshot!("stream_version_max", hex_dump(&encoded));
 }
 
 // ---------------------------------------------------------------------------

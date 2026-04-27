@@ -26,13 +26,21 @@
 )]
 #![allow(clippy::str_to_string, reason = "tests use to_string/to_owned freely")]
 
+use arrayvec::ArrayString;
 use nexus::{Id, Version};
-use nexus_store::ToStreamLabel;
+use nexus_store::InMemoryStoreError;
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
+
+/// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
+type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::convert::Infallible>;
+
+fn label(s: &str) -> ArrayString<64> {
+    ArrayString::try_from(s).unwrap()
+}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TestId(&'static str);
@@ -41,7 +49,14 @@ impl std::fmt::Display for TestId {
         f.write_str(self.0)
     }
 }
-impl Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 // =============================================================================
 // C2: Builder accepts any String — content validation is the facade's job
@@ -76,7 +91,7 @@ async fn h1_append_empty_envelopes_is_noop_or_error() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "Empty append should not create any events"
     );
 }
@@ -145,17 +160,17 @@ async fn h5_append_with_duplicate_versions() {
 }
 
 // =============================================================================
-// H4: StoreError has heap-allocated Box<dyn Error>
+// H4: StoreError has concrete typed errors — no heap allocation
 // =============================================================================
 
 #[test]
 fn h4_store_error_size() {
     // Document the size of StoreError for IoT awareness.
-    // Box<dyn Error> means heap allocation on error paths.
-    let size = std::mem::size_of::<StoreError>();
+    // With concrete types, no Box<dyn Error> heap allocation on error paths.
+    let size = std::mem::size_of::<TestStoreError>();
     // This should be reasonable — if it's too large, consider boxing the whole error
     assert!(
-        size <= 128,
+        size <= 256,
         "StoreError is {size} bytes — too large for stack on constrained devices"
     );
 }
@@ -195,7 +210,7 @@ async fn read_nonexistent_stream_returns_empty() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "Reading a nonexistent stream should return empty, not error"
     );
 }
@@ -233,7 +248,7 @@ async fn streams_are_isolated() {
     assert_eq!(envelope.event_type(), "EventA");
     assert_eq!(envelope.payload(), &[1]);
     drop(envelope);
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 
     // Read stream-b — should only see EventB
     let mut stream = store
@@ -244,7 +259,7 @@ async fn streams_are_isolated() {
     assert_eq!(envelope.event_type(), "EventB");
     assert_eq!(envelope.payload(), &[2]);
     drop(envelope);
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }
 
 // =============================================================================
@@ -253,14 +268,16 @@ async fn streams_are_isolated() {
 
 #[test]
 fn store_error_variants_are_known() {
-    let err = StoreError::StreamNotFound {
-        stream_id: "test".to_stream_label(),
+    let err: TestStoreError = StoreError::StreamNotFound {
+        stream_id: label("test"),
     };
     match err {
         StoreError::Conflict { .. } => {}
         StoreError::StreamNotFound { .. } => {}
         StoreError::Codec(_) => {}
         StoreError::Adapter(_) => {}
-        StoreError::Kernel(_) => {} // If you add a variant, add it here
+        StoreError::Upcast(_) => {}
+        StoreError::Kernel(_) => {}
+        StoreError::VersionOverflow => {} // If you add a variant, add it here
     }
 }

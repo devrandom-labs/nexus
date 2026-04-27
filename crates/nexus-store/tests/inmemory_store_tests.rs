@@ -14,7 +14,14 @@ impl std::fmt::Display for TestId {
         f.write_str(self.0)
     }
 }
-impl Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[tokio::test]
 async fn append_and_read_back() {
@@ -37,7 +44,7 @@ async fn append_and_read_back() {
     assert_eq!(env.payload(), b"hello");
     assert_eq!(env.version(), Version::INITIAL);
     assert_eq!(env.schema_version(), 1);
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -74,5 +81,5 @@ async fn read_from_version_filters_correctly() {
     assert_eq!(e2.event_type(), "E3");
     assert_eq!(e2.version(), Version::new(3).unwrap());
 
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }

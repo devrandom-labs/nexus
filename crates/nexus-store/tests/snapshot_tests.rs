@@ -15,6 +15,8 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{Id, Version};
+
+const SV1: NonZeroU32 = NonZeroU32::MIN;
 use nexus_store::snapshot::{
     AfterEventTypes, EveryNEvents, PendingSnapshot, PersistedSnapshot, SnapshotStore,
     SnapshotTrigger,
@@ -29,7 +31,14 @@ impl fmt::Display for TestId {
     }
 }
 
-impl Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[test]
 fn pending_snapshot_stores_version_and_payload() {
@@ -60,7 +69,7 @@ fn persisted_snapshot_stores_version_and_payload() {
 async fn unit_snapshot_store_returns_none() {
     let store = ();
     let id = TestId("agg-1".into());
-    let result = store.load_snapshot(&id).await;
+    let result = store.load_snapshot(&id, SV1).await;
     assert!(result.unwrap().is_none());
 }
 
@@ -94,12 +103,12 @@ fn every_n_events_triggers_on_boundary_crossing() {
     // Single-event saves crossing the boundary
     let v99 = Some(Version::new(99).unwrap());
     let v100 = Version::new(100).unwrap();
-    assert!(trigger.should_snapshot(v99, v100, &[]));
+    assert!(trigger.should_snapshot(v99, v100, std::iter::empty::<&str>()));
 
     // Not yet at boundary
     let v98 = Some(Version::new(98).unwrap());
     let v99_ver = Version::new(99).unwrap();
-    assert!(!trigger.should_snapshot(v98, v99_ver, &[]));
+    assert!(!trigger.should_snapshot(v98, v99_ver, std::iter::empty::<&str>()));
 }
 
 #[test]
@@ -109,7 +118,7 @@ fn every_n_events_triggers_on_batch_crossing_boundary() {
     // Batch of 7 events crossing the 100 boundary: 96 → 103
     let old = Some(Version::new(96).unwrap());
     let new = Version::new(103).unwrap();
-    assert!(trigger.should_snapshot(old, new, &[]));
+    assert!(trigger.should_snapshot(old, new, std::iter::empty::<&str>()));
 }
 
 #[test]
@@ -118,21 +127,21 @@ fn every_n_events_first_save_triggers_at_boundary() {
 
     // Fresh aggregate, first save crosses boundary
     let new = Version::new(100).unwrap();
-    assert!(trigger.should_snapshot(None, new, &[]));
+    assert!(trigger.should_snapshot(None, new, std::iter::empty::<&str>()));
 
     // Fresh aggregate, first save below boundary
     let new_50 = Version::new(50).unwrap();
-    assert!(!trigger.should_snapshot(None, new_50, &[]));
+    assert!(!trigger.should_snapshot(None, new_50, std::iter::empty::<&str>()));
 }
 
 #[test]
 fn every_1_event_always_triggers() {
     let trigger = EveryNEvents(NonZeroU64::new(1).unwrap());
-    assert!(trigger.should_snapshot(None, Version::new(1).unwrap(), &[]));
+    assert!(trigger.should_snapshot(None, Version::new(1).unwrap(), std::iter::empty::<&str>()));
     assert!(trigger.should_snapshot(
         Some(Version::new(1).unwrap()),
         Version::new(2).unwrap(),
-        &[],
+        std::iter::empty::<&str>(),
     ));
 }
 
@@ -142,9 +151,17 @@ fn every_1_event_always_triggers() {
 fn after_event_types_triggers_on_matching_event() {
     let trigger = AfterEventTypes::new(&["OrderCompleted", "OrderCancelled"]);
 
-    assert!(trigger.should_snapshot(None, Version::new(5).unwrap(), &["OrderCompleted"]));
-    assert!(trigger.should_snapshot(None, Version::new(5).unwrap(), &["OrderCancelled"]));
-    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &["ItemAdded"]));
+    assert!(trigger.should_snapshot(
+        None,
+        Version::new(5).unwrap(),
+        ["OrderCompleted"].into_iter()
+    ));
+    assert!(trigger.should_snapshot(
+        None,
+        Version::new(5).unwrap(),
+        ["OrderCancelled"].into_iter()
+    ));
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), ["ItemAdded"].into_iter()));
 }
 
 #[test]
@@ -154,14 +171,14 @@ fn after_event_types_triggers_if_any_event_in_batch_matches() {
     assert!(trigger.should_snapshot(
         None,
         Version::new(5).unwrap(),
-        &["ItemAdded", "OrderCompleted"],
+        ["ItemAdded", "OrderCompleted"].into_iter(),
     ));
 }
 
 #[test]
 fn after_event_types_does_not_trigger_on_empty_events() {
     let trigger = AfterEventTypes::new(&["OrderCompleted"]);
-    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), &[]));
+    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), std::iter::empty::<&str>()));
 }
 
 // ── InMemorySnapshotStore ───────────────────────────────────────────
@@ -174,7 +191,10 @@ mod in_memory_tests {
     #[tokio::test]
     async fn load_returns_none_when_empty() {
         let store = InMemorySnapshotStore::new();
-        let result = store.load_snapshot(&TestId("agg-1".into())).await.unwrap();
+        let result = store
+            .load_snapshot(&TestId("agg-1".into()), SV1)
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -186,7 +206,7 @@ mod in_memory_tests {
         let snap = PendingSnapshot::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
 
         store.save_snapshot(&id, &snap).await.unwrap();
-        let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+        let loaded = store.load_snapshot(&id, SV1).await.unwrap().unwrap();
 
         assert_eq!(loaded.version(), version);
         assert_eq!(loaded.schema_version(), NonZeroU32::new(1).unwrap());
@@ -212,7 +232,7 @@ mod in_memory_tests {
         );
         store.save_snapshot(&id, &snap2).await.unwrap();
 
-        let loaded = store.load_snapshot(&id).await.unwrap().unwrap();
+        let loaded = store.load_snapshot(&id, SV1).await.unwrap().unwrap();
         assert_eq!(loaded.version(), Version::new(20).unwrap());
         assert_eq!(loaded.payload(), &[2]);
     }
@@ -242,12 +262,12 @@ mod in_memory_tests {
             .unwrap();
 
         let loaded1 = store
-            .load_snapshot(&TestId("agg-1".into()))
+            .load_snapshot(&TestId("agg-1".into()), SV1)
             .await
             .unwrap()
             .unwrap();
         let loaded2 = store
-            .load_snapshot(&TestId("agg-2".into()))
+            .load_snapshot(&TestId("agg-2".into()), SV1)
             .await
             .unwrap()
             .unwrap();
@@ -268,7 +288,7 @@ mod in_memory_tests {
         store.save_snapshot(&id, &snap).await.unwrap();
 
         store.delete_snapshot(&id).await.unwrap();
-        let loaded = store.load_snapshot(&id).await.unwrap();
+        let loaded = store.load_snapshot(&id, SV1).await.unwrap();
         assert!(loaded.is_none());
     }
 

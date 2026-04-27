@@ -1,6 +1,0 @@
----
-source: crates/nexus-fjall/tests/snapshot_wire_format.rs
-assertion_line: 27
-expression: hex_dump(&encoded)
----
-00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 01

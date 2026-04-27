@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, reason = "tests")]
 #![allow(clippy::expect_used, reason = "tests")]
 
+use std::convert::Infallible;
 use std::fmt;
 
 use nexus::*;
@@ -51,13 +52,20 @@ impl AggregateState for TodoState {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TodoId(u64);
+struct TodoId(String);
 impl fmt::Display for TodoId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "todo-{}", self.0)
+        f.write_str(&self.0)
     }
 }
-impl Id for TodoId {}
+impl AsRef<[u8]> for TodoId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for TodoId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("todo error")]
@@ -110,11 +118,11 @@ async fn save_and_load_roundtrip() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(TestCodec).build();
 
-    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
+    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
     let events = [TodoEvent::Created("Buy milk".into()), TodoEvent::Done];
     es.save(&mut agg, &events).await.unwrap();
 
-    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     assert_eq!(loaded.state().title, "Buy milk");
     assert!(loaded.state().done);
     assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
@@ -124,7 +132,7 @@ async fn save_and_load_roundtrip() {
 async fn load_empty_stream_returns_fresh_aggregate() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(TestCodec).build();
-    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     assert_eq!(loaded.version(), None);
     assert_eq!(loaded.state(), &TodoState::default());
 }
@@ -133,7 +141,7 @@ async fn load_empty_stream_returns_fresh_aggregate() {
 async fn save_no_uncommitted_events_is_noop() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(TestCodec).build();
-    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
+    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
     es.save(&mut agg, &[]).await.unwrap();
 }
 
@@ -142,15 +150,15 @@ async fn save_then_append_more_events() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(TestCodec).build();
 
-    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
+    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
     es.save(&mut agg, &[TodoEvent::Created("Task".into())])
         .await
         .unwrap();
 
-    let mut loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    let mut loaded: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     es.save(&mut loaded, &[TodoEvent::Done]).await.unwrap();
 
-    let final_agg: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    let final_agg: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     assert_eq!(final_agg.state().title, "Task");
     assert!(final_agg.state().done);
     assert_eq!(final_agg.version(), Some(Version::new(2).unwrap()));
@@ -161,13 +169,13 @@ async fn optimistic_concurrency_conflict() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(TestCodec).build();
 
-    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
+    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
     es.save(&mut agg, &[TodoEvent::Created("Original".into())])
         .await
         .unwrap();
 
-    let mut agg_a: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
-    let mut agg_b: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    let mut agg_a: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
+    let mut agg_b: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
 
     es.save(&mut agg_a, &[TodoEvent::Done]).await.unwrap();
 
@@ -181,7 +189,12 @@ async fn optimistic_concurrency_conflict() {
 
 struct V1ToV2Upcaster;
 impl Upcaster for V1ToV2Upcaster {
-    fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+    type Error = Infallible;
+
+    fn apply<'a>(
+        &self,
+        morsel: EventMorsel<'a>,
+    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
         match (morsel.event_type(), morsel.schema_version()) {
             ("Created", v) if v == Version::INITIAL => {
                 // Passthrough — payload format unchanged, just bump version.
@@ -214,13 +227,13 @@ async fn load_with_transform_transforms_events() {
         .build();
 
     // Save — transforms are only applied on reads, not writes
-    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId(1));
+    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
     es.save(&mut agg, &[TodoEvent::Created("Task".into())])
         .await
         .unwrap();
 
     // Load — transform bumps schema version but payload format is unchanged
-    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId(1)).await.unwrap();
+    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     assert_eq!(loaded.state().title, "Task");
     assert_eq!(loaded.version(), Some(Version::new(1).unwrap()));
 }

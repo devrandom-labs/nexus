@@ -7,13 +7,25 @@ use std::fmt;
 
 // --- ID ---
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct UserId(u64);
-impl fmt::Display for UserId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "user-{}", self.0)
+struct UserId(String);
+impl UserId {
+    fn new(v: u64) -> Self {
+        Self(format!("user-{v}"))
     }
 }
-impl Id for UserId {}
+impl fmt::Display for UserId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl AsRef<[u8]> for UserId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for UserId {
+    const BYTE_LEN: usize = 0;
+}
 
 // --- Events (using derive macro!) ---
 #[derive(Debug, Clone)]
@@ -112,7 +124,7 @@ impl Handle<ActivateUser> for User {
 
 #[test]
 fn full_aggregate_lifecycle_with_handle() {
-    let mut user = User::new(UserId(1));
+    let mut user = User::new(UserId::new(1));
 
     // Decide: command produces events
     let create_events = user
@@ -143,7 +155,7 @@ fn full_aggregate_lifecycle_with_handle() {
 
 #[test]
 fn rehydrate_then_decide() {
-    let mut user = User::new(UserId(2));
+    let mut user = User::new(UserId::new(2));
     user.replay(
         Version::new(1).unwrap(),
         &UserEvent::Created(UserCreated { name: "Bob".into() }),
@@ -168,7 +180,7 @@ fn rehydrate_then_decide() {
 
 #[test]
 fn invariant_violations_return_domain_errors() {
-    let mut user = User::new(UserId(3));
+    let mut user = User::new(UserId::new(3));
 
     // Create the user
     let events = user

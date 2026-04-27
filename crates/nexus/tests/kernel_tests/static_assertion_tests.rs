@@ -47,13 +47,20 @@ assert_impl_all!(VersionedEvent<String>: Send, Sync);
 // =============================================================================
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct StaticId(u64);
+struct StaticId(String);
 impl fmt::Display for StaticId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-impl Id for StaticId {}
+impl AsRef<[u8]> for StaticId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for StaticId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code, reason = "test-only event type used for static assertions")]

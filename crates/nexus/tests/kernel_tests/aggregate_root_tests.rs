@@ -27,7 +27,14 @@ impl fmt::Display for TestId {
     }
 }
 
-impl Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone)]
 enum CounterEvent {

@@ -34,10 +34,18 @@ impl Aggregate for MyAggregate {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct MyId(u64);
+struct MyId(String);
+impl MyId {
+    fn new(v: u64) -> Self { Self(v.to_string()) }
+}
 impl std::fmt::Display for MyId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
 }
-impl Id for MyId {}
+impl AsRef<[u8]> for MyId {
+    fn as_ref(&self) -> &[u8] { self.0.as_bytes() }
+}
+impl Id for MyId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn main() {}

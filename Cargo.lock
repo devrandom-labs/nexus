@@ -594,6 +594,7 @@ dependencies = [
 name = "nexus-fjall"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "criterion",
  "fjall",
  "insta",
@@ -626,6 +627,7 @@ dependencies = [
 name = "nexus-store"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "criterion",
  "nexus",
  "nexus-store",

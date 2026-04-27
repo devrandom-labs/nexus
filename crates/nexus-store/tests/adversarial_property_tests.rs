@@ -57,10 +57,13 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 
+use arrayvec::ArrayString;
 use nexus::Version;
+use nexus_store::InMemoryStoreError;
 use nexus_store::Store;
 use nexus_store::Upcaster;
 use nexus_store::codec::Codec;
@@ -75,6 +78,13 @@ use nexus_store::upcasting::EventMorsel;
 
 use proptest::prelude::*;
 
+/// Concrete `StoreError` for tests using `InMemoryStore` + `JsonCodec` + no upcaster.
+type TestStoreError = StoreError<InMemoryStoreError, JsonCodecError, Infallible>;
+
+fn label(s: &str) -> ArrayString<64> {
+    ArrayString::try_from(s).unwrap()
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct StreamName(String);
 impl fmt::Display for StreamName {
@@ -82,7 +92,14 @@ impl fmt::Display for StreamName {
         f.write_str(&self.0)
     }
 }
-impl nexus::Id for StreamName {}
+impl AsRef<[u8]> for StreamName {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl nexus::Id for StreamName {
+    const BYTE_LEN: usize = 0;
+}
 fn sn(s: &str) -> StreamName {
     StreamName(s.to_owned())
 }
@@ -130,13 +147,20 @@ impl nexus::AggregateState for TestState {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(u64);
+struct TestId(String);
 impl fmt::Display for TestId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "test-{}", self.0)
+        f.write_str(&self.0)
     }
 }
-impl nexus::Id for TestId {}
+impl AsRef<[u8]> for TestId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl nexus::Id for TestId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("test error")]
@@ -234,8 +258,7 @@ async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamName) -> Vec
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -247,8 +270,7 @@ async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamName) -> Vec
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         versions.push(env.version().as_u64());
     }
     versions
@@ -689,15 +711,14 @@ proptest! {
 
             // Drain all events
             let mut count = 0;
-            while let Some(result) = stream.next().await {
-                result.unwrap();
+            while let Some(_env) = stream.next().await.unwrap() {
                 count += 1;
             }
             prop_assert_eq!(count, n, "wrong event count");
 
             // After None, all subsequent calls must also return None (fused)
             for _ in 0..10 {
-                let next = stream.next().await;
+                let next = stream.next().await.unwrap();
                 prop_assert!(next.is_none(), "stream must be fused: returned Some after None");
             }
             Ok(())
@@ -777,8 +798,7 @@ proptest! {
                 .unwrap();
 
             let mut read_versions = Vec::new();
-            while let Some(result) = stream.next().await {
-                let env = result.unwrap();
+            while let Some(env) = stream.next().await.unwrap() {
                 read_versions.push(env.version().as_u64());
             }
 
@@ -814,7 +834,12 @@ fn attack_upcaster_correct_final_state() {
     // Upcaster that steps "E" from V1->V2->V3->V4, preserving payload.
     struct ThreeStepUpcaster;
     impl Upcaster for ThreeStepUpcaster {
-        fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+        type Error = Infallible;
+
+        fn apply<'a>(
+            &self,
+            mut morsel: EventMorsel<'a>,
+        ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
             loop {
                 match (morsel.event_type(), morsel.schema_version()) {
                     ("E", v) if v == Version::INITIAL => {
@@ -909,14 +934,14 @@ proptest! {
             let es = store.repository().codec(JsonCodec).build();
 
             // Build events for the aggregate
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(42));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-42".into()));
             let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
 
             // Save
             es.save(&mut root, &events).await.unwrap();
 
             // Load into fresh aggregate
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(42)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-42".into())).await.unwrap();
 
             // Verify state matches
             prop_assert_eq!(
@@ -947,11 +972,11 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = strings.iter().map(|s| TestEvent::Happened(s.clone())).collect();
 
             es.save(&mut root, &events).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
 
             prop_assert_eq!(&loaded.state().log, &strings, "event log mismatch after roundtrip");
             Ok(())
@@ -975,7 +1000,7 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(99));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-99".into()));
             let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
 
             // First save — should work
@@ -998,7 +1023,8 @@ async fn attack_event_store_load_empty_stream() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(JsonCodec).build();
 
-    let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+    let loaded: nexus::AggregateRoot<TestAggregate> =
+        es.load(TestId("test-1".into())).await.unwrap();
 
     assert_eq!(loaded.version(), None);
     assert_eq!(loaded.state().events_applied, 0);
@@ -1023,13 +1049,13 @@ proptest! {
             let es = store.repository().codec(JsonCodec).build();
 
             // Seed the aggregate with n events
-            let mut root_a = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root_a = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
             es.save(&mut root_a, &events).await.unwrap();
 
             // Load into two separate aggregates
-            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
-            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
+            let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
 
             // First save succeeds
             es.save(&mut copy1, &[TestEvent::ValueSet(100)]).await.unwrap();
@@ -1051,7 +1077,12 @@ async fn attack_event_store_transforms_applied_on_load() {
     // Upcaster that bumps "Happened" from schema V1 to V2 (payload unchanged)
     struct HappenedV1ToV2;
     impl Upcaster for HappenedV1ToV2 {
-        fn apply<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+        type Error = Infallible;
+
+        fn apply<'a>(
+            &self,
+            morsel: EventMorsel<'a>,
+        ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
             match (morsel.event_type(), morsel.schema_version()) {
                 ("Happened", v) if v == Version::INITIAL => Ok(EventMorsel::new(
                     "Happened",
@@ -1094,7 +1125,8 @@ async fn attack_event_store_transforms_applied_on_load() {
         .upcaster(HappenedV1ToV2)
         .build();
 
-    let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+    let loaded: nexus::AggregateRoot<TestAggregate> =
+        es.load(TestId("test-1".into())).await.unwrap();
     assert_eq!(loaded.state().events_applied, 1);
     assert_eq!(loaded.state().log, vec!["hello".to_owned()]);
 }
@@ -1334,9 +1366,9 @@ proptest! {
             for (cycle_idx, values) in cycles.iter().enumerate() {
                 // Load current state
                 let mut root: nexus::AggregateRoot<TestAggregate> = if cycle_idx == 0 {
-                    nexus::AggregateRoot::<TestAggregate>::new(TestId(1))
+                    nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()))
                 } else {
-                    es.load(TestId(1)).await.unwrap()
+                    es.load(TestId("test-1".into())).await.unwrap()
                 };
 
                 // Verify loaded state
@@ -1361,7 +1393,7 @@ proptest! {
                 total_events += u64::try_from(values.len()).unwrap();
 
                 // Verify by loading again
-                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+                let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
                 prop_assert_eq!(
                     loaded.state().last_value, expected_last_value,
                     "last_value wrong after cycle {}", cycle_idx,
@@ -1409,8 +1441,7 @@ proptest! {
                 handles.push(tokio::spawn(async move {
                     let mut stream = store.read_stream(&sid, Version::INITIAL).await.unwrap();
                     let mut read = Vec::new();
-                    while let Some(result) = stream.next().await {
-                        let env = result.unwrap();
+                    while let Some(env) = stream.next().await.unwrap() {
                         read.push(env.payload().to_vec());
                     }
                     assert_eq!(read, expected, "reader got wrong payloads");
@@ -1486,9 +1517,8 @@ proptest! {
     ) {
         prop_assume!(expected != actual);
 
-        use nexus_store::ToStreamLabel;
-        let err = StoreError::Conflict {
-            stream_id: "test-stream".to_stream_label(),
+        let err: TestStoreError = StoreError::Conflict {
+            stream_id: label("test-stream"),
             expected: Version::new(expected),
             actual: Version::new(actual),
         };
@@ -1558,7 +1588,7 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(7));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-7".into()));
 
             // Interleave different event types
             let mut events: Vec<TestEvent> = Vec::new();
@@ -1581,7 +1611,7 @@ proptest! {
             }
 
             es.save(&mut root, &events).await.unwrap();
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(7)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-7".into())).await.unwrap();
 
             prop_assert_eq!(loaded.state().last_value, expected_last_value);
             prop_assert_eq!(&loaded.state().log, &expected_log);
@@ -1681,23 +1711,25 @@ proptest! {
     ) {
         let ver = Version::new(schema_version).unwrap();
 
-        let err1 = UpcastError::VersionNotAdvanced {
-            event_type: event_type.clone(),
+        let et_label = label(&event_type);
+
+        let err1 = UpcastError::<Infallible>::VersionNotAdvanced {
+            event_type: et_label,
             input_version: ver,
             output_version: ver,
         };
         let msg1 = err1.to_string();
         prop_assert!(msg1.contains(&event_type), "event_type missing from error: {}", msg1);
 
-        let err2 = UpcastError::EmptyEventType {
-            input_event_type: event_type.clone(),
+        let err2 = UpcastError::<Infallible>::EmptyEventType {
+            input_event_type: et_label,
             schema_version: ver,
         };
         let msg2 = err2.to_string();
         prop_assert!(msg2.contains(&event_type), "event_type missing from error: {}", msg2);
 
-        let err3 = UpcastError::ChainLimitExceeded {
-            event_type: event_type.clone(),
+        let err3 = UpcastError::<Infallible>::ChainLimitExceeded {
+            event_type: et_label,
             schema_version: ver,
             limit: 100,
         };
@@ -1765,7 +1797,9 @@ proptest! {
         // Upcaster: "OldEvent" v1 -> "MiddleEvent" v2 -> "NewEvent" v3
         struct RenamingUpcaster;
         impl Upcaster for RenamingUpcaster {
-            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+            type Error = Infallible;
+
+            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
                 loop {
                     match (morsel.event_type(), morsel.schema_version()) {
                         ("OldEvent", v) if v == Version::INITIAL => {
@@ -1815,7 +1849,9 @@ proptest! {
         // Upcaster that prefixes payload with a magic header
         struct PrefixUpcaster;
         impl Upcaster for PrefixUpcaster {
-            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError> {
+            type Error = Infallible;
+
+            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
                 loop {
                     match (morsel.event_type(), morsel.schema_version()) {
                         ("E", v) if v == Version::INITIAL => {
@@ -1866,7 +1902,7 @@ proptest! {
             let es = store.repository().codec(JsonCodec).build();
 
             // Batch 1: create, save events
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events1: Vec<TestEvent> = batch1.iter().map(|&v| TestEvent::ValueSet(v)).collect();
             es.save(&mut root, &events1).await.unwrap();
             let v1 = root.version().unwrap().as_u64();
@@ -1879,13 +1915,13 @@ proptest! {
             prop_assert_eq!(v2, u64::try_from(batch1.len() + batch2.len()).unwrap());
 
             // Batch 3: load fresh, save more
-            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             prop_assert_eq!(fresh.version().unwrap().as_u64(), v2);
             let events3: Vec<TestEvent> = batch3.iter().map(|&v| TestEvent::ValueSet(v)).collect();
             es.save(&mut fresh, &events3).await.unwrap();
 
             // Final verification
-            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let final_root: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             let total = batch1.len() + batch2.len() + batch3.len();
             prop_assert_eq!(
                 final_root.version().unwrap().as_u64(),
@@ -2038,7 +2074,7 @@ proptest! {
             let store = Store::new(InMemoryStore::new());
             let es = store.repository().codec(JsonCodec).build();
 
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId(1));
+            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
 
             // After save, version should advance
@@ -2051,7 +2087,7 @@ proptest! {
             // Can still save more events
             es.save(&mut root, &[TestEvent::ValueSet(999)]).await.unwrap();
 
-            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId(1)).await.unwrap();
+            let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             prop_assert_eq!(loaded.state().last_value, 999);
             prop_assert_eq!(loaded.state().events_applied, u64::try_from(n + 1).unwrap());
             Ok(())

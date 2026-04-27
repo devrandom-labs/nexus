@@ -15,13 +15,25 @@ use nexus::Version;
 // --- Minimal test domain ---
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct RId(u64);
-impl fmt::Display for RId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "r-{}", self.0)
+struct RId(String);
+impl RId {
+    fn new(v: u64) -> Self {
+        Self(format!("r-{v}"))
     }
 }
-impl Id for RId {}
+impl fmt::Display for RId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl AsRef<[u8]> for RId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for RId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum REvent {
@@ -80,7 +92,7 @@ const fn v(n: u64) -> Version {
 
 #[test]
 fn replay_single_event_advances_version() {
-    let mut agg = AggregateRoot::<RAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
     assert_eq!(agg.version(), None, "fresh aggregate has no version");
 
     agg.replay(v(1), &REvent::Added("a".into())).unwrap();
@@ -95,7 +107,7 @@ fn replay_single_event_advances_version() {
 
 #[test]
 fn replay_sequential_events() {
-    let mut agg = AggregateRoot::<RAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
     agg.replay(v(1), &REvent::Added("a".into())).unwrap();
     agg.replay(v(2), &REvent::Added("b".into())).unwrap();
     agg.replay(v(3), &REvent::Added("c".into())).unwrap();
@@ -110,7 +122,7 @@ fn replay_sequential_events() {
 
 #[test]
 fn replay_rejects_wrong_first_version() {
-    let mut agg = AggregateRoot::<RAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
 
     let err = agg.replay(v(5), &REvent::Added("a".into())).unwrap_err();
 
@@ -129,7 +141,7 @@ fn replay_rejects_wrong_first_version() {
 
 #[test]
 fn replay_rejects_duplicate_version() {
-    let mut agg = AggregateRoot::<RAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
     agg.replay(v(1), &REvent::Added("a".into())).unwrap();
 
     let err = agg.replay(v(1), &REvent::Added("b".into())).unwrap_err();
@@ -149,7 +161,7 @@ fn replay_rejects_duplicate_version() {
 
 #[test]
 fn replay_rejects_version_gap() {
-    let mut agg = AggregateRoot::<RAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
     agg.replay(v(1), &REvent::Added("a".into())).unwrap();
 
     let err = agg.replay(v(3), &REvent::Added("b".into())).unwrap_err();
@@ -169,7 +181,7 @@ fn replay_rejects_version_gap() {
 
 #[test]
 fn replay_does_not_change_version_on_error() {
-    let mut agg = AggregateRoot::<RAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
     agg.replay(v(1), &REvent::Added("a".into())).unwrap();
 
     // Attempt a bad replay — version should remain at 1
@@ -206,7 +218,7 @@ fn replay_enforces_rehydration_limit() {
         const MAX_REHYDRATION_EVENTS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
     }
 
-    let mut agg = AggregateRoot::<SmallLimitAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<SmallLimitAgg>::new(RId::new(1));
     agg.replay(v(1), &REvent::Added("a".into())).unwrap();
     agg.replay(v(2), &REvent::Added("b".into())).unwrap();
     agg.replay(v(3), &REvent::Added("c".into())).unwrap();
@@ -232,7 +244,7 @@ fn replay_enforces_rehydration_limit() {
 
 #[test]
 fn replay_then_advance_and_apply_continues_correctly() {
-    let mut agg = AggregateRoot::<RAgg>::new(RId(1));
+    let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
 
     // Rehydrate from two persisted events
     agg.replay(v(1), &REvent::Added("a".into())).unwrap();
@@ -308,7 +320,7 @@ fn replay_panic_safety_preserves_state() {
         type Id = RId;
     }
 
-    let mut agg = AggregateRoot::<PanicAgg>::new(RId(42));
+    let mut agg = AggregateRoot::<PanicAgg>::new(RId::new(42));
     agg.replay(v(1), &PanicEvent::Normal("before".into()))
         .unwrap();
 

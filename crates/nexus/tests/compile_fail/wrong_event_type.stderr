@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
-  --> tests/compile_fail/wrong_event_type.rs:54:35
+  --> tests/compile_fail/wrong_event_type.rs:62:35
    |
-54 |     user.replay(Version::INITIAL, &OrderEvent::Placed);
+62 |     user.replay(Version::INITIAL, &OrderEvent::Placed);
    |          ------                   ^^^^^^^^^^^^^^^^^^^ expected `&UserEvent`, found `&OrderEvent`
    |          |
    |          arguments to this method are incorrect

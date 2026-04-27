@@ -17,7 +17,7 @@ impl std::error::Error for TestError {}
 #[allow(dead_code, reason = "referenced by macro attribute only")]
 struct TestAggregate;
 
-#[nexus_macros::transforms(aggregate = TestAggregate)]
+#[nexus_macros::transforms(aggregate = TestAggregate, error = TestError)]
 impl TestTransforms {
     #[transform(event = "OrderCreated", from = 1, to = 2)]
     fn created_v1_to_v2(payload: &[u8]) -> Result<Vec<u8>, TestError> {

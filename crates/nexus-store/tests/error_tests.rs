@@ -2,14 +2,22 @@
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 
+use arrayvec::ArrayString;
 use nexus::{KernelError, Version};
-use nexus_store::ToStreamLabel;
 use nexus_store::{StoreError, UpcastError};
+
+/// Concrete `StoreError` for tests: adapter = `std::io::Error`, codec = `std::io::Error`,
+/// upcaster = `std::convert::Infallible`.
+type TestStoreError = StoreError<std::io::Error, std::io::Error, std::convert::Infallible>;
+
+fn label(s: &str) -> ArrayString<64> {
+    ArrayString::try_from(s).unwrap()
+}
 
 #[test]
 fn conflict_display_contains_stream_id_and_versions() {
-    let err = StoreError::Conflict {
-        stream_id: "order-42".to_stream_label(),
+    let err: TestStoreError = StoreError::Conflict {
+        stream_id: label("order-42"),
         expected: Version::new(3),
         actual: Version::new(5),
     };
@@ -27,8 +35,8 @@ fn conflict_display_contains_stream_id_and_versions() {
 
 #[test]
 fn stream_not_found_display_contains_stream_id() {
-    let err = StoreError::StreamNotFound {
-        stream_id: "user-99".to_stream_label(),
+    let err: TestStoreError = StoreError::StreamNotFound {
+        stream_id: label("user-99"),
     };
     let msg = format!("{err}");
     assert!(msg.contains("user-99"), "should contain stream_id");
@@ -43,9 +51,9 @@ fn stream_not_found_display_contains_stream_id() {
 #[test]
 fn codec_display_contains_inner_message() {
     let inner = std::io::Error::new(std::io::ErrorKind::InvalidData, "bad json");
-    let err = StoreError::Codec(Box::new(inner));
+    let err: TestStoreError = StoreError::Codec(inner);
     let msg = format!("{err}");
-    assert!(msg.contains("Codec"), "should mention Codec");
+    assert!(msg.contains("codec"), "should mention codec");
     assert!(msg.contains("bad json"), "should contain inner message");
     // Codec has a source chain
     let source = std::error::Error::source(&err);
@@ -60,9 +68,9 @@ fn codec_display_contains_inner_message() {
 #[test]
 fn adapter_display_contains_inner_message() {
     let inner = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "db offline");
-    let err = StoreError::Adapter(Box::new(inner));
+    let err: TestStoreError = StoreError::Adapter(inner);
     let msg = format!("{err}");
-    assert!(msg.contains("Adapter"), "should mention Adapter");
+    assert!(msg.contains("adapter"), "should mention adapter");
     assert!(msg.contains("db offline"), "should contain inner message");
     // Adapter has a source chain
     let source = std::error::Error::source(&err);
@@ -80,30 +88,27 @@ fn kernel_error_converts_to_store_error() {
         expected: Version::INITIAL,
         actual: Version::new(2).unwrap(),
     };
-    let store_err: StoreError = kernel_err.into();
+    let store_err: TestStoreError = kernel_err.into();
     assert!(matches!(store_err, StoreError::Kernel(_)));
     let msg = format!("{store_err}");
-    assert!(msg.contains("Kernel"), "should mention Kernel");
+    assert!(msg.contains("kernel"), "should mention kernel");
     assert!(msg.contains("mismatch"), "should mention mismatch");
 }
 
 #[test]
 fn kernel_error_has_source_chain() {
     let kernel_err = KernelError::RehydrationLimitExceeded { max: 100 };
-    let store_err: StoreError = kernel_err.into();
+    let store_err: TestStoreError = kernel_err.into();
     let source = std::error::Error::source(&store_err);
     assert!(source.is_some(), "Kernel variant should have a source");
 }
 
 #[test]
 fn transform_failed_error_displays_context() {
-    let err = UpcastError::TransformFailed {
-        event_type: "OrderCreated".into(),
+    let err = UpcastError::<std::io::Error>::TransformFailed {
+        event_type: label("OrderCreated"),
         schema_version: Version::INITIAL,
-        source: Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "bad json",
-        )),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, "bad json"),
     };
     let msg = err.to_string();
     assert!(msg.contains("OrderCreated"), "should contain event type");

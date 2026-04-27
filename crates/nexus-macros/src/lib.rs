@@ -203,19 +203,24 @@ fn parse_transforms(
     ast: &syn::ItemImpl,
     args: proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream> {
-    // 1. Parse aggregate = Type from outer attributes
+    // 1. Parse aggregate = Type, error = Type from outer attributes
     let mut aggregate_type: Option<Type> = None;
+    let mut error_type: Option<Type> = None;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("aggregate") {
             aggregate_type = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("error") {
+            error_type = Some(meta.value()?.parse()?);
         } else {
-            return Err(meta.error("expected `aggregate`"));
+            return Err(meta.error("expected `aggregate` or `error`"));
         }
         Ok(())
     });
     syn::parse::Parser::parse2(parser, args)?;
     let _aggregate_type = aggregate_type
         .ok_or_else(|| Error::new(proc_macro2::Span::call_site(), "`aggregate` is required"))?;
+    let error_type = error_type
+        .ok_or_else(|| Error::new(proc_macro2::Span::call_site(), "`error` is required"))?;
 
     // 2. Get the struct name from the impl block
     let struct_ident = match &*ast.self_ty {
@@ -305,9 +310,13 @@ fn parse_transforms(
                 (#event_type, v) if v == ::nexus::Version::new(#from_version).expect("nonzero") => {
                     let payload = Self::#fn_name(morsel.payload())
                         .map_err(|e| ::nexus_store::UpcastError::TransformFailed {
-                            event_type: ::std::string::String::from(#event_type),
+                            event_type: {
+                                let mut buf = ::nexus_store::ArrayString::<64>::new();
+                                let _ = ::std::fmt::Write::write_str(&mut buf, #event_type);
+                                buf
+                            },
                             schema_version: ::nexus::Version::new(#from_version).expect("nonzero"),
-                            source: ::std::boxed::Box::new(e),
+                            source: e,
                         })?;
                     ::nexus_store::upcasting::EventMorsel::new(
                         #output_event_type,
@@ -355,12 +364,14 @@ fn parse_transforms(
         }
 
         impl ::nexus_store::Upcaster for #struct_ident {
+            type Error = #error_type;
+
             fn apply<'a>(
                 &self,
                 mut morsel: ::nexus_store::upcasting::EventMorsel<'a>,
             ) -> ::core::result::Result<
                 ::nexus_store::upcasting::EventMorsel<'a>,
-                ::nexus_store::UpcastError,
+                ::nexus_store::UpcastError<Self::Error>,
             > {
                 loop {
                     morsel = match (morsel.event_type(), morsel.schema_version()) {

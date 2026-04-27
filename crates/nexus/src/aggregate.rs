@@ -95,9 +95,10 @@ pub trait AggregateState: Send + Sync + Debug + Clone + 'static {
 /// # impl DomainEvent for Ev { fn name(&self) -> &'static str { "A" } }
 /// # #[derive(Default, Debug, Clone)] struct St;
 /// # impl AggregateState for St { type Event = Ev; fn initial() -> Self { Self::default() } fn apply(self, _: &Ev) -> Self { self } }
-/// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct MyId(u64);
+/// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct MyId(String);
 /// # impl std::fmt::Display for MyId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
-/// # impl Id for MyId {}
+/// # impl AsRef<[u8]> for MyId { fn as_ref(&self) -> &[u8] { self.0.as_bytes() } }
+/// # impl Id for MyId { const BYTE_LEN: usize = 0; }
 /// # #[derive(Debug, thiserror::Error)] #[error("e")] struct MyError;
 ///
 /// struct MyAggregate(AggregateRoot<Self>);
@@ -149,9 +150,10 @@ pub trait Aggregate: Sized {
 /// # impl DomainEvent for TodoEvent { fn name(&self) -> &'static str { "e" } }
 /// # #[derive(Default, Debug, Clone)] struct TodoState { done: bool }
 /// # impl AggregateState for TodoState { type Event = TodoEvent; fn initial() -> Self { Self::default() } fn apply(self, _: &TodoEvent) -> Self { self } }
-/// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct TodoId(u64);
+/// # #[derive(Debug, Clone, Hash, PartialEq, Eq)] struct TodoId(String);
 /// # impl std::fmt::Display for TodoId { fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "{}", self.0) } }
-/// # impl Id for TodoId {}
+/// # impl AsRef<[u8]> for TodoId { fn as_ref(&self) -> &[u8] { self.0.as_bytes() } }
+/// # impl Id for TodoId { const BYTE_LEN: usize = 0; }
 /// # #[derive(Debug, thiserror::Error)] #[error("e")] struct TodoError;
 /// # struct Todo(AggregateRoot<Self>);
 /// # impl Aggregate for Todo { type State = TodoState; type Error = TodoError; type Id = TodoId; }

@@ -5,13 +5,25 @@ use std::fmt;
 
 // Shared test domain
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct HId(u64);
-impl fmt::Display for HId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+struct HId([u8; 8]);
+impl HId {
+    fn new(id: u64) -> Self {
+        Self(id.to_be_bytes())
     }
 }
-impl Id for HId {}
+impl fmt::Display for HId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", u64::from_be_bytes(self.0))
+    }
+}
+impl AsRef<[u8]> for HId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl Id for HId {
+    const BYTE_LEN: usize = 8;
+}
 
 #[derive(Debug, Clone)]
 enum HEvent {
@@ -53,7 +65,7 @@ struct AggWithRoot;
 #[test]
 fn user_variable_named_root_no_conflict() {
     let root = "I am a local variable named root";
-    let mut agg = AggWithRoot::new(HId(1));
+    let mut agg = AggWithRoot::new(HId::new(1));
     agg.root_mut().apply_event(&HEvent::A);
     assert_eq!(agg.state().count, 1);
     assert_eq!(root, "I am a local variable named root");
@@ -71,8 +83,8 @@ struct SecondAggregate;
 
 #[test]
 fn two_aggregates_same_module_no_interference() {
-    let mut first = FirstAggregate::new(HId(1));
-    let mut second = SecondAggregate::new(HId(2));
+    let mut first = FirstAggregate::new(HId::new(1));
+    let mut second = SecondAggregate::new(HId::new(2));
 
     first.root_mut().apply_event(&HEvent::A);
     first.root_mut().apply_event(&HEvent::A);
@@ -121,7 +133,7 @@ fn aggregate_inside_function_body() {
     #[nexus::aggregate(state = LocalState, error = LocalError, id = HId)]
     struct LocalAggregate;
 
-    let mut agg = LocalAggregate::new(HId(1));
+    let mut agg = LocalAggregate::new(HId::new(1));
     agg.root_mut().apply_event(&LocalEvent::Tick);
     agg.root_mut().apply_event(&LocalEvent::Tick);
     agg.root_mut().apply_event(&LocalEvent::Tick);
@@ -153,7 +165,7 @@ mod user_has_own_aggregate_trait {
 
     #[test]
     fn user_aggregate_trait_no_ambiguity() {
-        let mut agg = MyAgg::new(HId(1));
+        let mut agg = MyAgg::new(HId::new(1));
         agg.root_mut().apply_event(&HEvent::A); // from nexus::AggregateEntity
         assert_eq!(agg.custom_method(), "custom"); // from user's Aggregate
         assert_eq!(agg.state().count, 1); // from nexus::AggregateEntity
@@ -181,7 +193,7 @@ mod user_has_own_aggregate_root_type {
         let user_root = AggregateRoot {
             data: "user".into(),
         };
-        let mut agg = MyAgg::new(HId(1));
+        let mut agg = MyAgg::new(HId::new(1));
         agg.root_mut().apply_event(&HEvent::A);
 
         assert_eq!(user_root.data, "user");
@@ -211,14 +223,14 @@ struct FnConflictAgg;
 
 #[test]
 fn user_functions_named_like_trait_methods() {
-    let mut agg = FnConflictAgg::new(HId(1));
+    let mut agg = FnConflictAgg::new(HId::new(1));
     agg.root_mut().apply_event(&HEvent::A);
 
     // Trait methods on agg
     assert_eq!(agg.state().count, 1);
     // Version is None because apply_event does not advance version
     assert_eq!(agg.version(), None);
-    assert_eq!(agg.id(), &HId(1));
+    assert_eq!(agg.id(), &HId::new(1));
 
     // Free functions still accessible
     assert_eq!(state(), "free function state");

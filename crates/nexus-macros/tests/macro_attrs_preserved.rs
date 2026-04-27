@@ -4,13 +4,25 @@ use nexus::*;
 use std::fmt;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct AttrId(u64);
-impl fmt::Display for AttrId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+struct AttrId([u8; 8]);
+impl AttrId {
+    fn new(id: u64) -> Self {
+        Self(id.to_be_bytes())
     }
 }
-impl Id for AttrId {}
+impl fmt::Display for AttrId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", u64::from_be_bytes(self.0))
+    }
+}
+impl AsRef<[u8]> for AttrId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl Id for AttrId {
+    const BYTE_LEN: usize = 8;
+}
 
 #[derive(Debug, Clone)]
 #[allow(
@@ -57,7 +69,7 @@ fn doc_attribute_preserved() {
     // If the doc attribute was dropped, this test still passes —
     // but `cargo doc` would show no documentation.
     // The real verification is that this compiles without error.
-    let _agg = DocumentedAggregate::new(AttrId(1));
+    let _agg = DocumentedAggregate::new(AttrId::new(1));
 }
 
 // =============================================================================
@@ -72,7 +84,7 @@ struct TestOnlyAggregate;
 fn cfg_attribute_preserved() {
     // This aggregate only exists in test cfg.
     // If #[cfg(test)] was dropped, it would also exist in non-test builds.
-    let _agg = TestOnlyAggregate::new(AttrId(1));
+    let _agg = TestOnlyAggregate::new(AttrId::new(1));
 }
 
 // =============================================================================

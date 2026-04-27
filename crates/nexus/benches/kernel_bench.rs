@@ -24,13 +24,25 @@ use std::hint::black_box;
 // =============================================================================
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct BId(u64);
+struct BId(String);
+impl BId {
+    fn new(v: u64) -> Self {
+        Self(v.to_string())
+    }
+}
 impl fmt::Display for BId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-impl Id for BId {}
+impl AsRef<[u8]> for BId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for BId {
+    const BYTE_LEN: usize = 0;
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code, reason = "Set variant exists for realistic bench domain")]
@@ -102,7 +114,7 @@ fn bench_replay(c: &mut Criterion) {
         let events = make_versioned_events(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &events, |b, events| {
             b.iter(|| {
-                let mut agg = AggregateRoot::<BAgg>::new(black_box(BId(1)));
+                let mut agg = AggregateRoot::<BAgg>::new(black_box(BId::new(1)));
                 for ve in events {
                     agg.replay(ve.version(), ve.event()).unwrap();
                 }
@@ -119,7 +131,7 @@ fn bench_apply_events(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             b.iter_with_setup(
                 || {
-                    let agg = AggregateRoot::<BAgg>::new(BId(1));
+                    let agg = AggregateRoot::<BAgg>::new(BId::new(1));
                     let batches: Vec<Events<BEvent>> = (0..size)
                         .map(|_| Events::new(BEvent::Incremented))
                         .collect();

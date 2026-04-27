@@ -43,7 +43,15 @@ impl fmt::Display for AccountId {
     }
 }
 
-impl Id for AccountId {}
+impl Id for AccountId {
+    const BYTE_LEN: usize = 0;
+}
+
+impl AsRef<[u8]> for AccountId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
 
 // --- Events (with serde for codec integration) ---
 
@@ -228,11 +236,9 @@ async fn load_events(
 
     let mut versioned = Vec::new();
     loop {
-        let envelope = stream.next().await;
-        match envelope {
+        match stream.next().await.expect("stream read should succeed") {
             None => break,
-            Some(result) => {
-                let env = result.expect("stream read should succeed");
+            Some(env) => {
                 let event: AccountEvent = codec
                     .decode(env.event_type(), env.payload())
                     .expect("decode should succeed");

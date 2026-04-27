@@ -24,15 +24,15 @@ pub trait EventStream<M = ()> {
 
     /// Advance the cursor and return the next event envelope.
     ///
-    /// Returns `None` when the stream is exhausted. Once this method
-    /// returns `None`, all subsequent calls must also return `None`
+    /// Returns `Ok(None)` when the stream is exhausted. Once this method
+    /// returns `Ok(None)`, all subsequent calls must also return `Ok(None)`
     /// (fused behavior).
     ///
     /// The returned envelope borrows from `self` — drop it before
     /// calling `next()` again.
     fn next(
         &mut self,
-    ) -> impl Future<Output = Option<Result<PersistedEnvelope<'_, M>, Self::Error>>> + Send;
+    ) -> impl Future<Output = Result<Option<PersistedEnvelope<'_, M>>, Self::Error>> + Send;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -86,8 +86,7 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
     {
         async move {
             let mut acc = init;
-            while let Some(result) = self.next().await {
-                let env = result.map_err(E::from)?;
+            while let Some(env) = self.next().await.map_err(E::from)? {
                 acc = f(acc, env)?;
             }
             Ok(acc)

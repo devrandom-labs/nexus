@@ -25,6 +25,11 @@
     reason = "benchmark functions do not need panic docs"
 )]
 
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::fmt;
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::Version;
 use nexus_store::AppendError;
@@ -33,9 +38,6 @@ use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
-use std::collections::HashMap;
-use std::fmt;
-use std::hint::black_box;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -45,7 +47,14 @@ impl fmt::Display for BenchId {
         f.write_str(&self.0)
     }
 }
-impl nexus::Id for BenchId {}
+impl AsRef<[u8]> for BenchId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl nexus::Id for BenchId {
+    const BYTE_LEN: usize = 0;
+}
 
 fn bid(s: &str) -> BenchId {
     BenchId(s.to_owned())
@@ -77,13 +86,13 @@ struct InMemoryStream {
 impl EventStream for InMemoryStream {
     type Error = BenchError;
 
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         if self.pos >= self.events.len() {
-            return None;
+            return Ok(None);
         }
         let row = &self.events[self.pos];
         self.pos += 1;
-        Some(Ok(PersistedEnvelope::new_unchecked(
+        Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).unwrap(),
             &row.1,
             1,
@@ -155,10 +164,13 @@ impl RawEventStore for InMemoryRawStore {
 struct NoopV1ToV6;
 
 impl Upcaster for NoopV1ToV6 {
+    type Error = Infallible;
+
     fn apply<'a>(
         &self,
         mut morsel: nexus_store::upcasting::EventMorsel<'a>,
-    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError> {
+    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError<Self::Error>>
+    {
         loop {
             morsel = match (morsel.event_type(), morsel.schema_version()) {
                 ("UserCreated", v) if v == Version::new(1).unwrap() => {
@@ -303,8 +315,8 @@ fn bench_read_stream(c: &mut Criterion) {
                         .read_stream(&bid("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
-                    while let Some(result) = stream.next().await {
-                        black_box(result.unwrap());
+                    while let Some(env) = stream.next().await.unwrap() {
+                        black_box(env);
                     }
                 });
             });

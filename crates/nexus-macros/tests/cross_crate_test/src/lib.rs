@@ -6,15 +6,29 @@ use std::fmt;
 
 // --- ID ---
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct TaskId(pub u64);
+pub struct TaskId(pub [u8; 8]);
 
-impl fmt::Display for TaskId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "task-{}", self.0)
+impl TaskId {
+    pub fn new(id: u64) -> Self {
+        Self(id.to_be_bytes())
     }
 }
 
-impl Id for TaskId {}
+impl fmt::Display for TaskId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "task-{}", u64::from_be_bytes(self.0))
+    }
+}
+
+impl AsRef<[u8]> for TaskId {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Id for TaskId {
+    const BYTE_LEN: usize = 8;
+}
 
 // --- Events (derive macro from external crate) ---
 #[derive(Debug, Clone, DomainEvent)]
@@ -104,7 +118,7 @@ mod tests {
 
     #[test]
     fn cross_crate_lifecycle() {
-        let mut task = TaskAggregate::new(TaskId(1));
+        let mut task = TaskAggregate::new(TaskId::new(1));
         let decided = task
             .handle(CreateTask {
                 title: "Write tests".into(),
@@ -124,7 +138,7 @@ mod tests {
 
     #[test]
     fn cross_crate_invariants() {
-        let mut task = TaskAggregate::new(TaskId(2));
+        let mut task = TaskAggregate::new(TaskId::new(2));
         let decided = task
             .handle(CreateTask {
                 title: "Task".into(),
@@ -147,7 +161,7 @@ mod tests {
 
     #[test]
     fn cross_crate_rehydrate() {
-        let mut task = TaskAggregate::new(TaskId(3));
+        let mut task = TaskAggregate::new(TaskId::new(3));
         task.root_mut()
             .replay(
                 Version::new(1).unwrap(),
@@ -162,7 +176,7 @@ mod tests {
 
     #[test]
     fn cross_crate_generic_aggregate_entity() {
-        let task = TaskAggregate::new(TaskId(4));
+        let task = TaskAggregate::new(TaskId::new(4));
         // This function accepts any AggregateEntity — proves the trait works
         assert_eq!(generic_version(&task), None);
     }
