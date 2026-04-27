@@ -454,3 +454,27 @@ fn projection_error_state_variant_is_unconstructable_when_infallible() {
     > = ProjectionError::Projector(TestProjectionError);
     // If this compiles, the State(Infallible) variant is unconstructable. ✓
 }
+
+// ── NoStatePersistence ──────────────────────────────────────────
+use nexus_store::projection::runner::{NoStatePersistence, StatePersistence};
+
+#[tokio::test]
+async fn no_state_persistence_load_returns_none() {
+    let sp = NoStatePersistence;
+    let id = TestId("proj-1".into());
+    let result: Result<Option<(CountState, _)>, _> = sp.load(&id).await;
+    assert!(result.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn no_state_persistence_save_succeeds() {
+    let sp = NoStatePersistence;
+    let id = TestId("proj-1".into());
+    let state = CountState {
+        count: 1,
+        total: 10,
+    };
+    let version = Version::new(5).unwrap();
+    let result = sp.save(&id, version, &state).await;
+    assert!(result.is_ok());
+}
