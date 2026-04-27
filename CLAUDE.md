@@ -52,6 +52,16 @@ Organized into 4 module directories + 3 cross-cutting files:
 - **`upcasting/`** — Schema evolution.
   - `morsel.rs` — `EventMorsel<'a>`: zero-copy-when-possible data unit flowing through transforms.
   - `upcaster.rs` — `Upcaster` trait for raw-byte schema migrations with associated `type Error`. `()` is the no-op passthrough (`Error = Infallible`).
+- **`projection/`** — Subscription-powered CQRS projections (feature-gated: `projection`).
+  - `projector.rs` — `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`).
+  - `trigger.rs` — `ProjectionTrigger` trait: decides when to persist state. `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic).
+  - `pending.rs` / `persisted.rs` — `PendingState` (write-path) / `PersistedState` (read-path) containers with version + schema_version + payload.
+  - `store.rs` — `StateStore` trait: byte-level projection state persistence. `()` is no-op impl.
+  - `runner/` — Subscription-powered async projection execution.
+    - `runner.rs` — `ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig>`: background event processor. `async fn run(self, shutdown: impl Future<Output = ()>)` consumes self, processes events until shutdown or error. Uses `core::future::poll_fn` for runtime-agnostic select (no tokio in public API).
+    - `builder.rs` — `ProjectionRunnerBuilder`: typestate builder with 4 required slots (subscription, checkpoint, projector, event_codec) and optional (state_store + codec via `WithStatePersistence`, trigger). `!Send` markers prevent `.build()` without required fields.
+    - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain. `StatePersistError<S, C>`: wraps state store and codec errors.
+    - `persist.rs` — `StatePersistence<S>` trait: polymorphic state load/save. `NoStatePersistence` (Error = Infallible, no-op). `WithStatePersistence<SS, SC>` (real store + codec).
 - **`store/`** — Storage infrastructure: traits adapters implement + facades users interact with.
   - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap. Factory methods: `repository(codec, upcaster) -> EventStore`, `zero_copy_repository(codec, upcaster) -> ZeroCopyEventStore`.
   - `raw.rs` — `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
@@ -113,6 +123,7 @@ Every database interaction in store adapters MUST be atomic:
 - **Reads touching multiple partitions/keys**: single read transaction or shared snapshot — NEVER two independent reads
 - **Writes**: write transactions
 - **Read-then-write**: single transaction spanning both
+- **Inline projections**: projection state writes default to best-effort (separate operation, like snapshots). Same-transaction atomicity is an opt-in capability for adapters that support it — not a universal requirement. Projections are derived state; if a best-effort write fails, the projection is re-derived on next load or rebuild.
 
 If a public method does 2+ database calls without a shared transaction, it is a bug.
 

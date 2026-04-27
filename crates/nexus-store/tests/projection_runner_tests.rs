@@ -14,9 +14,7 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{DomainEvent, Message, Version};
-use nexus_store::projection::runner::{
-    NoStatePersistence, ProjectionError, ProjectionRunner, StatePersistence, WithStatePersistence,
-};
+use nexus_store::projection::runner::{ProjectionError, ProjectionRunner};
 use nexus_store::projection::{
     EveryNEvents as ProjEveryNEvents, InMemoryStateStore, Projector, StateStore,
 };
