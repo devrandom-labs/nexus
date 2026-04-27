@@ -16,7 +16,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 use nexus::Version;
 use nexus_store::projection::{
     AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,
-    PersistedState, ProjectionTrigger, StateStore,
+    PersistedState, ProjectionTrigger, Projector, StateStore,
 };
 
 const SV1: NonZeroU32 = NonZeroU32::MIN;
@@ -305,4 +305,117 @@ mod in_memory_tests {
         let loaded = store.load(&id, NonZeroU32::new(2).unwrap()).await.unwrap();
         assert!(loaded.is_none());
     }
+}
+
+// ── Projector trait ─────────────────────────────────────────────────
+
+/// A test projector that counts events and sums a field.
+struct CountingProjector;
+
+#[derive(Debug, Clone, PartialEq)]
+struct CountState {
+    count: u64,
+    total: u64,
+}
+
+#[derive(Debug)]
+enum TestEvent {
+    Added(u64),
+    Removed(u64),
+}
+
+impl nexus::Message for TestEvent {}
+impl nexus::DomainEvent for TestEvent {
+    fn name(&self) -> &'static str {
+        match self {
+            TestEvent::Added(_) => "Added",
+            TestEvent::Removed(_) => "Removed",
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("overflow")]
+struct ProjectionError;
+
+impl Projector for CountingProjector {
+    type Event = TestEvent;
+    type State = CountState;
+    type Error = ProjectionError;
+
+    fn initial(&self) -> CountState {
+        CountState { count: 0, total: 0 }
+    }
+
+    fn apply(&self, state: CountState, event: &TestEvent) -> Result<CountState, ProjectionError> {
+        match event {
+            TestEvent::Added(n) => Ok(CountState {
+                count: state.count.checked_add(1).ok_or(ProjectionError)?,
+                total: state.total.checked_add(*n).ok_or(ProjectionError)?,
+            }),
+            TestEvent::Removed(n) => Ok(CountState {
+                count: state.count.checked_add(1).ok_or(ProjectionError)?,
+                total: state.total.checked_sub(*n).ok_or(ProjectionError)?,
+            }),
+        }
+    }
+}
+
+#[test]
+fn projector_initial_state() {
+    let proj = CountingProjector;
+    let state = proj.initial();
+    assert_eq!(state, CountState { count: 0, total: 0 });
+}
+
+#[test]
+fn projector_folds_events() {
+    let proj = CountingProjector;
+    let state = proj.initial();
+
+    let state = proj.apply(state, &TestEvent::Added(10)).unwrap();
+    assert_eq!(
+        state,
+        CountState {
+            count: 1,
+            total: 10
+        }
+    );
+
+    let state = proj.apply(state, &TestEvent::Added(20)).unwrap();
+    assert_eq!(
+        state,
+        CountState {
+            count: 2,
+            total: 30
+        }
+    );
+
+    let state = proj.apply(state, &TestEvent::Removed(5)).unwrap();
+    assert_eq!(
+        state,
+        CountState {
+            count: 3,
+            total: 25
+        }
+    );
+}
+
+#[test]
+fn projector_returns_error_on_overflow() {
+    let proj = CountingProjector;
+    let state = CountState {
+        count: 0,
+        total: u64::MAX,
+    };
+    let result = proj.apply(state, &TestEvent::Added(1));
+    assert!(result.is_err());
+}
+
+#[test]
+fn projector_returns_error_on_underflow() {
+    let proj = CountingProjector;
+    let state = CountState { count: 0, total: 0 };
+    let result = proj.apply(state, &TestEvent::Removed(1));
+    assert!(result.is_err());
 }

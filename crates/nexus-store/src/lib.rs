@@ -24,7 +24,7 @@ pub use projection::InMemoryStateStore;
 #[cfg(feature = "projection")]
 pub use projection::{
     AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,
-    PersistedState, ProjectionTrigger, StateStore,
+    PersistedState, ProjectionTrigger, Projector, StateStore,
 };
 #[cfg(all(feature = "snapshot", feature = "testing"))]
 pub use snapshot::InMemorySnapshotStore;
