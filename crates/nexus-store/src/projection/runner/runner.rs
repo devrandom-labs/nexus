@@ -1,3 +1,8 @@
+use core::future::{Future, poll_fn};
+use core::iter;
+use core::pin::pin;
+use core::task::Poll;
+
 use nexus::{DomainEvent, Id};
 
 use crate::codec::Codec;
@@ -56,7 +61,7 @@ where
     )]
     pub async fn run(
         self,
-        shutdown_signal: impl core::future::Future<Output = ()>,
+        shutdown_signal: impl Future<Output = ()>,
     ) -> Result<(), ProjectionError<P::Error, EC::Error, SP::Error, Ckpt::Error, Sub::Error>> {
         let Self {
             id,
@@ -94,44 +99,33 @@ where
             .await
             .map_err(ProjectionError::Subscription)?;
 
-        let mut shutdown = core::pin::pin!(shutdown_signal);
+        let mut shutdown = pin!(shutdown_signal);
         let mut last_persisted_version = last_checkpoint;
         let mut current_version = resume_from;
         let mut dirty = false;
 
         // 4. Event loop
         loop {
-            // Race stream.next() against shutdown using poll_fn.
-            // Decode inside the poll closure while the lending borrow is valid,
-            // extract only owned data.
             let step = {
-                let mut next = core::pin::pin!(stream.next());
-                core::future::poll_fn(|cx| {
-                    // Check shutdown first
+                let mut next = pin!(stream.next());
+                poll_fn(|cx| {
                     if shutdown.as_mut().poll(cx).is_ready() {
-                        return core::task::Poll::Ready(Ok(None));
+                        return Poll::Ready(Ok(None));
                     }
-                    // Check event stream
                     match next.as_mut().poll(cx) {
-                        core::task::Poll::Ready(Ok(Some(envelope))) => {
+                        Poll::Ready(Ok(Some(envelope))) => {
                             let version = envelope.version();
                             let decoded =
                                 event_codec.decode(envelope.event_type(), envelope.payload());
-                            core::task::Poll::Ready(
+                            Poll::Ready(
                                 decoded
                                     .map(|event| Some((version, event)))
                                     .map_err(ProjectionError::EventCodec),
                             )
                         }
-                        core::task::Poll::Ready(Ok(None)) => {
-                            // Subscription contract: never returns None.
-                            // Treat as stream ended — return gracefully.
-                            core::task::Poll::Ready(Ok(None))
-                        }
-                        core::task::Poll::Ready(Err(e)) => {
-                            core::task::Poll::Ready(Err(ProjectionError::Subscription(e)))
-                        }
-                        core::task::Poll::Pending => core::task::Poll::Pending,
+                        Poll::Ready(Ok(None)) => Poll::Ready(Ok(None)),
+                        Poll::Ready(Err(e)) => Poll::Ready(Err(ProjectionError::Subscription(e))),
+                        Poll::Pending => Poll::Pending,
                     }
                 })
                 .await?
@@ -161,11 +155,7 @@ where
             dirty = true;
 
             // Check trigger
-            if trigger.should_project(
-                last_persisted_version,
-                version,
-                core::iter::once(event_name),
-            ) {
+            if trigger.should_project(last_persisted_version, version, iter::once(event_name)) {
                 state_persistence
                     .save(&id, version, &state)
                     .await
