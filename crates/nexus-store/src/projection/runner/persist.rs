@@ -76,7 +76,7 @@ pub struct WithStatePersistence<SS, SC> {
 impl<SS, SC> WithStatePersistence<SS, SC> {
     /// Create a new state persistence with the given store, codec, and schema version.
     #[must_use]
-    pub fn new(store: SS, codec: SC, schema_version: NonZeroU32) -> Self {
+    pub const fn new(store: SS, codec: SC, schema_version: NonZeroU32) -> Self {
         Self {
             store,
             codec,

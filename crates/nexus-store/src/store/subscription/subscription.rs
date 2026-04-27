@@ -23,7 +23,10 @@ use nexus::{Id, Version};
 /// `subscribe` returns a stream that *waits* instead of terminating.
 pub trait Subscription<M: 'static> {
     /// The subscription stream type — an [`EventStream`] that never exhausts.
-    type Stream<'a>: EventStream<M> + 'a
+    ///
+    /// The stream's error type must be the same as the subscription's error type
+    /// to enable uniform error handling by consumers.
+    type Stream<'a>: EventStream<M, Error = Self::Error> + 'a
     where
         Self: 'a;
 
@@ -36,4 +39,25 @@ pub trait Subscription<M: 'static> {
         id: &'a impl Id,
         from: Option<Version>,
     ) -> impl Future<Output = Result<Self::Stream<'a>, Self::Error>> + Send + 'a;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Delegation implementation — share via reference
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl<T: Subscription<M> + Sync, M: 'static> Subscription<M> for &T {
+    type Stream<'a>
+        = T::Stream<'a>
+    where
+        Self: 'a;
+
+    type Error = T::Error;
+
+    fn subscribe<'a>(
+        &'a self,
+        id: &'a impl Id,
+        from: Option<Version>,
+    ) -> impl Future<Output = Result<Self::Stream<'a>, Self::Error>> + Send + 'a {
+        (**self).subscribe(id, from)
+    }
 }

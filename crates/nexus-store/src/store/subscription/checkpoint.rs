@@ -33,3 +33,26 @@ pub trait CheckpointStore {
         version: Version,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + '_;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Delegation implementation — share via reference
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl<T: CheckpointStore> CheckpointStore for &T {
+    type Error = T::Error;
+
+    fn load(
+        &self,
+        subscription_id: &impl Id,
+    ) -> impl Future<Output = Result<Option<Version>, Self::Error>> + Send + '_ {
+        (**self).load(subscription_id)
+    }
+
+    fn save(
+        &self,
+        subscription_id: &impl Id,
+        version: Version,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + '_ {
+        (**self).save(subscription_id, version)
+    }
+}
