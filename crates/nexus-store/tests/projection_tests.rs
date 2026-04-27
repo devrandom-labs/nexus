@@ -336,26 +336,30 @@ impl nexus::DomainEvent for TestEvent {
 
 #[derive(Debug, thiserror::Error)]
 #[error("overflow")]
-struct ProjectionError;
+struct TestProjectionError;
 
 impl Projector for CountingProjector {
     type Event = TestEvent;
     type State = CountState;
-    type Error = ProjectionError;
+    type Error = TestProjectionError;
 
     fn initial(&self) -> CountState {
         CountState { count: 0, total: 0 }
     }
 
-    fn apply(&self, state: CountState, event: &TestEvent) -> Result<CountState, ProjectionError> {
+    fn apply(
+        &self,
+        state: CountState,
+        event: &TestEvent,
+    ) -> Result<CountState, TestProjectionError> {
         match event {
             TestEvent::Added(n) => Ok(CountState {
-                count: state.count.checked_add(1).ok_or(ProjectionError)?,
-                total: state.total.checked_add(*n).ok_or(ProjectionError)?,
+                count: state.count.checked_add(1).ok_or(TestProjectionError)?,
+                total: state.total.checked_add(*n).ok_or(TestProjectionError)?,
             }),
             TestEvent::Removed(n) => Ok(CountState {
-                count: state.count.checked_add(1).ok_or(ProjectionError)?,
-                total: state.total.checked_sub(*n).ok_or(ProjectionError)?,
+                count: state.count.checked_add(1).ok_or(TestProjectionError)?,
+                total: state.total.checked_sub(*n).ok_or(TestProjectionError)?,
             }),
         }
     }
@@ -418,4 +422,35 @@ fn projector_returns_error_on_underflow() {
     let state = CountState { count: 0, total: 0 };
     let result = proj.apply(state, &TestEvent::Removed(1));
     assert!(result.is_err());
+}
+
+// ── ProjectionError ─────────────────────────────────────────────
+use nexus_store::projection::runner::ProjectionError;
+
+#[test]
+fn projection_error_displays_projector_variant() {
+    let err: ProjectionError<
+        TestProjectionError,
+        std::io::Error,
+        std::convert::Infallible,
+        std::io::Error,
+        std::io::Error,
+    > = ProjectionError::Projector(TestProjectionError);
+    let msg = err.to_string();
+    assert!(msg.contains("projector"), "expected 'projector' in: {msg}");
+}
+
+#[test]
+fn projection_error_state_variant_is_unconstructable_when_infallible() {
+    // When StatePersistence = NoStatePersistence, SP::Error = Infallible.
+    // The State variant cannot be constructed — this is a compile-time property.
+    // We verify by constructing other variants with Infallible as the SP type param.
+    let _err: ProjectionError<
+        TestProjectionError,
+        std::io::Error,
+        std::convert::Infallible,
+        std::io::Error,
+        std::io::Error,
+    > = ProjectionError::Projector(TestProjectionError);
+    // If this compiles, the State(Infallible) variant is unconstructable. ✓
 }

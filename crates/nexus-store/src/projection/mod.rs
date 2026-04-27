@@ -1,6 +1,7 @@
 mod pending;
 mod persisted;
 mod projector;
+pub mod runner;
 mod store;
 #[cfg(feature = "testing")]
 mod testing;
