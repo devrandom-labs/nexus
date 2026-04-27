@@ -26,7 +26,8 @@ cargo fmt --all
 ### Crate Dependency Graph
 
 ```
-nexus-fjall   --> nexus-store --> nexus (kernel)
+nexus-framework --> nexus-store --> nexus (kernel)
+nexus-fjall   --> nexus-store
 nexus-macros <-- nexus (kernel, optional via "derive" feature)
 ```
 
@@ -57,11 +58,6 @@ Organized into 4 module directories + 3 cross-cutting files:
   - `trigger.rs` — `ProjectionTrigger` trait: decides when to persist state. `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic).
   - `pending.rs` / `persisted.rs` — `PendingState` (write-path) / `PersistedState` (read-path) containers with version + schema_version + payload.
   - `store.rs` — `StateStore` trait: byte-level projection state persistence. `()` is no-op impl.
-  - `runner/` — Subscription-powered async projection execution.
-    - `runner.rs` — `ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig>`: background event processor. `async fn run(self, shutdown: impl Future<Output = ()>)` consumes self, processes events until shutdown or error. Uses `core::future::poll_fn` for runtime-agnostic select (no tokio in public API).
-    - `builder.rs` — `ProjectionRunnerBuilder`: typestate builder with 4 required slots (subscription, checkpoint, projector, event_codec) and optional (state_store + codec via `WithStatePersistence`, trigger). `!Send` markers prevent `.build()` without required fields.
-    - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain. `StatePersistError<S, C>`: wraps state store and codec errors.
-    - `persist.rs` — `StatePersistence<S>` trait: polymorphic state load/save. `NoStatePersistence` (Error = Infallible, no-op). `WithStatePersistence<SS, SC>` (real store + codec).
 - **`store/`** — Storage infrastructure: traits adapters implement + facades users interact with.
   - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap. Factory methods: `repository(codec, upcaster) -> EventStore`, `zero_copy_repository(codec, upcaster) -> ZeroCopyEventStore`.
   - `raw.rs` — `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
@@ -71,6 +67,17 @@ Organized into 4 module directories + 3 cross-cutting files:
   - `repository.rs` — `Repository<A>` trait: high-level `load` and `save`.
 - **`error.rs`** — `StoreError<A, C, U>` (generic over adapter/codec/upcaster errors, allocation-free), `AppendError<E>`, `UpcastError<U>` (generic over transform error), `InvalidSchemaVersion`. All use `ArrayString<64>` for stream IDs instead of heap-allocated strings.
 - **`testing.rs`** — `InMemoryStore`, `InMemoryStream`, `InMemoryStoreError` (feature-gated behind `testing`).
+
+### Framework Crate (`nexus-framework`) — Batteries-Included Runtime Layer
+
+Depends on `nexus-store` + `tokio`. Provides IO-driven components that require an async runtime.
+
+- **`projection/`** — Subscription-powered async projection execution.
+  - `runner.rs` — `ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig>`: background event processor. Uses `tokio::select!` to race event stream against shutdown signal.
+  - `builder.rs` — `ProjectionRunnerBuilder`: typestate builder with `!Send` markers for compile-time required field enforcement.
+  - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain. `StatePersistError<S, C>`.
+  - `persist.rs` — `StatePersistence<S>` trait: `NoStatePersistence` (Infallible) and `WithStatePersistence<SS, SC>`.
+  - `stream.rs` — `DecodedStream`: adapter converting lending GAT `EventStream` to owned `tokio_stream::Stream` by decoding inside `poll_next`.
 
 ### Fjall Adapter Crate (`nexus-fjall`) — Embedded LSM-Tree Event Store
 

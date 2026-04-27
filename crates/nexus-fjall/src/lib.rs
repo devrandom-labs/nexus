@@ -13,7 +13,7 @@ mod subscription_stream;
 
 pub use builder::FjallStoreBuilder;
 pub use error::FjallError;
-pub use partition::PartitionConfig;
+pub use partition::KeyspaceConfig;
 pub use store::FjallStore;
 pub use stream::FjallStream;
 pub use subscription_stream::FjallSubscriptionStream;

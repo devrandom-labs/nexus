@@ -6,7 +6,7 @@ use crate::error::FjallError;
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
 use arrayvec::ArrayString;
-use fjall::Slice;
+use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
@@ -42,12 +42,12 @@ fn lossy_label(bytes: &[u8]) -> ArrayString<64> {
 ///
 /// Use [`FjallStore::builder`] to configure and open a store.
 pub struct FjallStore {
-    pub(crate) db: fjall::TxKeyspace,
-    pub(crate) streams: fjall::TxPartitionHandle,
-    pub(crate) events: fjall::TxPartitionHandle,
+    pub(crate) db: fjall::SingleWriterTxDatabase,
+    pub(crate) streams: fjall::SingleWriterTxKeyspace,
+    pub(crate) events: fjall::SingleWriterTxKeyspace,
     #[cfg(feature = "snapshot")]
-    pub(crate) snapshots: fjall::TxPartitionHandle,
-    pub(crate) checkpoints: fjall::TxPartitionHandle,
+    pub(crate) snapshots: fjall::SingleWriterTxKeyspace,
+    pub(crate) checkpoints: fjall::SingleWriterTxKeyspace,
     pub(crate) notify: Notify,
 }
 
@@ -225,7 +225,7 @@ impl RawEventStore for FjallStore {
             .events
             .inner()
             .range(start..=end)
-            .map(|r| r.map(|kv| (kv.0, kv.1)))
+            .map(fjall::Guard::into_inner)
             .collect::<Result<_, _>>()?;
 
         // Postcondition: events must be sorted by key (fjall guarantees this,

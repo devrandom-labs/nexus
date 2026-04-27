@@ -1,7 +1,7 @@
 use crate::error::FjallError;
-use crate::partition::{PartitionConfig, point_read_defaults, scan_defaults};
+use crate::partition::{KeyspaceConfig, point_read_defaults, scan_defaults};
 use crate::store::FjallStore;
-use fjall::PartitionCreateOptions;
+use fjall::KeyspaceCreateOptions;
 use std::path::{Path, PathBuf};
 use tokio::sync::Notify;
 
@@ -38,13 +38,13 @@ impl FjallStoreBuilder {
 impl<S, E> FjallStoreBuilder<S, E> {
     /// Customise the `streams` partition options.
     ///
-    /// The closure receives a pre-configured `PartitionCreateOptions` and
+    /// The closure receives a pre-configured `KeyspaceCreateOptions` and
     /// should return the (possibly modified) options. Defaults are tuned
     /// for point-read-heavy metadata lookups (4 KiB blocks, bloom filter).
     #[must_use]
     pub fn streams_config<F>(self, f: F) -> FjallStoreBuilder<F, E>
     where
-        F: FnOnce(PartitionCreateOptions) -> PartitionCreateOptions,
+        F: FnOnce(KeyspaceCreateOptions) -> KeyspaceCreateOptions,
     {
         FjallStoreBuilder {
             path: self.path,
@@ -55,13 +55,13 @@ impl<S, E> FjallStoreBuilder<S, E> {
 
     /// Customise the `events` partition options.
     ///
-    /// The closure receives a pre-configured `PartitionCreateOptions` and
+    /// The closure receives a pre-configured `KeyspaceCreateOptions` and
     /// should return the (possibly modified) options. Defaults are tuned
     /// for scan-heavy event reads (32 KiB blocks, LZ4 compression).
     #[must_use]
     pub fn events_config<F>(self, f: F) -> FjallStoreBuilder<S, F>
     where
-        F: FnOnce(PartitionCreateOptions) -> PartitionCreateOptions,
+        F: FnOnce(KeyspaceCreateOptions) -> KeyspaceCreateOptions,
     {
         FjallStoreBuilder {
             path: self.path,
@@ -71,7 +71,7 @@ impl<S, E> FjallStoreBuilder<S, E> {
     }
 }
 
-impl<S: PartitionConfig, E: PartitionConfig> FjallStoreBuilder<S, E> {
+impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
     /// Open (or create) the fjall database and return a [`FjallStore`].
     ///
     /// On first open the partitions are created with their default
@@ -83,16 +83,17 @@ impl<S: PartitionConfig, E: PartitionConfig> FjallStoreBuilder<S, E> {
     /// Returns [`FjallError::Io`] if the underlying fjall database cannot
     /// be opened or a partition cannot be created.
     pub fn open(self) -> Result<FjallStore, FjallError> {
-        let db = fjall::Config::new(&self.path).open_transactional()?;
+        let db = fjall::SingleWriterTxDatabase::builder(&self.path).open()?;
 
-        let streams =
-            db.open_partition("streams", self.streams_config.apply(point_read_defaults()))?;
-        let events = db.open_partition("events", self.events_config.apply(scan_defaults()))?;
+        let streams_opts = self.streams_config.apply(point_read_defaults());
+        let streams = db.keyspace("streams", || streams_opts)?;
+        let events_opts = self.events_config.apply(scan_defaults());
+        let events = db.keyspace("events", || events_opts)?;
 
         #[cfg(feature = "snapshot")]
-        let snapshots = db.open_partition("snapshots", point_read_defaults())?;
+        let snapshots = db.keyspace("snapshots", point_read_defaults)?;
 
-        let checkpoints = db.open_partition("checkpoints", point_read_defaults())?;
+        let checkpoints = db.keyspace("checkpoints", point_read_defaults)?;
 
         Ok(FjallStore {
             db,

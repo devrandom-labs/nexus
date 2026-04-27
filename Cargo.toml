@@ -16,7 +16,7 @@ members = [
 [workspace.dependencies]
 arrayvec = { version = "0.7.6", default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
-fjall = "2"
+fjall = "3"
 insta = "1.47.2"
 proptest = "1.11.0"
 proptest-state-machine = "0.8.0"
