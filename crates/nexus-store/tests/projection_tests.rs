@@ -14,7 +14,7 @@ use std::fmt;
 use std::num::NonZeroU32;
 
 use nexus::Version;
-use nexus_store::projection::{PendingState, PersistedState};
+use nexus_store::projection::{PendingState, PersistedState, StateStore};
 
 const SV1: NonZeroU32 = NonZeroU32::MIN;
 
@@ -58,4 +58,35 @@ fn persisted_state_stores_version_and_payload() {
     assert_eq!(state.version(), version);
     assert_eq!(state.schema_version(), sv);
     assert_eq!(state.payload(), &[4, 5, 6]);
+}
+
+// ── () no-op StateStore ─────────────────────────────────────────
+
+#[tokio::test]
+async fn unit_state_store_returns_none() {
+    let store = ();
+    let id = TestId("proj-1".into());
+    let result = store.load(&id, SV1).await;
+    assert!(result.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn unit_state_store_save_succeeds() {
+    let store = ();
+    let id = TestId("proj-1".into());
+    let state = PendingState::new(
+        Version::new(1).unwrap(),
+        NonZeroU32::new(1).unwrap(),
+        vec![1, 2, 3],
+    );
+    let result = store.save(&id, &state).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn unit_state_store_delete_succeeds() {
+    let store = ();
+    let id = TestId("proj-1".into());
+    let result = store.delete(&id).await;
+    assert!(result.is_ok());
 }
