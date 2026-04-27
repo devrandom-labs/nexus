@@ -478,3 +478,87 @@ async fn no_state_persistence_save_succeeds() {
     let result = sp.save(&id, version, &state).await;
     assert!(result.is_ok());
 }
+
+// ── WithStatePersistence ────────────────────────────────────────
+#[cfg(feature = "testing")]
+mod state_persistence_tests {
+    use super::*;
+    use nexus_store::Codec;
+    use nexus_store::projection::InMemoryStateStore;
+    use nexus_store::projection::runner::WithStatePersistence;
+
+    /// A test codec for CountState.
+    struct CountStateCodec;
+
+    impl Codec<CountState> for CountStateCodec {
+        type Error = std::io::Error;
+
+        fn encode(&self, state: &CountState) -> Result<Vec<u8>, Self::Error> {
+            let mut buf = Vec::with_capacity(16);
+            buf.extend_from_slice(&state.count.to_le_bytes());
+            buf.extend_from_slice(&state.total.to_le_bytes());
+            Ok(buf)
+        }
+
+        fn decode(&self, _name: &str, payload: &[u8]) -> Result<CountState, Self::Error> {
+            if payload.len() != 16 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "expected 16 bytes",
+                ));
+            }
+            let count = u64::from_le_bytes(payload[..8].try_into().unwrap());
+            let total = u64::from_le_bytes(payload[8..].try_into().unwrap());
+            Ok(CountState { count, total })
+        }
+    }
+
+    #[tokio::test]
+    async fn with_state_persistence_save_then_load_roundtrips() {
+        let store = InMemoryStateStore::new();
+        let sp = WithStatePersistence::new(&store, CountStateCodec, NonZeroU32::MIN);
+
+        let id = TestId("proj-1".into());
+        let state = CountState {
+            count: 3,
+            total: 42,
+        };
+        let version = Version::new(10).unwrap();
+
+        sp.save(&id, version, &state).await.unwrap();
+
+        let loaded = sp.load(&id).await.unwrap().unwrap();
+        assert_eq!(loaded.0, state);
+        assert_eq!(loaded.1, version);
+    }
+
+    #[tokio::test]
+    async fn with_state_persistence_load_returns_none_when_empty() {
+        let store = InMemoryStateStore::new();
+        let sp = WithStatePersistence::new(&store, CountStateCodec, NonZeroU32::MIN);
+
+        let id = TestId("proj-1".into());
+        let result: Option<(CountState, _)> = sp.load(&id).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn with_state_persistence_load_returns_none_on_schema_mismatch() {
+        let store = InMemoryStateStore::new();
+        let sp = WithStatePersistence::new(&store, CountStateCodec, NonZeroU32::MIN);
+
+        let id = TestId("proj-1".into());
+        sp.save(
+            &id,
+            Version::new(5).unwrap(),
+            &CountState { count: 1, total: 1 },
+        )
+        .await
+        .unwrap();
+
+        // Load with a different schema version
+        let sp_v2 = WithStatePersistence::new(&store, CountStateCodec, NonZeroU32::new(2).unwrap());
+        let result: Option<(CountState, _)> = sp_v2.load(&id).await.unwrap();
+        assert!(result.is_none());
+    }
+}
