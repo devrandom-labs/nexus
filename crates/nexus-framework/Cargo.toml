@@ -1,0 +1,30 @@
+[package]
+name = "nexus-framework"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Batteries-included framework for the Nexus event-sourcing kernel"
+readme = "../../README.md"
+keywords = ["event-sourcing", "cqrs", "projection", "framework"]
+categories = ["asynchronous"]
+
+[features]
+testing = ["nexus-store/testing"]
+
+[dependencies]
+nexus = { version = "0.1.0", path = "../nexus" }
+nexus-store = { version = "0.1.0", path = "../nexus-store", features = ["projection"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros"] }
+tokio-stream.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+nexus-framework = { path = ".", features = ["testing"] }
+nexus-store = { path = "../nexus-store", features = ["projection", "testing"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
