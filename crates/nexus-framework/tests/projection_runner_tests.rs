@@ -1,4 +1,4 @@
-#![cfg(all(feature = "projection", feature = "testing"))]
+#![cfg(feature = "testing")]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -14,12 +14,14 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{DomainEvent, Message, Version};
-use nexus_store::projection::runner::{ProjectionError, ProjectionRunner};
+use nexus_framework::projection::{
+    NoStatePersistence, ProjectionError, ProjectionRunner, StatePersistence, WithStatePersistence,
+};
 use nexus_store::projection::{
     EveryNEvents as ProjEveryNEvents, InMemoryStateStore, Projector, StateStore,
 };
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{CheckpointStore, Codec, RawEventStore, pending_envelope};
+use nexus_store::{CheckpointStore, Codec, EventStreamExt, RawEventStore, pending_envelope};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Test fixtures
@@ -173,7 +175,6 @@ async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[Test
             .read_stream(stream_id, Version::INITIAL)
             .await
             .unwrap();
-        use nexus_store::EventStreamExt;
         stream.try_count().await.unwrap()
     };
     let base_version = u64::try_from(current_len).unwrap();
@@ -688,4 +689,107 @@ async fn runner_catches_up_and_processes_all_existing_events() {
             total: 150
         }
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. ProjectionError display tests (moved from nexus-store)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn projection_error_displays_projector_variant() {
+    let err: ProjectionError<
+        TestProjectionError,
+        std::io::Error,
+        std::convert::Infallible,
+        std::io::Error,
+        std::io::Error,
+    > = ProjectionError::Projector(TestProjectionError);
+    let msg = err.to_string();
+    assert!(msg.contains("projector"), "expected 'projector' in: {msg}");
+}
+
+#[test]
+fn projection_error_state_variant_is_unconstructable_when_infallible() {
+    let _err: ProjectionError<
+        TestProjectionError,
+        std::io::Error,
+        std::convert::Infallible,
+        std::io::Error,
+        std::io::Error,
+    > = ProjectionError::Projector(TestProjectionError);
+    // If this compiles, the State(Infallible) variant is unconstructable. ✓
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 6. StatePersistence trait tests (moved from nexus-store)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn no_state_persistence_load_returns_none() {
+    let sp = NoStatePersistence;
+    let id = TestId("proj-1".into());
+    let result: Result<Option<(CountState, _)>, _> = sp.load(&id).await;
+    assert!(result.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn no_state_persistence_save_succeeds() {
+    let sp = NoStatePersistence;
+    let id = TestId("proj-1".into());
+    let state = CountState {
+        count: 1,
+        total: 10,
+    };
+    let version = Version::new(5).unwrap();
+    let result = sp.save(&id, version, &state).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn with_state_persistence_save_then_load_roundtrips() {
+    let store = InMemoryStateStore::new();
+    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
+
+    let id = TestId("proj-1".into());
+    let state = CountState {
+        count: 3,
+        total: 42,
+    };
+    let version = Version::new(10).unwrap();
+
+    sp.save(&id, version, &state).await.unwrap();
+
+    let loaded = sp.load(&id).await.unwrap().unwrap();
+    assert_eq!(loaded.0, state);
+    assert_eq!(loaded.1, version);
+}
+
+#[tokio::test]
+async fn with_state_persistence_load_returns_none_when_empty() {
+    let store = InMemoryStateStore::new();
+    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
+
+    let id = TestId("proj-1".into());
+    let result: Option<(CountState, _)> = sp.load(&id).await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn with_state_persistence_load_returns_none_on_schema_mismatch() {
+    let store = InMemoryStateStore::new();
+    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
+
+    let id = TestId("proj-1".into());
+    sp.save(
+        &id,
+        Version::new(5).unwrap(),
+        &CountState { count: 1, total: 1 },
+    )
+    .await
+    .unwrap();
+
+    // Load with a different schema version
+    let sp_v2 = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::new(2).unwrap());
+    let result: Option<(CountState, _)> = sp_v2.load(&id).await.unwrap();
+    assert!(result.is_none());
 }

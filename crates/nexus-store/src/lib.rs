@@ -22,8 +22,6 @@ pub use nexus::Version;
 #[cfg(all(feature = "projection", feature = "testing"))]
 pub use projection::InMemoryStateStore;
 #[cfg(feature = "projection")]
-pub use projection::runner::{ProjectionError, ProjectionRunner};
-#[cfg(feature = "projection")]
 pub use projection::{
     AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,
     PersistedState, ProjectionTrigger, Projector, StateStore,
