@@ -1,6 +1,8 @@
 pub mod codec;
 pub mod envelope;
 pub mod error;
+#[cfg(feature = "projection")]
+pub mod projection;
 #[cfg(feature = "snapshot")]
 pub mod snapshot;
 pub mod store;
@@ -17,6 +19,8 @@ pub use codec::{BorrowingCodec, Codec};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use nexus::Version;
+#[cfg(feature = "projection")]
+pub use projection::{PendingState, PersistedState};
 #[cfg(all(feature = "snapshot", feature = "testing"))]
 pub use snapshot::InMemorySnapshotStore;
 #[cfg(feature = "snapshot")]
