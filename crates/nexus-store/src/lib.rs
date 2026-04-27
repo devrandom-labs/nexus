@@ -20,7 +20,10 @@ pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use nexus::Version;
 #[cfg(feature = "projection")]
-pub use projection::{PendingState, PersistedState, StateStore};
+pub use projection::{
+    AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,
+    PersistedState, ProjectionTrigger, StateStore,
+};
 #[cfg(all(feature = "snapshot", feature = "testing"))]
 pub use snapshot::InMemorySnapshotStore;
 #[cfg(feature = "snapshot")]
