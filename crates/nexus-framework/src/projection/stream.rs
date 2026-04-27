@@ -14,14 +14,14 @@ use tokio_stream::Stream;
 /// decodes the event from the borrowed envelope, and yields the owned
 /// `(Version, E)` pair. The lending borrow is released before the item
 /// is returned.
-pub(crate) struct DecodedStream<'a, S, EC, E> {
+pub struct DecodedStream<'a, S, EC, E> {
     stream: S,
     codec: &'a EC,
     _event: std::marker::PhantomData<E>,
 }
 
 impl<'a, S, EC, E> DecodedStream<'a, S, EC, E> {
-    pub(crate) fn new(stream: S, codec: &'a EC) -> Self {
+    pub const fn new(stream: S, codec: &'a EC) -> Self {
         Self {
             stream,
             codec,
@@ -37,7 +37,7 @@ impl<S, EC, E> Unpin for DecodedStream<'_, S, EC, E> {}
 
 /// Error from the decoded stream — either a subscription/stream error or a codec error.
 #[derive(Debug)]
-pub(crate) enum DecodeStreamError<SubErr, CodecErr> {
+pub enum DecodeStreamError<SubErr, CodecErr> {
     Stream(SubErr),
     Codec(CodecErr),
 }

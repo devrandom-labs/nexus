@@ -96,7 +96,7 @@ where
 
         loop {
             let item = tokio::select! {
-                _ = &mut shutdown => None,
+                () = &mut shutdown => None,
                 item = decoded.next() => item,
             };
 
