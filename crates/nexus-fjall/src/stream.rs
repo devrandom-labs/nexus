@@ -26,9 +26,9 @@ pub struct FjallStream {
 impl EventStream for FjallStream {
     type Error = FjallError;
 
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         if self.poisoned || self.pos >= self.events.len() {
-            return None;
+            return Ok(None);
         }
 
         let (key, value) = &self.events[self.pos];
@@ -36,10 +36,10 @@ impl EventStream for FjallStream {
 
         let Ok((_id_bytes, version)) = decode_event_key(key) else {
             self.poisoned = true;
-            return Some(Err(FjallError::CorruptValue {
+            return Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: None,
-            }));
+            });
         };
 
         #[cfg(debug_assertions)]
@@ -56,30 +56,30 @@ impl EventStream for FjallStream {
 
         let Ok((schema_version, event_type, payload)) = decode_event_value(value) else {
             self.poisoned = true;
-            return Some(Err(FjallError::CorruptValue {
+            return Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: Some(version),
-            }));
+            });
         };
 
         let Some(ver) = Version::new(version) else {
             self.poisoned = true;
-            return Some(Err(FjallError::CorruptValue {
+            return Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: Some(version),
-            }));
+            });
         };
 
         if let Ok(envelope) =
             PersistedEnvelope::try_new(ver, event_type, schema_version, payload, ())
         {
-            Some(Ok(envelope))
+            Ok(Some(envelope))
         } else {
             self.poisoned = true;
-            Some(Err(FjallError::CorruptValue {
+            Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: Some(version),
-            }))
+            })
         }
     }
 }
@@ -150,10 +150,7 @@ mod tests {
             prev_version: None,
         };
 
-        let result = stream.next().await.unwrap();
-        assert!(result.is_err());
-
-        let err = result.unwrap_err();
+        let err = stream.next().await.unwrap_err();
         match err {
             FjallError::CorruptValue { stream_id, version } => {
                 assert_eq!(stream_id.as_str(), "corrupt-stream");

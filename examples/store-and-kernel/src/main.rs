@@ -236,11 +236,9 @@ async fn load_events(
 
     let mut versioned = Vec::new();
     loop {
-        let envelope = stream.next().await;
-        match envelope {
+        match stream.next().await.expect("stream read should succeed") {
             None => break,
-            Some(result) => {
-                let env = result.expect("stream read should succeed");
+            Some(env) => {
                 let event: AccountEvent = codec
                     .decode(env.event_type(), env.payload())
                     .expect("decode should succeed");

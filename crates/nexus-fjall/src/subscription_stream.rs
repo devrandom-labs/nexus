@@ -98,7 +98,7 @@ impl<'a> FjallSubscriptionStream<'a> {
 impl EventStream for FjallSubscriptionStream<'_> {
     type Error = FjallError;
 
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         loop {
             // Yield from the current inner batch if available.
             if self.inner.poisoned || self.inner.pos >= self.inner.events.len() {
@@ -112,10 +112,10 @@ impl EventStream for FjallSubscriptionStream<'_> {
 
                 let Ok((_id_bytes, version_raw)) = decode_event_key(key) else {
                     self.inner.poisoned = true;
-                    return Some(Err(FjallError::CorruptValue {
+                    return Err(FjallError::CorruptValue {
                         stream_id: self.label,
                         version: None,
-                    }));
+                    });
                 };
 
                 #[cfg(debug_assertions)]
@@ -132,32 +132,32 @@ impl EventStream for FjallSubscriptionStream<'_> {
 
                 let Ok((schema_version, event_type, payload)) = decode_event_value(value) else {
                     self.inner.poisoned = true;
-                    return Some(Err(FjallError::CorruptValue {
+                    return Err(FjallError::CorruptValue {
                         stream_id: self.label,
                         version: Some(version_raw),
-                    }));
+                    });
                 };
 
                 let Some(version) = Version::new(version_raw) else {
                     self.inner.poisoned = true;
-                    return Some(Err(FjallError::CorruptValue {
+                    return Err(FjallError::CorruptValue {
                         stream_id: self.label,
                         version: Some(version_raw),
-                    }));
+                    });
                 };
 
                 let Ok(envelope) =
                     PersistedEnvelope::try_new(version, event_type, schema_version, payload, ())
                 else {
                     self.inner.poisoned = true;
-                    return Some(Err(FjallError::CorruptValue {
+                    return Err(FjallError::CorruptValue {
                         stream_id: self.label,
                         version: Some(version_raw),
-                    }));
+                    });
                 };
 
                 self.last_version = Some(version);
-                return Some(Ok(envelope));
+                return Ok(Some(envelope));
             }
 
             // Buffer exhausted (or recovering from poison). Register for
@@ -165,13 +165,8 @@ impl EventStream for FjallSubscriptionStream<'_> {
             // append happens between our read and our wait.
             let notified = self.store.notify.notified();
 
-            let from = match self.next_read_version() {
-                Ok(v) => v,
-                Err(err) => return Some(Err(err)),
-            };
-            if let Err(err) = self.refill(from).await {
-                return Some(Err(err));
-            }
+            let from = self.next_read_version()?;
+            self.refill(from).await?;
 
             // If refill found new events, loop back to yield them.
             if !self.inner.events.is_empty() {

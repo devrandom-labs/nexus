@@ -86,13 +86,13 @@ struct InMemoryStream {
 impl EventStream for InMemoryStream {
     type Error = BenchError;
 
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         if self.pos >= self.events.len() {
-            return None;
+            return Ok(None);
         }
         let row = &self.events[self.pos];
         self.pos += 1;
-        Some(Ok(PersistedEnvelope::new_unchecked(
+        Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).unwrap(),
             &row.1,
             1,
@@ -315,8 +315,8 @@ fn bench_read_stream(c: &mut Criterion) {
                         .read_stream(&bid("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
-                    while let Some(result) = stream.next().await {
-                        black_box(result.unwrap());
+                    while let Some(env) = stream.next().await.unwrap() {
+                        black_box(env);
                     }
                 });
             });

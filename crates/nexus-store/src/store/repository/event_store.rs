@@ -85,9 +85,7 @@ where
             .await
             .map_err(StoreError::Adapter)?;
 
-        while let Some(result) = stream.next().await {
-            let env = result.map_err(StoreError::Adapter)?;
-
+        while let Some(env) = stream.next().await.map_err(StoreError::Adapter)? {
             // Build morsel from envelope — all Cow::Borrowed (zero-alloc).
             let morsel = EventMorsel::borrowed(
                 env.event_type(),

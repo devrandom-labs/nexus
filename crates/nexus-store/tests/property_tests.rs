@@ -122,8 +122,7 @@ proptest! {
                 .unwrap();
 
             let mut read_payloads: Vec<Vec<u8>> = Vec::new();
-            while let Some(result) = stream.next().await {
-                let env = result.unwrap();
+            while let Some(env) = stream.next().await.unwrap() {
                 read_payloads.push(env.payload().to_vec());
             }
 
@@ -159,8 +158,7 @@ proptest! {
                 .unwrap();
 
             let mut prev_version: u64 = 0;
-            while let Some(result) = stream.next().await {
-                let env = result.unwrap();
+            while let Some(env) = stream.next().await.unwrap() {
                 let current = env.version().as_u64();
                 prop_assert!(
                     current > prev_version,
@@ -206,8 +204,7 @@ proptest! {
             {
                 let mut stream = store.read_stream(&id_a, Version::INITIAL).await.unwrap();
                 let mut count = 0usize;
-                while let Some(result) = stream.next().await {
-                    let env = result.unwrap();
+                while let Some(env) = stream.next().await.unwrap() {
                     let idx = count;
                     prop_assert!(
                         idx < payloads_a.len(),
@@ -232,8 +229,7 @@ proptest! {
             {
                 let mut stream = store.read_stream(&id_b, Version::INITIAL).await.unwrap();
                 let mut count = 0usize;
-                while let Some(result) = stream.next().await {
-                    let env = result.unwrap();
+                while let Some(env) = stream.next().await.unwrap() {
                     let idx = count;
                     prop_assert!(
                         idx < payloads_b.len(),

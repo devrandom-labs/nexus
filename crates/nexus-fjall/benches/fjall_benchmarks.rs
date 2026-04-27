@@ -239,8 +239,8 @@ fn read_throughput(c: &mut Criterion) {
                         .read_stream(&bid("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
-                    while let Some(result) = stream.next().await {
-                        let _ = result.unwrap();
+                    while let Some(env) = stream.next().await.unwrap() {
+                        let _ = env;
                     }
                 });
             });

@@ -296,10 +296,13 @@ async fn main() {
 
     let mut read_events: Vec<(String, u32, Vec<u8>, u64)> = Vec::new();
     loop {
-        let item = event_stream.next().await;
-        match item {
-            None => break,
-            Some(Ok(env)) => {
+        match event_stream.next().await {
+            Err(e) => {
+                println!("  Error reading event: {e}");
+                break;
+            }
+            Ok(None) => break,
+            Ok(Some(env)) => {
                 let event_type = env.event_type().to_owned();
                 let payload = env.payload().to_vec();
                 let version = env.version().as_u64();
@@ -312,10 +315,6 @@ async fn main() {
                 );
 
                 read_events.push((event_type, schema_version, payload, version));
-            }
-            Some(Err(e)) => {
-                println!("  Error reading event: {e}");
-                break;
             }
         }
     }

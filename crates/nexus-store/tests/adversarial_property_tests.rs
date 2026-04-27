@@ -258,8 +258,7 @@ async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamName) -> Vec
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -271,8 +270,7 @@ async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamName) -> Vec
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         versions.push(env.version().as_u64());
     }
     versions
@@ -713,15 +711,14 @@ proptest! {
 
             // Drain all events
             let mut count = 0;
-            while let Some(result) = stream.next().await {
-                result.unwrap();
+            while let Some(_env) = stream.next().await.unwrap() {
                 count += 1;
             }
             prop_assert_eq!(count, n, "wrong event count");
 
             // After None, all subsequent calls must also return None (fused)
             for _ in 0..10 {
-                let next = stream.next().await;
+                let next = stream.next().await.unwrap();
                 prop_assert!(next.is_none(), "stream must be fused: returned Some after None");
             }
             Ok(())
@@ -801,8 +798,7 @@ proptest! {
                 .unwrap();
 
             let mut read_versions = Vec::new();
-            while let Some(result) = stream.next().await {
-                let env = result.unwrap();
+            while let Some(env) = stream.next().await.unwrap() {
                 read_versions.push(env.version().as_u64());
             }
 
@@ -1445,8 +1441,7 @@ proptest! {
                 handles.push(tokio::spawn(async move {
                     let mut stream = store.read_stream(&sid, Version::INITIAL).await.unwrap();
                     let mut read = Vec::new();
-                    while let Some(result) = stream.next().await {
-                        let env = result.unwrap();
+                    while let Some(env) = stream.next().await.unwrap() {
                         read.push(env.payload().to_vec());
                     }
                     assert_eq!(read, expected, "reader got wrong payloads");

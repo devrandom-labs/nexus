@@ -48,8 +48,8 @@ use std::future::Future;
 ///     let mut stream = self.store.read_stream(&id, Version::INITIAL).await
 ///         .map_err(|e| StoreError::Adapter(Box::new(e)))?;
 ///     let mut root = AggregateRoot::<A>::new(id);
-///     while let Some(result) = stream.next().await {
-///         let env = result.map_err(|e| StoreError::Adapter(Box::new(e)))?;
+///     while let Some(env) = stream.next().await
+///         .map_err(|e| StoreError::Adapter(Box::new(e)))? {
 ///         let event = self.codec.decode(env.event_type(), env.payload())
 ///             .map_err(|e| StoreError::Codec(Box::new(e)))?;
 ///         root.replay(env.version(), &event)?; // KernelError auto-converts via From

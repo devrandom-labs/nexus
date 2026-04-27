@@ -569,7 +569,7 @@ mod tests {
             assert_eq!(env.payload(), b"p2");
         }
 
-        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.unwrap().is_none());
     }
 
     // ---- version tracking tests ----
@@ -598,6 +598,6 @@ mod tests {
             let e2 = stream.next().await.unwrap().unwrap();
             assert_eq!(e2.version().as_u64(), 2);
         }
-        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.unwrap().is_none());
     }
 }

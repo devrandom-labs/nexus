@@ -95,8 +95,7 @@ async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -108,8 +107,7 @@ async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         versions.push(env.version().as_u64());
     }
     versions
@@ -121,8 +119,7 @@ async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<Str
         .await
         .unwrap();
     let mut types = Vec::new();
-    while let Some(result) = stream.next().await {
-        let env = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
         types.push(env.event_type().to_owned());
     }
     types
@@ -134,8 +131,8 @@ async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
         .await
         .unwrap();
     let mut count: u64 = 0;
-    while let Some(result) = stream.next().await {
-        let _ = result.unwrap();
+    while let Some(env) = stream.next().await.unwrap() {
+        let _ = env;
         count += 1;
     }
     count
@@ -455,7 +452,7 @@ async fn attack_version_u64_max_read() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "reading from u64::MAX should return empty"
     );
 }
@@ -481,7 +478,7 @@ async fn attack_read_nonexistent_stream() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "nonexistent stream should return empty"
     );
 }
@@ -502,7 +499,7 @@ async fn attack_read_past_end_of_stream() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.is_none(),
+        stream.next().await.unwrap().is_none(),
         "reading past end of stream should return empty"
     );
 }

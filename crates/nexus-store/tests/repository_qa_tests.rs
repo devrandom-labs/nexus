@@ -1438,7 +1438,7 @@ async fn d11_schema_version_always_one() {
         1,
         "default schema_version should be 1"
     );
-    assert!(stream.next().await.is_none());
+    assert!(stream.next().await.unwrap().is_none());
 }
 
 #[tokio::test]

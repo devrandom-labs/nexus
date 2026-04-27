@@ -96,13 +96,13 @@ enum ProbeError {
 
 impl EventStream for ProbeStream {
     type Error = ProbeError;
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         if self.pos >= self.events.len() {
-            return None;
+            return Ok(None);
         }
         let row = &self.events[self.pos];
         self.pos += 1;
-        Some(Ok(PersistedEnvelope::new_unchecked(
+        Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).unwrap(),
             &row.1,
             1,

@@ -93,9 +93,9 @@ pub struct InMemoryStream {
 impl EventStream for InMemoryStream {
     type Error = InMemoryStoreError;
 
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         if self.pos >= self.events.len() {
-            return None;
+            return Ok(None);
         }
         let row = &self.events[self.pos];
         self.pos += 1;
@@ -112,9 +112,9 @@ impl EventStream for InMemoryStream {
             self.prev_version = Some(row.version);
         }
         let Some(version) = Version::new(row.version) else {
-            return Some(Err(InMemoryStoreError::CorruptVersion));
+            return Err(InMemoryStoreError::CorruptVersion);
         };
-        Some(Ok(PersistedEnvelope::new_unchecked(
+        Ok(Some(PersistedEnvelope::new_unchecked(
             version,
             &row.event_type,
             row.schema_version,
@@ -286,7 +286,7 @@ impl InMemorySubscriptionStream<'_> {
 impl EventStream for InMemorySubscriptionStream<'_> {
     type Error = InMemoryStoreError;
 
-    async fn next(&mut self) -> Option<Result<PersistedEnvelope<'_>, Self::Error>> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         loop {
             // Yield from the current buffer if available.
             if self.pos < self.buffer.len() {
@@ -307,11 +307,11 @@ impl EventStream for InMemorySubscriptionStream<'_> {
                 }
 
                 let Some(version) = Version::new(row.version) else {
-                    return Some(Err(InMemoryStoreError::CorruptVersion));
+                    return Err(InMemoryStoreError::CorruptVersion);
                 };
                 self.last_version = Some(version);
 
-                return Some(Ok(PersistedEnvelope::new_unchecked(
+                return Ok(Some(PersistedEnvelope::new_unchecked(
                     version,
                     &row.event_type,
                     row.schema_version,
@@ -325,10 +325,7 @@ impl EventStream for InMemorySubscriptionStream<'_> {
             // between our read and our wait.
             let notified = self.store.notify.notified();
 
-            let from = match self.next_read_version() {
-                Ok(v) => v,
-                Err(err) => return Some(Err(err)),
-            };
+            let from = self.next_read_version()?;
             self.refill(from).await;
 
             // If refill found new events, loop back to yield them.

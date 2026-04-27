@@ -60,11 +60,11 @@ async fn collect_stream(stream: &mut InMemoryStream) -> Vec<(u64, Vec<u8>)> {
     loop {
         let item = stream.next().await;
         match item {
-            None => break,
-            Some(Ok(env)) => {
+            Ok(None) => break,
+            Ok(Some(env)) => {
                 result.push((env.version().as_u64(), env.payload().to_vec()));
             }
-            Some(Err(e)) => panic!("unexpected stream error: {e}"),
+            Err(e) => panic!("unexpected stream error: {e}"),
         }
     }
     result
@@ -231,7 +231,7 @@ async fn read_from_future_version_returns_empty() {
         .await
         .unwrap();
     assert!(
-        cursor.next().await.is_none(),
+        cursor.next().await.unwrap().is_none(),
         "should return empty for future version"
     );
 }
