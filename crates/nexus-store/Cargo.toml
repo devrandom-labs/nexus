@@ -16,6 +16,8 @@ serde = ["dep:serde"]
 json = ["serde", "dep:serde_json"]
 snapshot = []
 snapshot-json = ["snapshot", "json"]
+projection = []
+projection-json = ["projection", "json"]
 
 [dependencies]
 arrayvec = { workspace = true }

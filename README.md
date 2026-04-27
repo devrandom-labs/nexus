@@ -1,120 +1,103 @@
 # Nexus
 
-> A zero-compromise **event-sourcing** & **CQRS** kernel for Rust.
+Event sourcing for Rust — no `Box<dyn>`, no runtime downcasting, no hidden allocations.
 
-[![crates.io](https://img.shields.io/crates/v/nexus.svg)](https://crates.io/crates/nexus)
-[![docs.rs](https://img.shields.io/docsrs/nexus/latest)](https://docs.rs/nexus)
 [![CI](https://github.com/devrandom-labs/nexus/actions/workflows/checks.yml/badge.svg)](https://github.com/devrandom-labs/nexus/actions/workflows/checks.yml)
-[![license](https://img.shields.io/crates/l/nexus)](LICENSE-MIT)
-
-Nexus is a pure, synchronous, zero-dependency kernel for building event-sourced applications in Rust. It provides maximum compile-time type safety with no `Box<dyn>`, no runtime downcasting, and no hidden allocations.
-
-## Quick Start
+[![license](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue)](LICENSE-MIT)
 
 ```rust
-use nexus::prelude::*;
+use nexus::*;
 
-// 1. Define your events
+#[derive(Debug, Clone, DomainEvent)]
+enum Event {
+    Deposited(Deposited),
+    Withdrawn(Withdrawn),
+}
+
 #[derive(Debug, Clone)]
-enum UserEvent {
-    Created { name: String },
-    Activated,
-}
+struct Deposited { amount: u64 }
+#[derive(Debug, Clone)]
+struct Withdrawn { amount: u64 }
 
-impl DomainEvent for UserEvent {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Created { .. } => "UserCreated",
-            Self::Activated => "UserActivated",
-        }
-    }
-}
+#[derive(Default, Debug, Clone)]
+struct Account { balance: u64 }
 
-// 2. Define your state
-#[derive(Default, Debug)]
-struct UserState {
-    name: String,
-    active: bool,
-}
-
-impl AggregateState for UserState {
-    type Event = UserEvent;
-
+impl AggregateState for Account {
+    type Event = Event;
     fn initial() -> Self { Self::default() }
-
-    fn apply(mut self, event: &UserEvent) -> Self {
+    fn apply(mut self, event: &Event) -> Self {
         match event {
-            UserEvent::Created { name } => self.name = name.clone(),
-            UserEvent::Activated => self.active = true,
+            Event::Deposited(e) => self.balance += e.amount,
+            Event::Withdrawn(e) => self.balance -= e.amount,
         }
         self
     }
-
-    fn name(&self) -> &'static str { "User" }
 }
 
-// 3. Use it
-let mut user = AggregateRoot::<UserAggregate>::new(id);
-user.apply(UserEvent::Created { name: "Alice".into() });
-user.apply(UserEvent::Activated);
+#[nexus::aggregate(state = Account, error = BankError, id = AccountId)]
+struct BankAccount;
 
-let events = user.take_uncommitted_events();
-assert_eq!(events.len(), 2);
+struct Deposit { amount: u64 }
+
+impl Handle<Deposit> for BankAccount {
+    fn handle(&self, cmd: Deposit) -> Result<Events<Event>, BankError> {
+        Ok(events![Event::Deposited(Deposited { amount: cmd.amount })])
+    }
+}
 ```
 
-## Design Principles
+## Why Nexus?
 
-- **Concrete event enums** -- the compiler enforces exhaustive event handling via `match`. No `Box<dyn Any>`.
-- **Marker-trait aggregates** -- `Aggregate` binds `State`, `Error`, and `Id` at the type level. One generic parameter.
-- **Encapsulated versioning** -- `Version` and `VersionedEvent` cannot be forged. The kernel controls all version assignment.
-- **Value-semantic state transitions** -- `apply(self, &Event) -> Self` consumes and returns state for atomic transitions.
-- **Minimal error surface** -- `KernelError` has a single variant. Infrastructure errors belong in outer layers.
+**Concrete event enums, not trait objects.** Events are plain Rust enums. `match` is exhaustive — the compiler catches every missing handler at build time. No `Box<dyn Any>`, no runtime downcasting, no message bus plumbing.
+
+**`no_std` / `no_alloc` kernel.** The core crate has zero dependencies on `std` allocation. `Events<E, N>` uses `ArrayVec` with const generics — `N = 0` (the default) means a single event with no heap allocation at all. The kernel compiles for embedded and WASM targets.
+
+**Zero-copy read path.** `BorrowingCodec` decodes events directly from database buffers via GAT lending iterators. No deserialization into owned structs on the read path — rkyv and flatbuffers plug in directly.
 
 ## Crates
 
 | Crate | Description |
 |-------|-------------|
-| [`nexus`](https://crates.io/crates/nexus) | Core kernel -- aggregates, events, versioning |
-| [`nexus-macros`](https://crates.io/crates/nexus-macros) | Derive macros (`DomainEvent`, `Command`, `Query`, `Aggregate`) |
-| [`nexus-store`](https://crates.io/crates/nexus-store) | Event store edge layer -- codecs, streams, upcasters, repositories |
+| [`nexus`](crates/nexus) | Kernel — aggregates, events, versioning, command handling |
+| [`nexus-macros`](crates/nexus-macros) | Derive macros — `DomainEvent`, `#[aggregate]`, `#[transforms]` |
+| [`nexus-store`](crates/nexus-store) | Persistence edge — codecs, event streams, upcasters, repositories |
+| [`nexus-fjall`](crates/nexus-fjall) | Embedded LSM-tree event store adapter (fjall) |
 
-## Verification
+## Features
 
-The kernel is tested with 10 verification techniques:
+- Schema evolution via `#[nexus::transforms]` upcasters
+- Optimistic concurrency with version-checked appends
+- Allocation-free errors (`ArrayString`-based, no heap on error paths)
+- Aggregate snapshots with `AggregateRoot::restore`
+- Verified with proptest, miri, mutation testing, trybuild, and criterion
 
-| Technique | What it proves |
-|-----------|---------------|
-| Unit tests + edge cases | Correct behavior |
-| Property-based testing (proptest) | Algebraic properties hold for all random inputs |
-| Compile-failure tests (trybuild) | Invalid code fails to compile |
-| Static assertions | Send, Sync, size, trait bounds enforced at compile time |
-| Miri | Zero undefined behavior under strict provenance |
-| Mutation testing (cargo-mutants) | Every viable mutation caught |
-| Contract invariants (debug_assert!) | Version arithmetic verified in debug builds |
-| Benchmarks (criterion) | Performance regression detection |
-| Doc tests | All examples compile and run |
-| Architecture tests | Kernel imports nothing from outer layers |
+## Getting Started
 
-## Development
+Kernel only (pure domain logic, no persistence):
 
-Prerequisites: [Nix](https://nixos.org/) with flakes enabled.
-
-```bash
-nix develop          # enter dev shell
-cargo test --all     # run all tests
-cargo clippy --all-targets -- --deny warnings
-nix flake check      # full CI suite locally
+```toml
+[dependencies]
+nexus = { git = "https://github.com/devrandom-labs/nexus", features = ["derive"] }
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+With persistence (fjall embedded store):
+
+```toml
+[dependencies]
+nexus = { git = "https://github.com/devrandom-labs/nexus", features = ["derive"] }
+nexus-store = { git = "https://github.com/devrandom-labs/nexus" }
+nexus-fjall = { git = "https://github.com/devrandom-labs/nexus" }
+```
+
+See the [examples](examples/) for complete working code:
+- [`inmemory`](examples/inmemory) — pure in-memory event sourcing (bank account domain)
+- [`store-inmemory`](examples/store-inmemory) — all store traits with `InMemoryStore`, including codec and upcasting
+- [`store-and-kernel`](examples/store-and-kernel) — full lifecycle: create, decide, encode, persist, read, decode, rehydrate
 
 ## Status
 
-Nexus is **experimental** with an unstable API. The kernel layer is solid and heavily tested; the store layer is under active development.
+Nexus is **experimental** with an unstable API. The kernel is well-tested (proptest, miri, mutation testing, trybuild). The store and fjall adapter are under active development.
 
 ## License
 
-Licensed under your choice of:
-
-- [MIT license](LICENSE-MIT)
-- [Apache License, Version 2.0](LICENSE-APACHE)
+Licensed under your choice of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
