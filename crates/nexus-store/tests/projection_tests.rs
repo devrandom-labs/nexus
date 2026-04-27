@@ -336,26 +336,30 @@ impl nexus::DomainEvent for TestEvent {
 
 #[derive(Debug, thiserror::Error)]
 #[error("overflow")]
-struct ProjectionError;
+struct TestProjectionError;
 
 impl Projector for CountingProjector {
     type Event = TestEvent;
     type State = CountState;
-    type Error = ProjectionError;
+    type Error = TestProjectionError;
 
     fn initial(&self) -> CountState {
         CountState { count: 0, total: 0 }
     }
 
-    fn apply(&self, state: CountState, event: &TestEvent) -> Result<CountState, ProjectionError> {
+    fn apply(
+        &self,
+        state: CountState,
+        event: &TestEvent,
+    ) -> Result<CountState, TestProjectionError> {
         match event {
             TestEvent::Added(n) => Ok(CountState {
-                count: state.count.checked_add(1).ok_or(ProjectionError)?,
-                total: state.total.checked_add(*n).ok_or(ProjectionError)?,
+                count: state.count.checked_add(1).ok_or(TestProjectionError)?,
+                total: state.total.checked_add(*n).ok_or(TestProjectionError)?,
             }),
             TestEvent::Removed(n) => Ok(CountState {
-                count: state.count.checked_add(1).ok_or(ProjectionError)?,
-                total: state.total.checked_sub(*n).ok_or(ProjectionError)?,
+                count: state.count.checked_add(1).ok_or(TestProjectionError)?,
+                total: state.total.checked_sub(*n).ok_or(TestProjectionError)?,
             }),
         }
     }

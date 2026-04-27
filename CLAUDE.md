@@ -26,7 +26,8 @@ cargo fmt --all
 ### Crate Dependency Graph
 
 ```
-nexus-fjall   --> nexus-store --> nexus (kernel)
+nexus-framework --> nexus-store --> nexus (kernel)
+nexus-fjall   --> nexus-store
 nexus-macros <-- nexus (kernel, optional via "derive" feature)
 ```
 
@@ -52,6 +53,11 @@ Organized into 4 module directories + 3 cross-cutting files:
 - **`upcasting/`** — Schema evolution.
   - `morsel.rs` — `EventMorsel<'a>`: zero-copy-when-possible data unit flowing through transforms.
   - `upcaster.rs` — `Upcaster` trait for raw-byte schema migrations with associated `type Error`. `()` is the no-op passthrough (`Error = Infallible`).
+- **`projection/`** — Subscription-powered CQRS projections (feature-gated: `projection`).
+  - `projector.rs` — `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`).
+  - `trigger.rs` — `ProjectionTrigger` trait: decides when to persist state. `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic).
+  - `pending.rs` / `persisted.rs` — `PendingState` (write-path) / `PersistedState` (read-path) containers with version + schema_version + payload.
+  - `store.rs` — `StateStore` trait: byte-level projection state persistence. `()` is no-op impl.
 - **`store/`** — Storage infrastructure: traits adapters implement + facades users interact with.
   - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap. Factory methods: `repository(codec, upcaster) -> EventStore`, `zero_copy_repository(codec, upcaster) -> ZeroCopyEventStore`.
   - `raw.rs` — `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
@@ -61,6 +67,17 @@ Organized into 4 module directories + 3 cross-cutting files:
   - `repository.rs` — `Repository<A>` trait: high-level `load` and `save`.
 - **`error.rs`** — `StoreError<A, C, U>` (generic over adapter/codec/upcaster errors, allocation-free), `AppendError<E>`, `UpcastError<U>` (generic over transform error), `InvalidSchemaVersion`. All use `ArrayString<64>` for stream IDs instead of heap-allocated strings.
 - **`testing.rs`** — `InMemoryStore`, `InMemoryStream`, `InMemoryStoreError` (feature-gated behind `testing`).
+
+### Framework Crate (`nexus-framework`) — Batteries-Included Runtime Layer
+
+Depends on `nexus-store` + `tokio`. Provides IO-driven components that require an async runtime.
+
+- **`projection/`** — Subscription-powered async projection execution.
+  - `runner.rs` — `ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig>`: background event processor. Uses `tokio::select!` to race event stream against shutdown signal.
+  - `builder.rs` — `ProjectionRunnerBuilder`: typestate builder with `!Send` markers for compile-time required field enforcement.
+  - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain. `StatePersistError<S, C>`.
+  - `persist.rs` — `StatePersistence<S>` trait: `NoStatePersistence` (Infallible) and `WithStatePersistence<SS, SC>`.
+  - `stream.rs` — `DecodedStream`: adapter converting lending GAT `EventStream` to owned `tokio_stream::Stream` by decoding inside `poll_next`.
 
 ### Fjall Adapter Crate (`nexus-fjall`) — Embedded LSM-Tree Event Store
 
@@ -113,6 +130,7 @@ Every database interaction in store adapters MUST be atomic:
 - **Reads touching multiple partitions/keys**: single read transaction or shared snapshot — NEVER two independent reads
 - **Writes**: write transactions
 - **Read-then-write**: single transaction spanning both
+- **Inline projections**: projection state writes default to best-effort (separate operation, like snapshots). Same-transaction atomicity is an opt-in capability for adapters that support it — not a universal requirement. Projections are derived state; if a best-effort write fails, the projection is re-derived on next load or rebuild.
 
 If a public method does 2+ database calls without a shared transaction, it is a bug.
 

@@ -418,21 +418,32 @@ async fn attack_crash_simulation_forget_store() {
         std::mem::forget(store); // Simulate crash — no Drop, no flush
     }
 
-    // Reopen and check if data survived
-    let store = FjallStore::builder(&path).open().unwrap();
-    let payloads = read_all_payloads(&store, &tid("crash-test")).await;
-    // Data may or may not survive depending on fjall's durability guarantees
-    // Document what actually happens:
-    if payloads.is_empty() {
-        println!(
-            "DURABILITY NOTE: data lost after mem::forget — \
-             fjall does not fsync on every commit by default"
-        );
-    } else {
-        assert_eq!(payloads, vec![b"crash-data".to_vec()]);
-        println!(
-            "DURABILITY NOTE: data survived mem::forget — fjall fsynced or recovered from WAL"
-        );
+    // Reopen and check if data survived.
+    // fjall v3 uses file locking — if mem::forget skipped Drop, the lock may
+    // still be held, making reopen impossible. Both outcomes are valid:
+    // - Locked: lock file not released (crash left stale lock)
+    // - Ok: lock released, data may or may not have survived
+    match FjallStore::builder(&path).open() {
+        Err(_) => {
+            println!(
+                "DURABILITY NOTE: reopen failed after mem::forget — \
+                 fjall v3 file lock was not released (expected for crash simulation)"
+            );
+        }
+        Ok(store) => {
+            let payloads = read_all_payloads(&store, &tid("crash-test")).await;
+            if payloads.is_empty() {
+                println!(
+                    "DURABILITY NOTE: data lost after mem::forget — \
+                     fjall does not fsync on every commit by default"
+                );
+            } else {
+                assert_eq!(payloads, vec![b"crash-data".to_vec()]);
+                println!(
+                    "DURABILITY NOTE: data survived mem::forget — fjall fsynced or recovered from WAL"
+                );
+            }
+        }
     }
 }
 
@@ -1060,8 +1071,12 @@ async fn attack_concurrent_reads_and_writes() {
 async fn attack_custom_builder_config_still_works() {
     let dir = tempfile::tempdir().unwrap();
     let store = FjallStore::builder(dir.path().join("db"))
-        .streams_config(|opts| opts.block_size(8_192))
-        .events_config(|opts| opts.block_size(16_384))
+        .streams_config(|opts| {
+            opts.data_block_size_policy(fjall::config::BlockSizePolicy::all(8_192))
+        })
+        .events_config(|opts| {
+            opts.data_block_size_policy(fjall::config::BlockSizePolicy::all(16_384))
+        })
         .open()
         .unwrap();
 
