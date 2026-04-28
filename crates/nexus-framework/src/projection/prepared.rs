@@ -200,6 +200,68 @@ where
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Typestate-specific methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl<I, Sub, Ckpt, SP, P: Projector, EC, Trig>
+    PreparedProjection<I, Sub, Ckpt, SP, P, EC, Trig, Resuming>
+{
+    /// The resolved resume position from the checkpoint.
+    #[must_use]
+    pub const fn resume_from(&self) -> Option<Version> {
+        self.resume_from
+    }
+
+    /// The loaded projection state.
+    #[must_use]
+    pub const fn state(&self) -> &P::State {
+        &self.state
+    }
+
+    /// Discard loaded state and force a full rebuild from the beginning.
+    ///
+    /// Transitions the typestate from [`Resuming`] to [`Rebuilding`].
+    /// The state is reset to [`Projector::initial()`] and the resume
+    /// position is set to `None` (start of stream).
+    #[must_use]
+    pub fn force_rebuild(self) -> PreparedProjection<I, Sub, Ckpt, SP, P, EC, Trig, Rebuilding> {
+        let initial_state = self.projector.initial();
+        PreparedProjection {
+            id: self.id,
+            subscription: self.subscription,
+            checkpoint: self.checkpoint,
+            state_persistence: self.state_persistence,
+            projector: self.projector,
+            event_codec: self.event_codec,
+            trigger: self.trigger,
+            state: initial_state,
+            resume_from: None,
+            _mode: PhantomData,
+        }
+    }
+}
+
+impl<I, Sub, Ckpt, SP, P: Projector, EC, Trig>
+    PreparedProjection<I, Sub, Ckpt, SP, P, EC, Trig, Rebuilding>
+{
+    /// The initial projection state (always [`Projector::initial()`]).
+    #[must_use]
+    pub const fn state(&self) -> &P::State {
+        &self.state
+    }
+}
+
+impl<I, Sub, Ckpt, SP, P: Projector, EC, Trig>
+    PreparedProjection<I, Sub, Ckpt, SP, P, EC, Trig, Starting>
+{
+    /// The initial projection state (always [`Projector::initial()`]).
+    #[must_use]
+    pub const fn state(&self) -> &P::State {
+        &self.state
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -214,6 +276,7 @@ mod tests {
     use nexus_store::projection::{EveryNEvents, ProjectionTrigger, Projector};
 
     use super::apply_event;
+    use super::*;
 
     // ── Minimal test fixtures ─────────────────────────────────────────
 
@@ -328,5 +391,52 @@ mod tests {
         let (_, should_persist) =
             apply_event(&SumProjector, &every_3, 0_u64, &Evt, Some(v(3)), v(4)).unwrap();
         assert!(!should_persist);
+    }
+
+    // ── PreparedProjection typestate tests ─────────────────────────────
+
+    fn make_resuming_prepared()
+    -> PreparedProjection<&'static str, (), (), (), SumProjector, (), NeverTrigger, Resuming> {
+        PreparedProjection {
+            id: "test",
+            subscription: (),
+            checkpoint: (),
+            state_persistence: (),
+            projector: SumProjector,
+            event_codec: (),
+            trigger: NeverTrigger,
+            state: 42,
+            resume_from: Some(v(5)),
+            _mode: PhantomData,
+        }
+    }
+
+    #[test]
+    fn resuming_state_returns_loaded_state() {
+        let p = make_resuming_prepared();
+        assert_eq!(*p.state(), 42);
+    }
+
+    #[test]
+    fn resuming_resume_from_returns_checkpoint() {
+        let p = make_resuming_prepared();
+        assert_eq!(p.resume_from(), Some(v(5)));
+    }
+
+    #[test]
+    fn force_rebuild_transitions_to_rebuilding_with_initial_state() {
+        let p = make_resuming_prepared();
+        let rebuilt = p.force_rebuild();
+        // State reset to projector.initial() = 0
+        assert_eq!(*rebuilt.state(), 0);
+    }
+
+    #[test]
+    fn force_rebuild_sets_resume_from_to_none() {
+        let p = make_resuming_prepared();
+        let rebuilt = p.force_rebuild();
+        // resume_from should be None (replay from beginning)
+        // Access via pub(crate) field since we're in the same crate
+        assert!(rebuilt.resume_from.is_none());
     }
 }
