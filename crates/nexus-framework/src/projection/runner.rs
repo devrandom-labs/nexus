@@ -71,16 +71,22 @@ where
             .await
             .map_err(ProjectionError::Checkpoint)?;
 
-        let (mut state, _) = match state_persistence
+        let loaded_state = state_persistence
             .load(&id)
             .await
-            .map_err(ProjectionError::State)?
-        {
-            Some((s, v)) => (s, Some(v)),
-            None => (projector.initial(), None),
-        };
+            .map_err(ProjectionError::State)?;
 
-        let resume_from = last_checkpoint;
+        // Detect schema mismatch: state persistence is enabled, a checkpoint
+        // exists (prior progress), but no usable state was loaded (schema
+        // version changed). In this case, replay from the beginning of the
+        // stream to rebuild the projection with the new schema.
+        let (mut state, resume_from) = match loaded_state {
+            Some((s, _)) => (s, last_checkpoint),
+            None if state_persistence.persists_state() && last_checkpoint.is_some() => {
+                (projector.initial(), None)
+            }
+            None => (projector.initial(), last_checkpoint),
+        };
 
         let stream = subscription
             .subscribe(&id, resume_from)
@@ -88,7 +94,7 @@ where
             .map_err(ProjectionError::Subscription)?;
 
         let mut decoded = DecodedStream::new(stream, &event_codec);
-        let mut last_persisted_version = last_checkpoint;
+        let mut last_persisted_version = resume_from;
         let mut current_version = resume_from;
         let mut dirty = false;
 
