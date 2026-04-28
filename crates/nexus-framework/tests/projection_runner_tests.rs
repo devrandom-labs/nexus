@@ -608,6 +608,104 @@ async fn runner_immediate_shutdown_with_no_events() {
 }
 
 #[tokio::test]
+async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
+    let store = InMemoryStore::new();
+    let state_store = InMemoryStateStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    // Phase 1: initial run with schema v1
+    append_events(
+        &store,
+        &stream_id,
+        &[
+            TestEvent::Added(10),
+            TestEvent::Added(20),
+            TestEvent::Added(30),
+        ],
+    )
+    .await;
+
+    let runner = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build();
+
+    runner
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Checkpoint at v3 with schema v1
+    assert_eq!(
+        store.load(&stream_id).await.unwrap(),
+        Some(Version::new(3).unwrap())
+    );
+
+    // Phase 2: start rebuild with schema v2 but immediate shutdown.
+    // tokio::select! is non-deterministic — the runner may process 0..N
+    // events before the shutdown branch wins. This simulates a crash at
+    // an arbitrary point during the rebuild. The important property is
+    // that Phase 3 produces the correct final state regardless.
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    tx.send(()).unwrap();
+
+    let runner2 = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .state_schema_version(NonZeroU32::new(2).unwrap())
+        .trigger(ProjEveryNEvents(NonZeroU64::new(100).unwrap()))
+        .build();
+
+    runner2
+        .run(async {
+            rx.await.ok();
+        })
+        .await
+        .unwrap();
+
+    // Phase 3: restart with schema v2 — whether Phase 2 processed some
+    // events or none, the final result must be correct (idempotent)
+    let runner3 = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .state_schema_version(NonZeroU32::new(2).unwrap())
+        .build();
+
+    runner3
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Now state should be correctly rebuilt
+    let persisted = state_store
+        .load(&stream_id, NonZeroU32::new(2).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
+    assert_eq!(
+        state,
+        CountState {
+            count: 3,
+            total: 60
+        }
+    );
+}
+
+#[tokio::test]
 async fn runner_graceful_shutdown_flushes_dirty_state() {
     let store = InMemoryStore::new();
     let state_store = InMemoryStateStore::new();
