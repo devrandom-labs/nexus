@@ -1,5 +1,10 @@
-use nexus_store::projection::Projector;
+use nexus::Id;
+use nexus_store::Codec;
+use nexus_store::projection::{ProjectionTrigger, Projector};
+use nexus_store::store::{CheckpointStore, Subscription};
 
+use super::error::ProjectionError;
+use super::persist::StatePersistence;
 use super::prepared::{PreparedProjection, Rebuilding, Resuming, Starting};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -20,4 +25,35 @@ pub enum Initialized<I, Sub, Ckpt, SP, P: Projector, EC, Trig> {
     Rebuilding(PreparedProjection<I, Sub, Ckpt, SP, P, EC, Trig, Rebuilding>),
     /// First run. Will process from beginning of stream.
     Starting(PreparedProjection<I, Sub, Ckpt, SP, P, EC, Trig, Starting>),
+}
+
+impl<I, Sub, Ckpt, SP, P, EC, Trig> Initialized<I, Sub, Ckpt, SP, P, EC, Trig>
+where
+    I: Id + Clone,
+    Sub: Subscription<()>,
+    Ckpt: CheckpointStore,
+    SP: StatePersistence<P::State>,
+    P: Projector,
+    EC: Codec<P::Event>,
+    Trig: ProjectionTrigger,
+{
+    /// Convenience: run whichever variant was resolved, ignoring the startup mode.
+    ///
+    /// Equivalent to matching on `self` and calling `.run(shutdown)` on each arm.
+    /// Use this when you don't need mode-specific behavior before entering the loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectionError`] on subscription, codec, projector,
+    /// state persistence, or checkpoint failure.
+    pub async fn run(
+        self,
+        shutdown: impl std::future::Future<Output = ()>,
+    ) -> Result<(), ProjectionError<P::Error, EC::Error, SP::Error, Ckpt::Error, Sub::Error>> {
+        match self {
+            Self::Resuming(prepared) => prepared.run(shutdown).await,
+            Self::Rebuilding(prepared) => prepared.run(shutdown).await,
+            Self::Starting(prepared) => prepared.run(shutdown).await,
+        }
+    }
 }

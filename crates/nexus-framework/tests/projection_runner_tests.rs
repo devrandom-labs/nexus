@@ -232,7 +232,13 @@ async fn runner_processes_events_and_checkpoints() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
 
-    runner.run(shutdown).await.unwrap();
+    runner
+        .initialize()
+        .await
+        .unwrap()
+        .run(shutdown)
+        .await
+        .unwrap();
 
     // Verify checkpoint
     let cp = store.load(&stream_id).await.unwrap();
@@ -281,6 +287,9 @@ async fn runner_resumes_from_checkpoint() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -305,6 +314,9 @@ async fn runner_resumes_from_checkpoint() {
         .build();
 
     runner2
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -361,6 +373,9 @@ async fn runner_trigger_controls_checkpoint_frequency() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -408,6 +423,9 @@ async fn runner_works_without_state_persistence() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -446,6 +464,9 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -467,6 +488,9 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
         .build();
 
     runner2
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -516,6 +540,9 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -533,6 +560,9 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .build();
 
     runner2
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -552,6 +582,9 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .build();
 
     runner3
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -600,7 +633,13 @@ async fn runner_immediate_shutdown_with_no_events() {
         rx.await.ok();
     };
 
-    runner.run(shutdown).await.unwrap();
+    runner
+        .initialize()
+        .await
+        .unwrap()
+        .run(shutdown)
+        .await
+        .unwrap();
 
     // No checkpoint saved (no events processed)
     let cp = store.load(&stream_id).await.unwrap();
@@ -634,6 +673,9 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -665,6 +707,9 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
         .build();
 
     runner2
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             rx.await.ok();
         })
@@ -683,6 +728,9 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
         .build();
 
     runner3
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -731,6 +779,9 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -796,6 +847,9 @@ async fn runner_stale_state_falls_back_to_initial() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -847,6 +901,9 @@ async fn runner_no_state_persistence_with_checkpoint_does_not_rebuild() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -876,6 +933,9 @@ async fn runner_no_state_persistence_with_checkpoint_does_not_rebuild() {
         .build();
 
     runner2
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -911,6 +971,9 @@ async fn runner_first_run_with_state_persistence_is_not_rebuild() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -955,6 +1018,9 @@ async fn runner_returns_projector_error_on_apply_failure() {
         .build();
 
     let result = runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         })
@@ -987,6 +1053,9 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
         .build();
 
     let result = runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         })
@@ -1032,6 +1101,9 @@ async fn runner_catches_up_and_processes_all_existing_events() {
         .build();
 
     runner
+        .initialize()
+        .await
+        .unwrap()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })

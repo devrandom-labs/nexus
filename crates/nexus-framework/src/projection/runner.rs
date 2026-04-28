@@ -1,14 +1,14 @@
-use std::iter;
+use std::marker::PhantomData;
 
-use nexus::{DomainEvent, Id, Version};
+use nexus::{Id, Version};
 use nexus_store::Codec;
 use nexus_store::projection::{ProjectionTrigger, Projector};
 use nexus_store::store::{CheckpointStore, Subscription};
-use tokio_stream::StreamExt;
 
 use super::error::ProjectionError;
+use super::initialized::Initialized;
 use super::persist::StatePersistence;
-use super::stream::{DecodeStreamError, DecodedStream};
+use super::prepared::PreparedProjection;
 
 /// Subscription-powered async projection runner.
 ///
@@ -38,35 +38,26 @@ where
     EC: Codec<P::Event>,
     Trig: ProjectionTrigger,
 {
-    /// Run the projection loop until shutdown or error.
+    /// Initialize the projection: load checkpoint, load state, resolve startup decision.
     ///
-    /// # Startup
+    /// Returns an [`Initialized`] enum that the supervisor must match:
+    /// - [`Initialized::Starting`] — first run, will process from beginning
+    /// - [`Initialized::Resuming`] — loaded state, will resume from checkpoint
+    /// - [`Initialized::Rebuilding`] — schema mismatch, will replay from beginning
     ///
-    /// 1. Load checkpoint (resume position)
-    /// 2. Load persisted state
-    /// 3. **Schema mismatch detection:** if state persistence is enabled,
-    ///    a checkpoint exists, but no usable state was loaded (schema version
-    ///    changed), the runner replays from the beginning of the stream
-    ///    to rebuild the projection with the new schema.
-    ///
-    /// # Event loop
-    ///
-    /// 1. Subscribe to the event stream from the resume position
-    /// 2. For each event: decode -> apply -> trigger check -> maybe persist + checkpoint
-    /// 3. On shutdown: flush dirty state + checkpoint, return `Ok(())`
+    /// Call `.run(shutdown)` on any variant to enter the event loop, or
+    /// use [`Initialized::run`] as a convenience that delegates to whichever variant.
     ///
     /// # Errors
     ///
-    /// Returns immediately on any error. The supervision layer (separate
-    /// component) is responsible for retry/restart policy.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "run() is being replaced by PreparedProjection::run() in upcoming tasks"
-    )]
-    pub async fn run(
+    /// Returns [`ProjectionError::Checkpoint`] or [`ProjectionError::State`]
+    /// if loading fails.
+    pub async fn initialize(
         self,
-        shutdown: impl std::future::Future<Output = ()>,
-    ) -> Result<(), ProjectionError<P::Error, EC::Error, SP::Error, Ckpt::Error, Sub::Error>> {
+    ) -> Result<
+        Initialized<I, Sub, Ckpt, SP, P, EC, Trig>,
+        ProjectionError<P::Error, EC::Error, SP::Error, Ckpt::Error, Sub::Error>,
+    > {
         let Self {
             id,
             subscription,
@@ -77,6 +68,7 @@ where
             trigger,
         } = self;
 
+        // ── IO: load ──────────────────────────────────────────────────
         let last_checkpoint = checkpoint
             .load(&id)
             .await
@@ -87,79 +79,56 @@ where
             .await
             .map_err(ProjectionError::State)?;
 
-        let (mut state, resume_from) = match resolve_startup(
+        // ── Sync: decide startup ──────────────────────────────────────
+        let outcome = resolve_startup(
             loaded_state,
             last_checkpoint,
             state_persistence.persists_state(),
             || projector.initial(),
-        ) {
-            StartupOutcome::Resuming { state, resume_from } => (state, resume_from),
-            StartupOutcome::Rebuilding { state } | StartupOutcome::Starting { state } => {
-                (state, None)
+        );
+
+        // ── Construct the appropriate typestate variant ────────────────
+        match outcome {
+            StartupOutcome::Resuming { state, resume_from } => {
+                Ok(Initialized::Resuming(PreparedProjection {
+                    id,
+                    subscription,
+                    checkpoint,
+                    state_persistence,
+                    projector,
+                    event_codec,
+                    trigger,
+                    state,
+                    resume_from,
+                    _mode: PhantomData,
+                }))
             }
-        };
-
-        let stream = subscription
-            .subscribe(&id, resume_from)
-            .await
-            .map_err(ProjectionError::Subscription)?;
-
-        let mut decoded = DecodedStream::new(stream, &event_codec);
-        let mut last_persisted_version = resume_from;
-        let mut current_version = resume_from;
-        let mut dirty = false;
-
-        tokio::pin!(shutdown);
-
-        loop {
-            let item = tokio::select! {
-                () = &mut shutdown => None,
-                item = decoded.next() => item,
-            };
-
-            let Some(result) = item else {
-                if let (true, Some(ver)) = (dirty, current_version) {
-                    state_persistence
-                        .save(&id, ver, &state)
-                        .await
-                        .map_err(ProjectionError::State)?;
-                    checkpoint
-                        .save(&id, ver)
-                        .await
-                        .map_err(ProjectionError::Checkpoint)?;
-                }
-                return Ok(());
-            };
-
-            let (version, event) = match result {
-                Ok(pair) => pair,
-                Err(DecodeStreamError::Stream(e)) => {
-                    return Err(ProjectionError::Subscription(e));
-                }
-                Err(DecodeStreamError::Codec(e)) => {
-                    return Err(ProjectionError::EventCodec(e));
-                }
-            };
-
-            let event_name = event.name();
-            state = projector
-                .apply(state, &event)
-                .map_err(ProjectionError::Projector)?;
-            current_version = Some(version);
-            dirty = true;
-
-            if trigger.should_project(last_persisted_version, version, iter::once(event_name)) {
-                state_persistence
-                    .save(&id, version, &state)
-                    .await
-                    .map_err(ProjectionError::State)?;
-                checkpoint
-                    .save(&id, version)
-                    .await
-                    .map_err(ProjectionError::Checkpoint)?;
-                last_persisted_version = Some(version);
-                dirty = false;
+            StartupOutcome::Rebuilding { state } => {
+                Ok(Initialized::Rebuilding(PreparedProjection {
+                    id,
+                    subscription,
+                    checkpoint,
+                    state_persistence,
+                    projector,
+                    event_codec,
+                    trigger,
+                    state,
+                    resume_from: None,
+                    _mode: PhantomData,
+                }))
             }
+            StartupOutcome::Starting { state } => Ok(Initialized::Starting(PreparedProjection {
+                id,
+                subscription,
+                checkpoint,
+                state_persistence,
+                projector,
+                event_codec,
+                trigger,
+                state,
+                resume_from: None,
+                _mode: PhantomData,
+            })),
         }
     }
 }
