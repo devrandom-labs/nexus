@@ -73,7 +73,7 @@ Organized into 4 module directories + 3 cross-cutting files:
 Depends on `nexus-store` + `tokio`. Provides IO-driven components that require an async runtime.
 
 - **`projection/`** — Subscription-powered async projection execution.
-  - `runner.rs` — `ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig>`: background event processor. Uses `tokio::select!` to race event stream against shutdown signal.
+  - `runner.rs` — `ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig>`: background event processor. Uses `tokio::select!` to race event stream against shutdown signal. Auto-detects schema version mismatch at startup (checkpoint exists but state is stale) and replays from the beginning of the stream.
   - `builder.rs` — `ProjectionRunnerBuilder`: typestate builder with `!Send` markers for compile-time required field enforcement.
   - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain. `StatePersistError<S, C>`.
   - `persist.rs` — `StatePersistence<S>` trait: `NoStatePersistence` (Infallible) and `WithStatePersistence<SS, SC>`.
