@@ -15,7 +15,8 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{DomainEvent, Message, Version};
 use nexus_framework::projection::{
-    NoStatePersistence, ProjectionError, ProjectionRunner, StatePersistence, WithStatePersistence,
+    Initialized, NoStatePersistence, ProjectionError, ProjectionRunner, StatePersistence,
+    WithStatePersistence,
 };
 use nexus_store::projection::{
     EveryNEvents as ProjEveryNEvents, InMemoryStateStore, Projector, StateStore,
@@ -1244,4 +1245,253 @@ async fn with_state_persistence_load_returns_none_on_schema_mismatch() {
     let sp_v2 = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::new(2).unwrap());
     let result: Option<(CountState, _)> = sp_v2.load(&id).await.unwrap();
     assert!(result.is_none());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 7. Typestate / Phased Startup Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn initialize_returns_starting_on_first_run() {
+    let store = InMemoryStore::new();
+    let stream_id = TestId("fresh-stream".into());
+
+    let runner = ProjectionRunner::builder(stream_id)
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .build();
+
+    let initialized = runner.initialize().await.unwrap();
+    assert!(matches!(initialized, Initialized::Starting(_)));
+}
+
+#[tokio::test]
+async fn initialize_returns_resuming_after_successful_run() {
+    let store = InMemoryStore::new();
+    let state_store = InMemoryStateStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
+
+    // First run
+    ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build()
+        .initialize()
+        .await
+        .unwrap()
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Second run — should resume
+    let runner2 = ProjectionRunner::builder(stream_id)
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build();
+
+    let initialized = runner2.initialize().await.unwrap();
+    assert!(matches!(initialized, Initialized::Resuming(_)));
+}
+
+#[tokio::test]
+async fn initialize_returns_rebuilding_on_schema_mismatch() {
+    let store = InMemoryStore::new();
+    let state_store = InMemoryStateStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
+
+    // First run with schema v1
+    ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build()
+        .initialize()
+        .await
+        .unwrap()
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Second run with schema v2 — should trigger rebuild
+    let runner2 = ProjectionRunner::builder(stream_id)
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .state_schema_version(NonZeroU32::new(2).unwrap())
+        .build();
+
+    let initialized = runner2.initialize().await.unwrap();
+    assert!(matches!(initialized, Initialized::Rebuilding(_)));
+}
+
+#[tokio::test]
+async fn initialize_returns_resuming_without_state_persistence() {
+    let store = InMemoryStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
+
+    // First run (checkpoint-only, no state persistence)
+    ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .build()
+        .initialize()
+        .await
+        .unwrap()
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Second run — should resume (not rebuild) despite no state
+    let runner2 = ProjectionRunner::builder(stream_id)
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .build();
+
+    let initialized = runner2.initialize().await.unwrap();
+    assert!(matches!(initialized, Initialized::Resuming(_)));
+}
+
+#[tokio::test]
+async fn force_rebuild_replays_from_beginning() {
+    let store = InMemoryStore::new();
+    let state_store = InMemoryStateStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    append_events(
+        &store,
+        &stream_id,
+        &[TestEvent::Added(10), TestEvent::Added(20)],
+    )
+    .await;
+
+    // First run
+    ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build()
+        .initialize()
+        .await
+        .unwrap()
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Second run — force rebuild despite valid state
+    let runner2 = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build();
+
+    let initialized = runner2.initialize().await.unwrap();
+    let Initialized::Resuming(prepared) = initialized else {
+        panic!("expected Resuming");
+    };
+
+    // Force rebuild and run
+    prepared
+        .force_rebuild()
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // State should be freshly computed from initial()
+    let persisted = state_store
+        .load(&stream_id, NonZeroU32::MIN)
+        .await
+        .unwrap()
+        .unwrap();
+    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
+    assert_eq!(
+        state,
+        CountState {
+            count: 2,
+            total: 30
+        }
+    );
+}
+
+#[tokio::test]
+async fn resuming_accessors_return_correct_values() {
+    let store = InMemoryStore::new();
+    let state_store = InMemoryStateStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
+
+    // First run to create checkpoint + state
+    ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build()
+        .initialize()
+        .await
+        .unwrap()
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Second run — inspect Resuming variant
+    let runner2 = ProjectionRunner::builder(stream_id)
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build();
+
+    let Initialized::Resuming(prepared) = runner2.initialize().await.unwrap() else {
+        panic!("expected Resuming");
+    };
+
+    assert_eq!(prepared.resume_from(), Some(Version::new(1).unwrap()));
+    assert_eq!(
+        *prepared.state(),
+        CountState {
+            count: 1,
+            total: 10
+        }
+    );
 }
