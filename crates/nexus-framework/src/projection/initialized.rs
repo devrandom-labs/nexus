@@ -12,6 +12,7 @@ use super::prepared::{PreparedProjection, Rebuilding, Resuming, Starting};
 /// - [`Resuming`] — loaded state, can [`force_rebuild`](PreparedProjection::force_rebuild) or run
 /// - [`Rebuilding`] — schema mismatch, can run or drop to abort
 /// - [`Starting`] — first run, can run or drop to abort
+#[must_use = "an initialized projection does nothing unless .run() is called"]
 pub enum Initialized<I, Sub, Ckpt, SP, P: Projector, EC, Trig> {
     /// Checkpoint and state loaded successfully. Will resume from checkpoint.
     Resuming(PreparedProjection<I, Sub, Ckpt, SP, P, EC, Trig, Resuming>),

@@ -30,6 +30,10 @@ pub struct Starting;
 ///
 /// Call [`run`](PreparedProjection::run) to enter the event loop, or inspect
 /// the resolved state via mode-specific accessors before running.
+#[expect(
+    dead_code,
+    reason = "fields consumed by run() and accessors in upcoming tasks"
+)]
 pub struct PreparedProjection<I, Sub, Ckpt, SP, P: Projector, EC, Trig, Mode> {
     pub(crate) id: I,
     pub(crate) subscription: Sub,
