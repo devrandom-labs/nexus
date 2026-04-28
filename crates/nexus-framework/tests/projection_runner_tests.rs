@@ -774,6 +774,20 @@ async fn with_state_persistence_load_returns_none_when_empty() {
     assert!(result.is_none());
 }
 
+#[test]
+fn no_state_persistence_does_not_persist_state() {
+    assert!(
+        !<NoStatePersistence as StatePersistence<CountState>>::persists_state(&NoStatePersistence)
+    );
+}
+
+#[test]
+fn with_state_persistence_persists_state() {
+    let store = InMemoryStateStore::new();
+    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
+    assert!(sp.persists_state());
+}
+
 #[tokio::test]
 async fn with_state_persistence_load_returns_none_on_schema_mismatch() {
     let store = InMemoryStateStore::new();

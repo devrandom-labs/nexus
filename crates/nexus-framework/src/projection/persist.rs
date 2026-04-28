@@ -27,6 +27,17 @@ pub trait StatePersistence<S>: Send + Sync {
         id: &impl Id,
     ) -> impl Future<Output = Result<Option<(S, Version)>, Self::Error>> + Send;
 
+    /// Whether this persistence layer actually stores state.
+    ///
+    /// Returns `false` for [`NoStatePersistence`]. The projection runner
+    /// uses this to distinguish "no state because first run" from "no state
+    /// because schema version changed" — when `true` and `load` returns
+    /// `None` despite a checkpoint existing, the runner replays from the
+    /// beginning of the stream.
+    fn persists_state(&self) -> bool {
+        true
+    }
+
     /// Persist state at the given version.
     fn save(
         &self,
@@ -48,6 +59,10 @@ pub struct NoStatePersistence;
 
 impl<S: Send + Sync> StatePersistence<S> for NoStatePersistence {
     type Error = Infallible;
+
+    fn persists_state(&self) -> bool {
+        false
+    }
 
     async fn load(&self, _id: &impl Id) -> Result<Option<(S, Version)>, Infallible> {
         Ok(None)
