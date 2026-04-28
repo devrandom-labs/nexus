@@ -823,6 +823,116 @@ async fn runner_stale_state_falls_back_to_initial() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
+async fn runner_no_state_persistence_with_checkpoint_does_not_rebuild() {
+    let store = InMemoryStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    // Append 3 events, run WITHOUT state persistence to set a checkpoint
+    append_events(
+        &store,
+        &stream_id,
+        &[
+            TestEvent::Added(10),
+            TestEvent::Added(20),
+            TestEvent::Added(30),
+        ],
+    )
+    .await;
+
+    let runner = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .build();
+
+    runner
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Checkpoint at v3, no state persisted (NoStatePersistence)
+    assert_eq!(
+        store.load(&stream_id).await.unwrap(),
+        Some(Version::new(3).unwrap())
+    );
+
+    // Append 2 more events
+    append_events(
+        &store,
+        &stream_id,
+        &[TestEvent::Added(40), TestEvent::Added(50)],
+    )
+    .await;
+
+    // Run again without state persistence — should resume from v3, NOT rebuild
+    let runner2 = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .build();
+
+    runner2
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Checkpoint should be at v5 (resumed from v3, processed v4+v5)
+    let cp = store.load(&stream_id).await.unwrap();
+    assert_eq!(cp, Some(Version::new(5).unwrap()));
+}
+
+#[tokio::test]
+async fn runner_first_run_with_state_persistence_is_not_rebuild() {
+    let store = InMemoryStore::new();
+    let state_store = InMemoryStateStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    append_events(
+        &store,
+        &stream_id,
+        &[TestEvent::Added(10), TestEvent::Added(20)],
+    )
+    .await;
+
+    // First run ever — no checkpoint, no state. Should process from beginning
+    // without treating it as a "rebuild".
+    let runner = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build();
+
+    runner
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    let persisted = state_store
+        .load(&stream_id, NonZeroU32::MIN)
+        .await
+        .unwrap()
+        .unwrap();
+    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
+    assert_eq!(
+        state,
+        CountState {
+            count: 2,
+            total: 30
+        }
+    );
+}
+
+#[tokio::test]
 async fn runner_returns_projector_error_on_apply_failure() {
     let store = InMemoryStore::new();
     let stream_id = TestId("stream-1".into());
