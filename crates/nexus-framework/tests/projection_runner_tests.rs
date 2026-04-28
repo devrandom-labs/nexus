@@ -493,6 +493,90 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
     assert_eq!(cp, Some(Version::new(3).unwrap()));
 }
 
+#[tokio::test]
+async fn runner_resumes_normally_after_rebuild_completes() {
+    let store = InMemoryStore::new();
+    let state_store = InMemoryStateStore::new();
+    let stream_id = TestId("stream-1".into());
+
+    // Phase 1: initial run with schema v1
+    append_events(
+        &store,
+        &stream_id,
+        &[TestEvent::Added(10), TestEvent::Added(20)],
+    )
+    .await;
+
+    let runner = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .build();
+
+    runner
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Phase 2: restart with schema v2 — triggers rebuild
+    let runner2 = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .state_schema_version(NonZeroU32::new(2).unwrap())
+        .build();
+
+    runner2
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Phase 3: append more events, restart with same schema v2 — normal resume
+    append_events(&store, &stream_id, &[TestEvent::Added(30)]).await;
+
+    let runner3 = ProjectionRunner::builder(stream_id.clone())
+        .subscription(&store)
+        .checkpoint(&store)
+        .projector(CountingProjector)
+        .event_codec(TestEventCodec)
+        .state_store(&state_store, TestStateCodec)
+        .state_schema_version(NonZeroU32::new(2).unwrap())
+        .build();
+
+    runner3
+        .run(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        })
+        .await
+        .unwrap();
+
+    // Verify: state reflects all 3 events, checkpoint at v3
+    let persisted = state_store
+        .load(&stream_id, NonZeroU32::new(2).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
+    assert_eq!(
+        state,
+        CountState {
+            count: 3,
+            total: 60
+        }
+    );
+
+    let cp = store.load(&stream_id).await.unwrap();
+    assert_eq!(cp, Some(Version::new(3).unwrap()));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 2. Lifecycle Tests
 // ═══════════════════════════════════════════════════════════════════════════
