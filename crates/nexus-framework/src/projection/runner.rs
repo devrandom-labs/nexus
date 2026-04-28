@@ -40,13 +40,20 @@ where
 {
     /// Run the projection loop until shutdown or error.
     ///
-    /// # Event loop
+    /// # Startup
     ///
     /// 1. Load checkpoint (resume position)
-    /// 2. Load persisted state (or use `projector.initial()`)
-    /// 3. Subscribe to the event stream from the checkpoint
-    /// 4. For each event: decode -> apply -> trigger check -> maybe persist + checkpoint
-    /// 5. On shutdown: flush dirty state + checkpoint, return `Ok(())`
+    /// 2. Load persisted state
+    /// 3. **Schema mismatch detection:** if state persistence is enabled,
+    ///    a checkpoint exists, but no usable state was loaded (schema version
+    ///    changed), the runner replays from the beginning of the stream
+    ///    to rebuild the projection with the new schema.
+    ///
+    /// # Event loop
+    ///
+    /// 1. Subscribe to the event stream from the resume position
+    /// 2. For each event: decode -> apply -> trigger check -> maybe persist + checkpoint
+    /// 3. On shutdown: flush dirty state + checkpoint, return `Ok(())`
     ///
     /// # Errors
     ///
