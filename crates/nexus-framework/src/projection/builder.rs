@@ -239,15 +239,15 @@ where
     #[must_use]
     #[allow(clippy::missing_const_for_fn, reason = "generics may have destructors")]
     pub fn build(self) -> Projection<Id, Sub, Ckpt, SP, P, EC, Trig, Configured> {
-        Projection {
-            id: self.id,
-            subscription: self.subscription,
-            checkpoint: self.checkpoint,
-            state_persistence: self.state_persistence,
-            projector: self.projector,
-            event_codec: self.event_codec,
-            trigger: self.trigger,
-            mode: Configured,
-        }
+        Projection::new(
+            self.id,
+            self.subscription,
+            self.checkpoint,
+            self.state_persistence,
+            self.projector,
+            self.event_codec,
+            self.trigger,
+            Configured,
+        )
     }
 }

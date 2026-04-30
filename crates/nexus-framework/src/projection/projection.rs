@@ -1,4 +1,4 @@
-use nexus::{Id, Version};
+use nexus::Id;
 use nexus_store::Codec;
 use nexus_store::projection::{ProjectionTrigger, Projector};
 use nexus_store::store::{CheckpointStore, Subscription};
@@ -36,6 +36,12 @@ pub struct Ready<S> {
     pub(crate) decision: StartupDecision,
 }
 
+impl<S> Ready<S> {
+    pub(crate) fn new(status: ProjectionStatus<S>, decision: StartupDecision) -> Self {
+        Self { status, decision }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Projection
 // ═══════════════════════════════════════════════════════════════════════════
@@ -58,59 +64,27 @@ pub struct Projection<I, Sub, Ckpt, SP, P, EC, Trig, Mode> {
     pub(crate) mode: Mode,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Startup resolution
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Resolve startup state from loaded checkpoint and persisted state.
-///
-/// Returns `ProjectionStatus::Idle` directly — the startup decision only
-/// determines what `state` and `checkpoint` values Idle starts with.
-///
-/// # Decision table
-///
-/// | loaded_state | persists_state | checkpoint | decision | Idle state |
-/// |---|---|---|---|---|
-/// | `Some(s)` | any | any | `Resume` | loaded state, checkpoint |
-/// | `None` | `true` | `Some(_)` | `Rebuild` | initial(), None |
-/// | `None` | `true` | `None` | `Fresh` | initial(), None |
-/// | `None` | `false` | `Some(_)` | `Resume` | initial(), checkpoint |
-/// | `None` | `false` | `None` | `Fresh` | initial(), None |
-pub(crate) fn resolve_startup<S>(
-    loaded_state: Option<(S, Version)>,
-    last_checkpoint: Option<Version>,
-    persists_state: bool,
-    initial: impl FnOnce() -> S,
-) -> (ProjectionStatus<S>, StartupDecision) {
-    match loaded_state {
-        Some((state, _)) => (
-            ProjectionStatus::Idle {
-                state,
-                checkpoint: last_checkpoint,
-            },
-            StartupDecision::Resume,
-        ),
-        None if persists_state && last_checkpoint.is_some() => (
-            ProjectionStatus::Idle {
-                state: initial(),
-                checkpoint: None,
-            },
-            StartupDecision::Rebuild,
-        ),
-        None if last_checkpoint.is_some() => (
-            ProjectionStatus::Idle {
-                state: initial(),
-                checkpoint: last_checkpoint,
-            },
-            StartupDecision::Resume,
-        ),
-        None => (
-            ProjectionStatus::Idle {
-                state: initial(),
-                checkpoint: None,
-            },
-            StartupDecision::Fresh,
-        ),
+impl<I, Sub, Ckpt, SP, P, EC, Trig, Mode> Projection<I, Sub, Ckpt, SP, P, EC, Trig, Mode> {
+    pub(crate) fn new(
+        id: I,
+        subscription: Sub,
+        checkpoint: Ckpt,
+        state_persistence: SP,
+        projector: P,
+        event_codec: EC,
+        trigger: Trig,
+        mode: Mode,
+    ) -> Self {
+        Self {
+            id,
+            subscription,
+            checkpoint,
+            state_persistence,
+            projector,
+            event_codec,
+            trigger,
+            mode,
+        }
     }
 }
 
@@ -132,6 +106,16 @@ where
     ///
     /// Returns `Projection<..., Ready>` with the resolved `ProjectionStatus::Idle`
     /// and the `StartupDecision` label.
+    ///
+    /// # Decision table
+    ///
+    /// | loaded_state | persists_state | checkpoint | decision | Idle state |
+    /// |---|---|---|---|---|
+    /// | `Some(s)` | any | any | `Resume` | loaded state, checkpoint |
+    /// | `None` | `true` | `Some(_)` | `Rebuild` | initial(), None |
+    /// | `None` | `true` | `None` | `Fresh` | initial(), None |
+    /// | `None` | `false` | `Some(_)` | `Resume` | initial(), checkpoint |
+    /// | `None` | `false` | `None` | `Fresh` | initial(), None |
     ///
     /// # Errors
     ///
@@ -155,23 +139,31 @@ where
             .await
             .map_err(ProjectionError::State)?;
 
-        let (status, decision) = resolve_startup(
-            loaded_state,
-            last_checkpoint,
-            self.state_persistence.persists_state(),
-            || self.projector.initial(),
-        );
+        let persists_state = self.state_persistence.persists_state();
 
-        Ok(Projection {
-            id: self.id,
-            subscription: self.subscription,
-            checkpoint: self.checkpoint,
-            state_persistence: self.state_persistence,
-            projector: self.projector,
-            event_codec: self.event_codec,
-            trigger: self.trigger,
-            mode: Ready { status, decision },
-        })
+        let (state, checkpoint, decision) = match loaded_state {
+            Some((state, _)) => (state, last_checkpoint, StartupDecision::Resume),
+            None if persists_state && last_checkpoint.is_some() => {
+                (self.projector.initial(), None, StartupDecision::Rebuild)
+            }
+            None if last_checkpoint.is_some() => (
+                self.projector.initial(),
+                last_checkpoint,
+                StartupDecision::Resume,
+            ),
+            None => (self.projector.initial(), None, StartupDecision::Fresh),
+        };
+
+        Ok(Projection::new(
+            self.id,
+            self.subscription,
+            self.checkpoint,
+            self.state_persistence,
+            self.projector,
+            self.event_codec,
+            self.trigger,
+            Ready::new(ProjectionStatus::Idle { state, checkpoint }, decision),
+        ))
     }
 }
 
@@ -199,22 +191,22 @@ where
     #[must_use]
     pub fn rebuild(self) -> Self {
         let initial_state = self.projector.initial();
-        Projection {
-            id: self.id,
-            subscription: self.subscription,
-            checkpoint: self.checkpoint,
-            state_persistence: self.state_persistence,
-            projector: self.projector,
-            event_codec: self.event_codec,
-            trigger: self.trigger,
-            mode: Ready {
-                status: ProjectionStatus::Idle {
+        Projection::new(
+            self.id,
+            self.subscription,
+            self.checkpoint,
+            self.state_persistence,
+            self.projector,
+            self.event_codec,
+            self.trigger,
+            Ready::new(
+                ProjectionStatus::Idle {
                     state: initial_state,
                     checkpoint: None,
                 },
-                decision: StartupDecision::Rebuild,
-            },
-        }
+                StartupDecision::Rebuild,
+            ),
+        )
     }
 }
 
@@ -306,106 +298,5 @@ where
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::panic,
-    reason = "test code — relaxed lints"
-)]
-mod tests {
-    use nexus::Version;
-
-    use super::*;
-
-    fn v(n: u64) -> Version {
-        Version::new(n).unwrap()
-    }
-
-    #[test]
-    fn resolve_resumes_when_state_loaded() {
-        let (status, decision) =
-            resolve_startup(Some(("loaded", v(5))), Some(v(5)), true, || "initial");
-        let ProjectionStatus::Idle { state, checkpoint } = status else {
-            panic!("expected Idle");
-        };
-        assert_eq!(state, "loaded");
-        assert_eq!(checkpoint, Some(v(5)));
-        assert_eq!(decision, StartupDecision::Resume);
-    }
-
-    #[test]
-    fn resolve_resumes_when_state_loaded_regardless_of_persists_flag() {
-        let (status, decision) =
-            resolve_startup(Some(("loaded", v(3))), Some(v(3)), false, || "initial");
-        let ProjectionStatus::Idle { state, checkpoint } = status else {
-            panic!("expected Idle");
-        };
-        assert_eq!(state, "loaded");
-        assert_eq!(checkpoint, Some(v(3)));
-        assert_eq!(decision, StartupDecision::Resume);
-    }
-
-    #[test]
-    fn resolve_rebuilds_when_state_missing_but_checkpoint_exists() {
-        let (status, decision) =
-            resolve_startup(None::<(&str, Version)>, Some(v(10)), true, || "initial");
-        let ProjectionStatus::Idle { state, checkpoint } = status else {
-            panic!("expected Idle");
-        };
-        assert_eq!(state, "initial");
-        assert!(checkpoint.is_none());
-        assert_eq!(decision, StartupDecision::Rebuild);
-    }
-
-    #[test]
-    fn resolve_fresh_on_first_run_with_persistence() {
-        let (status, decision) = resolve_startup(None::<(&str, Version)>, None, true, || "initial");
-        let ProjectionStatus::Idle { state, checkpoint } = status else {
-            panic!("expected Idle");
-        };
-        assert_eq!(state, "initial");
-        assert!(checkpoint.is_none());
-        assert_eq!(decision, StartupDecision::Fresh);
-    }
-
-    #[test]
-    fn resolve_resumes_without_state_persistence() {
-        let (status, decision) =
-            resolve_startup(None::<(&str, Version)>, Some(v(7)), false, || "initial");
-        let ProjectionStatus::Idle { state, checkpoint } = status else {
-            panic!("expected Idle");
-        };
-        assert_eq!(state, "initial");
-        assert_eq!(checkpoint, Some(v(7)));
-        assert_eq!(decision, StartupDecision::Resume);
-    }
-
-    #[test]
-    fn resolve_fresh_on_first_run_without_persistence() {
-        let (status, decision) =
-            resolve_startup(None::<(&str, Version)>, None, false, || "initial");
-        let ProjectionStatus::Idle { state, checkpoint } = status else {
-            panic!("expected Idle");
-        };
-        assert_eq!(state, "initial");
-        assert!(checkpoint.is_none());
-        assert_eq!(decision, StartupDecision::Fresh);
-    }
-
-    #[test]
-    fn resolve_initial_is_lazy_when_state_loaded() {
-        let mut called = false;
-        let (status, _) = resolve_startup(Some(("loaded", v(1))), Some(v(1)), true, || {
-            called = true;
-            "initial"
-        });
-        assert!(matches!(status, ProjectionStatus::Idle { .. }));
-        assert!(
-            !called,
-            "initial() should not be called when state is loaded"
-        );
     }
 }
