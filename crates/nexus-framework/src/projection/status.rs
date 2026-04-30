@@ -69,6 +69,19 @@ where
     }
 }
 
+impl<S> ProjectionStatus<S> {
+    /// The checkpoint (last persisted version), if any.
+    ///
+    /// Used by `Projection::run()` to determine the subscribe-from position.
+    pub(crate) fn checkpoint(&self) -> Option<Version> {
+        match self {
+            ProjectionStatus::Idle { checkpoint, .. } => *checkpoint,
+            ProjectionStatus::Pending { checkpoint, .. } => *checkpoint,
+            ProjectionStatus::Committed { version, .. } => Some(*version),
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

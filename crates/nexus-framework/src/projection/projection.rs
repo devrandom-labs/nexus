@@ -1,7 +1,13 @@
-use nexus::Version;
-use nexus_store::projection::Projector;
+use nexus::{Id, Version};
+use nexus_store::Codec;
+use nexus_store::projection::{ProjectionTrigger, Projector};
+use nexus_store::store::{CheckpointStore, Subscription};
+use tokio_stream::StreamExt;
 
-use super::status::ProjectionStatus;
+use super::error::ProjectionError;
+use super::persist::StatePersistence;
+use super::status::{ProjectionStatus, apply_event};
+use super::stream::{DecodeStreamError, DecodedStream};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Typestate markers
@@ -105,6 +111,201 @@ pub(crate) fn resolve_startup<S>(
             },
             StartupDecision::Fresh,
         ),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Projection<Configured> — load checkpoint + state, resolve startup
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl<I, Sub, Ckpt, SP, P, EC, Trig> Projection<I, Sub, Ckpt, SP, P, EC, Trig, Configured>
+where
+    I: Id + Clone,
+    Sub: Subscription<()>,
+    Ckpt: CheckpointStore,
+    SP: StatePersistence<P::State>,
+    P: Projector,
+    EC: Codec<P::Event>,
+    Trig: ProjectionTrigger,
+{
+    /// Load checkpoint and state, resolve the startup decision.
+    ///
+    /// Returns `Projection<..., Ready>` with the resolved `ProjectionStatus::Idle`
+    /// and the `StartupDecision` label.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectionError::Checkpoint`] or [`ProjectionError::State`]
+    /// if loading fails.
+    pub async fn initialize(
+        self,
+    ) -> Result<
+        Projection<I, Sub, Ckpt, SP, P, EC, Trig, Ready<P::State>>,
+        ProjectionError<P::Error, EC::Error, SP::Error, Ckpt::Error, Sub::Error>,
+    > {
+        let last_checkpoint = self
+            .checkpoint
+            .load(&self.id)
+            .await
+            .map_err(ProjectionError::Checkpoint)?;
+
+        let loaded_state = self
+            .state_persistence
+            .load(&self.id)
+            .await
+            .map_err(ProjectionError::State)?;
+
+        let (status, decision) = resolve_startup(
+            loaded_state,
+            last_checkpoint,
+            self.state_persistence.persists_state(),
+            || self.projector.initial(),
+        );
+
+        Ok(Projection {
+            id: self.id,
+            subscription: self.subscription,
+            checkpoint: self.checkpoint,
+            state_persistence: self.state_persistence,
+            projector: self.projector,
+            event_codec: self.event_codec,
+            trigger: self.trigger,
+            mode: Ready { status, decision },
+        })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Projection<Ready> — inspect, rebuild, run
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl<I, Sub, Ckpt, SP, P, EC, Trig> Projection<I, Sub, Ckpt, SP, P, EC, Trig, Ready<P::State>>
+where
+    P: Projector,
+{
+    /// The startup decision — why the projection resolved to its current state.
+    #[must_use]
+    pub const fn decision(&self) -> StartupDecision {
+        self.mode.decision
+    }
+
+    /// The resolved projection status (always `Idle` after initialization).
+    #[must_use]
+    pub const fn status(&self) -> &ProjectionStatus<P::State> {
+        &self.mode.status
+    }
+
+    /// Discard loaded state and reset to initial. Replays from the beginning.
+    #[must_use]
+    pub fn rebuild(self) -> Self {
+        let initial_state = self.projector.initial();
+        Projection {
+            id: self.id,
+            subscription: self.subscription,
+            checkpoint: self.checkpoint,
+            state_persistence: self.state_persistence,
+            projector: self.projector,
+            event_codec: self.event_codec,
+            trigger: self.trigger,
+            mode: Ready {
+                status: ProjectionStatus::Idle {
+                    state: initial_state,
+                    checkpoint: None,
+                },
+                decision: StartupDecision::Rebuild,
+            },
+        }
+    }
+}
+
+impl<I, Sub, Ckpt, SP, P, EC, Trig> Projection<I, Sub, Ckpt, SP, P, EC, Trig, Ready<P::State>>
+where
+    I: Id + Clone,
+    Sub: Subscription<()>,
+    Ckpt: CheckpointStore,
+    SP: StatePersistence<P::State>,
+    P: Projector,
+    EC: Codec<P::Event>,
+    Trig: ProjectionTrigger,
+{
+    /// Run the event loop until shutdown or error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectionError`] on subscription, codec, projector,
+    /// state persistence, or checkpoint failure.
+    pub async fn run(
+        self,
+        shutdown: impl std::future::Future<Output = ()>,
+    ) -> Result<(), ProjectionError<P::Error, EC::Error, SP::Error, Ckpt::Error, Sub::Error>> {
+        let Self {
+            id,
+            subscription,
+            checkpoint,
+            state_persistence,
+            projector,
+            event_codec,
+            trigger,
+            mode: Ready { status, .. },
+        } = self;
+
+        let stream = subscription
+            .subscribe(&id, status.checkpoint())
+            .await
+            .map_err(ProjectionError::Subscription)?;
+
+        let mut decoded = DecodedStream::new(stream, &event_codec);
+        let mut status = status;
+
+        tokio::pin!(shutdown);
+
+        loop {
+            match tokio::select! {
+                () = &mut shutdown => None,
+                item = decoded.next() => item,
+            } {
+                None => {
+                    if let ProjectionStatus::Pending {
+                        ref state, version, ..
+                    } = status
+                    {
+                        state_persistence
+                            .save(&id, version, state)
+                            .await
+                            .map_err(ProjectionError::State)?;
+                        checkpoint
+                            .save(&id, version)
+                            .await
+                            .map_err(ProjectionError::Checkpoint)?;
+                    }
+                    return Ok(());
+                }
+                Some(Ok((version, event))) => {
+                    status = apply_event(&projector, &trigger, status, &event, version)
+                        .map_err(ProjectionError::Projector)?;
+
+                    if let ProjectionStatus::Committed {
+                        ref state, version, ..
+                    } = status
+                    {
+                        state_persistence
+                            .save(&id, version, state)
+                            .await
+                            .map_err(ProjectionError::State)?;
+                        checkpoint
+                            .save(&id, version)
+                            .await
+                            .map_err(ProjectionError::Checkpoint)?;
+                    }
+                }
+                Some(Err(DecodeStreamError::Stream(e))) => {
+                    return Err(ProjectionError::Subscription(e));
+                }
+                Some(Err(DecodeStreamError::Codec(e))) => {
+                    return Err(ProjectionError::EventCodec(e));
+                }
+            }
+        }
     }
 }
 
