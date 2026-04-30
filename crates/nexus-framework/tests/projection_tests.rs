@@ -15,8 +15,8 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{DomainEvent, Message, Version};
 use nexus_framework::projection::{
-    Initialized, NoStatePersistence, ProjectionError, ProjectionRunner, StatePersistence,
-    WithStatePersistence,
+    NoStatePersistence, Projection, ProjectionError, ProjectionStatus, StartupDecision,
+    StatePersistence, WithStatePersistence,
 };
 use nexus_store::projection::{
     EveryNEvents as ProjEveryNEvents, InMemoryStateStore, Projector, StateStore,
@@ -220,7 +220,7 @@ async fn runner_processes_events_and_checkpoints() {
     .await;
 
     // Build runner with EveryNEvents(1) — checkpoint every event
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -279,7 +279,7 @@ async fn runner_resumes_from_checkpoint() {
     )
     .await;
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -306,7 +306,7 @@ async fn runner_resumes_from_checkpoint() {
     .await;
 
     // Run again — should resume from checkpoint (version 3)
-    let runner2 = ProjectionRunner::builder(stream_id.clone())
+    let runner2 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -364,7 +364,7 @@ async fn runner_trigger_controls_checkpoint_frequency() {
     .await;
 
     // Trigger every 3 events
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -416,7 +416,7 @@ async fn runner_works_without_state_persistence() {
     .await;
 
     // No state_store — only checkpoints
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -456,7 +456,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
     )
     .await;
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -479,7 +479,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
     assert_eq!(cp, Some(Version::new(3).unwrap()));
 
     // Now restart with schema v2 — should rebuild from beginning
-    let runner2 = ProjectionRunner::builder(stream_id.clone())
+    let runner2 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -532,7 +532,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
     )
     .await;
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -551,7 +551,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .unwrap();
 
     // Phase 2: restart with schema v2 — triggers rebuild
-    let runner2 = ProjectionRunner::builder(stream_id.clone())
+    let runner2 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -573,7 +573,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
     // Phase 3: append more events, restart with same schema v2 — normal resume
     append_events(&store, &stream_id, &[TestEvent::Added(30)]).await;
 
-    let runner3 = ProjectionRunner::builder(stream_id.clone())
+    let runner3 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -620,7 +620,7 @@ async fn runner_immediate_shutdown_with_no_events() {
     let store = InMemoryStore::new();
     let stream_id = TestId("empty-stream".into());
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -665,7 +665,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     )
     .await;
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -697,7 +697,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     tx.send(()).unwrap();
 
-    let runner2 = ProjectionRunner::builder(stream_id.clone())
+    let runner2 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -719,7 +719,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
 
     // Phase 3: restart with schema v2 — whether Phase 2 processed some
     // events or none, the final result must be correct (idempotent)
-    let runner3 = ProjectionRunner::builder(stream_id.clone())
+    let runner3 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -770,7 +770,7 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
 
     // Trigger every 100 events — so the trigger never fires during these 2 events.
     // Only the shutdown flush should persist state.
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -838,7 +838,7 @@ async fn runner_stale_state_falls_back_to_initial() {
     .await;
 
     // Runner with schema version 2 — stale state should be ignored
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -894,7 +894,7 @@ async fn runner_no_state_persistence_with_checkpoint_does_not_rebuild() {
     )
     .await;
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -926,7 +926,7 @@ async fn runner_no_state_persistence_with_checkpoint_does_not_rebuild() {
     .await;
 
     // Run again without state persistence — should resume from v3, NOT rebuild
-    let runner2 = ProjectionRunner::builder(stream_id.clone())
+    let runner2 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -963,7 +963,7 @@ async fn runner_first_run_with_state_persistence_is_not_rebuild() {
 
     // First run ever — no checkpoint, no state. Should process from beginning
     // without treating it as a "rebuild".
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1011,7 +1011,7 @@ async fn runner_returns_projector_error_on_apply_failure() {
     )
     .await;
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1046,7 +1046,7 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
         .await
         .unwrap();
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1093,7 +1093,7 @@ async fn runner_catches_up_and_processes_all_existing_events() {
     )
     .await;
 
-    let runner = ProjectionRunner::builder(stream_id.clone())
+    let runner = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1256,15 +1256,15 @@ async fn initialize_returns_starting_on_first_run() {
     let store = InMemoryStore::new();
     let stream_id = TestId("fresh-stream".into());
 
-    let runner = ProjectionRunner::builder(stream_id)
+    let runner = Projection::builder(stream_id)
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .build();
 
-    let initialized = runner.initialize().await.unwrap();
-    assert!(matches!(initialized, Initialized::Starting(_)));
+    let ready = runner.initialize().await.unwrap();
+    assert_eq!(ready.decision(), StartupDecision::Fresh);
 }
 
 #[tokio::test]
@@ -1276,7 +1276,7 @@ async fn initialize_returns_resuming_after_successful_run() {
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
 
     // First run
-    ProjectionRunner::builder(stream_id.clone())
+    Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1293,7 +1293,7 @@ async fn initialize_returns_resuming_after_successful_run() {
         .unwrap();
 
     // Second run — should resume
-    let runner2 = ProjectionRunner::builder(stream_id)
+    let runner2 = Projection::builder(stream_id)
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1301,8 +1301,8 @@ async fn initialize_returns_resuming_after_successful_run() {
         .state_store(&state_store, TestStateCodec)
         .build();
 
-    let initialized = runner2.initialize().await.unwrap();
-    assert!(matches!(initialized, Initialized::Resuming(_)));
+    let ready = runner2.initialize().await.unwrap();
+    assert_eq!(ready.decision(), StartupDecision::Resume);
 }
 
 #[tokio::test]
@@ -1314,7 +1314,7 @@ async fn initialize_returns_rebuilding_on_schema_mismatch() {
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
 
     // First run with schema v1
-    ProjectionRunner::builder(stream_id.clone())
+    Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1331,7 +1331,7 @@ async fn initialize_returns_rebuilding_on_schema_mismatch() {
         .unwrap();
 
     // Second run with schema v2 — should trigger rebuild
-    let runner2 = ProjectionRunner::builder(stream_id)
+    let runner2 = Projection::builder(stream_id)
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1340,8 +1340,8 @@ async fn initialize_returns_rebuilding_on_schema_mismatch() {
         .state_schema_version(NonZeroU32::new(2).unwrap())
         .build();
 
-    let initialized = runner2.initialize().await.unwrap();
-    assert!(matches!(initialized, Initialized::Rebuilding(_)));
+    let ready = runner2.initialize().await.unwrap();
+    assert_eq!(ready.decision(), StartupDecision::Rebuild);
 }
 
 #[tokio::test]
@@ -1352,7 +1352,7 @@ async fn initialize_returns_resuming_without_state_persistence() {
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
 
     // First run (checkpoint-only, no state persistence)
-    ProjectionRunner::builder(stream_id.clone())
+    Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1368,15 +1368,15 @@ async fn initialize_returns_resuming_without_state_persistence() {
         .unwrap();
 
     // Second run — should resume (not rebuild) despite no state
-    let runner2 = ProjectionRunner::builder(stream_id)
+    let runner2 = Projection::builder(stream_id)
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .build();
 
-    let initialized = runner2.initialize().await.unwrap();
-    assert!(matches!(initialized, Initialized::Resuming(_)));
+    let ready = runner2.initialize().await.unwrap();
+    assert_eq!(ready.decision(), StartupDecision::Resume);
 }
 
 #[tokio::test]
@@ -1393,7 +1393,7 @@ async fn force_rebuild_replays_from_beginning() {
     .await;
 
     // First run
-    ProjectionRunner::builder(stream_id.clone())
+    Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1410,7 +1410,7 @@ async fn force_rebuild_replays_from_beginning() {
         .unwrap();
 
     // Second run — force rebuild despite valid state
-    let runner2 = ProjectionRunner::builder(stream_id.clone())
+    let runner2 = Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1418,14 +1418,12 @@ async fn force_rebuild_replays_from_beginning() {
         .state_store(&state_store, TestStateCodec)
         .build();
 
-    let initialized = runner2.initialize().await.unwrap();
-    let Initialized::Resuming(prepared) = initialized else {
-        panic!("expected Resuming");
-    };
+    let ready = runner2.initialize().await.unwrap();
+    assert_eq!(ready.decision(), StartupDecision::Resume);
 
     // Force rebuild and run
-    prepared
-        .force_rebuild()
+    ready
+        .rebuild()
         .run(async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         })
@@ -1457,7 +1455,7 @@ async fn resuming_accessors_return_correct_values() {
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
 
     // First run to create checkpoint + state
-    ProjectionRunner::builder(stream_id.clone())
+    Projection::builder(stream_id.clone())
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1474,7 +1472,7 @@ async fn resuming_accessors_return_correct_values() {
         .unwrap();
 
     // Second run — inspect Resuming variant
-    let runner2 = ProjectionRunner::builder(stream_id)
+    let runner2 = Projection::builder(stream_id)
         .subscription(&store)
         .checkpoint(&store)
         .projector(CountingProjector)
@@ -1482,13 +1480,19 @@ async fn resuming_accessors_return_correct_values() {
         .state_store(&state_store, TestStateCodec)
         .build();
 
-    let Initialized::Resuming(prepared) = runner2.initialize().await.unwrap() else {
-        panic!("expected Resuming");
-    };
+    let ready = runner2.initialize().await.unwrap();
+    assert_eq!(ready.decision(), StartupDecision::Resume);
 
-    assert_eq!(prepared.resume_from(), Some(Version::new(1).unwrap()));
+    let ProjectionStatus::Idle {
+        ref state,
+        checkpoint,
+    } = *ready.status()
+    else {
+        panic!("expected Idle");
+    };
+    assert_eq!(checkpoint, Some(Version::new(1).unwrap()));
     assert_eq!(
-        *prepared.state(),
+        *state,
         CountState {
             count: 1,
             total: 10
