@@ -3,6 +3,7 @@ mod error;
 mod initialized;
 mod persist;
 mod prepared;
+mod projection;
 mod runner;
 mod status;
 mod stream;
