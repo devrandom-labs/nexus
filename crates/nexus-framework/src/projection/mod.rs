@@ -4,6 +4,7 @@ mod initialized;
 mod persist;
 mod prepared;
 mod runner;
+mod status;
 mod stream;
 
 pub use builder::ProjectionRunnerBuilder;
