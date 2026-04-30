@@ -11,7 +11,7 @@ use nexus_store::projection::{ProjectionTrigger, Projector};
 /// - [`Idle`](ProjectionStatus::Idle) — no events processed yet
 /// - [`Pending`](ProjectionStatus::Pending) — events folded, write pending
 /// - [`Committed`](ProjectionStatus::Committed) — trigger fired, state persisted
-pub(crate) enum ProjectionStatus<S> {
+pub enum ProjectionStatus<S> {
     /// No events processed yet.
     Idle {
         state: S,

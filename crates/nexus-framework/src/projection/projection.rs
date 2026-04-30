@@ -47,7 +47,7 @@ pub struct Ready<S> {
 /// 2. `Projection<..., Ready<P::State>>` — loaded, ready to run
 ///
 /// Constructed via [`Projection::builder`]. Single-use: `run` consumes `self`.
-pub struct Projection<I, Sub, Ckpt, SP, P: Projector, EC, Trig, Mode> {
+pub struct Projection<I, Sub, Ckpt, SP, P, EC, Trig, Mode> {
     pub(crate) id: I,
     pub(crate) subscription: Sub,
     pub(crate) checkpoint: Ckpt,

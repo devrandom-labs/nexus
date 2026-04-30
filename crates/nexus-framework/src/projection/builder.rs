@@ -4,7 +4,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 use nexus_store::projection::EveryNEvents;
 
 use super::persist::{NoStatePersistence, WithStatePersistence};
-use super::runner::ProjectionRunner;
+use super::projection::{Configured, Projection};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Typestate markers — compile-time guards for required fields
@@ -26,19 +26,19 @@ const DEFAULT_TRIGGER: EveryNEvents = EveryNEvents(NonZeroU64::MIN);
 const DEFAULT_STATE_SCHEMA_VERSION: NonZeroU32 = NonZeroU32::MIN;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ProjectionRunnerBuilder
+// ProjectionBuilder
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Typestate builder for [`ProjectionRunner`].
+/// Typestate builder for [`Projection`].
 ///
-/// Created via [`ProjectionRunner::builder`]. Required fields must be set
+/// Created via [`Projection::builder`]. Required fields must be set
 /// before `.build()` becomes available: `subscription`, `checkpoint`,
 /// `projector`, and `event_codec`.
 ///
 /// Optional fields have defaults:
 /// - `state_persistence` -> [`NoStatePersistence`] (state not persisted)
 /// - `trigger` -> [`EveryNEvents(1)`](EveryNEvents) (checkpoint every event)
-pub struct ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
+pub struct ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
     id: Id,
     subscription: Sub,
     checkpoint: Ckpt,
@@ -51,7 +51,7 @@ pub struct ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
 // ── Entry point ─────────────────────────────────────────────────────────
 
 impl<I>
-    ProjectionRunner<
+    Projection<
         I,
         NeedsSub,
         NeedsCkpt,
@@ -59,13 +59,14 @@ impl<I>
         NeedsProj,
         NeedsEvtCodec,
         EveryNEvents,
+        Configured,
     >
 {
-    /// Start building a new projection runner.
+    /// Start building a new projection.
     #[must_use]
     pub const fn builder(
         id: I,
-    ) -> ProjectionRunnerBuilder<
+    ) -> ProjectionBuilder<
         I,
         NeedsSub,
         NeedsCkpt,
@@ -74,7 +75,7 @@ impl<I>
         NeedsEvtCodec,
         EveryNEvents,
     > {
-        ProjectionRunnerBuilder {
+        ProjectionBuilder {
             id,
             subscription: NeedsSub(PhantomData),
             checkpoint: NeedsCkpt(PhantomData),
@@ -88,14 +89,14 @@ impl<I>
 
 // ── Required setters ────────────────────────────────────────────────────
 
-impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
+impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
     /// Set the subscription source (event stream).
     #[must_use]
     pub fn subscription<NewSub>(
         self,
         sub: NewSub,
-    ) -> ProjectionRunnerBuilder<Id, NewSub, Ckpt, SP, P, EC, Trig> {
-        ProjectionRunnerBuilder {
+    ) -> ProjectionBuilder<Id, NewSub, Ckpt, SP, P, EC, Trig> {
+        ProjectionBuilder {
             id: self.id,
             subscription: sub,
             checkpoint: self.checkpoint,
@@ -111,8 +112,8 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, 
     pub fn checkpoint<NewCkpt>(
         self,
         ckpt: NewCkpt,
-    ) -> ProjectionRunnerBuilder<Id, Sub, NewCkpt, SP, P, EC, Trig> {
-        ProjectionRunnerBuilder {
+    ) -> ProjectionBuilder<Id, Sub, NewCkpt, SP, P, EC, Trig> {
+        ProjectionBuilder {
             id: self.id,
             subscription: self.subscription,
             checkpoint: ckpt,
@@ -128,8 +129,8 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, 
     pub fn projector<NewP>(
         self,
         proj: NewP,
-    ) -> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, NewP, EC, Trig> {
-        ProjectionRunnerBuilder {
+    ) -> ProjectionBuilder<Id, Sub, Ckpt, SP, NewP, EC, Trig> {
+        ProjectionBuilder {
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
@@ -145,8 +146,8 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, 
     pub fn event_codec<NewEC>(
         self,
         codec: NewEC,
-    ) -> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, P, NewEC, Trig> {
-        ProjectionRunnerBuilder {
+    ) -> ProjectionBuilder<Id, Sub, Ckpt, SP, P, NewEC, Trig> {
+        ProjectionBuilder {
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
@@ -160,18 +161,18 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, 
 
 // ── Optional setters ────────────────────────────────────────────────────
 
-impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
+impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
     /// Enable state persistence with a store and codec.
     ///
-    /// When not called, state persistence is disabled — the runner only
+    /// When not called, state persistence is disabled — the projection only
     /// checkpoints progress, it doesn't persist the folded state.
     #[must_use]
     pub fn state_store<SS, SC>(
         self,
         store: SS,
         codec: SC,
-    ) -> ProjectionRunnerBuilder<Id, Sub, Ckpt, WithStatePersistence<SS, SC>, P, EC, Trig> {
-        ProjectionRunnerBuilder {
+    ) -> ProjectionBuilder<Id, Sub, Ckpt, WithStatePersistence<SS, SC>, P, EC, Trig> {
+        ProjectionBuilder {
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
@@ -193,8 +194,8 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, 
     pub fn trigger<NewTrig>(
         self,
         trigger: NewTrig,
-    ) -> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, P, EC, NewTrig> {
-        ProjectionRunnerBuilder {
+    ) -> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC, NewTrig> {
+        ProjectionBuilder {
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
@@ -209,7 +210,7 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, 
 // ── Schema version setter (only when state store is configured) ─────────
 
 impl<Id, Sub, Ckpt, SS, SC, P, EC, Trig>
-    ProjectionRunnerBuilder<Id, Sub, Ckpt, WithStatePersistence<SS, SC>, P, EC, Trig>
+    ProjectionBuilder<Id, Sub, Ckpt, WithStatePersistence<SS, SC>, P, EC, Trig>
 {
     /// Set the schema version for state invalidation.
     ///
@@ -224,21 +225,21 @@ impl<Id, Sub, Ckpt, SS, SC, P, EC, Trig>
 
 // ── Terminal: .build() ──────────────────────────────────────────────────
 
-impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionRunnerBuilder<Id, Sub, Ckpt, SP, P, EC, Trig>
+impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC, Trig>
 where
     Sub: Send + Sync,
     Ckpt: Send + Sync,
     P: Send + Sync,
     EC: Send + Sync,
 {
-    /// Build the projection runner.
+    /// Build the projection.
     ///
     /// Only available when all required fields are set. The `Send + Sync`
     /// bounds exclude `Needs*` markers (which are `!Send`).
     #[must_use]
     #[allow(clippy::missing_const_for_fn, reason = "generics may have destructors")]
-    pub fn build(self) -> ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig> {
-        ProjectionRunner {
+    pub fn build(self) -> Projection<Id, Sub, Ckpt, SP, P, EC, Trig, Configured> {
+        Projection {
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
@@ -246,6 +247,7 @@ where
             projector: self.projector,
             event_codec: self.event_codec,
             trigger: self.trigger,
+            mode: Configured,
         }
     }
 }
