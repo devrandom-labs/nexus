@@ -5,6 +5,7 @@ pub mod error;
 pub mod projection;
 #[cfg(feature = "snapshot")]
 pub mod snapshot;
+pub mod state;
 pub mod store;
 #[cfg(feature = "testing")]
 pub mod testing;
