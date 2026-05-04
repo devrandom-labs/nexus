@@ -14,13 +14,9 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{DomainEvent, Message, Version};
-use nexus_framework::projection::{
-    NoStatePersistence, Projection, ProjectionError, ProjectionStatus, StartupDecision,
-    StatePersistence, WithStatePersistence,
-};
-use nexus_store::projection::{
-    EveryNEvents as ProjEveryNEvents, InMemoryStateStore, Projector, StateStore,
-};
+use nexus_framework::projection::{Projection, ProjectionError, ProjectionStatus, StartupDecision};
+use nexus_store::Projector;
+use nexus_store::state::{EveryNEvents, InMemoryStateStore, PendingState, StateStore};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{CheckpointStore, Codec, EventStreamExt, RawEventStore, pending_envelope};
 
@@ -142,32 +138,6 @@ impl Codec<TestEvent> for TestEventCodec {
     }
 }
 
-/// Simple state codec for tests.
-struct TestStateCodec;
-
-impl Codec<CountState> for TestStateCodec {
-    type Error = std::io::Error;
-
-    fn encode(&self, state: &CountState) -> Result<Vec<u8>, Self::Error> {
-        let mut buf = Vec::with_capacity(16);
-        buf.extend_from_slice(&state.count.to_le_bytes());
-        buf.extend_from_slice(&state.total.to_le_bytes());
-        Ok(buf)
-    }
-
-    fn decode(&self, _name: &str, payload: &[u8]) -> Result<CountState, Self::Error> {
-        if payload.len() != 16 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "bad len",
-            ));
-        }
-        let count = u64::from_le_bytes(payload[..8].try_into().unwrap());
-        let total = u64::from_le_bytes(payload[8..].try_into().unwrap());
-        Ok(CountState { count, total })
-    }
-}
-
 /// Append test events to the in-memory store.
 async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[TestEvent]) {
     let codec = TestEventCodec;
@@ -204,7 +174,7 @@ async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[Test
 #[tokio::test]
 async fn runner_processes_events_and_checkpoints() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Append 3 events
@@ -225,7 +195,7 @@ async fn runner_processes_events_and_checkpoints() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     // Run with delayed shutdown to let the runner process existing events
@@ -251,9 +221,8 @@ async fn runner_processes_events_and_checkpoints() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 3,
             total: 60
@@ -264,7 +233,7 @@ async fn runner_processes_events_and_checkpoints() {
 #[tokio::test]
 async fn runner_resumes_from_checkpoint() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Append 3 events, run, shutdown
@@ -284,7 +253,7 @@ async fn runner_resumes_from_checkpoint() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     runner
@@ -311,7 +280,7 @@ async fn runner_resumes_from_checkpoint() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     runner2
@@ -333,9 +302,8 @@ async fn runner_resumes_from_checkpoint() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 5,
             total: 95
@@ -346,7 +314,7 @@ async fn runner_resumes_from_checkpoint() {
 #[tokio::test]
 async fn runner_trigger_controls_checkpoint_frequency() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Append 5 events
@@ -369,8 +337,8 @@ async fn runner_trigger_controls_checkpoint_frequency() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
-        .trigger(ProjEveryNEvents(NonZeroU64::new(3).unwrap()))
+        .state_store(&state_store)
+        .trigger(EveryNEvents(NonZeroU64::new(3).unwrap()))
         .build();
 
     runner
@@ -393,9 +361,8 @@ async fn runner_trigger_controls_checkpoint_frequency() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 5,
             total: 15
@@ -441,7 +408,7 @@ async fn runner_works_without_state_persistence() {
 #[tokio::test]
 async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Append 3 events, run with schema v1
@@ -461,7 +428,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     runner
@@ -484,7 +451,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .state_schema_version(NonZeroU32::new(2).unwrap())
         .build();
 
@@ -504,9 +471,8 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 3,
             total: 60
@@ -521,7 +487,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
 #[tokio::test]
 async fn runner_resumes_normally_after_rebuild_completes() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Phase 1: initial run with schema v1
@@ -537,7 +503,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     runner
@@ -556,7 +522,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .state_schema_version(NonZeroU32::new(2).unwrap())
         .build();
 
@@ -578,7 +544,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .state_schema_version(NonZeroU32::new(2).unwrap())
         .build();
 
@@ -598,9 +564,8 @@ async fn runner_resumes_normally_after_rebuild_completes() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 3,
             total: 60
@@ -650,7 +615,7 @@ async fn runner_immediate_shutdown_with_no_events() {
 #[tokio::test]
 async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Phase 1: initial run with schema v1
@@ -670,7 +635,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     runner
@@ -702,9 +667,9 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .state_schema_version(NonZeroU32::new(2).unwrap())
-        .trigger(ProjEveryNEvents(NonZeroU64::new(100).unwrap()))
+        .trigger(EveryNEvents(NonZeroU64::new(100).unwrap()))
         .build();
 
     runner2
@@ -724,7 +689,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .state_schema_version(NonZeroU32::new(2).unwrap())
         .build();
 
@@ -744,9 +709,8 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 3,
             total: 60
@@ -757,7 +721,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
 #[tokio::test]
 async fn runner_graceful_shutdown_flushes_dirty_state() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Append 2 events
@@ -775,8 +739,8 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
-        .trigger(ProjEveryNEvents(NonZeroU64::new(100).unwrap()))
+        .state_store(&state_store)
+        .trigger(EveryNEvents(NonZeroU64::new(100).unwrap()))
         .build();
 
     runner
@@ -795,9 +759,8 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 2,
             total: 30
@@ -812,20 +775,17 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
 #[tokio::test]
 async fn runner_stale_state_falls_back_to_initial() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Pre-save state with schema version 1
-    use nexus_store::projection::PendingState;
     let old_state = PendingState::new(
         Version::new(5).unwrap(),
         NonZeroU32::MIN,
-        TestStateCodec
-            .encode(&CountState {
-                count: 99,
-                total: 999,
-            })
-            .unwrap(),
+        CountState {
+            count: 99,
+            total: 999,
+        },
     );
     state_store.save(&stream_id, &old_state).await.unwrap();
 
@@ -843,7 +803,7 @@ async fn runner_stale_state_falls_back_to_initial() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .state_schema_version(NonZeroU32::new(2).unwrap())
         .build();
 
@@ -863,9 +823,8 @@ async fn runner_stale_state_falls_back_to_initial() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 2,
             total: 30
@@ -951,7 +910,7 @@ async fn runner_no_state_persistence_with_checkpoint_does_not_rebuild() {
 #[tokio::test]
 async fn runner_first_run_with_state_persistence_is_not_rebuild() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     append_events(
@@ -968,7 +927,7 @@ async fn runner_first_run_with_state_persistence_is_not_rebuild() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     runner
@@ -986,9 +945,8 @@ async fn runner_first_run_with_state_persistence_is_not_rebuild() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 2,
             total: 30
@@ -1076,7 +1034,7 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
 #[tokio::test]
 async fn runner_catches_up_and_processes_all_existing_events() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     // Append events before runner starts — runner must catch up
@@ -1098,7 +1056,7 @@ async fn runner_catches_up_and_processes_all_existing_events() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     runner
@@ -1120,9 +1078,8 @@ async fn runner_catches_up_and_processes_all_existing_events() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 5,
             total: 150
@@ -1156,99 +1113,11 @@ fn projection_error_state_variant_is_unconstructable_when_infallible() {
         std::io::Error,
         std::io::Error,
     > = ProjectionError::Projector(TestProjectionError);
-    // If this compiles, the State(Infallible) variant is unconstructable. ✓
+    // If this compiles, the State(Infallible) variant is unconstructable.
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 6. StatePersistence trait tests (moved from nexus-store)
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[tokio::test]
-async fn no_state_persistence_load_returns_none() {
-    let sp = NoStatePersistence;
-    let id = TestId("proj-1".into());
-    let result: Result<Option<(CountState, _)>, _> = sp.load(&id).await;
-    assert!(result.unwrap().is_none());
-}
-
-#[tokio::test]
-async fn no_state_persistence_save_succeeds() {
-    let sp = NoStatePersistence;
-    let id = TestId("proj-1".into());
-    let state = CountState {
-        count: 1,
-        total: 10,
-    };
-    let version = Version::new(5).unwrap();
-    let result = sp.save(&id, version, &state).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn with_state_persistence_save_then_load_roundtrips() {
-    let store = InMemoryStateStore::new();
-    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
-
-    let id = TestId("proj-1".into());
-    let state = CountState {
-        count: 3,
-        total: 42,
-    };
-    let version = Version::new(10).unwrap();
-
-    sp.save(&id, version, &state).await.unwrap();
-
-    let loaded = sp.load(&id).await.unwrap().unwrap();
-    assert_eq!(loaded.0, state);
-    assert_eq!(loaded.1, version);
-}
-
-#[tokio::test]
-async fn with_state_persistence_load_returns_none_when_empty() {
-    let store = InMemoryStateStore::new();
-    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
-
-    let id = TestId("proj-1".into());
-    let result: Option<(CountState, _)> = sp.load(&id).await.unwrap();
-    assert!(result.is_none());
-}
-
-#[test]
-fn no_state_persistence_does_not_persist_state() {
-    assert!(
-        !<NoStatePersistence as StatePersistence<CountState>>::persists_state(&NoStatePersistence)
-    );
-}
-
-#[test]
-fn with_state_persistence_persists_state() {
-    let store = InMemoryStateStore::new();
-    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
-    assert!(sp.persists_state());
-}
-
-#[tokio::test]
-async fn with_state_persistence_load_returns_none_on_schema_mismatch() {
-    let store = InMemoryStateStore::new();
-    let sp = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::MIN);
-
-    let id = TestId("proj-1".into());
-    sp.save(
-        &id,
-        Version::new(5).unwrap(),
-        &CountState { count: 1, total: 1 },
-    )
-    .await
-    .unwrap();
-
-    // Load with a different schema version
-    let sp_v2 = WithStatePersistence::new(&store, TestStateCodec, NonZeroU32::new(2).unwrap());
-    let result: Option<(CountState, _)> = sp_v2.load(&id).await.unwrap();
-    assert!(result.is_none());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 7. Typestate / Phased Startup Tests
+// 6. Typestate / Phased Startup Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
@@ -1270,7 +1139,7 @@ async fn initialize_returns_starting_on_first_run() {
 #[tokio::test]
 async fn initialize_returns_resuming_after_successful_run() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
@@ -1281,7 +1150,7 @@ async fn initialize_returns_resuming_after_successful_run() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build()
         .initialize()
         .await
@@ -1298,7 +1167,7 @@ async fn initialize_returns_resuming_after_successful_run() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     let ready = runner2.initialize().await.unwrap();
@@ -1308,7 +1177,7 @@ async fn initialize_returns_resuming_after_successful_run() {
 #[tokio::test]
 async fn initialize_returns_rebuilding_on_schema_mismatch() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
@@ -1319,7 +1188,7 @@ async fn initialize_returns_rebuilding_on_schema_mismatch() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build()
         .initialize()
         .await
@@ -1336,7 +1205,7 @@ async fn initialize_returns_rebuilding_on_schema_mismatch() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .state_schema_version(NonZeroU32::new(2).unwrap())
         .build();
 
@@ -1382,7 +1251,7 @@ async fn initialize_returns_resuming_without_state_persistence() {
 #[tokio::test]
 async fn force_rebuild_replays_from_beginning() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     append_events(
@@ -1398,7 +1267,7 @@ async fn force_rebuild_replays_from_beginning() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build()
         .initialize()
         .await
@@ -1415,7 +1284,7 @@ async fn force_rebuild_replays_from_beginning() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     let ready = runner2.initialize().await.unwrap();
@@ -1436,9 +1305,8 @@ async fn force_rebuild_replays_from_beginning() {
         .await
         .unwrap()
         .unwrap();
-    let state: CountState = TestStateCodec.decode("", persisted.payload()).unwrap();
     assert_eq!(
-        state,
+        *persisted.state(),
         CountState {
             count: 2,
             total: 30
@@ -1449,7 +1317,7 @@ async fn force_rebuild_replays_from_beginning() {
 #[tokio::test]
 async fn resuming_accessors_return_correct_values() {
     let store = InMemoryStore::new();
-    let state_store = InMemoryStateStore::new();
+    let state_store = InMemoryStateStore::<CountState>::new();
     let stream_id = TestId("stream-1".into());
 
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
@@ -1460,7 +1328,7 @@ async fn resuming_accessors_return_correct_values() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build()
         .initialize()
         .await
@@ -1477,7 +1345,7 @@ async fn resuming_accessors_return_correct_values() {
         .checkpoint(&store)
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
-        .state_store(&state_store, TestStateCodec)
+        .state_store(&state_store)
         .build();
 
     let ready = runner2.initialize().await.unwrap();

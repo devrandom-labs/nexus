@@ -1,9 +1,8 @@
 use std::marker::PhantomData;
 use std::num::{NonZeroU32, NonZeroU64};
 
-use nexus_store::projection::EveryNEvents;
+use nexus_store::state::EveryNEvents;
 
-use super::persist::{NoStatePersistence, WithStatePersistence};
 use super::projection::{Configured, Projection};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -36,53 +35,38 @@ const DEFAULT_STATE_SCHEMA_VERSION: NonZeroU32 = NonZeroU32::MIN;
 /// `projector`, and `event_codec`.
 ///
 /// Optional fields have defaults:
-/// - `state_persistence` -> [`NoStatePersistence`] (state not persisted)
+/// - `state_store` -> `()` (state not persisted)
 /// - `trigger` -> [`EveryNEvents(1)`](EveryNEvents) (checkpoint every event)
 pub struct ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
     id: Id,
     subscription: Sub,
     checkpoint: Ckpt,
-    state_persistence: SP,
+    state_store: SP,
     projector: P,
     event_codec: EC,
     trigger: Trig,
+    schema_version: NonZeroU32,
+    persists_state: bool,
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
-impl<I>
-    Projection<
-        I,
-        NeedsSub,
-        NeedsCkpt,
-        NoStatePersistence,
-        NeedsProj,
-        NeedsEvtCodec,
-        EveryNEvents,
-        Configured,
-    >
-{
+impl<I> Projection<I, NeedsSub, NeedsCkpt, (), NeedsProj, NeedsEvtCodec, EveryNEvents, Configured> {
     /// Start building a new projection.
     #[must_use]
     pub const fn builder(
         id: I,
-    ) -> ProjectionBuilder<
-        I,
-        NeedsSub,
-        NeedsCkpt,
-        NoStatePersistence,
-        NeedsProj,
-        NeedsEvtCodec,
-        EveryNEvents,
-    > {
+    ) -> ProjectionBuilder<I, NeedsSub, NeedsCkpt, (), NeedsProj, NeedsEvtCodec, EveryNEvents> {
         ProjectionBuilder {
             id,
             subscription: NeedsSub(PhantomData),
             checkpoint: NeedsCkpt(PhantomData),
-            state_persistence: NoStatePersistence,
+            state_store: (),
             projector: NeedsProj(PhantomData),
             event_codec: NeedsEvtCodec(PhantomData),
             trigger: DEFAULT_TRIGGER,
+            schema_version: DEFAULT_STATE_SCHEMA_VERSION,
+            persists_state: false,
         }
     }
 }
@@ -100,10 +84,12 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC,
             id: self.id,
             subscription: sub,
             checkpoint: self.checkpoint,
-            state_persistence: self.state_persistence,
+            state_store: self.state_store,
             projector: self.projector,
             event_codec: self.event_codec,
             trigger: self.trigger,
+            schema_version: self.schema_version,
+            persists_state: self.persists_state,
         }
     }
 
@@ -117,10 +103,12 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC,
             id: self.id,
             subscription: self.subscription,
             checkpoint: ckpt,
-            state_persistence: self.state_persistence,
+            state_store: self.state_store,
             projector: self.projector,
             event_codec: self.event_codec,
             trigger: self.trigger,
+            schema_version: self.schema_version,
+            persists_state: self.persists_state,
         }
     }
 
@@ -134,10 +122,12 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC,
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
-            state_persistence: self.state_persistence,
+            state_store: self.state_store,
             projector: proj,
             event_codec: self.event_codec,
             trigger: self.trigger,
+            schema_version: self.schema_version,
+            persists_state: self.persists_state,
         }
     }
 
@@ -151,10 +141,12 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC,
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
-            state_persistence: self.state_persistence,
+            state_store: self.state_store,
             projector: self.projector,
             event_codec: codec,
             trigger: self.trigger,
+            schema_version: self.schema_version,
+            persists_state: self.persists_state,
         }
     }
 }
@@ -162,28 +154,25 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC,
 // ── Optional setters ────────────────────────────────────────────────────
 
 impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC, Trig> {
-    /// Enable state persistence with a store and codec.
+    /// Enable state persistence with a typed state store.
     ///
     /// When not called, state persistence is disabled — the projection only
     /// checkpoints progress, it doesn't persist the folded state.
     #[must_use]
-    pub fn state_store<SS, SC>(
+    pub fn state_store<NewSP>(
         self,
-        store: SS,
-        codec: SC,
-    ) -> ProjectionBuilder<Id, Sub, Ckpt, WithStatePersistence<SS, SC>, P, EC, Trig> {
+        store: NewSP,
+    ) -> ProjectionBuilder<Id, Sub, Ckpt, NewSP, P, EC, Trig> {
         ProjectionBuilder {
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
-            state_persistence: WithStatePersistence {
-                store,
-                codec,
-                schema_version: DEFAULT_STATE_SCHEMA_VERSION,
-            },
+            state_store: store,
             projector: self.projector,
             event_codec: self.event_codec,
             trigger: self.trigger,
+            schema_version: self.schema_version,
+            persists_state: true,
         }
     }
 
@@ -199,26 +188,25 @@ impl<Id, Sub, Ckpt, SP, P, EC, Trig> ProjectionBuilder<Id, Sub, Ckpt, SP, P, EC,
             id: self.id,
             subscription: self.subscription,
             checkpoint: self.checkpoint,
-            state_persistence: self.state_persistence,
+            state_store: self.state_store,
             projector: self.projector,
             event_codec: self.event_codec,
             trigger,
+            schema_version: self.schema_version,
+            persists_state: self.persists_state,
         }
     }
-}
 
-// ── Schema version setter (only when state store is configured) ─────────
-
-impl<Id, Sub, Ckpt, SS, SC, P, EC, Trig>
-    ProjectionBuilder<Id, Sub, Ckpt, WithStatePersistence<SS, SC>, P, EC, Trig>
-{
     /// Set the schema version for state invalidation.
     ///
     /// Default: 1. Increment when the projection state shape changes
     /// to trigger re-computation from scratch.
+    ///
+    /// Only meaningful when a state store is configured via
+    /// [`.state_store()`](Self::state_store).
     #[must_use]
     pub const fn state_schema_version(mut self, version: NonZeroU32) -> Self {
-        self.state_persistence.schema_version = version;
+        self.schema_version = version;
         self
     }
 }
@@ -243,10 +231,12 @@ where
             self.id,
             self.subscription,
             self.checkpoint,
-            self.state_persistence,
+            self.state_store,
             self.projector,
             self.event_codec,
             self.trigger,
+            self.schema_version,
+            self.persists_state,
             Configured,
         )
     }

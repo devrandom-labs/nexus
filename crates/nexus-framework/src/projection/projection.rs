@@ -1,11 +1,13 @@
+use std::num::NonZeroU32;
+
 use nexus::Id;
 use nexus_store::Codec;
-use nexus_store::projection::{ProjectionTrigger, Projector};
+use nexus_store::projection::Projector;
+use nexus_store::state::{PendingState, PersistTrigger, StateStore};
 use nexus_store::store::{CheckpointStore, Subscription};
 use tokio_stream::StreamExt;
 
 use super::error::ProjectionError;
-use super::persist::StatePersistence;
 use super::status::{ProjectionStatus, apply_event};
 use super::stream::{DecodeStreamError, DecodedStream};
 
@@ -57,10 +59,12 @@ pub struct Projection<I, Sub, Ckpt, SP, P, EC, Trig, Mode> {
     pub(crate) id: I,
     pub(crate) subscription: Sub,
     pub(crate) checkpoint: Ckpt,
-    pub(crate) state_persistence: SP,
+    pub(crate) state_store: SP,
     pub(crate) projector: P,
     pub(crate) event_codec: EC,
     pub(crate) trigger: Trig,
+    pub(crate) schema_version: NonZeroU32,
+    pub(crate) persists_state: bool,
     pub(crate) mode: Mode,
 }
 
@@ -69,20 +73,24 @@ impl<I, Sub, Ckpt, SP, P, EC, Trig, Mode> Projection<I, Sub, Ckpt, SP, P, EC, Tr
         id: I,
         subscription: Sub,
         checkpoint: Ckpt,
-        state_persistence: SP,
+        state_store: SP,
         projector: P,
         event_codec: EC,
         trigger: Trig,
+        schema_version: NonZeroU32,
+        persists_state: bool,
         mode: Mode,
     ) -> Self {
         Self {
             id,
             subscription,
             checkpoint,
-            state_persistence,
+            state_store,
             projector,
             event_codec,
             trigger,
+            schema_version,
+            persists_state,
             mode,
         }
     }
@@ -97,10 +105,10 @@ where
     I: Id + Clone,
     Sub: Subscription<()>,
     Ckpt: CheckpointStore,
-    SP: StatePersistence<P::State>,
+    SP: StateStore<P::State>,
     P: Projector,
     EC: Codec<P::Event>,
-    Trig: ProjectionTrigger,
+    Trig: PersistTrigger,
 {
     /// Load checkpoint and state, resolve the startup decision.
     ///
@@ -134,16 +142,17 @@ where
             .map_err(ProjectionError::Checkpoint)?;
 
         let loaded_state = self
-            .state_persistence
-            .load(&self.id)
+            .state_store
+            .load(&self.id, self.schema_version)
             .await
             .map_err(ProjectionError::State)?;
 
-        let persists_state = self.state_persistence.persists_state();
-
         let (state, checkpoint, decision) = match loaded_state {
-            Some((state, _)) => (state, last_checkpoint, StartupDecision::Resume),
-            None if persists_state && last_checkpoint.is_some() => {
+            Some(persisted) => {
+                let (_version, _schema, state) = persisted.into_parts();
+                (state, last_checkpoint, StartupDecision::Resume)
+            }
+            None if self.persists_state && last_checkpoint.is_some() => {
                 (self.projector.initial(), None, StartupDecision::Rebuild)
             }
             None if last_checkpoint.is_some() => (
@@ -158,10 +167,12 @@ where
             self.id,
             self.subscription,
             self.checkpoint,
-            self.state_persistence,
+            self.state_store,
             self.projector,
             self.event_codec,
             self.trigger,
+            self.schema_version,
+            self.persists_state,
             Ready::new(ProjectionStatus::Idle { state, checkpoint }, decision),
         ))
     }
@@ -195,10 +206,12 @@ where
             self.id,
             self.subscription,
             self.checkpoint,
-            self.state_persistence,
+            self.state_store,
             self.projector,
             self.event_codec,
             self.trigger,
+            self.schema_version,
+            self.persists_state,
             Ready::new(
                 ProjectionStatus::Idle {
                     state: initial_state,
@@ -215,10 +228,11 @@ where
     I: Id + Clone,
     Sub: Subscription<()>,
     Ckpt: CheckpointStore,
-    SP: StatePersistence<P::State>,
+    SP: StateStore<P::State>,
     P: Projector,
+    P::State: Clone,
     EC: Codec<P::Event>,
-    Trig: ProjectionTrigger,
+    Trig: PersistTrigger,
 {
     /// Run the event loop until shutdown or error.
     ///
@@ -234,11 +248,13 @@ where
             id,
             subscription,
             checkpoint,
-            state_persistence,
+            state_store,
             projector,
             event_codec,
             trigger,
+            schema_version,
             mode: Ready { status, .. },
+            ..
         } = self;
 
         let stream = subscription
@@ -261,8 +277,9 @@ where
                         ref state, version, ..
                     } = status
                     {
-                        state_persistence
-                            .save(&id, version, state)
+                        let pending = PendingState::new(version, schema_version, state.clone());
+                        state_store
+                            .save(&id, &pending)
                             .await
                             .map_err(ProjectionError::State)?;
                         checkpoint
@@ -280,8 +297,9 @@ where
                         ref state, version, ..
                     } = status
                     {
-                        state_persistence
-                            .save(&id, version, state)
+                        let pending = PendingState::new(version, schema_version, state.clone());
+                        state_store
+                            .save(&id, &pending)
                             .await
                             .map_err(ProjectionError::State)?;
                         checkpoint

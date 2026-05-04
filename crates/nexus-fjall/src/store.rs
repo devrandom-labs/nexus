@@ -250,23 +250,24 @@ impl RawEventStore for FjallStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SnapshotStore implementation
+// StateStore<Vec<u8>> implementation (snapshot storage)
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
     use super::*;
     use crate::encoding::{decode_snapshot_value, encode_snapshot_value};
-    use nexus_store::snapshot::{PendingSnapshot, PersistedSnapshot, SnapshotStore};
+    use nexus_store::state::{PendingState, PersistedState, StateStore};
+    use std::num::NonZeroU32;
 
-    impl SnapshotStore for FjallStore {
+    impl StateStore<Vec<u8>> for FjallStore {
         type Error = FjallError;
 
-        async fn load_snapshot(
+        async fn load(
             &self,
             id: &impl Id,
-            expected_schema_version: std::num::NonZeroU32,
-        ) -> Result<Option<PersistedSnapshot>, FjallError> {
+            expected_schema_version: NonZeroU32,
+        ) -> Result<Option<PersistedState<Vec<u8>>>, FjallError> {
             let id_bytes = id.as_ref();
 
             // Check if the stream exists.
@@ -285,7 +286,7 @@ mod snapshot_impl {
                     version: None,
                 })?;
 
-            // Filter by schema version before constructing the snapshot
+            // Filter by schema version before constructing the state
             // (avoids cloning payload bytes for stale snapshots).
             if schema_version_raw != expected_schema_version.get() {
                 return Ok(None);
@@ -295,14 +296,18 @@ mod snapshot_impl {
                 stream_id: id.to_label(),
                 version: None,
             })?;
-            let snap = PersistedSnapshot::new(version, expected_schema_version, payload.to_vec());
-            Ok(Some(snap))
+
+            Ok(Some(PersistedState::new(
+                version,
+                expected_schema_version,
+                payload.to_vec(),
+            )))
         }
 
-        async fn save_snapshot(
+        async fn save(
             &self,
             id: &impl Id,
-            snapshot: &PendingSnapshot,
+            state: &PendingState<Vec<u8>>,
         ) -> Result<(), FjallError> {
             let id_bytes = id.as_ref();
 
@@ -319,9 +324,9 @@ mod snapshot_impl {
             let mut buf = Vec::new();
             encode_snapshot_value(
                 &mut buf,
-                snapshot.schema_version().get(),
-                snapshot.version().as_u64(),
-                snapshot.payload(),
+                state.schema_version().get(),
+                state.version().as_u64(),
+                state.state(),
             );
             tx.insert(&self.snapshots, id_bytes, fjall::Slice::from(&*buf));
 
@@ -329,7 +334,7 @@ mod snapshot_impl {
             Ok(())
         }
 
-        async fn delete_snapshot(&self, id: &impl Id) -> Result<(), FjallError> {
+        async fn delete(&self, id: &impl Id) -> Result<(), FjallError> {
             let id_bytes = id.as_ref();
             let mut tx = self.db.write_tx();
 

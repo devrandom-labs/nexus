@@ -3,8 +3,6 @@ pub mod envelope;
 pub mod error;
 #[cfg(feature = "projection")]
 pub mod projection;
-#[cfg(feature = "snapshot")]
-pub mod snapshot;
 pub mod state;
 pub mod store;
 #[cfg(feature = "testing")]
@@ -20,19 +18,13 @@ pub use codec::{BorrowingCodec, Codec};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use nexus::Version;
-#[cfg(all(feature = "projection", feature = "testing"))]
-pub use projection::InMemoryStateStore;
 #[cfg(feature = "projection")]
-pub use projection::{
-    AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,
-    PersistedState, ProjectionTrigger, Projector, StateStore,
-};
-#[cfg(all(feature = "snapshot", feature = "testing"))]
-pub use snapshot::InMemorySnapshotStore;
-#[cfg(feature = "snapshot")]
-pub use snapshot::{
-    AfterEventTypes, EveryNEvents, PendingSnapshot, PersistedSnapshot, SnapshotStore,
-    SnapshotTrigger,
+pub use projection::Projector;
+#[cfg(feature = "testing")]
+pub use state::InMemoryStateStore;
+pub use state::{
+    AfterEventTypes, CodecStateStore, CodecStateStoreError, EveryNEvents, PendingState,
+    PersistTrigger, PersistedState, StateStore,
 };
 pub use store::{
     CheckpointStore, EventStore, EventStream, EventStreamExt, NeedsCodec, NoSnapshot,

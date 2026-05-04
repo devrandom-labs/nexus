@@ -1,7 +1,8 @@
 use std::iter;
 
 use nexus::{DomainEvent, Version};
-use nexus_store::projection::{ProjectionTrigger, Projector};
+use nexus_store::projection::Projector;
+use nexus_store::state::PersistTrigger;
 
 /// FSM state for the projection event loop.
 ///
@@ -42,7 +43,7 @@ pub(crate) fn apply_event<P, E, Trig>(
 where
     P: Projector<Event = E>,
     E: DomainEvent,
-    Trig: ProjectionTrigger,
+    Trig: PersistTrigger,
 {
     let (state, checkpoint) = match status {
         ProjectionStatus::Idle { state, checkpoint } => (state, checkpoint),
@@ -53,7 +54,7 @@ where
     };
 
     let new_state = projector.apply(state, event)?;
-    let should_persist = trigger.should_project(checkpoint, version, iter::once(event.name()));
+    let should_persist = trigger.should_persist(checkpoint, version, iter::once(event.name()));
 
     if should_persist {
         Ok(ProjectionStatus::Committed {
@@ -93,7 +94,8 @@ mod tests {
     use std::num::NonZeroU64;
 
     use nexus::{DomainEvent, Message, Version};
-    use nexus_store::projection::{EveryNEvents, ProjectionTrigger, Projector};
+    use nexus_store::projection::Projector;
+    use nexus_store::state::{EveryNEvents, PersistTrigger};
 
     use super::*;
 
@@ -143,8 +145,8 @@ mod tests {
     }
 
     struct AlwaysTrigger;
-    impl ProjectionTrigger for AlwaysTrigger {
-        fn should_project(
+    impl PersistTrigger for AlwaysTrigger {
+        fn should_persist(
             &self,
             _old: Option<Version>,
             _new: Version,
@@ -155,8 +157,8 @@ mod tests {
     }
 
     struct NeverTrigger;
-    impl ProjectionTrigger for NeverTrigger {
-        fn should_project(
+    impl PersistTrigger for NeverTrigger {
+        fn should_persist(
             &self,
             _old: Option<Version>,
             _new: Version,

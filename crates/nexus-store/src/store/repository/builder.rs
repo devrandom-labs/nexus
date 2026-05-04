@@ -35,10 +35,12 @@ impl NeedsCodec {
 pub struct NoSnapshot;
 
 /// Snapshot configuration, created by builder methods.
+///
+/// `SS` is a typed state store — the codec (if needed) is composed inside
+/// the store adapter (e.g., [`CodecStateStore`](crate::state::CodecStateStore)).
 #[cfg(feature = "snapshot")]
-pub struct WithSnapshot<SS, SC, T> {
+pub struct WithSnapshot<SS, T> {
     store: SS,
-    codec: SC,
     trigger: T,
     schema_version: std::num::NonZeroU32,
     snapshot_on_read: bool,
@@ -141,7 +143,7 @@ where
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
-use crate::snapshot::{EveryNEvents, SnapshotStore, SnapshotTrigger};
+use crate::state;
 #[cfg(feature = "snapshot")]
 use crate::store::snapshot::Snapshotting;
 #[cfg(feature = "snapshot")]
@@ -159,30 +161,37 @@ const DEFAULT_SCHEMA_VERSION: std::num::NonZeroU32 = std::num::NonZeroU32::MIN;
 impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     /// Configure a snapshot store with JSON codec (default).
     ///
+    /// Accepts a byte-level [`StateStore<Vec<u8>>`](state::StateStore) and wraps
+    /// it in [`CodecStateStore`](state::CodecStateStore) with [`JsonCodec`](crate::JsonCodec).
+    ///
     /// Pre-fills:
-    /// - Snapshot codec: [`JsonCodec`](crate::JsonCodec)
-    /// - Trigger: [`EveryNEvents(100)`](EveryNEvents)
+    /// - Trigger: [`EveryNEvents(100)`](state::EveryNEvents)
     /// - Schema version: 1
     /// - Snapshot on read: false
     ///
-    /// Override any default with `.snapshot_codec()`, `.snapshot_trigger()`, etc.
+    /// Override any default with `.snapshot_trigger()`, etc.
     #[must_use]
     #[allow(
         clippy::expect_used,
         reason = "DEFAULT_SNAPSHOT_INTERVAL is non-zero by inspection"
     )]
-    pub fn snapshot_store<SS: SnapshotStore>(
+    pub fn snapshot_store<SS>(
         self,
         snapshot_store: SS,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, crate::JsonCodec, EveryNEvents>> {
+    ) -> RepositoryBuilder<
+        S,
+        C,
+        U,
+        WithSnapshot<state::CodecStateStore<SS, crate::JsonCodec>, state::EveryNEvents>,
+    > {
+        let typed_store = state::CodecStateStore::new(snapshot_store, crate::JsonCodec::default());
         RepositoryBuilder {
             store: self.store,
             codec: self.codec,
             upcaster: self.upcaster,
             snapshot: WithSnapshot {
-                store: snapshot_store,
-                codec: crate::JsonCodec::default(),
-                trigger: EveryNEvents(
+                store: typed_store,
+                trigger: state::EveryNEvents(
                     NonZeroU64::new(DEFAULT_SNAPSHOT_INTERVAL)
                         .expect("DEFAULT_SNAPSHOT_INTERVAL is non-zero"),
                 ),
@@ -195,10 +204,14 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
 
 #[cfg(all(feature = "snapshot", not(feature = "snapshot-json")))]
 impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
-    /// Configure a snapshot store with an explicit codec.
+    /// Configure a snapshot store.
+    ///
+    /// Accepts a pre-composed typed [`StateStore<S>`](state::StateStore).
+    /// If your store is byte-level, compose it with
+    /// [`CodecStateStore`](state::CodecStateStore) before passing it here.
     ///
     /// Pre-fills:
-    /// - Trigger: [`EveryNEvents(100)`](EveryNEvents)
+    /// - Trigger: [`EveryNEvents(100)`](state::EveryNEvents)
     /// - Schema version: 1
     /// - Snapshot on read: false
     ///
@@ -206,22 +219,19 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     #[must_use]
     #[allow(
         clippy::expect_used,
-        clippy::missing_panics_doc,
-        reason = "DEFAULT_SNAPSHOT_INTERVAL is non-zero by inspection — cannot panic"
+        reason = "DEFAULT_SNAPSHOT_INTERVAL is non-zero by inspection"
     )]
-    pub fn snapshot_store<SS: SnapshotStore, SC>(
+    pub fn snapshot_store<SS>(
         self,
         snapshot_store: SS,
-        snapshot_codec: SC,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, EveryNEvents>> {
+    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, state::EveryNEvents>> {
         RepositoryBuilder {
             store: self.store,
             codec: self.codec,
             upcaster: self.upcaster,
             snapshot: WithSnapshot {
                 store: snapshot_store,
-                codec: snapshot_codec,
-                trigger: EveryNEvents(
+                trigger: state::EveryNEvents(
                     NonZeroU64::new(DEFAULT_SNAPSHOT_INTERVAL)
                         .expect("DEFAULT_SNAPSHOT_INTERVAL is non-zero"),
                 ),
@@ -233,40 +243,19 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
 }
 
 #[cfg(feature = "snapshot")]
-impl<S, C, U, SS, SC, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>> {
-    /// Replace the snapshot codec.
-    #[must_use]
-    pub fn snapshot_codec<NewSC>(
-        self,
-        codec: NewSC,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, NewSC, T>> {
-        RepositoryBuilder {
-            store: self.store,
-            codec: self.codec,
-            upcaster: self.upcaster,
-            snapshot: WithSnapshot {
-                store: self.snapshot.store,
-                codec,
-                trigger: self.snapshot.trigger,
-                schema_version: self.snapshot.schema_version,
-                snapshot_on_read: self.snapshot.snapshot_on_read,
-            },
-        }
-    }
-
+impl<S, C, U, SS, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, T>> {
     /// Replace the snapshot trigger.
     #[must_use]
-    pub fn snapshot_trigger<NewT: SnapshotTrigger>(
+    pub fn snapshot_trigger<NewT: state::PersistTrigger>(
         self,
         trigger: NewT,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, NewT>> {
+    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, NewT>> {
         RepositoryBuilder {
             store: self.store,
             codec: self.codec,
             upcaster: self.upcaster,
             snapshot: WithSnapshot {
                 store: self.snapshot.store,
-                codec: self.snapshot.codec,
                 trigger,
                 schema_version: self.snapshot.schema_version,
                 snapshot_on_read: self.snapshot.snapshot_on_read,
@@ -294,20 +283,19 @@ impl<S, C, U, SS, SC, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
-impl<S, C, U, SS, SC, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, SC, T>>
+impl<S, C, U, SS, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, T>>
 where
     S: RawEventStore,
     C: Send + Sync + 'static,
 {
     /// Build a snapshot-aware [`EventStore`] using an owning [`Codec`](crate::Codec).
     #[must_use]
-    pub fn build(self) -> Snapshotting<EventStore<S, C, U>, SS, SC, T> {
+    pub fn build(self) -> Snapshotting<EventStore<S, C, U>, SS, T> {
         let inner = EventStore::new(self.store, self.codec, self.upcaster);
         let snap = self.snapshot;
         Snapshotting::new(
             inner,
             snap.store,
-            snap.codec,
             snap.trigger,
             snap.schema_version,
             snap.snapshot_on_read,
@@ -316,13 +304,12 @@ where
 
     /// Build a snapshot-aware [`ZeroCopyEventStore`] using a [`BorrowingCodec`](crate::BorrowingCodec).
     #[must_use]
-    pub fn build_zero_copy(self) -> Snapshotting<ZeroCopyEventStore<S, C, U>, SS, SC, T> {
+    pub fn build_zero_copy(self) -> Snapshotting<ZeroCopyEventStore<S, C, U>, SS, T> {
         let inner = ZeroCopyEventStore::new(self.store, self.codec, self.upcaster);
         let snap = self.snapshot;
         Snapshotting::new(
             inner,
             snap.store,
-            snap.codec,
             snap.trigger,
             snap.schema_version,
             snap.snapshot_on_read,
