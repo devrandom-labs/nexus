@@ -1,3 +1,4 @@
+mod codec_adapter;
 mod pending;
 mod persisted;
 mod store;
@@ -5,6 +6,7 @@ mod store;
 mod testing;
 mod trigger;
 
+pub use codec_adapter::{CodecStateStore, CodecStateStoreError};
 pub use pending::PendingState;
 pub use persisted::PersistedState;
 pub use store::StateStore;
