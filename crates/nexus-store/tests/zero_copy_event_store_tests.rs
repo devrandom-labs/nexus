@@ -11,8 +11,8 @@ use std::fmt;
 
 use nexus::*;
 use nexus_store::BorrowingCodec;
+use nexus_store::Repository;
 use nexus_store::Store;
-use nexus_store::store::Repository;
 use nexus_store::testing::InMemoryStore;
 
 // -- Domain where Event is a fixed-layout type decodable from bytes --

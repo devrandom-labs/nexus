@@ -72,9 +72,10 @@ Organized into 4 module directories + 3 cross-cutting files:
 
 Depends on `nexus-store` + `tokio`. Provides IO-driven components that require an async runtime.
 
-- **`projection/`** — Subscription-powered async projection execution.
-  - `runner.rs` — `ProjectionRunner<Id, Sub, Ckpt, SP, P, EC, Trig>`: background event processor. Uses `tokio::select!` to race event stream against shutdown signal.
-  - `builder.rs` — `ProjectionRunnerBuilder`: typestate builder with `!Send` markers for compile-time required field enforcement.
+- **`projection/`** — Subscription-powered CQRS projections (feature-gated: `projection`).
+  - `projection.rs` — `Projection<I, Sub, Ckpt, SP, P, EC, Trig, Mode>`: two-phase typestate. `Configured` (built, not loaded) → `initialize()` → `Ready<S>` (loaded, can run). `Ready` carries `ProjectionStatus<S>` and `StartupDecision` (Fresh/Resume/Rebuild). `run()` subscribes and enters the event loop. `rebuild()` resets to initial state.
+  - `status.rs` — `ProjectionStatus<S>` enum: explicit FSM for the event loop with three write-centric states (`Idle`, `Pending`, `Committed`). Pure sync `apply_event` transition function — no IO, no async. Driven by the async shell in `Projection::run()`.
+  - `builder.rs` — `ProjectionBuilder`: typestate builder with `!Send` markers for compile-time required field enforcement.
   - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain. `StatePersistError<S, C>`.
   - `persist.rs` — `StatePersistence<S>` trait: `NoStatePersistence` (Infallible) and `WithStatePersistence<SS, SC>`.
   - `stream.rs` — `DecodedStream`: adapter converting lending GAT `EventStream` to owned `tokio_stream::Stream` by decoding inside `poll_next`.

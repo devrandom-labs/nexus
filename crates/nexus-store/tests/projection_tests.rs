@@ -14,10 +14,8 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::Version;
-use nexus_store::projection::{
-    AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,
-    PersistedState, ProjectionTrigger, Projector, StateStore,
-};
+use nexus_store::Projector;
+use nexus_store::state::{AfterEventTypes, EveryNEvents, PersistTrigger, State, StateStore};
 
 const SV1: NonZeroU32 = NonZeroU32::MIN;
 
@@ -45,39 +43,39 @@ fn pending_state_stores_version_and_payload() {
     let version = Version::new(42).unwrap();
     let payload = vec![1, 2, 3];
     let sv = NonZeroU32::new(1).unwrap();
-    let state = PendingState::new(version, sv, payload.clone());
+    let state = State::new(version, sv, payload.clone());
 
     assert_eq!(state.version(), version);
     assert_eq!(state.schema_version(), sv);
-    assert_eq!(state.payload(), &payload);
+    assert_eq!(state.state(), &payload);
 }
 
 #[test]
 fn persisted_state_stores_version_and_payload() {
     let version = Version::new(10).unwrap();
     let sv = NonZeroU32::new(2).unwrap();
-    let state = PersistedState::new(version, sv, vec![4, 5, 6]);
+    let state = State::new(version, sv, vec![4, 5, 6]);
 
     assert_eq!(state.version(), version);
     assert_eq!(state.schema_version(), sv);
-    assert_eq!(state.payload(), &[4, 5, 6]);
+    assert_eq!(state.state(), &[4, 5, 6]);
 }
 
 // ── () no-op StateStore ─────────────────────────────────────────
 
 #[tokio::test]
 async fn unit_state_store_returns_none() {
-    let store = ();
+    let store: () = ();
     let id = TestId("proj-1".into());
-    let result = store.load(&id, SV1).await;
+    let result: Result<Option<State<Vec<u8>>>, _> = store.load(&id, SV1).await;
     assert!(result.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn unit_state_store_save_succeeds() {
-    let store = ();
+    let store: () = ();
     let id = TestId("proj-1".into());
-    let state = PendingState::new(
+    let state = State::new(
         Version::new(1).unwrap(),
         NonZeroU32::new(1).unwrap(),
         vec![1, 2, 3],
@@ -88,9 +86,9 @@ async fn unit_state_store_save_succeeds() {
 
 #[tokio::test]
 async fn unit_state_store_delete_succeeds() {
-    let store = ();
+    let store: () = ();
     let id = TestId("proj-1".into());
-    let result = store.delete(&id).await;
+    let result: Result<(), _> = StateStore::<Vec<u8>>::delete(&store, &id).await;
     assert!(result.is_ok());
 }
 
@@ -98,42 +96,42 @@ async fn unit_state_store_delete_succeeds() {
 
 #[test]
 fn proj_every_n_events_triggers_on_boundary_crossing() {
-    let trigger = ProjEveryNEvents(NonZeroU64::new(100).unwrap());
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
 
     let v99 = Some(Version::new(99).unwrap());
     let v100 = Version::new(100).unwrap();
-    assert!(trigger.should_project(v99, v100, std::iter::empty::<&str>()));
+    assert!(trigger.should_persist(v99, v100, std::iter::empty::<&str>()));
 
     let v98 = Some(Version::new(98).unwrap());
     let v99_ver = Version::new(99).unwrap();
-    assert!(!trigger.should_project(v98, v99_ver, std::iter::empty::<&str>()));
+    assert!(!trigger.should_persist(v98, v99_ver, std::iter::empty::<&str>()));
 }
 
 #[test]
 fn proj_every_n_events_triggers_on_batch_crossing_boundary() {
-    let trigger = ProjEveryNEvents(NonZeroU64::new(100).unwrap());
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
 
     let old = Some(Version::new(96).unwrap());
     let new = Version::new(103).unwrap();
-    assert!(trigger.should_project(old, new, std::iter::empty::<&str>()));
+    assert!(trigger.should_persist(old, new, std::iter::empty::<&str>()));
 }
 
 #[test]
 fn proj_every_n_events_first_save_triggers_at_boundary() {
-    let trigger = ProjEveryNEvents(NonZeroU64::new(100).unwrap());
+    let trigger = EveryNEvents(NonZeroU64::new(100).unwrap());
 
     let new = Version::new(100).unwrap();
-    assert!(trigger.should_project(None, new, std::iter::empty::<&str>()));
+    assert!(trigger.should_persist(None, new, std::iter::empty::<&str>()));
 
     let new_50 = Version::new(50).unwrap();
-    assert!(!trigger.should_project(None, new_50, std::iter::empty::<&str>()));
+    assert!(!trigger.should_persist(None, new_50, std::iter::empty::<&str>()));
 }
 
 #[test]
 fn proj_every_1_event_always_triggers() {
-    let trigger = ProjEveryNEvents(NonZeroU64::new(1).unwrap());
-    assert!(trigger.should_project(None, Version::new(1).unwrap(), std::iter::empty::<&str>()));
-    assert!(trigger.should_project(
+    let trigger = EveryNEvents(NonZeroU64::new(1).unwrap());
+    assert!(trigger.should_persist(None, Version::new(1).unwrap(), std::iter::empty::<&str>()));
+    assert!(trigger.should_persist(
         Some(Version::new(1).unwrap()),
         Version::new(2).unwrap(),
         std::iter::empty::<&str>(),
@@ -144,26 +142,26 @@ fn proj_every_1_event_always_triggers() {
 
 #[test]
 fn proj_after_event_types_triggers_on_matching_event() {
-    let trigger = ProjAfterEventTypes::new(&["OrderCompleted", "OrderCancelled"]);
+    let trigger = AfterEventTypes::new(&["OrderCompleted", "OrderCancelled"]);
 
-    assert!(trigger.should_project(
+    assert!(trigger.should_persist(
         None,
         Version::new(5).unwrap(),
         ["OrderCompleted"].into_iter()
     ));
-    assert!(trigger.should_project(
+    assert!(trigger.should_persist(
         None,
         Version::new(5).unwrap(),
         ["OrderCancelled"].into_iter()
     ));
-    assert!(!trigger.should_project(None, Version::new(5).unwrap(), ["ItemAdded"].into_iter()));
+    assert!(!trigger.should_persist(None, Version::new(5).unwrap(), ["ItemAdded"].into_iter()));
 }
 
 #[test]
 fn proj_after_event_types_triggers_if_any_event_in_batch_matches() {
-    let trigger = ProjAfterEventTypes::new(&["OrderCompleted"]);
+    let trigger = AfterEventTypes::new(&["OrderCompleted"]);
 
-    assert!(trigger.should_project(
+    assert!(trigger.should_persist(
         None,
         Version::new(5).unwrap(),
         ["ItemAdded", "OrderCompleted"].into_iter(),
@@ -172,8 +170,8 @@ fn proj_after_event_types_triggers_if_any_event_in_batch_matches() {
 
 #[test]
 fn proj_after_event_types_does_not_trigger_on_empty_events() {
-    let trigger = ProjAfterEventTypes::new(&["OrderCompleted"]);
-    assert!(!trigger.should_project(None, Version::new(5).unwrap(), std::iter::empty::<&str>()));
+    let trigger = AfterEventTypes::new(&["OrderCompleted"]);
+    assert!(!trigger.should_persist(None, Version::new(5).unwrap(), std::iter::empty::<&str>()));
 }
 
 // ── InMemoryStateStore ───────────────────────────────────────────
@@ -181,43 +179,43 @@ fn proj_after_event_types_does_not_trigger_on_empty_events() {
 #[cfg(feature = "testing")]
 mod in_memory_tests {
     use super::*;
-    use nexus_store::projection::InMemoryStateStore;
+    use nexus_store::state::InMemoryStateStore;
 
     #[tokio::test]
     async fn load_returns_none_when_empty() {
-        let store = InMemoryStateStore::new();
+        let store = InMemoryStateStore::<Vec<u8>>::new();
         let result = store.load(&TestId("proj-1".into()), SV1).await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn save_then_load_roundtrips() {
-        let store = InMemoryStateStore::new();
+        let store = InMemoryStateStore::<Vec<u8>>::new();
         let id = TestId("proj-1".into());
         let version = Version::new(10).unwrap();
-        let state = PendingState::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
+        let state = State::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
 
         store.save(&id, &state).await.unwrap();
         let loaded = store.load(&id, SV1).await.unwrap().unwrap();
 
         assert_eq!(loaded.version(), version);
         assert_eq!(loaded.schema_version(), NonZeroU32::new(1).unwrap());
-        assert_eq!(loaded.payload(), &[1, 2, 3]);
+        assert_eq!(loaded.state(), &[1, 2, 3]);
     }
 
     #[tokio::test]
     async fn save_overwrites_previous_state() {
-        let store = InMemoryStateStore::new();
+        let store = InMemoryStateStore::<Vec<u8>>::new();
         let id = TestId("proj-1".into());
 
-        let state1 = PendingState::new(
+        let state1 = State::new(
             Version::new(10).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![1],
         );
         store.save(&id, &state1).await.unwrap();
 
-        let state2 = PendingState::new(
+        let state2 = State::new(
             Version::new(20).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![2],
@@ -226,21 +224,21 @@ mod in_memory_tests {
 
         let loaded = store.load(&id, SV1).await.unwrap().unwrap();
         assert_eq!(loaded.version(), Version::new(20).unwrap());
-        assert_eq!(loaded.payload(), &[2]);
+        assert_eq!(loaded.state(), &[2]);
     }
 
     #[tokio::test]
     async fn different_projections_have_separate_state() {
-        let store = InMemoryStateStore::new();
+        let store = InMemoryStateStore::<Vec<u8>>::new();
 
-        let state1 = PendingState::new(
+        let state1 = State::new(
             Version::new(5).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![1],
         );
         store.save(&TestId("proj-1".into()), &state1).await.unwrap();
 
-        let state2 = PendingState::new(
+        let state2 = State::new(
             Version::new(10).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![2],
@@ -263,10 +261,10 @@ mod in_memory_tests {
 
     #[tokio::test]
     async fn delete_removes_state() {
-        let store = InMemoryStateStore::new();
+        let store = InMemoryStateStore::<Vec<u8>>::new();
         let id = TestId("proj-1".into());
 
-        let state = PendingState::new(
+        let state = State::new(
             Version::new(10).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![1],
@@ -280,17 +278,17 @@ mod in_memory_tests {
 
     #[tokio::test]
     async fn delete_nonexistent_is_ok() {
-        let store = InMemoryStateStore::new();
+        let store = InMemoryStateStore::<Vec<u8>>::new();
         let result = store.delete(&TestId("nope".into())).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn load_filters_by_schema_version() {
-        let store = InMemoryStateStore::new();
+        let store = InMemoryStateStore::<Vec<u8>>::new();
         let id = TestId("proj-1".into());
 
-        let state = PendingState::new(
+        let state = State::new(
             Version::new(10).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![1, 2, 3],

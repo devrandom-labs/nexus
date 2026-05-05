@@ -8,10 +8,10 @@ use std::fmt;
 
 use nexus::*;
 use nexus_store::Codec;
+use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::UpcastError;
 use nexus_store::Upcaster;
-use nexus_store::store::Repository;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 

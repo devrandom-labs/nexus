@@ -64,6 +64,7 @@ use std::sync::Arc;
 use arrayvec::ArrayString;
 use nexus::Version;
 use nexus_store::InMemoryStoreError;
+use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::Upcaster;
 use nexus_store::codec::Codec;
@@ -72,7 +73,6 @@ use nexus_store::error::{StoreError, UpcastError};
 use nexus_store::pending_envelope;
 use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
-use nexus_store::store::Repository;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 

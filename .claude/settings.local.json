@@ -200,7 +200,11 @@
       "Bash(while ! grep -q 'test result:' /private/tmp/claude-501/-Users-joel-Code-devrandom-nexus/695d60d0-d57f-4c11-b229-aaf930eba894/tasks/bnoybo0rz.output)",
       "Bash(! tail:*)",
       "Bash(echo \"Exit: $?\")",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "WebFetch(domain:lib.rs)",
+      "WebFetch(domain:axoniq.io)",
+      "WebFetch(domain:tokio.rs)",
+      "WebFetch(domain:redbadger.github.io)"
     ]
   },
   "hooks": {
