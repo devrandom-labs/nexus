@@ -1,18 +1,17 @@
 use std::num::NonZeroU32;
 
-use crate::codec::Codec;
-use crate::snapshot::{PendingSnapshot, SnapshotStore, SnapshotTrigger};
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, KernelError, Version};
 
-use crate::store::repository::Repository;
-use crate::store::repository::replay::ReplayFrom;
+use super::replay::ReplayFrom;
+use super::repository::Repository;
+use crate::state;
 
 /// Snapshot-aware repository decorator.
 ///
 /// Wraps an inner repository (e.g., `EventStore` or `ZeroCopyEventStore`)
 /// and adds transparent snapshot support:
 ///
-/// - **Load:** tries the snapshot store first; on hit with matching schema
+/// - **Load:** tries the state store first; on hit with matching schema
 ///   version, restores state from snapshot and replays only subsequent events.
 ///   On miss or schema mismatch, falls back to full event replay via the
 ///   inner repository. Optionally creates a snapshot after a full replay
@@ -24,35 +23,33 @@ use crate::store::repository::replay::ReplayFrom;
 ///   never block event persistence.
 ///
 /// The trigger type `T` is a generic parameter (not `Box<dyn>`) for
-/// zero-cost monomorphization — the compiler inlines `should_snapshot()`
+/// zero-cost monomorphization — the compiler inlines `should_persist()`
 /// calls entirely.
-pub struct Snapshotting<R, SS, SC, T> {
+///
+/// The state store `SS` is generic over the aggregate's state type at the
+/// `Repository` impl level — the struct itself is agnostic of the state type.
+/// Codec responsibility lives in the state store adapter (e.g.,
+/// [`CodecStateStore`](crate::state::CodecStateStore)).
+pub struct Snapshotting<R, SS, T> {
     inner: R,
-    snapshot_store: SS,
-    snapshot_codec: SC,
+    state_store: SS,
     trigger: T,
     schema_version: NonZeroU32,
     snapshot_on_read: bool,
 }
 
-impl<R, SS, SC, T> Snapshotting<R, SS, SC, T> {
+impl<R, SS, T> Snapshotting<R, SS, T> {
     /// Create a new snapshot-aware repository.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "snapshot config is flat — all fields are semantically distinct"
-    )]
     pub const fn new(
         inner: R,
-        snapshot_store: SS,
-        snapshot_codec: SC,
+        state_store: SS,
         trigger: T,
         schema_version: NonZeroU32,
         snapshot_on_read: bool,
     ) -> Self {
         Self {
             inner,
-            snapshot_store,
-            snapshot_codec,
+            state_store,
             trigger,
             schema_version,
             snapshot_on_read,
@@ -60,14 +57,14 @@ impl<R, SS, SC, T> Snapshotting<R, SS, SC, T> {
     }
 }
 
-impl<A, R, SS, SC, T> Repository<A> for Snapshotting<R, SS, SC, T>
+impl<A, R, SS, T> Repository<A> for Snapshotting<R, SS, T>
 where
     A: Aggregate,
+    A::State: Clone,
     R: Repository<A> + ReplayFrom<A, Error = <R as Repository<A>>::Error>,
     <R as Repository<A>>::Error: From<KernelError>,
-    SS: SnapshotStore,
-    SC: Codec<A::State>,
-    T: SnapshotTrigger,
+    SS: state::StateStore<A::State>,
+    T: state::PersistTrigger,
     EventOf<A>: DomainEvent,
 {
     type Error = <R as Repository<A>>::Error;
@@ -103,7 +100,7 @@ where
         let Some(new_version) = aggregate.version().filter(|_| !events.is_empty()) else {
             return Ok(());
         };
-        if self.trigger.should_snapshot(
+        if self.trigger.should_persist(
             old_version,
             new_version,
             events.iter().map(DomainEvent::name),
@@ -115,11 +112,10 @@ where
     }
 }
 
-impl<R, SS, SC, T> Snapshotting<R, SS, SC, T>
+impl<R, SS, T> Snapshotting<R, SS, T>
 where
     R: Send + Sync,
-    SS: SnapshotStore,
-    SC: Send + Sync,
+    SS: Send + Sync,
     T: Send + Sync,
 {
     /// Try to load a snapshot. Returns `(root, next_version)` on hit.
@@ -127,20 +123,15 @@ where
     async fn try_load_from_snapshot<A>(&self, id: &A::Id) -> Option<(AggregateRoot<A>, Version)>
     where
         A: Aggregate,
-        SC: Codec<A::State>,
+        SS: state::StateStore<A::State>,
     {
-        let holder = self
-            .snapshot_store
-            .load_snapshot(id, self.schema_version)
+        let persisted = self
+            .state_store
+            .load(id, self.schema_version)
             .await
             .ok()??;
-
-        let state = self
-            .snapshot_codec
-            .decode(&id.to_string(), holder.payload())
-            .ok()?;
-        let version = holder.version();
-        let root = AggregateRoot::<A>::restore(id.clone(), state, version);
+        let (version, _schema, typed_state) = persisted.into_parts();
+        let root = AggregateRoot::<A>::restore(id.clone(), typed_state, version);
         let next = version.next()?;
         Some((root, next))
     }
@@ -149,15 +140,10 @@ where
     async fn try_save_snapshot<A>(&self, aggregate: &AggregateRoot<A>, version: Version)
     where
         A: Aggregate,
-        SC: Codec<A::State>,
+        A::State: Clone,
+        SS: state::StateStore<A::State>,
     {
-        let Ok(payload) = self.snapshot_codec.encode(aggregate.state()) else {
-            return;
-        };
-        let snap = PendingSnapshot::new(version, self.schema_version, payload);
-        let _ = self
-            .snapshot_store
-            .save_snapshot(aggregate.id(), &snap)
-            .await;
+        let pending = state::State::new(version, self.schema_version, aggregate.state().clone());
+        let _ = self.state_store.save(aggregate.id(), &pending).await;
     }
 }

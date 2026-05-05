@@ -42,11 +42,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use nexus::*;
 use nexus_store::BorrowingCodec;
+use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::codec::Codec;
 use nexus_store::error::StoreError;
 use nexus_store::store::RawEventStore;
-use nexus_store::store::Repository;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 use nexus_store::{UpcastError, Upcaster};

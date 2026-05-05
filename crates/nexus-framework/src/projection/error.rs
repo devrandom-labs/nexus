@@ -2,9 +2,9 @@ use thiserror::Error;
 
 /// Errors from the projection runner.
 ///
-/// Generic over projector (`P`), event codec (`EC`), state persistence (`SP`),
+/// Generic over projector (`P`), event codec (`EC`), state store (`SP`),
 /// checkpoint store (`Ckpt`), and subscription (`Sub`) error types.
-/// When state persistence is disabled (`NoStatePersistence`), `SP = Infallible`
+/// When state persistence is disabled (`SP = ()`), `SP = Infallible`
 /// and the `State` variant is unconstructable.
 #[derive(Debug, Error)]
 pub enum ProjectionError<P, EC, SP, Ckpt, Sub> {
@@ -16,8 +16,8 @@ pub enum ProjectionError<P, EC, SP, Ckpt, Sub> {
     #[error("event codec failed: {0}")]
     EventCodec(#[source] EC),
 
-    /// State persistence failed (store or codec).
-    #[error("state persistence failed: {0}")]
+    /// State store failed (load, save, or delete).
+    #[error("state store failed: {0}")]
     State(#[source] SP),
 
     /// Checkpoint load or save failed.
@@ -27,19 +27,4 @@ pub enum ProjectionError<P, EC, SP, Ckpt, Sub> {
     /// Subscription or event stream failed.
     #[error("subscription failed: {0}")]
     Subscription(#[source] Sub),
-}
-
-/// Errors from state persistence operations.
-///
-/// Wraps both state store and state codec errors. Used as
-/// `SP::Error` in [`ProjectionError`] when state persistence is enabled.
-#[derive(Debug, Error)]
-pub enum StatePersistError<S, C> {
-    /// State store operation failed (load or save).
-    #[error("state store error: {0}")]
-    Store(#[source] S),
-
-    /// State codec operation failed (encode or decode).
-    #[error("state codec error: {0}")]
-    Codec(#[source] C),
 }

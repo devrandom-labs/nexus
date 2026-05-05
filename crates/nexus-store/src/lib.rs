@@ -3,8 +3,8 @@ pub mod envelope;
 pub mod error;
 #[cfg(feature = "projection")]
 pub mod projection;
-#[cfg(feature = "snapshot")]
-pub mod snapshot;
+pub mod repository;
+pub mod state;
 pub mod store;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -19,26 +19,20 @@ pub use codec::{BorrowingCodec, Codec};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use nexus::Version;
-#[cfg(all(feature = "projection", feature = "testing"))]
-pub use projection::InMemoryStateStore;
 #[cfg(feature = "projection")]
-pub use projection::{
-    AfterEventTypes as ProjAfterEventTypes, EveryNEvents as ProjEveryNEvents, PendingState,
-    PersistedState, ProjectionTrigger, Projector, StateStore,
-};
-#[cfg(all(feature = "snapshot", feature = "testing"))]
-pub use snapshot::InMemorySnapshotStore;
-#[cfg(feature = "snapshot")]
-pub use snapshot::{
-    AfterEventTypes, EveryNEvents, PendingSnapshot, PersistedSnapshot, SnapshotStore,
-    SnapshotTrigger,
-};
-pub use store::{
-    CheckpointStore, EventStore, EventStream, EventStreamExt, NeedsCodec, NoSnapshot,
-    RawEventStore, Repository, RepositoryBuilder, Store, Subscription, ZeroCopyEventStore,
+pub use projection::Projector;
+pub use repository::{
+    EventStore, NeedsCodec, NoSnapshot, Repository, RepositoryBuilder, ZeroCopyEventStore,
 };
 #[cfg(feature = "snapshot")]
-pub use store::{Snapshotting, WithSnapshot};
+pub use repository::{Snapshotting, WithSnapshot};
+#[cfg(feature = "testing")]
+pub use state::InMemoryStateStore;
+pub use state::{
+    AfterEventTypes, CodecStateStore, CodecStateStoreError, EveryNEvents, PersistTrigger, State,
+    StateStore,
+};
+pub use store::{CheckpointStore, EventStream, EventStreamExt, RawEventStore, Store, Subscription};
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::{EventMorsel, Upcaster};

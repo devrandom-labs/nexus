@@ -2,18 +2,17 @@ use std::num::NonZeroU64;
 
 use nexus::Version;
 
-/// Strategy for deciding when to update projection state.
+/// Strategy for deciding when to persist state.
 ///
-/// Checked after each successful `save()`. The trigger receives both the
-/// old and new version (to detect boundary crossings regardless of batch
-/// size) and the names of events just persisted (for semantic triggers).
-pub trait ProjectionTrigger: Send + Sync {
-    /// Whether a projection state update should happen after this save.
+/// Used by both projection runners (when to checkpoint projection state)
+/// and snapshot decorators (when to snapshot aggregate state).
+pub trait PersistTrigger: Send + Sync {
+    /// Whether state should be persisted now.
     ///
-    /// - `old_version`: version before save (`None` for new streams)
-    /// - `new_version`: version after save
-    /// - `event_names`: names of events just persisted (from `DomainEvent::name()`).
-    fn should_project(
+    /// - `old_version`: version before the operation (`None` for first run)
+    /// - `new_version`: version after the operation
+    /// - `event_names`: names of events just processed
+    fn should_persist(
         &self,
         old_version: Option<Version>,
         new_version: Version,
@@ -21,15 +20,12 @@ pub trait ProjectionTrigger: Send + Sync {
     ) -> bool;
 }
 
-/// Trigger a projection state update every N events.
-///
-/// Uses a bucket-crossing algorithm to detect when a save crosses an
-/// N-event boundary, regardless of batch size.
+/// Persist every N events (bucket-crossing algorithm).
 #[derive(Debug, Clone, Copy)]
 pub struct EveryNEvents(pub NonZeroU64);
 
-impl ProjectionTrigger for EveryNEvents {
-    fn should_project(
+impl PersistTrigger for EveryNEvents {
+    fn should_persist(
         &self,
         old_version: Option<Version>,
         new_version: Version,
@@ -42,10 +38,7 @@ impl ProjectionTrigger for EveryNEvents {
     }
 }
 
-/// Trigger a projection state update after specific event types.
-///
-/// Useful for domain milestones where a projection update aligns with
-/// business semantics.
+/// Persist after specific event types.
 #[derive(Debug, Clone)]
 pub struct AfterEventTypes {
     types: Vec<&'static str>,
@@ -61,8 +54,8 @@ impl AfterEventTypes {
     }
 }
 
-impl ProjectionTrigger for AfterEventTypes {
-    fn should_project(
+impl PersistTrigger for AfterEventTypes {
+    fn should_persist(
         &self,
         _old_version: Option<Version>,
         _new_version: Version,

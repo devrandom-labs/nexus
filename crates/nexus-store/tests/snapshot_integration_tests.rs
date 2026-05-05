@@ -22,11 +22,11 @@ fn sv2() -> NonZeroU32 {
 
 use nexus::*;
 use nexus_store::Store;
-use nexus_store::snapshot::{
-    AfterEventTypes, EveryNEvents, InMemorySnapshotStore, SnapshotStore, SnapshotTrigger,
+use nexus_store::state::{
+    AfterEventTypes, EveryNEvents, InMemoryStateStore, PersistTrigger, StateStore,
 };
-use nexus_store::store::{Repository, Snapshotting};
 use nexus_store::testing::InMemoryStore;
+use nexus_store::{Repository, Snapshotting};
 
 // ── Test domain ────────────────────────────────────────────────────
 
@@ -96,18 +96,14 @@ impl Aggregate for CounterAggregate {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-fn repo(
-    trigger: impl SnapshotTrigger,
-    snapshot_on_read: bool,
-) -> impl Repository<CounterAggregate, Error = nexus_store::StoreError> {
+fn repo(trigger: impl PersistTrigger, snapshot_on_read: bool) -> impl Repository<CounterAggregate> {
     let raw = InMemoryStore::new();
     let store = Store::new(raw);
     let inner = store.repository().build();
 
     Snapshotting::new(
         inner,
-        InMemorySnapshotStore::new(),
-        nexus_store::JsonCodec::default(),
+        InMemoryStateStore::<CounterState>::new(),
         trigger,
         SV1,
         snapshot_on_read,
@@ -201,12 +197,11 @@ async fn schema_version_mismatch_falls_back_to_full_replay() {
     let raw = InMemoryStore::new();
     let store = Store::new(raw);
     let inner = store.repository().build();
-    let snap_store = InMemorySnapshotStore::new();
+    let snap_store = InMemoryStateStore::<CounterState>::new();
 
     let repo_v1 = Snapshotting::new(
         inner,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1, // schema v1
         false,
@@ -224,7 +219,6 @@ async fn schema_version_mismatch_falls_back_to_full_replay() {
     let repo_v2 = Snapshotting::new(
         inner2,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         sv2(), // schema v2 — mismatch!
         false,
@@ -266,14 +260,13 @@ async fn after_event_types_trigger_snapshots_on_domain_milestone() {
 async fn lazy_snapshot_on_read_after_full_replay() {
     let raw = InMemoryStore::new();
     let store = Store::new(raw);
-    let snap_store = InMemorySnapshotStore::new();
+    let snap_store = InMemoryStateStore::<CounterState>::new();
 
     // First, save events without snapshots (no trigger, just on-read)
     let inner = store.repository().build();
     let repo_write = Snapshotting::new(
         inner,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1000).unwrap()), // very high threshold
         SV1,
         false, // no on-read yet
@@ -299,7 +292,6 @@ async fn lazy_snapshot_on_read_after_full_replay() {
     let repo_read = Snapshotting::new(
         inner2,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1000).unwrap()),
         SV1,
         true, // on-read enabled!
@@ -309,8 +301,8 @@ async fn lazy_snapshot_on_read_after_full_replay() {
     let loaded: AggregateRoot<CounterAggregate> = repo_read.load(id.clone()).await.unwrap();
     assert_eq!(loaded.state().value, 3);
 
-    // Verify snapshot was created by checking load_snapshot directly
-    let snap = snap_store.load_snapshot(&id, SV1).await.unwrap();
+    // Verify snapshot was created by checking load directly
+    let snap = snap_store.load(&id, SV1).await.unwrap();
     assert!(snap.is_some());
     assert_eq!(snap.unwrap().version(), Version::new(3).unwrap());
 }
@@ -452,14 +444,13 @@ async fn sequence_batch_crossing_non_multiple_boundary() {
 async fn sequence_snapshot_invalidation_then_new_snapshot() {
     let raw = InMemoryStore::new();
     let store = Store::new(raw);
-    let snap_store = InMemorySnapshotStore::new();
+    let snap_store = InMemoryStateStore::<CounterState>::new();
 
     // Save with schema v1, triggers snapshot
     let inner = store.repository().build();
     let repo_v1 = Snapshotting::new(
         inner,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
@@ -476,7 +467,6 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
     let repo_v2 = Snapshotting::new(
         inner2,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         sv2(),
         false,
@@ -496,7 +486,7 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
     assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
 
     // Verify the snapshot has schema v2
-    let snap = snap_store.load_snapshot(&id, SV1).await.unwrap().unwrap();
+    let snap = snap_store.load(&id, sv2()).await.unwrap().unwrap();
     assert_eq!(snap.schema_version(), sv2());
 }
 
@@ -532,14 +522,13 @@ async fn lifecycle_create_save_snapshot_reload_verify() {
 async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
     let raw = InMemoryStore::new();
     let store = Store::new(raw);
-    let snap_store = InMemorySnapshotStore::new();
+    let snap_store = InMemoryStateStore::<CounterState>::new();
 
     // Save events without snapshot
     let inner = store.repository().build();
     let repo_no_snap = Snapshotting::new(
         inner,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(10000).unwrap()),
         SV1,
         false,
@@ -561,14 +550,13 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
         .unwrap();
 
     // No snapshot yet
-    assert!(snap_store.load_snapshot(&id, SV1).await.unwrap().is_none());
+    assert!(snap_store.load(&id, SV1).await.unwrap().is_none());
 
     // Load with on-read → creates lazy snapshot
     let inner2 = store.repository().build();
     let repo_on_read = Snapshotting::new(
         inner2,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(10000).unwrap()),
         SV1,
         true,
@@ -576,7 +564,7 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
     let _loaded: AggregateRoot<CounterAggregate> = repo_on_read.load(id.clone()).await.unwrap();
 
     // Snapshot now exists
-    let snap = snap_store.load_snapshot(&id, SV1).await.unwrap().unwrap();
+    let snap = snap_store.load(&id, SV1).await.unwrap().unwrap();
     assert_eq!(snap.version(), Version::new(5).unwrap());
 
     // Second load uses snapshot (we can't directly prove partial replay,
@@ -592,7 +580,10 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
 
 #[tokio::test]
 async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
-    // Use a codec that always fails decode
+    // Use a state store that always fails decode (load).
+    // We simulate this by using a CodecStateStore with a failing codec.
+    use nexus_store::state::CodecStateStore;
+
     struct FailCodec;
     impl nexus_store::Codec<CounterState> for FailCodec {
         type Error = std::io::Error;
@@ -609,14 +600,14 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
 
     let raw = InMemoryStore::new();
     let store = Store::new(raw);
-    let snap_store = InMemorySnapshotStore::new();
+    let byte_store = InMemoryStateStore::<Vec<u8>>::new();
 
-    // Save events and manually insert a snapshot
+    // Save events and snapshot with a good codec first
+    let good_state_store = CodecStateStore::new(&byte_store, nexus_store::JsonCodec::default());
     let inner = store.repository().build();
     let repo_good = Snapshotting::new(
         inner,
-        &snap_store,
-        nexus_store::JsonCodec::default(),
+        &good_state_store,
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
@@ -629,11 +620,11 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
         .unwrap();
 
     // Now load with the failing codec — should fall back to full replay
+    let bad_state_store = CodecStateStore::new(&byte_store, FailCodec);
     let inner2 = store.repository().build();
     let repo_bad = Snapshotting::new(
         inner2,
-        &snap_store,
-        FailCodec,
+        &bad_state_store,
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
@@ -645,28 +636,28 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
 
 #[tokio::test]
 async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
-    // A snapshot store that always errors on load
+    // A state store that always errors on load
     struct ErrorStore;
-    impl SnapshotStore for ErrorStore {
+    impl StateStore<CounterState> for ErrorStore {
         type Error = std::io::Error;
-        async fn load_snapshot(
+        async fn load(
             &self,
             _id: &impl nexus::Id,
             _schema_version: NonZeroU32,
-        ) -> Result<Option<nexus_store::snapshot::PersistedSnapshot>, Self::Error> {
+        ) -> Result<Option<nexus_store::state::State<CounterState>>, Self::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "disk on fire",
             ))
         }
-        async fn save_snapshot(
+        async fn save(
             &self,
             _id: &impl nexus::Id,
-            _snapshot: &nexus_store::snapshot::PendingSnapshot,
+            _state: &nexus_store::state::State<CounterState>,
         ) -> Result<(), Self::Error> {
             Ok(())
         }
-        async fn delete_snapshot(&self, _id: &impl nexus::Id) -> Result<(), Self::Error> {
+        async fn delete(&self, _id: &impl nexus::Id) -> Result<(), Self::Error> {
             Ok(())
         }
     }
@@ -678,8 +669,7 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
     let inner = store.repository().build();
     let good_repo = Snapshotting::new(
         inner,
-        InMemorySnapshotStore::new(),
-        nexus_store::JsonCodec::default(),
+        InMemoryStateStore::<CounterState>::new(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
@@ -699,7 +689,6 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
     let bad_repo = Snapshotting::new(
         inner2,
         ErrorStore,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
@@ -710,28 +699,28 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
 
 #[tokio::test]
 async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
-    // A snapshot store that always errors on save
+    // A state store that always errors on save
     struct SaveErrorStore;
-    impl SnapshotStore for SaveErrorStore {
+    impl StateStore<CounterState> for SaveErrorStore {
         type Error = std::io::Error;
-        async fn load_snapshot(
+        async fn load(
             &self,
             _id: &impl nexus::Id,
             _schema_version: NonZeroU32,
-        ) -> Result<Option<nexus_store::snapshot::PersistedSnapshot>, Self::Error> {
+        ) -> Result<Option<nexus_store::state::State<CounterState>>, Self::Error> {
             Ok(None)
         }
-        async fn save_snapshot(
+        async fn save(
             &self,
             _id: &impl nexus::Id,
-            _snapshot: &nexus_store::snapshot::PendingSnapshot,
+            _state: &nexus_store::state::State<CounterState>,
         ) -> Result<(), Self::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "snapshot write failed",
             ))
         }
-        async fn delete_snapshot(&self, _id: &impl nexus::Id) -> Result<(), Self::Error> {
+        async fn delete(&self, _id: &impl nexus::Id) -> Result<(), Self::Error> {
             Ok(())
         }
     }
@@ -742,7 +731,6 @@ async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
     let repo = Snapshotting::new(
         inner,
         SaveErrorStore,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
@@ -765,9 +753,9 @@ async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
 async fn defensive_after_event_types_empty_names_no_trigger() {
     let trigger = AfterEventTypes::new(&["OrderCompleted"]);
     // Empty event names should not trigger
-    assert!(!trigger.should_snapshot(None, Version::new(5).unwrap(), std::iter::empty::<&str>()));
+    assert!(!trigger.should_persist(None, Version::new(5).unwrap(), std::iter::empty::<&str>()));
     // Non-matching should not trigger
-    assert!(!trigger.should_snapshot(
+    assert!(!trigger.should_persist(
         Some(Version::new(1).unwrap()),
         Version::new(2).unwrap(),
         ["ItemAdded"].into_iter(),
@@ -782,14 +770,13 @@ async fn defensive_after_event_types_empty_names_no_trigger() {
 async fn isolation_concurrent_loads_from_same_snapshot_get_independent_copies() {
     let raw = InMemoryStore::new();
     let store = Store::new(raw);
-    let snap_store = InMemorySnapshotStore::new();
+    let snap_store = InMemoryStateStore::<CounterState>::new();
 
     // Save 3 events, snapshot at v3
     let inner = store.repository().build();
     let repo = Snapshotting::new(
         inner,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
@@ -812,7 +799,6 @@ async fn isolation_concurrent_loads_from_same_snapshot_get_independent_copies() 
     let repo2 = Snapshotting::new(
         inner2,
         &snap_store,
-        nexus_store::JsonCodec::default(),
         EveryNEvents(NonZeroU64::new(1).unwrap()),
         SV1,
         false,
