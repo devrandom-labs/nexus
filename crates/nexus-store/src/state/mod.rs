@@ -1,14 +1,12 @@
 mod codec_adapter;
-mod pending;
-mod persisted;
+mod state;
 mod store;
 #[cfg(feature = "testing")]
 mod testing;
 mod trigger;
 
+pub use self::state::State;
 pub use codec_adapter::{CodecStateStore, CodecStateStoreError};
-pub use pending::PendingState;
-pub use persisted::PersistedState;
 pub use store::StateStore;
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStateStore;

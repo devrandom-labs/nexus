@@ -4,8 +4,7 @@ use std::num::NonZeroU32;
 
 use nexus::Id;
 
-use super::pending::PendingState;
-use super::persisted::PersistedState;
+use super::state::State;
 
 /// Versioned state persistence trait.
 ///
@@ -25,13 +24,13 @@ pub trait StateStore<S>: Send + Sync {
         &self,
         id: &impl Id,
         schema_version: NonZeroU32,
-    ) -> impl Future<Output = Result<Option<PersistedState<S>>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<State<S>>, Self::Error>> + Send;
 
     /// Persist state (overwrites existing).
     fn save(
         &self,
         id: &impl Id,
-        state: &PendingState<S>,
+        state: &State<S>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     /// Delete persisted state (idempotent).
@@ -49,11 +48,11 @@ impl<S: Send + Sync, T: StateStore<S>> StateStore<S> for &T {
         &self,
         id: &impl Id,
         schema_version: NonZeroU32,
-    ) -> Result<Option<PersistedState<S>>, Self::Error> {
+    ) -> Result<Option<State<S>>, Self::Error> {
         (**self).load(id, schema_version).await
     }
 
-    async fn save(&self, id: &impl Id, state: &PendingState<S>) -> Result<(), Self::Error> {
+    async fn save(&self, id: &impl Id, state: &State<S>) -> Result<(), Self::Error> {
         (**self).save(id, state).await
     }
 
@@ -73,11 +72,11 @@ impl<S: Send + Sync> StateStore<S> for () {
         &self,
         _id: &impl Id,
         _schema_version: NonZeroU32,
-    ) -> Result<Option<PersistedState<S>>, Infallible> {
+    ) -> Result<Option<State<S>>, Infallible> {
         Ok(None)
     }
 
-    async fn save(&self, _id: &impl Id, _state: &PendingState<S>) -> Result<(), Infallible> {
+    async fn save(&self, _id: &impl Id, _state: &State<S>) -> Result<(), Infallible> {
         Ok(())
     }
 

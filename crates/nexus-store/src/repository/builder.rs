@@ -143,9 +143,9 @@ where
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
-use crate::state;
+use super::snapshot::Snapshotting;
 #[cfg(feature = "snapshot")]
-use crate::store::snapshot::Snapshotting;
+use crate::state;
 #[cfg(feature = "snapshot")]
 use std::num::NonZeroU64;
 
@@ -170,6 +170,10 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     /// - Snapshot on read: false
     ///
     /// Override any default with `.snapshot_trigger()`, etc.
+    ///
+    /// # Panics
+    ///
+    /// Cannot panic — the internal `expect` is on a compile-time constant.
     #[must_use]
     #[allow(
         clippy::expect_used,
@@ -216,6 +220,10 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     /// - Snapshot on read: false
     ///
     /// Override any default with `.snapshot_trigger()`, etc.
+    ///
+    /// # Panics
+    ///
+    /// Cannot panic — the internal `expect` is on a compile-time constant.
     #[must_use]
     #[allow(
         clippy::expect_used,

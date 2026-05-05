@@ -4,8 +4,7 @@ use nexus::Id;
 
 use crate::codec::Codec;
 
-use super::pending::PendingState;
-use super::persisted::PersistedState;
+use super::state::State;
 use super::store::StateStore;
 
 /// Adapter that bridges a byte-level [`StateStore<Vec<u8>>`] to a typed
@@ -46,7 +45,7 @@ where
         &self,
         id: &impl Id,
         schema_version: NonZeroU32,
-    ) -> Result<Option<PersistedState<S>>, Self::Error> {
+    ) -> Result<Option<State<S>>, Self::Error> {
         let Some(raw) = self
             .store
             .load(id, schema_version)
@@ -63,16 +62,16 @@ where
             .decode(&label, &bytes)
             .map_err(CodecStateStoreError::Codec)?;
 
-        Ok(Some(PersistedState::new(version, schema_ver, state)))
+        Ok(Some(State::new(version, schema_ver, state)))
     }
 
-    async fn save(&self, id: &impl Id, state: &PendingState<S>) -> Result<(), Self::Error> {
+    async fn save(&self, id: &impl Id, state: &State<S>) -> Result<(), Self::Error> {
         let bytes = self
             .codec
             .encode(state.state())
             .map_err(CodecStateStoreError::Codec)?;
 
-        let raw = PendingState::new(state.version(), state.schema_version(), bytes);
+        let raw = State::new(state.version(), state.schema_version(), bytes);
         self.store
             .save(id, &raw)
             .await

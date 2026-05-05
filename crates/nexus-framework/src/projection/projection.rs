@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use nexus::Id;
 use nexus_store::Codec;
 use nexus_store::projection::Projector;
-use nexus_store::state::{PendingState, PersistTrigger, StateStore};
+use nexus_store::state::{PersistTrigger, State, StateStore};
 use nexus_store::store::{CheckpointStore, Subscription};
 use tokio_stream::StreamExt;
 
@@ -277,7 +277,7 @@ where
                         ref state, version, ..
                     } = status
                     {
-                        let pending = PendingState::new(version, schema_version, state.clone());
+                        let pending = State::new(version, schema_version, state.clone());
                         state_store
                             .save(&id, &pending)
                             .await
@@ -297,7 +297,7 @@ where
                         ref state, version, ..
                     } = status
                     {
-                        let pending = PendingState::new(version, schema_version, state.clone());
+                        let pending = State::new(version, schema_version, state.clone());
                         state_store
                             .save(&id, &pending)
                             .await

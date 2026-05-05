@@ -2,9 +2,9 @@ use std::num::NonZeroU32;
 
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, KernelError, Version};
 
+use super::replay::ReplayFrom;
+use super::repository::Repository;
 use crate::state;
-use crate::store::repository::Repository;
-use crate::store::repository::replay::ReplayFrom;
 
 /// Snapshot-aware repository decorator.
 ///
@@ -143,8 +143,7 @@ where
         A::State: Clone,
         SS: state::StateStore<A::State>,
     {
-        let pending =
-            state::PendingState::new(version, self.schema_version, aggregate.state().clone());
+        let pending = state::State::new(version, self.schema_version, aggregate.state().clone());
         let _ = self.state_store.save(aggregate.id(), &pending).await;
     }
 }

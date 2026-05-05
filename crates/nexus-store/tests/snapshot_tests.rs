@@ -17,9 +17,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 use nexus::{Id, Version};
 
 const SV1: NonZeroU32 = NonZeroU32::MIN;
-use nexus_store::state::{
-    AfterEventTypes, EveryNEvents, PendingState, PersistTrigger, PersistedState, StateStore,
-};
+use nexus_store::state::{AfterEventTypes, EveryNEvents, PersistTrigger, State, StateStore};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TestId(String);
@@ -44,7 +42,7 @@ fn pending_state_stores_version_and_payload() {
     let version = Version::new(42).unwrap();
     let payload = vec![1, 2, 3];
     let sv = NonZeroU32::new(1).unwrap();
-    let snap = PendingState::new(version, sv, payload.clone());
+    let snap = State::new(version, sv, payload.clone());
 
     assert_eq!(snap.version(), version);
     assert_eq!(snap.schema_version(), sv);
@@ -55,7 +53,7 @@ fn pending_state_stores_version_and_payload() {
 fn persisted_state_stores_version_and_payload() {
     let version = Version::new(10).unwrap();
     let sv = NonZeroU32::new(2).unwrap();
-    let snap = PersistedState::new(version, sv, vec![4, 5, 6]);
+    let snap = State::new(version, sv, vec![4, 5, 6]);
 
     assert_eq!(snap.version(), version);
     assert_eq!(snap.schema_version(), sv);
@@ -68,7 +66,7 @@ fn persisted_state_stores_version_and_payload() {
 async fn unit_state_store_returns_none() {
     let store: () = ();
     let id = TestId("agg-1".into());
-    let result: Result<Option<PersistedState<Vec<u8>>>, _> = store.load(&id, SV1).await;
+    let result: Result<Option<State<Vec<u8>>>, _> = store.load(&id, SV1).await;
     assert!(result.unwrap().is_none());
 }
 
@@ -76,7 +74,7 @@ async fn unit_state_store_returns_none() {
 async fn unit_state_store_save_succeeds() {
     let store: () = ();
     let id = TestId("agg-1".into());
-    let snap = PendingState::new(
+    let snap = State::new(
         Version::new(1).unwrap(),
         NonZeroU32::new(1).unwrap(),
         vec![1, 2, 3],
@@ -199,7 +197,7 @@ mod in_memory_tests {
         let store = InMemoryStateStore::<Vec<u8>>::new();
         let id = TestId("agg-1".into());
         let version = Version::new(10).unwrap();
-        let snap = PendingState::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
+        let snap = State::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
 
         store.save(&id, &snap).await.unwrap();
         let loaded = store.load(&id, SV1).await.unwrap().unwrap();
@@ -214,14 +212,14 @@ mod in_memory_tests {
         let store = InMemoryStateStore::<Vec<u8>>::new();
         let id = TestId("agg-1".into());
 
-        let snap1 = PendingState::new(
+        let snap1 = State::new(
             Version::new(10).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![1],
         );
         store.save(&id, &snap1).await.unwrap();
 
-        let snap2 = PendingState::new(
+        let snap2 = State::new(
             Version::new(20).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![2],
@@ -237,14 +235,14 @@ mod in_memory_tests {
     async fn different_aggregates_have_separate_snapshots() {
         let store = InMemoryStateStore::<Vec<u8>>::new();
 
-        let snap1 = PendingState::new(
+        let snap1 = State::new(
             Version::new(5).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![1],
         );
         store.save(&TestId("agg-1".into()), &snap1).await.unwrap();
 
-        let snap2 = PendingState::new(
+        let snap2 = State::new(
             Version::new(10).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![2],
@@ -270,7 +268,7 @@ mod in_memory_tests {
         let store = InMemoryStateStore::<Vec<u8>>::new();
         let id = TestId("agg-1".into());
 
-        let snap = PendingState::new(
+        let snap = State::new(
             Version::new(10).unwrap(),
             NonZeroU32::new(1).unwrap(),
             vec![1],

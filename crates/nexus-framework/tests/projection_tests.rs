@@ -16,7 +16,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 use nexus::{DomainEvent, Message, Version};
 use nexus_framework::projection::{Projection, ProjectionError, ProjectionStatus, StartupDecision};
 use nexus_store::Projector;
-use nexus_store::state::{EveryNEvents, InMemoryStateStore, PendingState, StateStore};
+use nexus_store::state::{EveryNEvents, InMemoryStateStore, State, StateStore};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{CheckpointStore, Codec, EventStreamExt, RawEventStore, pending_envelope};
 
@@ -779,7 +779,7 @@ async fn runner_stale_state_falls_back_to_initial() {
     let stream_id = TestId("stream-1".into());
 
     // Pre-save state with schema version 1
-    let old_state = PendingState::new(
+    let old_state = State::new(
         Version::new(5).unwrap(),
         NonZeroU32::MIN,
         CountState {

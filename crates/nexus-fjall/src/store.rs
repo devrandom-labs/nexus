@@ -257,7 +257,7 @@ impl RawEventStore for FjallStore {
 mod snapshot_impl {
     use super::*;
     use crate::encoding::{decode_snapshot_value, encode_snapshot_value};
-    use nexus_store::state::{PendingState, PersistedState, StateStore};
+    use nexus_store::state::{State, StateStore};
     use std::num::NonZeroU32;
 
     impl StateStore<Vec<u8>> for FjallStore {
@@ -267,7 +267,7 @@ mod snapshot_impl {
             &self,
             id: &impl Id,
             expected_schema_version: NonZeroU32,
-        ) -> Result<Option<PersistedState<Vec<u8>>>, FjallError> {
+        ) -> Result<Option<State<Vec<u8>>>, FjallError> {
             let id_bytes = id.as_ref();
 
             // Check if the stream exists.
@@ -297,18 +297,14 @@ mod snapshot_impl {
                 version: None,
             })?;
 
-            Ok(Some(PersistedState::new(
+            Ok(Some(State::new(
                 version,
                 expected_schema_version,
                 payload.to_vec(),
             )))
         }
 
-        async fn save(
-            &self,
-            id: &impl Id,
-            state: &PendingState<Vec<u8>>,
-        ) -> Result<(), FjallError> {
+        async fn save(&self, id: &impl Id, state: &State<Vec<u8>>) -> Result<(), FjallError> {
             let id_bytes = id.as_ref();
 
             // Check if stream exists — can't snapshot an aggregate with no events.

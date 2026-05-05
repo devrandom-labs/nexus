@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
-use nexus_store::state::{PendingState, StateStore};
+use nexus_store::state::{State, StateStore};
 
 const SV1: NonZeroU32 = NonZeroU32::MIN;
 
@@ -73,7 +73,7 @@ async fn save_then_load_roundtrips() {
     let id = tid("agg-1");
     setup_stream(&store, &id, 5).await;
 
-    let snap = PendingState::new(Version::new(5).unwrap(), SV1, vec![1, 2, 3]);
+    let snap = State::new(Version::new(5).unwrap(), SV1, vec![1, 2, 3]);
     store.save(&id, &snap).await.unwrap();
 
     let loaded = store.load(&id, SV1).await.unwrap().unwrap();
@@ -88,10 +88,10 @@ async fn save_overwrites_previous_snapshot() {
     let id = tid("agg-1");
     setup_stream(&store, &id, 10).await;
 
-    let snap1 = PendingState::new(Version::new(5).unwrap(), SV1, vec![1]);
+    let snap1 = State::new(Version::new(5).unwrap(), SV1, vec![1]);
     store.save(&id, &snap1).await.unwrap();
 
-    let snap2 = PendingState::new(
+    let snap2 = State::new(
         Version::new(10).unwrap(),
         NonZeroU32::new(2).unwrap(),
         vec![2, 3],
@@ -114,7 +114,7 @@ async fn delete_then_load_returns_none() {
     let id = tid("agg-1");
     setup_stream(&store, &id, 3).await;
 
-    let snap = PendingState::new(Version::new(3).unwrap(), SV1, vec![1]);
+    let snap = State::new(Version::new(3).unwrap(), SV1, vec![1]);
     store.save(&id, &snap).await.unwrap();
     store.delete(&id).await.unwrap();
 
@@ -133,7 +133,7 @@ async fn snapshot_persists_across_reopen() {
     {
         let store = FjallStore::builder(&db_path).open().unwrap();
         setup_stream(&store, &id, 5).await;
-        let snap = PendingState::new(Version::new(5).unwrap(), SV1, vec![42, 43, 44]);
+        let snap = State::new(Version::new(5).unwrap(), SV1, vec![42, 43, 44]);
         store.save(&id, &snap).await.unwrap();
     }
 
@@ -177,7 +177,7 @@ async fn delete_nonexistent_is_ok() {
 async fn save_to_nonexistent_stream_is_noop() {
     let (store, _dir) = temp_store();
     // No stream exists — save should silently succeed (no-op)
-    let snap = PendingState::new(Version::new(1).unwrap(), SV1, vec![1]);
+    let snap = State::new(Version::new(1).unwrap(), SV1, vec![1]);
     let result = store.save(&tid("nope"), &snap).await;
     assert!(result.is_ok());
 
@@ -195,10 +195,10 @@ async fn different_streams_have_separate_snapshots() {
     setup_stream(&store, &id1, 5).await;
     setup_stream(&store, &id2, 10).await;
 
-    let snap1 = PendingState::new(Version::new(5).unwrap(), SV1, vec![1]);
+    let snap1 = State::new(Version::new(5).unwrap(), SV1, vec![1]);
     store.save(&id1, &snap1).await.unwrap();
 
-    let snap2 = PendingState::new(Version::new(10).unwrap(), SV1, vec![2]);
+    let snap2 = State::new(Version::new(10).unwrap(), SV1, vec![2]);
     store.save(&id2, &snap2).await.unwrap();
 
     let loaded1 = store.load(&id1, SV1).await.unwrap().unwrap();

@@ -2,19 +2,19 @@ use std::num::NonZeroU32;
 
 use nexus::Version;
 
-/// State payload ready for persistence (write path).
+/// Versioned state payload — used for both read and write paths.
 ///
 /// Generic over `S` — the adapter decides serialization format.
-/// For byte-level adapters (fjall): `PendingState<Vec<u8>>`.
-/// For typed adapters (postgres): `PendingState<MyState>`.
-#[derive(Debug, Clone)]
-pub struct PendingState<S> {
+/// For byte-level adapters (fjall): `State<Vec<u8>>`.
+/// For typed adapters (postgres): `State<MyDomainState>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct State<S> {
     version: Version,
     schema_version: NonZeroU32,
     state: S,
 }
 
-impl<S> PendingState<S> {
+impl<S> State<S> {
     #[must_use]
     pub const fn new(version: Version, schema_version: NonZeroU32, state: S) -> Self {
         Self {

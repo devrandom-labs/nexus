@@ -25,8 +25,8 @@ use nexus_store::Store;
 use nexus_store::state::{
     AfterEventTypes, EveryNEvents, InMemoryStateStore, PersistTrigger, StateStore,
 };
-use nexus_store::store::{Repository, Snapshotting};
 use nexus_store::testing::InMemoryStore;
+use nexus_store::{Repository, Snapshotting};
 
 // ── Test domain ────────────────────────────────────────────────────
 
@@ -644,7 +644,7 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
             &self,
             _id: &impl nexus::Id,
             _schema_version: NonZeroU32,
-        ) -> Result<Option<nexus_store::state::PersistedState<CounterState>>, Self::Error> {
+        ) -> Result<Option<nexus_store::state::State<CounterState>>, Self::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "disk on fire",
@@ -653,7 +653,7 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
         async fn save(
             &self,
             _id: &impl nexus::Id,
-            _state: &nexus_store::state::PendingState<CounterState>,
+            _state: &nexus_store::state::State<CounterState>,
         ) -> Result<(), Self::Error> {
             Ok(())
         }
@@ -707,13 +707,13 @@ async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
             &self,
             _id: &impl nexus::Id,
             _schema_version: NonZeroU32,
-        ) -> Result<Option<nexus_store::state::PersistedState<CounterState>>, Self::Error> {
+        ) -> Result<Option<nexus_store::state::State<CounterState>>, Self::Error> {
             Ok(None)
         }
         async fn save(
             &self,
             _id: &impl nexus::Id,
-            _state: &nexus_store::state::PendingState<CounterState>,
+            _state: &nexus_store::state::State<CounterState>,
         ) -> Result<(), Self::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
