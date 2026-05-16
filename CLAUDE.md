@@ -42,49 +42,64 @@ nexus-macros <-- nexus (kernel, optional via "derive" feature)
 
 ### Store Crate (`nexus-store`) — Persistence Edge Layer
 
-Organized into 4 module directories + 3 cross-cutting files:
+Organized into 5 module directories + 3 cross-cutting files. Responsibility split is deliberate: `store/` is infrastructure traits adapters implement; `repository/` is the aggregate-facing facade built on top; `state/` is unified versioned persistence used by both snapshots and projection state; `projection/` is the pure `Projector` fold trait (the IO-driven runner lives in `nexus-framework`).
 
 - **`codec/`** — Serialization traits.
   - `owning.rs` — `Codec<E>` for owning encode/decode (serde-based).
   - `borrowing.rs` — `BorrowingCodec<E>` for zero-copy decode (rkyv, flatbuffers).
+  - `serde/` — `SerdeCodec`, `SerdeFormat`, and `JsonCodec` (`Json` format tag); feature-gated.
 - **`envelope/`** — Event containers for read & write paths.
   - `pending.rs` — `PendingEnvelope<M>` (owned, write-path) built via typestate builder: `pending_envelope(version).event_type().payload().build(metadata)`.
   - `persisted.rs` — `PersistedEnvelope<'a, M>` (borrowed, read-path) returned by cursors.
 - **`upcasting/`** — Schema evolution.
   - `morsel.rs` — `EventMorsel<'a>`: zero-copy-when-possible data unit flowing through transforms.
   - `upcaster.rs` — `Upcaster` trait for raw-byte schema migrations with associated `type Error`. `()` is the no-op passthrough (`Error = Infallible`).
-- **`projection/`** — Subscription-powered CQRS projections (feature-gated: `projection`).
-  - `projector.rs` — `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`).
-  - `trigger.rs` — `ProjectionTrigger` trait: decides when to persist state. `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic).
-  - `pending.rs` / `persisted.rs` — `PendingState` (write-path) / `PersistedState` (read-path) containers with version + schema_version + payload.
-  - `store.rs` — `StateStore` trait: byte-level projection state persistence. `()` is no-op impl.
-- **`store/`** — Storage infrastructure: traits adapters implement + facades users interact with.
-  - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap. Factory methods: `repository(codec, upcaster) -> EventStore`, `zero_copy_repository(codec, upcaster) -> ZeroCopyEventStore`.
+- **`store/`** — Storage infrastructure traits that adapters (e.g. `nexus-fjall`) implement.
+  - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap; carries no codec/upcaster/aggregate binding. Call `.repository()` to obtain a `RepositoryBuilder`.
   - `raw.rs` — `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
-  - `stream.rs` — `EventStream<M>` trait: GAT lending cursor.
-  - `event_store.rs` — `EventStore<S, C, U>` facade (owning codec). Holds `Store<S>`. Implements `Repository<A>`.
-  - `zero_copy_event_store.rs` — `ZeroCopyEventStore<S, C, U>` facade (borrowing codec). Holds `Store<S>`. Implements `Repository<A>`.
-  - `repository.rs` — `Repository<A>` trait: high-level `load` and `save`.
+  - `stream.rs` — `EventStream<M>` trait (GAT lending cursor) + `EventStreamExt` extension trait for combinators over lending streams.
+  - `subscription.rs` — `Subscription<M>` trait: returns an `EventStream` that **never returns `None`** — when caught up, it waits for new events instead of terminating. `from: None` = beginning; `from: Some(v)` = events *after* `v`.
+  - `checkpoint.rs` — `CheckpointStore` trait: durable subscription position storage for resume-after-restart.
+- **`repository/`** — Aggregate-facing facades built on top of `store/` infrastructure.
+  - `repository.rs` — `Repository<A>` trait: high-level `load` and `save` for aggregates.
+  - `event_store.rs` — `EventStore<S, C, U>` facade (owning codec).
+  - `zero_copy.rs` — `ZeroCopyEventStore<S, C, U>` facade (borrowing codec).
+  - `builder.rs` — `RepositoryBuilder` typestate builder with `!Send` marker `NeedsCodec`; produces `EventStore` or `ZeroCopyEventStore`. `NoSnapshot` is the default snapshot slot.
+  - `snapshot.rs` — `Snapshotting<R, SS, T>` decorator (feature-gated: `snapshot`). Wraps an inner repository and transparently loads from a `StateStore` on read, persists on write per a `PersistTrigger`. Snapshot save is best-effort (never blocks event persistence).
+  - `replay.rs` — `pub(crate) ReplayFrom<A>` trait shared between `EventStore`, `ZeroCopyEventStore`, and `Snapshotting`.
+- **`state/`** — Unified versioned state persistence. One trait powers both projection state and aggregate snapshots.
+  - `state.rs` — `State<S>`: versioned payload `(Version, NonZeroU32 schema_version, S)` generic over `S`.
+  - `store.rs` — `StateStore<S>` trait with `load(id, schema_version) -> Option<State<S>>`, `save`, `delete`. `()` is the no-op impl.
+  - `codec_adapter.rs` — `CodecStateStore<SS, C>`: bridges a byte-level `StateStore<Vec<u8>>` (what fjall implements) to a typed `StateStore<S>` via `Codec<S>`. This is what lets adapters store bytes while consumers see typed state.
+  - `trigger.rs` — `PersistTrigger` trait: `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic). Used by both projection runners and the snapshot decorator.
+  - `testing.rs` — `InMemoryStateStore` (feature-gated behind `testing`).
+- **`projection/`** — Feature-gated under `projection`. Slim by design — only the pure fold trait lives here; the async runner is in `nexus-framework`.
+  - `projector.rs` — `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`). Fallibility is intentional: projections may do checked arithmetic where aggregates do not. Recovery policy (skip/fail/dead-letter) is the framework's concern, not the projector's.
 - **`error.rs`** — `StoreError<A, C, U>` (generic over adapter/codec/upcaster errors, allocation-free), `AppendError<E>`, `UpcastError<U>` (generic over transform error), `InvalidSchemaVersion`. All use `ArrayString<64>` for stream IDs instead of heap-allocated strings.
 - **`testing.rs`** — `InMemoryStore`, `InMemoryStream`, `InMemoryStoreError` (feature-gated behind `testing`).
 
+Feature flags: `serde`, `json` (implies `serde`), `snapshot`, `snapshot-json`, `projection`, `projection-json`, `testing`.
+
 ### Framework Crate (`nexus-framework`) — Batteries-Included Runtime Layer
 
-Depends on `nexus-store` + `tokio`. Provides IO-driven components that require an async runtime.
+Depends on `nexus-store` (with `projection` feature) + `tokio` + `tokio-stream`. Provides IO-driven components that require an async runtime. The kernel and store remain runtime-agnostic; tokio is confined here.
 
-- **`projection/`** — Subscription-powered CQRS projections (feature-gated: `projection`).
-  - `projection.rs` — `Projection<I, Sub, Ckpt, SP, P, EC, Trig, Mode>`: two-phase typestate. `Configured` (built, not loaded) → `initialize()` → `Ready<S>` (loaded, can run). `Ready` carries `ProjectionStatus<S>` and `StartupDecision` (Fresh/Resume/Rebuild). `run()` subscribes and enters the event loop. `rebuild()` resets to initial state.
+- **`projection/`** — Subscription-powered CQRS projection runner. Built on `Subscription` + `CheckpointStore` + `StateStore<S>` from `nexus-store`.
+  - `projection.rs` — `Projection<I, Sub, Ckpt, SP, P, EC, Trig, Mode>`: two-phase typestate. `Configured` (built, not loaded) → `initialize()` → `Ready<S>` (loaded, can run). `Ready` carries `ProjectionStatus<S>` and `StartupDecision` (Fresh/Resume/Rebuild — three startup paths that all produce `Idle`, distinguished only for supervisor inspection). `run()` subscribes and enters the event loop. `rebuild()` resets to initial state.
   - `status.rs` — `ProjectionStatus<S>` enum: explicit FSM for the event loop with three write-centric states (`Idle`, `Pending`, `Committed`). Pure sync `apply_event` transition function — no IO, no async. Driven by the async shell in `Projection::run()`.
-  - `builder.rs` — `ProjectionBuilder`: typestate builder with `!Send` markers for compile-time required field enforcement.
-  - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain. `StatePersistError<S, C>`.
-  - `persist.rs` — `StatePersistence<S>` trait: `NoStatePersistence` (Infallible) and `WithStatePersistence<SS, SC>`.
+  - `builder.rs` — `ProjectionBuilder`: typestate builder with `!Send` marker structs (`NeedsSub`, `NeedsCkpt`, `NeedsProj`, `NeedsEvtCodec`) that prevent calling `.build()` until each required field is set. State persistence defaults to `()` (the `StateStore` no-op); trigger defaults to `EveryNEvents(1)` (checkpoint every event).
+  - `error.rs` — `ProjectionError<P, EC, SP, Ckpt, Sub>`: one variant per failure domain (projector, event codec, state persist, checkpoint, subscription).
   - `stream.rs` — `DecodedStream`: adapter converting lending GAT `EventStream` to owned `tokio_stream::Stream` by decoding inside `poll_next`.
+
+The framework reuses `nexus-store::state::StateStore<S>` directly for projection state — there is no separate `StatePersistence` trait. Passing `()` as the state store opts out of state persistence (checkpoint-only). A real `StateStore<S>` opts in.
 
 ### Fjall Adapter Crate (`nexus-fjall`) — Embedded LSM-Tree Event Store
 
-- **`store.rs`** — `FjallStore` implements `RawEventStore`. Two partitions: `streams` (point-read optimized metadata) and `events` (scan-optimized, LZ4 compressed). Maps string `StreamId` to numeric `u64` IDs for key-space efficiency. Atomic writes via fjall transactions. Overflow-safe numeric ID allocation.
+- **`store.rs`** — `FjallStore` implements `RawEventStore` (and `Subscription` via `subscription_stream`). Two partitions: `streams` (point-read optimized metadata) and `events` (scan-optimized, LZ4 compressed). Maps string `StreamId` to numeric `u64` IDs for key-space efficiency. Atomic writes via fjall transactions. Overflow-safe numeric ID allocation.
 - **`builder.rs`** — `FjallStoreBuilder`: `FjallStore::builder(path).streams_config(fn).events_config(fn).open()`.
+- **`partition.rs`** — Sealed `KeyspaceConfig` trait. Only `()` (defaults) and `FnOnce(KeyspaceCreateOptions) -> KeyspaceCreateOptions` closures implement it. Eliminates dynamic dispatch from the builder by monomorphising keyspace configuration at compile time.
 - **`stream.rs`** — `FjallStream` implements `EventStream` as a lending cursor over eagerly-loaded rows.
+- **`subscription_stream.rs`** — `Subscription` impl: an `EventStream` that re-reads the underlying store when caught up rather than terminating. `OwnedStreamId` captures stream bytes to satisfy the `Id` `'static` bound across re-reads.
 - **`encoding.rs`** — Binary key/value encoding. Event keys: `[u64 BE stream_id][u64 BE version]` (16 bytes). Values: `[u32 LE schema_version][u16 LE event_type_len][event_type][payload]`.
 - **`error.rs`** — `FjallError`: `Io`, `CorruptValue`, `CorruptMeta`, `InvalidInput`, `VersionOverflow`. All diagnostic fields use `ArrayString<64>` / `ArrayString<128>` — no heap allocation on error paths.
 
