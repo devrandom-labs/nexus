@@ -4,9 +4,7 @@ use super::repository::Repository;
 use crate::codec::BorrowingCodec;
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
-use crate::store::raw::RawEventStore;
-use crate::store::store::Store;
-use crate::store::stream::EventStream;
+use crate::store::{EventStream, RawEventStore, Store};
 use crate::upcasting::{EventMorsel, Upcaster};
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
@@ -21,7 +19,7 @@ use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 ///
 /// # Construction
 ///
-/// Created via [`Store::repository()`](crate::store::store::Store::repository):
+/// Created via [`Store::repository()`](crate::store::Store::repository):
 ///
 /// ```ignore
 /// let store = Store::new(backend);
