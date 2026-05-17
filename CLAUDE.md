@@ -42,43 +42,45 @@ nexus-macros <-- nexus (kernel, optional via "derive" feature)
 
 ### Store Crate (`nexus-store`) — Persistence Edge Layer
 
-Organized into 5 module directories + 3 cross-cutting files. Responsibility split is deliberate: `store/` is infrastructure traits adapters implement; `repository/` is the aggregate-facing facade built on top; `state/` is unified versioned persistence used by both snapshots and projection state; `projection/` is the pure `Projector` fold trait (the IO-driven runner lives in `nexus-framework`).
+Flat layout — one file per concept, no module subdirectories. The earlier `codec/`, `envelope/`, `upcasting/`, `store/`, `repository/`, `state/`, `projection/` directories were collapsed into single files because each held only a handful of small files with no cohesion benefit. The boundary that matters is the crate boundary (kernel-pure → store-persistence → adapters); the boundary that didn't matter was inside `nexus-store`.
 
-- **`codec/`** — Serialization traits.
-  - `owning.rs` — `Codec<E>` for owning encode/decode (serde-based).
-  - `borrowing.rs` — `BorrowingCodec<E>` for zero-copy decode (rkyv, flatbuffers).
-  - `serde/` — `SerdeCodec`, `SerdeFormat`, and `JsonCodec` (`Json` format tag); feature-gated.
-- **`envelope/`** — Event containers for read & write paths.
-  - `pending.rs` — `PendingEnvelope<M>` (owned, write-path) built via typestate builder: `pending_envelope(version).event_type().payload().build(metadata)`.
-  - `persisted.rs` — `PersistedEnvelope<'a, M>` (borrowed, read-path) returned by cursors.
-- **`upcasting/`** — Schema evolution.
-  - `morsel.rs` — `EventMorsel<'a>`: zero-copy-when-possible data unit flowing through transforms.
-  - `upcaster.rs` — `Upcaster` trait for raw-byte schema migrations with associated `type Error`. `()` is the no-op passthrough (`Error = Infallible`).
-- **`store/`** — Storage infrastructure traits that adapters (e.g. `nexus-fjall`) implement.
-  - `store.rs` — `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap; carries no codec/upcaster/aggregate binding. Call `.repository()` to obtain a `RepositoryBuilder`.
-  - `raw.rs` — `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
-  - `stream.rs` — `EventStream<M>` trait (GAT lending cursor) + `EventStreamExt` extension trait for combinators over lending streams.
-  - `subscription.rs` — `Subscription<M>` trait: returns an `EventStream` that **never returns `None`** — when caught up, it waits for new events instead of terminating. `from: None` = beginning; `from: Some(v)` = events *after* `v`.
-  - `checkpoint.rs` — `CheckpointStore` trait: durable subscription position storage for resume-after-restart.
-- **`repository/`** — Aggregate-facing facades built on top of `store/` infrastructure.
-  - `repository.rs` — `Repository<A>` trait: high-level `load` and `save` for aggregates.
-  - `event_store.rs` — `EventStore<S, C, U>` facade (owning codec).
-  - `zero_copy.rs` — `ZeroCopyEventStore<S, C, U>` facade (borrowing codec).
-  - `builder.rs` — `RepositoryBuilder` typestate builder with `!Send` marker `NeedsCodec`; produces `EventStore` or `ZeroCopyEventStore`. `NoSnapshot` is the default snapshot slot.
-  - `snapshot.rs` — `Snapshotting<R, SS, T>` decorator (feature-gated: `snapshot`). Wraps an inner repository and transparently loads from a `StateStore` on read, persists on write per a `PersistTrigger`. Snapshot save is best-effort (never blocks event persistence).
-  - `replay.rs` — `pub(crate) ReplayFrom<A>` trait shared between `EventStore`, `ZeroCopyEventStore`, and `Snapshotting`.
-- **`state/`** — Unified versioned state persistence. One trait powers both projection state and aggregate snapshots.
-  - `state.rs` — `State<S>`: versioned payload `(Version, NonZeroU32 schema_version, S)` generic over `S`.
-  - `store.rs` — `StateStore<S>` trait with `load(id, schema_version) -> Option<State<S>>`, `save`, `delete`. `()` is the no-op impl.
-  - `codec_adapter.rs` — `CodecStateStore<SS, C>`: bridges a byte-level `StateStore<Vec<u8>>` (what fjall implements) to a typed `StateStore<S>` via `Codec<S>`. This is what lets adapters store bytes while consumers see typed state.
-  - `trigger.rs` — `PersistTrigger` trait: `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic). Used by both projection runners and the snapshot decorator.
-  - `testing.rs` — `InMemoryStateStore` (feature-gated behind `testing`).
-- **`projection/`** — Feature-gated under `projection`. Slim by design — only the pure fold trait lives here; the async runner is in `nexus-framework`.
-  - `projector.rs` — `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`). Fallibility is intentional: projections may do checked arithmetic where aggregates do not. Recovery policy (skip/fail/dead-letter) is the framework's concern, not the projector's.
+- **`codec.rs`** — Serialization traits.
+  - `Codec<E>` for owning encode/decode (serde-based).
+  - `BorrowingCodec<E>` for zero-copy decode (rkyv, flatbuffers).
+  - Inline `pub mod serde` block (feature-gated): `SerdeFormat`, `SerdeCodec<F>`, and nested `pub mod json` with `Json` format tag and `JsonCodec` alias.
+- **`envelope.rs`** — Event containers for read & write paths.
+  - `PendingEnvelope<M>` (owned, write-path) built via typestate builder: `pending_envelope(version).event_type().payload().build(metadata)`.
+  - `PersistedEnvelope<'a, M>` (borrowed, read-path) returned by cursors.
+- **`upcasting.rs`** — Schema evolution.
+  - `EventMorsel<'a>`: zero-copy-when-possible data unit flowing through transforms.
+  - `Upcaster` trait for raw-byte schema migrations with associated `type Error`. `()` is the no-op passthrough (`Error = Infallible`).
+- **`store.rs`** — Storage infrastructure traits that adapters (e.g. `nexus-fjall`) implement.
+  - `Store<S>`: `Arc`-wrapped shared handle to any `RawEventStore`. Clone-cheap; carries no codec/upcaster/aggregate binding. Call `.repository()` to obtain a `RepositoryBuilder`.
+  - `RawEventStore<M>` trait: byte-level `append` and `read_stream`.
+  - `EventStream<M>` trait (GAT lending cursor) + `EventStreamExt` extension trait for combinators over lending streams.
+  - `Subscription<M>` trait: returns an `EventStream` that **never returns `None`** — when caught up, it waits for new events instead of terminating. `from: None` = beginning; `from: Some(v)` = events *after* `v`.
+  - `CheckpointStore` trait: durable subscription position storage for resume-after-restart.
+- **`state.rs`** — Unified versioned state persistence. One trait powers both projection state and aggregate snapshots.
+  - `State<S>`: versioned payload `(Version, NonZeroU32 schema_version, S)` generic over `S`.
+  - `StateStore<S>` trait with `load(id, schema_version) -> Option<State<S>>`, `save`, `delete`. `()` is the no-op impl.
+  - `CodecStateStore<SS, C>`: bridges a byte-level `StateStore<Vec<u8>>` (what fjall implements) to a typed `StateStore<S>` via `Codec<S>`. This is what lets adapters store bytes while consumers see typed state.
+  - `PersistTrigger` trait: `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic). Used by both projection runners and the snapshot decorator.
+  - Inline `#[cfg(feature = "testing")] mod testing` block: `InMemoryStateStore`.
+- **`projection.rs`** — Feature-gated under `projection`. Slim by design.
+  - `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`). Fallibility is intentional: projections may do checked arithmetic where aggregates do not. Recovery policy (skip/fail/dead-letter) is the framework's concern, not the projector's. The IO-driven runner lives in `nexus-framework`.
+- **`repository.rs`** — Aggregate-facing trait + its two facade impls.
+  - `Repository<A>` trait: high-level `load` and `save` for aggregates.
+  - `EventStore<S, C, U>` facade (owning codec).
+  - `ZeroCopyEventStore<S, C, U>` facade (borrowing codec).
+  - `pub(crate) ReplayFrom<A>` trait shared with the `Snapshotting` decorator.
+- **`builder.rs`** — `RepositoryBuilder` typestate builder with `!Send` marker `NeedsCodec`; produces `EventStore` or `ZeroCopyEventStore`. `NoSnapshot` is the default snapshot slot; `WithSnapshot<SS, T>` is the active slot (feature-gated: `snapshot`). Kept separate from `repository.rs` because it's pure typestate construction scaffolding (~390 lines).
+- **`snapshot.rs`** — `Snapshotting<R, SS, T>` decorator (feature-gated: `snapshot`). Wraps an inner repository and transparently loads from a `StateStore` on read, persists on write per a `PersistTrigger`. Snapshot save is best-effort (never blocks event persistence). Kept separate from `repository.rs` because it's the only feature-gated piece of the facade.
 - **`error.rs`** — `StoreError<A, C, U>` (generic over adapter/codec/upcaster errors, allocation-free), `AppendError<E>`, `UpcastError<U>` (generic over transform error), `InvalidSchemaVersion`. All use `ArrayString<64>` for stream IDs instead of heap-allocated strings.
 - **`testing.rs`** — `InMemoryStore`, `InMemoryStream`, `InMemoryStoreError` (feature-gated behind `testing`).
 
 Feature flags: `serde`, `json` (implies `serde`), `snapshot`, `snapshot-json`, `projection`, `projection-json`, `testing`.
+
+Public sub-paths after the flatten: `nexus_store::codec::*`, `::envelope::*`, `::upcasting::*`, `::store::*`, `::state::*`, `::projection::*`, `::repository::*` (Repository + facades), `::builder::*` (builder typestate), `::snapshot::*` (decorator). All top-level types remain re-exported at `nexus_store::*` for convenience.
 
 ### Framework Crate (`nexus-framework`) — Batteries-Included Runtime Layer
 
