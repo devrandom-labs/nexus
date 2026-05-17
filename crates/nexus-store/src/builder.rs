@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
 
-use super::event_store::EventStore;
-use super::zero_copy::ZeroCopyEventStore;
+use crate::repository::{EventStore, ZeroCopyEventStore};
 use crate::store::{RawEventStore, Store};
 
 // ═══════════════════════════════════════════════════════════════════════════

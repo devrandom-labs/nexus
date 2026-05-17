@@ -159,7 +159,7 @@ impl<S: EventStream<M>, M> EventStreamExt<M> for S {}
 /// aggregate binding — it is just a database handle.
 ///
 /// Use [`repository()`](Store::repository) to obtain a
-/// [`RepositoryBuilder`](crate::repository::RepositoryBuilder), then
+/// [`RepositoryBuilder`](crate::builder::RepositoryBuilder), then
 /// configure a codec and upcaster before calling `.build()`.
 ///
 /// # Example
