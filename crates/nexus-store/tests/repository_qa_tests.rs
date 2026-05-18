@@ -1403,7 +1403,7 @@ async fn d10_max_rehydration_events_boundary() {
 #[tokio::test]
 async fn d11_schema_version_always_one() {
     use nexus_store::pending_envelope;
-    use nexus_store::store::EventStream;
+    use nexus_store::stream::EventStream;
 
     let store = InMemoryStore::new();
 

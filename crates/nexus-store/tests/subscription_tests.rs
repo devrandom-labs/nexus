@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use nexus::{Id, Version};
 use nexus_store::pending_envelope;
-use nexus_store::store::{CheckpointStore, EventStream, RawEventStore, Subscription};
+use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
+use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use tokio::time::timeout;
 

@@ -2,7 +2,8 @@
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::store::{CheckpointStore, EventStream, RawEventStore, Subscription};
+use crate::store::{CheckpointStore, RawEventStore, Subscription};
+use crate::stream::EventStream;
 use nexus::Id;
 use nexus::Version;
 use std::collections::HashMap;

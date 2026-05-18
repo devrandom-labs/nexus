@@ -6,7 +6,8 @@ use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 use crate::codec::{BorrowingCodec, Codec};
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
-use crate::store::{EventStream, RawEventStore, Store};
+use crate::store::{RawEventStore, Store};
+use crate::stream::EventStream;
 use crate::upcasting::{EventMorsel, Upcaster};
 
 // ═══════════════════════════════════════════════════════════════════════════

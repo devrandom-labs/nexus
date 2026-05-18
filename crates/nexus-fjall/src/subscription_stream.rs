@@ -5,7 +5,8 @@ use crate::stream::FjallStream;
 use arrayvec::ArrayString;
 use nexus::{Id, Version};
 use nexus_store::PersistedEnvelope;
-use nexus_store::store::{EventStream, RawEventStore};
+use nexus_store::store::RawEventStore;
+use nexus_store::stream::EventStream;
 
 /// Owned byte-key wrapper to satisfy the [`Id`] trait's `'static` bound
 /// when re-reading from the store during subscription refills.
