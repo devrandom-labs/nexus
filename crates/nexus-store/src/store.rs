@@ -137,7 +137,15 @@ pub trait Subscription<M: 'static> {
     ///
     /// The stream's error type must be the same as the subscription's error type
     /// to enable uniform error handling by consumers.
-    type Stream<'a>: EventStream<M, Error = Self::Error> + 'a
+    ///
+    /// The stream must be `Send` so consumers (e.g. projection runners) can
+    /// drive it from a multi-threaded async runtime. This is structural —
+    /// every implementor must produce a `Send` stream. Pushing it to the
+    /// trait level avoids HRTB bounds like `for<'a> Sub::Stream<'a>: Send`
+    /// at call sites, which conflict with non-`'static` subscription borrows
+    /// (the `where Self: 'a` bound on `Stream<'a>` would force the borrow's
+    /// lifetime to `'static`).
+    type Stream<'a>: EventStream<M, Error = Self::Error> + Send + 'a
     where
         Self: 'a;
 

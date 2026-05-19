@@ -39,7 +39,7 @@ pub use state::{
 };
 pub use store::{CheckpointStore, RawEventStore, Store, Subscription};
 pub use stream::{
-    BorrowedDecodedStream, DecodedStream, DecoderBuilder, EventStream, EventStreamExt,
+    BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition, EventStream, EventStreamExt,
 };
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
