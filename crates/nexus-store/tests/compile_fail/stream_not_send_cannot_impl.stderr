@@ -1,0 +1,17 @@
+error: future cannot be sent between threads safely
+  --> tests/compile_fail/stream_not_send_cannot_impl.rs:20:33
+   |
+20 |     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ future returned by `next` is not `Send`
+   |
+   = help: within `impl Future<Output = Result<Option<PersistedEnvelope<'_>>, <NotSendStream as EventStream>::Error>>`, the trait `Send` is not implemented for `Rc<()>`
+note: captured value is not `Send` because `&mut` references cannot be sent unless their referent is `Send`
+  --> tests/compile_fail/stream_not_send_cannot_impl.rs:20:19
+   |
+20 |     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+   |                   ^^^^^^^^^ has type `&mut NotSendStream` which is not `Send`, because `NotSendStream` is not `Send`
+note: required by a bound in `EventStream::next::{anon_assoc#0}`
+  --> src/stream.rs
+   |
+   |     ) -> impl Future<Output = Result<Option<PersistedEnvelope<'_, M>>, Self::Error>> + Send;
+   |                                                                                        ^^^^ required by this bound in `EventStream::next::{anon_assoc#0}`
