@@ -4,7 +4,7 @@ use arrayvec::ArrayString;
 use fjall::Slice;
 use nexus::Version;
 use nexus_store::PersistedEnvelope;
-use nexus_store::store::EventStream;
+use nexus_store::stream::EventStream;
 
 /// Lending cursor over fjall event rows.
 ///

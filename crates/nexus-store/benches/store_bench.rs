@@ -36,8 +36,8 @@ use nexus_store::AppendError;
 use nexus_store::Upcaster;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
-use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
+use nexus_store::stream::EventStream;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

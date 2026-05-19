@@ -31,8 +31,8 @@ use nexus::{Id, Version};
 use nexus_store::InMemoryStoreError;
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
-use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
+use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.

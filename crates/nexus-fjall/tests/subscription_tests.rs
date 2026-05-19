@@ -18,7 +18,8 @@ use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
-use nexus_store::store::{CheckpointStore, EventStream, RawEventStore, Subscription};
+use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
+use nexus_store::stream::EventStream;
 use tokio::time::timeout;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

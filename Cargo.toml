@@ -7,6 +7,7 @@ members = [
     "crates/nexus-macros",
     "crates/nexus-macros/tests/cross_crate_test",
     "crates/nexus-store",
+    "crates/nexus-store-testing",
     "crates/workspace-hack",
     "examples/inmemory",
     "examples/store-and-kernel",

@@ -433,7 +433,7 @@ impl CheckpointStore for FjallStore {
 mod tests {
     use super::*;
     use nexus_store::envelope::pending_envelope;
-    use nexus_store::store::EventStream;
+    use nexus_store::stream::EventStream;
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     struct TestId(String);

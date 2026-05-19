@@ -71,8 +71,8 @@ use nexus_store::codec::Codec;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::{StoreError, UpcastError};
 use nexus_store::pending_envelope;
-use nexus_store::store::EventStream;
 use nexus_store::store::RawEventStore;
+use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 

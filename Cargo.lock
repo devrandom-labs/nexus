@@ -612,6 +612,7 @@ dependencies = [
  "insta",
  "nexus",
  "nexus-store",
+ "nexus-store-testing",
  "proptest",
  "proptest-state-machine",
  "tempfile",
@@ -656,6 +657,7 @@ dependencies = [
  "criterion",
  "nexus",
  "nexus-store",
+ "nexus-store-testing",
  "proptest",
  "serde",
  "serde_json",
@@ -663,6 +665,16 @@ dependencies = [
  "thiserror",
  "tokio",
  "trybuild",
+ "workspace-hack",
+]
+
+[[package]]
+name = "nexus-store-testing"
+version = "0.1.0"
+dependencies = [
+ "nexus",
+ "nexus-store",
+ "tokio",
  "workspace-hack",
 ]
 

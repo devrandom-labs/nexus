@@ -870,7 +870,7 @@ async fn runner_no_state_persistence_with_checkpoint_does_not_rebuild() {
         .await
         .unwrap();
 
-    // Checkpoint at v3, no state persisted (NoStatePersistence)
+    // Checkpoint at v3, no state persisted (`()` StateStore = no-op)
     assert_eq!(
         store.load(&stream_id).await.unwrap(),
         Some(Version::new(3).unwrap())

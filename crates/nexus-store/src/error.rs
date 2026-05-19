@@ -70,6 +70,27 @@ pub enum AppendError<E> {
 #[error("invalid schema version: 0 (schema versions start at 1)")]
 pub struct InvalidSchemaVersion;
 
+/// Convenience error type for [`DecodedStream`](crate::stream::DecodedStream)
+/// and [`BorrowedDecodedStream`](crate::stream::BorrowedDecodedStream) fold operations.
+///
+/// Each variant carries the underlying error from one stage of the pipeline.
+/// Generic over the three error sources so callers may use it directly or
+/// define their own enum with `From` impls for the same three errors.
+#[derive(Debug, Error)]
+pub enum DecodeStreamError<S, C, U> {
+    /// Underlying stream failure.
+    #[error("stream error: {0}")]
+    Stream(#[source] S),
+
+    /// Codec decode failure.
+    #[error("codec decode error: {0}")]
+    Codec(#[source] C),
+
+    /// Upcaster transform failure.
+    #[error("upcaster error: {0}")]
+    Upcast(#[source] UpcastError<U>),
+}
+
 /// Errors from upcaster validation and transform execution.
 ///
 /// Generic over the transform error type `U` — each `Upcaster`

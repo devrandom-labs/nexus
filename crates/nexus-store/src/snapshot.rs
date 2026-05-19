@@ -2,8 +2,7 @@ use std::num::NonZeroU32;
 
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, KernelError, Version};
 
-use super::replay::ReplayFrom;
-use super::repository::Repository;
+use crate::repository::{ReplayFrom, Repository};
 use crate::state;
 
 /// Snapshot-aware repository decorator.

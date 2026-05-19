@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 
 use nexus::{DomainEvent, Version};
 use nexus_store::Codec;
-use nexus_store::store::EventStream;
+use nexus_store::stream::EventStream;
 use tokio_stream::Stream;
 
 /// Adapter that converts a lending GAT [`EventStream`] into an owned

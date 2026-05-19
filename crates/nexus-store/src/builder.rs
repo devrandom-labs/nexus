@@ -1,9 +1,7 @@
 use std::marker::PhantomData;
 
-use super::event_store::EventStore;
-use super::zero_copy::ZeroCopyEventStore;
-use crate::store::raw::RawEventStore;
-use crate::store::store::Store;
+use crate::repository::{EventStore, ZeroCopyEventStore};
+use crate::store::{RawEventStore, Store};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NeedsCodec — compile-time guard
