@@ -172,6 +172,71 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
         async move { self.try_fold(0usize, |count, _| Ok(count + 1)).await }
     }
 
+    /// Fold every event into an accumulator, interruptible by a shutdown signal.
+    ///
+    /// The async-closure, interruptible cousin of [`try_fold`](Self::try_fold).
+    /// The raw-envelope variant of
+    /// [`DecodedStream::try_fold_async_until`](DecodedStream::try_fold_async_until)
+    /// — use this when you want to handle decode yourself in the closure
+    /// (e.g. when the caller's error type doesn't have a `From` for the full
+    /// `DecodeStreamError<...>` pipeline).
+    ///
+    /// # Closure contract
+    ///
+    /// The closure receives the lent envelope and returns a `Fut` that
+    /// produces the next accumulator. Because the bound is
+    /// `for<'a> FnMut(B, PersistedEnvelope<'a, M>) -> Fut` with `Fut`
+    /// concrete, the closure must extract owned values from the envelope
+    /// *before* the `async move {}` block — the returned future must not
+    /// borrow from the envelope.
+    ///
+    /// Typical pattern:
+    /// ```ignore
+    /// stream.try_fold_async_until(init, move |acc, env| {
+    ///     let version = env.version();
+    ///     let decoded = codec.decode(env.event_type(), env.payload());
+    ///     async move {
+    ///         let event = decoded.map_err(MyErr::Codec)?;
+    ///         do_async_work(&event).await?;
+    ///         Ok(next_acc(acc, version, event))
+    ///     }
+    /// }, shutdown).await
+    /// ```
+    ///
+    /// All other semantics (bias, accumulator preservation, cancel-safety
+    /// of `next()`, closure runs to completion within an iteration) match
+    /// [`DecodedStream::try_fold_async_until`].
+    fn try_fold_async_until<B, E, F, Fut, Sh>(
+        &mut self,
+        init: B,
+        mut f: F,
+        shutdown: Sh,
+    ) -> impl Future<Output = Result<(B, Disposition), E>> + Send
+    where
+        Self: Send,
+        B: Send,
+        M: Send,
+        F: FnMut(B, PersistedEnvelope<'_, M>) -> Fut + Send,
+        Fut: Future<Output = Result<B, E>> + Send,
+        Sh: Future<Output = ()> + Send,
+        E: From<Self::Error>,
+    {
+        async move {
+            let mut shutdown = pin!(shutdown);
+            let mut acc = init;
+            loop {
+                let next_fut = pin!(self.next());
+                let env = match select_next_or_shutdown(next_fut, shutdown.as_mut()).await {
+                    Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
+                    Selected::Stream(Err(e)) => return Err(E::from(e)),
+                    Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),
+                    Selected::Stream(Ok(Some(env))) => env,
+                };
+                acc = f(acc, env).await?;
+            }
+        }
+    }
+
     /// Enter the decoder builder chain to produce a typed decoded stream.
     ///
     /// Pairs this stream with a codec and (optionally) an upcaster, yielding

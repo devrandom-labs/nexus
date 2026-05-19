@@ -5,11 +5,10 @@ use nexus_store::Codec;
 use nexus_store::projection::Projector;
 use nexus_store::state::{PersistTrigger, State, StateStore};
 use nexus_store::store::{CheckpointStore, Subscription};
-use tokio_stream::StreamExt;
+use nexus_store::stream::EventStreamExt;
 
 use super::error::ProjectionError;
 use super::status::{ProjectionStatus, apply_event};
-use super::stream::{DecodeStreamError, DecodedStream};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Typestate markers
@@ -225,16 +224,32 @@ where
 
 impl<I, Sub, Ckpt, SP, P, EC, Trig> Projection<I, Sub, Ckpt, SP, P, EC, Trig, Ready<P::State>>
 where
-    I: Id + Clone,
-    Sub: Subscription<()>,
-    Ckpt: CheckpointStore,
-    SP: StateStore<P::State>,
-    P: Projector,
-    P::State: Clone,
-    EC: Codec<P::Event>,
-    Trig: PersistTrigger,
+    I: Id + Clone + Send + Sync,
+    Sub: Subscription<()> + Send,
+    Ckpt: CheckpointStore + Send + Sync,
+    SP: StateStore<P::State> + Send + Sync,
+    P: Projector + Send + Sync,
+    P::State: Clone + Send,
+    EC: Codec<P::Event> + Send + Sync,
+    Trig: PersistTrigger + Send + Sync,
 {
     /// Run the event loop until shutdown or error.
+    ///
+    /// Drives the subscription through a single
+    /// [`try_fold_async_until`](EventStreamExt::try_fold_async_until)
+    /// invocation. The fold body is the *only* place projection-specific
+    /// logic lives:
+    ///
+    /// 1. Decode the envelope.
+    /// 2. Run the pure [`apply_event`] FSM transition.
+    /// 3. If the new status is `Committed`, persist state + checkpoint.
+    ///
+    /// When the shutdown future resolves, the combinator returns the
+    /// accumulator at the last completed iteration with
+    /// [`Disposition::Interrupted`](nexus_store::stream::Disposition::Interrupted).
+    /// If that accumulator is `Pending`, the flush tail persists it once —
+    /// honoring the same fs2-style "preserve partial accumulator and let
+    /// the caller finalize" contract.
     ///
     /// # Errors
     ///
@@ -242,7 +257,7 @@ where
     /// state persistence, or checkpoint failure.
     pub async fn run(
         self,
-        shutdown: impl std::future::Future<Output = ()>,
+        shutdown: impl std::future::Future<Output = ()> + Send,
     ) -> Result<(), ProjectionError<P::Error, EC::Error, SP::Error, Ckpt::Error, Sub::Error>> {
         let Self {
             id,
@@ -257,64 +272,83 @@ where
             ..
         } = self;
 
-        let stream = subscription
+        let mut stream = subscription
             .subscribe(&id, status.checkpoint())
             .await
             .map_err(ProjectionError::Subscription)?;
 
-        let mut decoded = DecodedStream::new(stream, &event_codec);
-        let mut status = status;
+        // Borrow the ingredients so the closure captures references
+        // (each iteration call has access; ownership stays out here for
+        // the flush tail).
+        let projector_ref = &projector;
+        let trigger_ref = &trigger;
+        let event_codec_ref = &event_codec;
+        let state_store_ref = &state_store;
+        let checkpoint_ref = &checkpoint;
+        let id_ref = &id;
 
-        tokio::pin!(shutdown);
-
-        loop {
-            match tokio::select! {
-                () = &mut shutdown => None,
-                item = decoded.next() => item,
-            } {
-                None => {
-                    if let ProjectionStatus::Pending {
-                        ref state, version, ..
-                    } = status
-                    {
-                        let pending = State::new(version, schema_version, state.clone());
-                        state_store
-                            .save(&id, &pending)
-                            .await
-                            .map_err(ProjectionError::State)?;
-                        checkpoint
-                            .save(&id, version)
-                            .await
-                            .map_err(ProjectionError::Checkpoint)?;
+        let (final_status, _disposition) = stream
+            .try_fold_async_until(
+                status,
+                move |status, envelope| {
+                    // Sync prelude: decode into owned values, drop the
+                    // envelope before the async move. The returned future
+                    // must not borrow from the envelope (HRTB requirement
+                    // for try_fold_async_until's `F: for<'a> FnMut(...) -> Fut`
+                    // with a single concrete Fut).
+                    let version = envelope.version();
+                    let decoded = event_codec_ref.decode(envelope.event_type(), envelope.payload());
+                    async move {
+                        let event = decoded.map_err(ProjectionError::EventCodec)?;
+                        let next = apply_event(projector_ref, trigger_ref, status, &event, version)
+                            .map_err(ProjectionError::Projector)?;
+                        if let ProjectionStatus::Committed {
+                            ref state, version, ..
+                        } = next
+                        {
+                            let pending = State::new(version, schema_version, state.clone());
+                            state_store_ref
+                                .save(id_ref, &pending)
+                                .await
+                                .map_err(ProjectionError::State)?;
+                            checkpoint_ref
+                                .save(id_ref, version)
+                                .await
+                                .map_err(ProjectionError::Checkpoint)?;
+                        }
+                        Ok::<
+                            ProjectionStatus<P::State>,
+                            ProjectionError<
+                                P::Error,
+                                EC::Error,
+                                SP::Error,
+                                Ckpt::Error,
+                                Sub::Error,
+                            >,
+                        >(next)
                     }
-                    return Ok(());
-                }
-                Some(Ok((version, event))) => {
-                    status = apply_event(&projector, &trigger, status, &event, version)
-                        .map_err(ProjectionError::Projector)?;
+                },
+                shutdown,
+            )
+            .await?;
 
-                    if let ProjectionStatus::Committed {
-                        ref state, version, ..
-                    } = status
-                    {
-                        let pending = State::new(version, schema_version, state.clone());
-                        state_store
-                            .save(&id, &pending)
-                            .await
-                            .map_err(ProjectionError::State)?;
-                        checkpoint
-                            .save(&id, version)
-                            .await
-                            .map_err(ProjectionError::Checkpoint)?;
-                    }
-                }
-                Some(Err(DecodeStreamError::Stream(e))) => {
-                    return Err(ProjectionError::Subscription(e));
-                }
-                Some(Err(DecodeStreamError::Codec(e))) => {
-                    return Err(ProjectionError::EventCodec(e));
-                }
-            }
+        // Flush tail: if the fold exited with pending work, persist it once
+        // before returning. Mirrors fs2's finalizer guarantee — resource
+        // cleanup runs regardless of completion or interrupt.
+        if let ProjectionStatus::Pending {
+            ref state, version, ..
+        } = final_status
+        {
+            let pending = State::new(version, schema_version, state.clone());
+            state_store
+                .save(&id, &pending)
+                .await
+                .map_err(ProjectionError::State)?;
+            checkpoint
+                .save(&id, version)
+                .await
+                .map_err(ProjectionError::Checkpoint)?;
         }
+        Ok(())
     }
 }

@@ -28,3 +28,15 @@ pub enum ProjectionError<P, EC, SP, Ckpt, Sub> {
     #[error("subscription failed: {0}")]
     Subscription(#[source] Sub),
 }
+
+/// `try_fold_async_until` requires `E: From<Self::Error>` where
+/// `Self::Error` is the subscription stream's error type. Since
+/// [`Subscription::Stream<'a>::Error == Subscription::Error`] in
+/// [`nexus_store::store::Subscription`], routing that error into
+/// [`ProjectionError::Subscription`] gives the combinator what it
+/// needs without extra glue at the call site.
+impl<P, EC, SP, Ckpt, Sub> From<Sub> for ProjectionError<P, EC, SP, Ckpt, Sub> {
+    fn from(err: Sub) -> Self {
+        Self::Subscription(err)
+    }
+}
