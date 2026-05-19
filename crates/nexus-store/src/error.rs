@@ -43,6 +43,16 @@ pub enum StoreError<A, C, U> {
     VersionOverflow,
 }
 
+impl<A, C, U> From<DecodeStreamError<A, C, U>> for StoreError<A, C, U> {
+    fn from(err: DecodeStreamError<A, C, U>) -> Self {
+        match err {
+            DecodeStreamError::Stream(e) => Self::Adapter(e),
+            DecodeStreamError::Codec(e) => Self::Codec(e),
+            DecodeStreamError::Upcast(e) => Self::Upcast(e),
+        }
+    }
+}
+
 /// Structured error from [`RawEventStore::append`](crate::RawEventStore::append).
 ///
 /// Separates concurrency conflicts (a normal, expected condition in

@@ -7,8 +7,8 @@ use crate::codec::{BorrowingCodec, Codec};
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
 use crate::store::{RawEventStore, Store};
-use crate::stream::EventStream;
-use crate::upcasting::{EventMorsel, Upcaster};
+use crate::stream::EventStreamExt;
+use crate::upcasting::Upcaster;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Repository<A> — high-level aggregate facade (load + save)
@@ -170,37 +170,26 @@ where
 
     async fn replay_from(
         &self,
-        mut root: AggregateRoot<A>,
+        root: AggregateRoot<A>,
         from: Version,
     ) -> Result<AggregateRoot<A>, Self::Error> {
-        let mut stream = self
+        let stream = self
             .store
             .raw()
             .read_stream(root.id(), from)
             .await
             .map_err(StoreError::Adapter)?;
 
-        while let Some(env) = stream.next().await.map_err(StoreError::Adapter)? {
-            // Build morsel from envelope — all Cow::Borrowed (zero-alloc).
-            let morsel = EventMorsel::borrowed(
-                env.event_type(),
-                env.schema_version_as_version(),
-                env.payload(),
-            );
-
-            // Run through upcaster — zero-alloc when no transform fires.
-            let transformed = self.upcaster.apply(morsel).map_err(StoreError::Upcast)?;
-
-            // Decode.
-            let event = self
-                .codec
-                .decode(transformed.event_type(), transformed.payload())
-                .map_err(StoreError::Codec)?;
-
-            root.replay(env.version(), &event)?;
-        }
-
-        Ok(root)
+        stream
+            .decoder()
+            .codec(&self.codec)
+            .upcaster(&self.upcaster)
+            .build()
+            .try_fold(root, |mut root, version, event| {
+                root.replay(version, &event)?;
+                Ok(root)
+            })
+            .await
     }
 }
 
@@ -349,37 +338,26 @@ where
 
     async fn replay_from(
         &self,
-        mut root: AggregateRoot<A>,
+        root: AggregateRoot<A>,
         from: Version,
     ) -> Result<AggregateRoot<A>, Self::Error> {
-        let mut stream = self
+        let stream = self
             .store
             .raw()
             .read_stream(root.id(), from)
             .await
             .map_err(StoreError::Adapter)?;
 
-        while let Some(env) = stream.next().await.map_err(StoreError::Adapter)? {
-            // Build morsel from envelope — all Cow::Borrowed (zero-alloc).
-            let morsel = EventMorsel::borrowed(
-                env.event_type(),
-                env.schema_version_as_version(),
-                env.payload(),
-            );
-
-            // Run through upcaster — zero-alloc when no transform fires.
-            let transformed = self.upcaster.apply(morsel).map_err(StoreError::Upcast)?;
-
-            // Decode — zero-copy: &E borrows from morsel payload.
-            let event: &EventOf<A> = self
-                .codec
-                .decode(transformed.event_type(), transformed.payload())
-                .map_err(StoreError::Codec)?;
-
-            root.replay(env.version(), event)?;
-        }
-
-        Ok(root)
+        stream
+            .decoder()
+            .borrowing_codec(&self.codec)
+            .upcaster(&self.upcaster)
+            .build()
+            .try_fold(root, |mut root, version, event: &EventOf<A>| {
+                root.replay(version, event)?;
+                Ok(root)
+            })
+            .await
     }
 }
 
