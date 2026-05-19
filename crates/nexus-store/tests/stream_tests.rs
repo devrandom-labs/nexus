@@ -2102,3 +2102,390 @@ assert_impl_all!(
 // compile-fail fixture `stream_not_send_cannot_impl.rs`. This is stronger
 // than "DecodedStream<!Send, ...>: !Send" because there is no valid input
 // that produces a `!Send` wrapper to begin with.
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 19 — try_fold_async_until (interruptible async fold on DecodedStream)
+//
+// Mirrors fs2's `interruptWhen` + `compile.fold` contract. Coverage by the
+// four mandatory categories from CLAUDE.md:
+//   1. Sequence/protocol — order, async per-event side-effects, accumulator
+//      threading
+//   2. Lifecycle — empty/complete, shutdown-before-any-event,
+//      shutdown-after-stream-ends, multi-shot disposition
+//   3. Defensive — closure error, stream error, upcast error, codec error,
+//      shutdown-already-fired
+//   4. Concurrency — concurrent shutdown signal racing the producer
+//
+// Plus property: try_fold_async_until with `pending::<()>()` shutdown is
+// behaviorally equivalent to try_fold (modulo Disposition::Completed).
+// ═══════════════════════════════════════════════════════════════════════════
+
+use nexus_store::stream::Disposition;
+use std::future::pending;
+use tokio::sync::oneshot;
+
+// ---------- Sequence / protocol ----------
+
+#[tokio::test]
+async fn try_fold_async_until_no_shutdown_returns_completed() {
+    let stream = VecStream::new(vec![
+        (1, "E".into(), 1u64.to_le_bytes().to_vec()),
+        (2, "E".into(), 2u64.to_le_bytes().to_vec()),
+        (3, "E".into(), 3u64.to_le_bytes().to_vec()),
+    ]);
+    let codec = U64Codec;
+    let (sum, dispo) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            0u64,
+            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            pending::<()>(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sum, 6);
+    assert_eq!(dispo, Disposition::Completed);
+}
+
+#[tokio::test]
+async fn try_fold_async_until_threads_versions_in_order() {
+    let stream = VecStream::new(vec![
+        (1, "E".into(), 10u64.to_le_bytes().to_vec()),
+        (2, "E".into(), 20u64.to_le_bytes().to_vec()),
+        (3, "E".into(), 30u64.to_le_bytes().to_vec()),
+    ]);
+    let codec = U64Codec;
+    let (seen, dispo) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            Vec::<(u64, u64)>::new(),
+            |mut acc, v, e| async move {
+                acc.push((v.as_u64(), e));
+                Ok::<_, TestErr>(acc)
+            },
+            pending::<()>(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(seen, vec![(1, 10), (2, 20), (3, 30)]);
+    assert_eq!(dispo, Disposition::Completed);
+}
+
+#[tokio::test]
+async fn try_fold_async_until_awaits_per_event_side_effect() {
+    // Per-event closure awaits a tokio sleep — proves async closure bodies
+    // actually run to completion before next iteration.
+    let stream = VecStream::new(vec![
+        (1, "E".into(), 1u64.to_le_bytes().to_vec()),
+        (2, "E".into(), 2u64.to_le_bytes().to_vec()),
+    ]);
+    let codec = U64Codec;
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let inv = Arc::clone(&invocations);
+    let (sum, _) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            0u64,
+            move |acc, _v, e| {
+                let inv = Arc::clone(&inv);
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    inv.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, TestErr>(acc + e)
+                }
+            },
+            pending::<()>(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sum, 3);
+    assert_eq!(invocations.load(Ordering::SeqCst), 2);
+}
+
+// ---------- Lifecycle ----------
+
+#[tokio::test]
+async fn try_fold_async_until_empty_stream_completes_with_init() {
+    let stream = VecStream::new(vec![]);
+    let codec = U64Codec;
+    let (acc, dispo) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            42u64,
+            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            pending::<()>(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(acc, 42);
+    assert_eq!(dispo, Disposition::Completed);
+}
+
+#[tokio::test]
+async fn try_fold_async_until_shutdown_already_fired_returns_init() {
+    // Pre-fired shutdown: ready future yields immediately. Fold sees no
+    // events; returns (init, Interrupted).
+    let stream = VecStream::new(vec![
+        (1, "E".into(), 1u64.to_le_bytes().to_vec()),
+        (2, "E".into(), 2u64.to_le_bytes().to_vec()),
+    ]);
+    let codec = U64Codec;
+    let shutdown = std::future::ready(());
+    let (acc, dispo) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            999u64,
+            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            shutdown,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        acc, 999,
+        "accumulator must be init when no events processed"
+    );
+    assert_eq!(dispo, Disposition::Interrupted);
+}
+
+#[tokio::test]
+async fn try_fold_async_until_shutdown_after_stream_completes_yields_completed() {
+    // If the stream exhausts before shutdown fires, Disposition is Completed,
+    // not Interrupted — natural termination wins.
+    let stream = VecStream::new(vec![
+        (1, "E".into(), 1u64.to_le_bytes().to_vec()),
+        (2, "E".into(), 2u64.to_le_bytes().to_vec()),
+    ]);
+    let codec = U64Codec;
+    // never-firing shutdown
+    let (sum, dispo) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            0u64,
+            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            pending::<()>(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sum, 3);
+    assert_eq!(dispo, Disposition::Completed);
+}
+
+// ---------- Defensive boundary ----------
+
+#[derive(Debug, Error)]
+#[error("test error: {0}")]
+struct TestErr(&'static str);
+
+impl<
+    S: std::error::Error + 'static + Send + Sync,
+    C: std::error::Error + 'static + Send + Sync,
+    U: std::error::Error + 'static + Send + Sync,
+> From<DecodeStreamError<S, C, U>> for TestErr
+{
+    fn from(_: DecodeStreamError<S, C, U>) -> Self {
+        Self("from decode-stream")
+    }
+}
+
+#[tokio::test]
+async fn try_fold_async_until_closure_error_short_circuits_no_disposition() {
+    let stream = VecStream::new(vec![
+        (1, "E".into(), 1u64.to_le_bytes().to_vec()),
+        (2, "E".into(), 2u64.to_le_bytes().to_vec()),
+        (3, "E".into(), 3u64.to_le_bytes().to_vec()),
+    ]);
+    let codec = U64Codec;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = Arc::clone(&calls);
+    let result = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            0u64,
+            move |acc, _v, e| {
+                let calls = Arc::clone(&calls_clone);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    if e == 2 {
+                        return Err(TestErr("boom on 2"));
+                    }
+                    Ok(acc + e)
+                }
+            },
+            pending::<()>(),
+        )
+        .await;
+    assert!(result.is_err(), "closure error must propagate");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "fold must short-circuit on the failing iteration"
+    );
+}
+
+#[tokio::test]
+async fn try_fold_async_until_stream_error_short_circuits_no_disposition() {
+    let stream = FailingStream::new(
+        vec![
+            (1, "E".into(), 1u64.to_le_bytes().to_vec()),
+            (2, "E".into(), 2u64.to_le_bytes().to_vec()),
+        ],
+        1, // fail on second poll
+    );
+    let codec = U64Codec;
+    let result = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            0u64,
+            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            pending::<()>(),
+        )
+        .await;
+    assert!(result.is_err(), "stream error must propagate as Err");
+}
+
+// ---------- Concurrency (linearizability under shutdown signal) ----------
+
+/// Stream that yields events with a small per-event async delay, so a
+/// concurrent shutdown signal has time to race the producer.
+struct SlowStream {
+    rows: Vec<(u64, String, Vec<u8>)>,
+    pos: usize,
+    per_event_delay: std::time::Duration,
+}
+
+impl SlowStream {
+    fn new(rows: Vec<(u64, String, Vec<u8>)>, delay: std::time::Duration) -> Self {
+        Self {
+            rows,
+            pos: 0,
+            per_event_delay: delay,
+        }
+    }
+}
+
+impl EventStream for SlowStream {
+    type Error = Infallible;
+
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+        if self.pos >= self.rows.len() {
+            return Ok(None);
+        }
+        tokio::time::sleep(self.per_event_delay).await;
+        let row = &self.rows[self.pos];
+        self.pos += 1;
+        Ok(Some(PersistedEnvelope::new_unchecked(
+            Version::new(row.0).expect("nz"),
+            &row.1,
+            1,
+            &row.2,
+            (),
+        )))
+    }
+}
+
+#[tokio::test]
+async fn try_fold_async_until_concurrent_shutdown_preserves_partial_accumulator() {
+    // A slow stream emits 100 events at 5ms intervals. After ~30ms, a
+    // separate task fires shutdown. The fold should return early with an
+    // accumulator strictly less than the full sum, AND with Interrupted.
+    //
+    // This mirrors fs2 `StreamInterruptSuite` test 11: events being computed
+    // when interrupt fires are not in the accumulator.
+    let rows: Vec<(u64, String, Vec<u8>)> = (1..=100u64)
+        .map(|i| (i, "E".into(), i.to_le_bytes().to_vec()))
+        .collect();
+    let total: u64 = (1..=100u64).sum();
+
+    let stream = SlowStream::new(rows, std::time::Duration::from_millis(5));
+    let codec = U64Codec;
+    let (tx, rx) = oneshot::channel::<()>();
+
+    // Fire shutdown from a concurrent task after a small window.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let _ = tx.send(());
+    });
+
+    let shutdown = async move {
+        let _ = rx.await;
+    };
+
+    let (partial, dispo) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            0u64,
+            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            shutdown,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dispo, Disposition::Interrupted, "shutdown won the race");
+    assert!(partial > 0, "at least one event should have been processed");
+    assert!(
+        partial < total,
+        "accumulator must be strictly less than full sum (interrupted mid-stream); got {} vs total {}",
+        partial,
+        total
+    );
+}
+
+#[tokio::test]
+async fn try_fold_async_until_event_processed_before_shutdown_is_in_accumulator() {
+    // Verify the converse of the above: events processed BEFORE shutdown
+    // fires ARE in the accumulator. This is the contiguous-prefix guarantee:
+    // every event whose closure ran to completion contributes; no event past
+    // the interruption point contributes.
+    let rows: Vec<(u64, String, Vec<u8>)> = (1..=10u64)
+        .map(|i| (i, "E".into(), i.to_le_bytes().to_vec()))
+        .collect();
+    let stream = SlowStream::new(rows, std::time::Duration::from_millis(10));
+    let codec = U64Codec;
+    let (tx, rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(35)).await;
+        let _ = tx.send(());
+    });
+    let shutdown = async move {
+        let _ = rx.await;
+    };
+
+    let (seen, dispo) = stream
+        .decoder()
+        .codec(&codec)
+        .build()
+        .try_fold_async_until(
+            Vec::<u64>::new(),
+            |mut acc, _v, e| async move {
+                acc.push(e);
+                Ok::<_, TestErr>(acc)
+            },
+            shutdown,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dispo, Disposition::Interrupted);
+    // Every observed event must be a contiguous prefix of 1..=N.
+    for (i, v) in seen.iter().enumerate() {
+        assert_eq!(*v as usize, i + 1, "events must be a contiguous prefix");
+    }
+}

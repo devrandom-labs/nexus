@@ -1,5 +1,7 @@
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::marker::PhantomData;
+use std::pin::pin;
+use std::task::Poll;
 
 use nexus::Version;
 
@@ -7,6 +9,30 @@ use crate::codec::{BorrowingCodec, Codec};
 use crate::envelope::PersistedEnvelope;
 use crate::error::DecodeStreamError;
 use crate::upcasting::{EventMorsel, Upcaster};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Disposition — why an interruptible fold returned
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Why a [`try_fold_async_until`](EventStreamExt::try_fold_async_until) — or
+/// the same method on [`DecodedStream`]/[`BorrowedDecodedStream`] — exited.
+///
+/// Returned alongside the accumulator so the caller can distinguish a stream
+/// that ended naturally from one cut short by an external shutdown signal.
+///
+/// The accumulator is always returned in the state of the *last completed
+/// iteration* — events processed before the exit are visible; an in-flight
+/// `next()` that was dropped because shutdown won is **not**. This mirrors
+/// fs2's `interruptWhen` + `compile.fold` contract (see fs2 `Pull.scala`
+/// `OuterRun.interrupted` which returns `F.pure(accB)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// The stream's `next()` returned `Ok(None)`; the fold consumed every event.
+    Completed,
+    /// The shutdown future resolved before the stream finished; the fold
+    /// returned the accumulator at the last completed iteration.
+    Interrupted,
+}
 
 /// GAT lending cursor for zero-allocation event streaming.
 ///
@@ -182,6 +208,49 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
 
 /// Blanket impl — every [`EventStream`] gets [`EventStreamExt`] for free.
 impl<S: EventStream<M>, M> EventStreamExt<M> for S {}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Internal: biased select between the stream's next() and a shutdown future
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Outcome of one biased poll-race between the stream cursor and shutdown.
+enum Selected<T, E> {
+    /// The stream's `next()` resolved first (or alone).
+    Stream(Result<Option<T>, E>),
+    /// The shutdown future resolved first (or alone). The stream's `next()`
+    /// future is dropped in this branch; its work is forfeit.
+    Shutdown,
+}
+
+/// Poll the stream cursor and the shutdown future, biased toward shutdown.
+///
+/// On every wake, shutdown is polled first; if `Ready`, returns
+/// [`Selected::Shutdown`] without polling the stream. Otherwise polls the
+/// stream's `next()` and returns [`Selected::Stream`] on `Ready`.
+///
+/// The shutdown reference is reborrowed for each iteration, so a single
+/// pinned shutdown future can survive many fold iterations.
+async fn select_next_or_shutdown<NextFut, Sh, T, E>(
+    next: std::pin::Pin<&mut NextFut>,
+    shutdown: std::pin::Pin<&mut Sh>,
+) -> Selected<T, E>
+where
+    NextFut: Future<Output = Result<Option<T>, E>>,
+    Sh: Future<Output = ()>,
+{
+    let mut next = next;
+    let mut shutdown = shutdown;
+    poll_fn(move |cx| {
+        if shutdown.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Selected::Shutdown);
+        }
+        match next.as_mut().poll(cx) {
+            Poll::Ready(r) => Poll::Ready(Selected::Stream(r)),
+            Poll::Pending => Poll::Pending,
+        }
+    })
+    .await
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DecoderBuilder — typestate chain binding codec + upcaster to a stream
@@ -399,6 +468,109 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
             acc = f(acc, version, event)?;
         }
         Ok(acc)
+    }
+
+    /// Async-fold every decoded event, interruptible by a shutdown signal.
+    ///
+    /// The async-closure, interruptible cousin of [`try_fold`](Self::try_fold).
+    /// Adds three capabilities over the pure-sync primitive:
+    ///
+    /// 1. **Async closure** — the body may `.await` on per-iteration side
+    ///    effects (e.g. persist projection state, save a checkpoint).
+    /// 2. **Shutdown signal** — when `shutdown` resolves, the fold terminates
+    ///    at the next iteration boundary and returns the accumulator with
+    ///    [`Disposition::Interrupted`].
+    /// 3. **Disposition return** — the caller distinguishes natural stream
+    ///    completion ([`Disposition::Completed`]) from external interruption.
+    ///
+    /// # Pipeline (per event)
+    ///
+    /// 1. Build an [`EventMorsel`] from the envelope's bytes.
+    /// 2. Run the upcaster to migrate to the current schema.
+    /// 3. Decode the (possibly transformed) payload into an owned `E`.
+    /// 4. Invoke `f(acc, version, event).await` to produce the next accumulator.
+    ///
+    /// # Bias
+    ///
+    /// On every iteration the shutdown future is polled *before* the
+    /// underlying stream's `next()`. If both are ready simultaneously,
+    /// shutdown wins — preventing a hot stream from starving cancellation.
+    /// Mirrors fs2's `interruptWhen` semantics, where interrupt is checked
+    /// via `interruptGuard` before each pull step (fs2 `Pull.scala` L950-961).
+    ///
+    /// # Accumulator preservation
+    ///
+    /// When shutdown wins, the accumulator from the *last completed
+    /// iteration* is returned. An envelope whose dequeue was racing with
+    /// shutdown is dropped and *not* in the result. This matches fs2's
+    /// `OuterRun.interrupted` returning `F.pure(accB)` (fs2 `Pull.scala`
+    /// L1283-1284) and is verified by `StreamInterruptSuite.scala` test 11.
+    ///
+    /// # The user closure runs to completion within an iteration
+    ///
+    /// Once an envelope is decoded and the closure begins executing, the
+    /// closure runs to completion before shutdown is checked again. The
+    /// accumulator is moved *into* the returned future; dropping the future
+    /// mid-`.await` would lose it entirely. (Rust async cannot preserve a
+    /// closure's local state across cancellation the way algebraic-effect
+    /// handlers can.) If the closure does long-running work, it must check
+    /// shutdown internally.
+    ///
+    /// # Cancel-safety
+    ///
+    /// When shutdown wins against the stream's `next()`, the in-flight
+    /// `next()` future is dropped mid-poll. Implementors of [`EventStream`]
+    /// **must** ensure `next()` is cancel-safe.
+    ///
+    /// # Errors
+    ///
+    /// - Closure returns `Err` → propagated immediately, no `Disposition`.
+    /// - Stream/upcaster/codec returns `Err` → propagated via
+    ///   `Err: From<DecodeStreamError<...>>`, no `Disposition`.
+    pub async fn try_fold_async_until<E, B, F, Fut, Err, Sh>(
+        mut self,
+        init: B,
+        mut f: F,
+        shutdown: Sh,
+    ) -> Result<(B, Disposition), Err>
+    where
+        S: EventStream<M> + Send,
+        C: Codec<E>,
+        U: Upcaster,
+        M: Send,
+        B: Send,
+        F: FnMut(B, Version, E) -> Fut + Send,
+        Fut: Future<Output = Result<B, Err>> + Send,
+        Sh: Future<Output = ()> + Send,
+        Err: From<DecodeStreamError<S::Error, C::Error, U::Error>>,
+    {
+        let mut shutdown = pin!(shutdown);
+        let mut acc = init;
+        loop {
+            let next_fut = pin!(self.stream.next());
+            match select_next_or_shutdown(next_fut, shutdown.as_mut()).await {
+                Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
+                Selected::Stream(Err(e)) => return Err(Err::from(DecodeStreamError::Stream(e))),
+                Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),
+                Selected::Stream(Ok(Some(env))) => {
+                    let version = env.version();
+                    let morsel = EventMorsel::borrowed(
+                        env.event_type(),
+                        env.schema_version_as_version(),
+                        env.payload(),
+                    );
+                    let transformed = self
+                        .upcaster
+                        .apply(morsel)
+                        .map_err(|e| Err::from(DecodeStreamError::Upcast(e)))?;
+                    let event = self
+                        .codec
+                        .decode(transformed.event_type(), transformed.payload())
+                        .map_err(|e| Err::from(DecodeStreamError::Codec(e)))?;
+                    acc = f(acc, version, event).await?;
+                }
+            }
+        }
     }
 }
 
