@@ -255,7 +255,7 @@ impl RawEventStore for FjallStore {
 
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
-    use super::*;
+    use super::{FjallError, FjallStore, Id, Readable, Version};
     use crate::encoding::{decode_snapshot_value, encode_snapshot_value};
     use nexus_store::state::{State, StateStore};
     use std::num::NonZeroU32;
@@ -326,8 +326,7 @@ mod snapshot_impl {
             );
             tx.insert(&self.snapshots, id_bytes, fjall::Slice::from(&*buf));
 
-            tx.commit().map_err(FjallError::Io)?;
-            Ok(())
+            tx.commit().map_err(FjallError::Io)
         }
 
         async fn delete(&self, id: &impl Id) -> Result<(), FjallError> {
@@ -343,8 +342,7 @@ mod snapshot_impl {
             }
 
             tx.remove(&self.snapshots, id_bytes);
-            tx.commit().map_err(FjallError::Io)?;
-            Ok(())
+            tx.commit().map_err(FjallError::Io)
         }
     }
 }

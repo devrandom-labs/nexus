@@ -15,16 +15,16 @@ use crate::codec::Codec;
 pub struct State<S> {
     version: Version,
     schema_version: NonZeroU32,
-    state: S,
+    payload: S,
 }
 
 impl<S> State<S> {
     #[must_use]
-    pub const fn new(version: Version, schema_version: NonZeroU32, state: S) -> Self {
+    pub const fn new(version: Version, schema_version: NonZeroU32, payload: S) -> Self {
         Self {
             version,
             schema_version,
-            state,
+            payload,
         }
     }
 
@@ -40,12 +40,12 @@ impl<S> State<S> {
 
     #[must_use]
     pub const fn state(&self) -> &S {
-        &self.state
+        &self.payload
     }
 
     #[must_use]
     pub fn into_parts(self) -> (Version, NonZeroU32, S) {
-        (self.version, self.schema_version, self.state)
+        (self.version, self.schema_version, self.payload)
     }
 }
 

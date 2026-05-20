@@ -4,7 +4,7 @@
 //!
 //! Every adapter that implements [`nexus_store::stream::EventStream`] —
 //! `nexus-fjall`'s `FjallEventStream`, `nexus-store`'s `InMemoryStream`, any
-//! future SQLite / Postgres / S3 adapter — must independently honor the
+//! future `SQLite` / Postgres / S3 adapter — must independently honor the
 //! trait contract:
 //!
 //! - **Fused after `None`**: once `next()` returns `Ok(None)`, all subsequent
@@ -172,16 +172,17 @@ where
     let row = ConformanceRow::new(1, "Only", vec![42]);
     let mut stream = make(vec![row.clone()]).await;
 
-    let first = stream
-        .next()
-        .await
-        .ok()
-        .flatten()
-        .expect("first call must yield Some");
-    assert_eq!(first.version(), Version::new(1).unwrap());
-    assert_eq!(first.event_type(), "Only");
-    assert_eq!(first.payload(), &[42][..]);
-    drop(first);
+    {
+        let first = stream
+            .next()
+            .await
+            .ok()
+            .flatten()
+            .expect("first call must yield Some");
+        assert_eq!(first.version(), Version::new(1).unwrap());
+        assert_eq!(first.event_type(), "Only");
+        assert_eq!(first.payload(), &[42][..]);
+    }
 
     let second = stream.next().await;
     assert!(
@@ -203,10 +204,7 @@ where
             .collect();
         let mut stream = make(rows.clone()).await;
         let observed = drain(&mut stream).await.unwrap_or_else(|_| {
-            panic!(
-                "drain over {} events errored — adapter contract violated",
-                n
-            )
+            panic!("drain over {n} events errored — adapter contract violated")
         });
         assert_eq!(
             observed.len(),
@@ -258,8 +256,7 @@ where
     for (i, (got, want)) in observed.iter().zip(rows.iter()).enumerate() {
         assert_eq!(
             got.event_type, want.event_type,
-            "event_type mismatch at index {}",
-            i,
+            "event_type mismatch at index {i}",
         );
     }
 }
@@ -282,8 +279,7 @@ where
     for (i, (got, want)) in observed.iter().zip(rows.iter()).enumerate() {
         assert_eq!(
             got.schema_version, want.schema_version,
-            "schema_version mismatch at index {}",
-            i,
+            "schema_version mismatch at index {i}",
         );
     }
 }
@@ -302,7 +298,13 @@ where
         ConformanceRow::new(3, "E", vec![0; 64]),
         ConformanceRow::new(4, "E", vec![0xff; 64]),
         ConformanceRow::new(5, "E", (0..=255u8).collect()),
-        ConformanceRow::new(6, "E", (0..4096u32).map(|i| (i % 256) as u8).collect()),
+        ConformanceRow::new(
+            6,
+            "E",
+            (0..4096u32)
+                .map(|i| u8::try_from(i % 256).unwrap_or(0))
+                .collect(),
+        ),
     ];
     let mut stream = make(rows.clone()).await;
     let observed = drain(&mut stream).await.expect("drain ok");
@@ -335,7 +337,7 @@ where
     let observed = drain(&mut stream).await.expect("drain ok");
     assert_eq!(observed.len(), rows.len());
     for (i, (got, want)) in observed.iter().zip(rows.iter()).enumerate() {
-        assert_eq!(got, want, "row mismatch at position {}", i);
+        assert_eq!(got, want, "row mismatch at position {i}");
     }
 }
 

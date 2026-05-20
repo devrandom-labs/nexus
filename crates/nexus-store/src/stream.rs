@@ -222,11 +222,11 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
         E: From<Self::Error>,
     {
         async move {
-            let mut shutdown = pin!(shutdown);
+            let mut pinned_shutdown = pin!(shutdown);
             let mut acc = init;
             loop {
                 let next_fut = pin!(self.next());
-                let env = match select_next_or_shutdown(next_fut, shutdown.as_mut()).await {
+                let env = match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
                     Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
                     Selected::Stream(Err(e)) => return Err(E::from(e)),
                     Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),
@@ -296,15 +296,13 @@ enum Selected<T, E> {
 /// The shutdown reference is reborrowed for each iteration, so a single
 /// pinned shutdown future can survive many fold iterations.
 async fn select_next_or_shutdown<NextFut, Sh, T, E>(
-    next: std::pin::Pin<&mut NextFut>,
-    shutdown: std::pin::Pin<&mut Sh>,
+    mut next: std::pin::Pin<&mut NextFut>,
+    mut shutdown: std::pin::Pin<&mut Sh>,
 ) -> Selected<T, E>
 where
     NextFut: Future<Output = Result<Option<T>, E>>,
     Sh: Future<Output = ()>,
 {
-    let mut next = next;
-    let mut shutdown = shutdown;
     poll_fn(move |cx| {
         if shutdown.as_mut().poll(cx).is_ready() {
             return Poll::Ready(Selected::Shutdown);
@@ -609,11 +607,11 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
         Sh: Future<Output = ()> + Send,
         Err: From<DecodeStreamError<S::Error, C::Error, U::Error>>,
     {
-        let mut shutdown = pin!(shutdown);
+        let mut pinned_shutdown = pin!(shutdown);
         let mut acc = init;
         loop {
             let next_fut = pin!(self.stream.next());
-            match select_next_or_shutdown(next_fut, shutdown.as_mut()).await {
+            match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
                 Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
                 Selected::Stream(Err(e)) => return Err(Err::from(DecodeStreamError::Stream(e))),
                 Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),

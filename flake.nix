@@ -44,7 +44,9 @@
         checks = {
           nexus-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
-            cargoClippyExtraArgs = "-p nexus -p nexus-macros --lib -- --deny warnings";
+            # Whole-workspace clippy. nexus-framework is temporarily excluded
+            # until its projection-runner refactor clears its lint backlog.
+            cargoClippyExtraArgs = "--workspace --all-features --lib --exclude nexus-framework -- --deny warnings";
           });
 
           nexus-doc =
