@@ -185,9 +185,9 @@ where
             .codec(&self.codec)
             .upcaster(&self.upcaster)
             .build()
-            .try_fold(root, |mut root, version, event| {
-                root.replay(version, &event)?;
-                Ok(root)
+            .try_fold(root, |mut acc, version, event| {
+                acc.replay(version, &event)?;
+                Ok(acc)
             })
             .await
     }
@@ -353,9 +353,9 @@ where
             .borrowing_codec(&self.codec)
             .upcaster(&self.upcaster)
             .build()
-            .try_fold(root, |mut root, version, event: &EventOf<A>| {
-                root.replay(version, event)?;
-                Ok(root)
+            .try_fold(root, |mut acc, version, event: &EventOf<A>| {
+                acc.replay(version, event)?;
+                Ok(acc)
             })
             .await
     }

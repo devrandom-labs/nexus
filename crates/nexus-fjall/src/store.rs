@@ -285,7 +285,7 @@ impl RawEventStore for FjallStore {
 
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
-    use super::*;
+    use super::{FjallError, FjallStore, Id, Version};
     use crate::encoding::{decode_snapshot_value, encode_snapshot_value};
     use nexus_store::state::SnapshotStore;
     use std::num::NonZeroU32;
