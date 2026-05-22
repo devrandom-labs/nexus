@@ -93,7 +93,7 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
         #[cfg(feature = "snapshot")]
         let snapshots = db.keyspace("snapshots", point_read_defaults)?;
 
-        let checkpoints = db.keyspace("checkpoints", point_read_defaults)?;
+        let global = db.keyspace("global", point_read_defaults)?;
 
         Ok(FjallStore {
             db,
@@ -101,7 +101,7 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
             events,
             #[cfg(feature = "snapshot")]
             snapshots,
-            checkpoints,
+            global,
             notify: Notify::new(),
         })
     }

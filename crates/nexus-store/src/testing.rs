@@ -2,7 +2,7 @@
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::store::{CheckpointStore, RawEventStore, Subscription};
+use crate::store::{GlobalSeq, RawEventStore, Subscription};
 use crate::stream::EventStream;
 use nexus::Id;
 use nexus::Version;
@@ -22,11 +22,16 @@ pub enum InMemoryStoreError {
     /// Version overflow: cannot advance past `u64::MAX`.
     #[error("version overflow: cannot advance past u64::MAX")]
     VersionOverflow,
+
+    /// Global sequence overflow: cannot advance past `u64::MAX`.
+    #[error("global sequence overflow: cannot advance past u64::MAX")]
+    GlobalSeqOverflow,
 }
 
 /// A row stored in the in-memory database.
 struct StoredRow {
     version: u64,
+    global_seq: GlobalSeq,
     event_type: String,
     schema_version: u32,
     payload: Vec<u8>,
@@ -54,7 +59,7 @@ struct StoredRow {
 pub struct InMemoryStore {
     streams: Mutex<HashMap<String, Vec<StoredRow>>>,
     notify: Arc<Notify>,
-    checkpoints: Mutex<HashMap<String, Version>>,
+    next_global_seq: Mutex<GlobalSeq>,
 }
 
 impl InMemoryStore {
@@ -64,7 +69,7 @@ impl InMemoryStore {
         Self {
             streams: Mutex::new(HashMap::new()),
             notify: Arc::new(Notify::new()),
-            checkpoints: Mutex::new(HashMap::new()),
+            next_global_seq: Mutex::new(GlobalSeq::INITIAL),
         }
     }
 }
@@ -78,6 +83,7 @@ impl Default for InMemoryStore {
 /// Owned row for the stream cursor.
 struct ReadRow {
     version: u64,
+    global_seq: GlobalSeq,
     event_type: String,
     schema_version: u32,
     payload: Vec<u8>,
@@ -117,6 +123,7 @@ impl EventStream for InMemoryStream {
         };
         Ok(Some(PersistedEnvelope::new_unchecked(
             version,
+            row.global_seq,
             &row.event_type,
             row.schema_version,
             &row.payload,
@@ -174,13 +181,28 @@ impl RawEventStore for InMemoryStore {
             }
         }
 
+        // Assign a store-global sequence to each event — monotonic across
+        // all streams; gaps are permitted by the `RawEventStore` contract.
+        let mut counter = self.next_global_seq.lock().await;
+        let mut seq = *counter;
+        let mut rows = Vec::with_capacity(envelopes.len());
+        for env in envelopes {
+            rows.push(StoredRow {
+                version: env.version().as_u64(),
+                global_seq: seq,
+                event_type: env.event_type().to_owned(),
+                schema_version: env.schema_version(),
+                payload: env.payload().to_vec(),
+            });
+            seq = seq
+                .next()
+                .ok_or(AppendError::Store(InMemoryStoreError::GlobalSeqOverflow))?;
+        }
+        *counter = seq;
+        drop(counter);
+
         // Store the events.
-        stream.extend(envelopes.iter().map(|env| StoredRow {
-            version: env.version().as_u64(),
-            event_type: env.event_type().to_owned(),
-            schema_version: env.schema_version(),
-            payload: env.payload().to_vec(),
-        }));
+        stream.extend(rows);
 
         let should_notify = !envelopes.is_empty();
 
@@ -211,6 +233,7 @@ impl RawEventStore for InMemoryStore {
                     .filter(|r| r.version >= from.as_u64())
                     .map(|r| ReadRow {
                         version: r.version,
+                        global_seq: r.global_seq,
                         event_type: r.event_type.clone(),
                         schema_version: r.schema_version,
                         payload: r.payload.clone(),
@@ -260,6 +283,7 @@ impl InMemorySubscriptionStream<'_> {
                         .filter(|r| r.version >= from_version.as_u64())
                         .map(|r| ReadRow {
                             version: r.version,
+                            global_seq: r.global_seq,
                             event_type: r.event_type.clone(),
                             schema_version: r.schema_version,
                             payload: r.payload.clone(),
@@ -314,6 +338,7 @@ impl EventStream for InMemorySubscriptionStream<'_> {
 
                 return Ok(Some(PersistedEnvelope::new_unchecked(
                     version,
+                    row.global_seq,
                     &row.event_type,
                     row.schema_version,
                     &row.payload,
@@ -369,34 +394,5 @@ impl Subscription<()> for InMemoryStore {
         sub.refill(from_version).await;
 
         Ok(sub)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CheckpointStore — in-memory checkpoint persistence
-// ═══════════════════════════════════════════════════════════════════════════
-
-impl CheckpointStore for InMemoryStore {
-    type Error = InMemoryStoreError;
-
-    fn load(
-        &self,
-        subscription_id: &impl Id,
-    ) -> impl std::future::Future<Output = Result<Option<Version>, InMemoryStoreError>> + Send + '_
-    {
-        let key = subscription_id.to_string();
-        async move { Ok(self.checkpoints.lock().await.get(&key).copied()) }
-    }
-
-    fn save(
-        &self,
-        subscription_id: &impl Id,
-        version: Version,
-    ) -> impl std::future::Future<Output = Result<(), InMemoryStoreError>> + Send + '_ {
-        let key = subscription_id.to_string();
-        async move {
-            self.checkpoints.lock().await.insert(key, version);
-            Ok(())
-        }
     }
 }

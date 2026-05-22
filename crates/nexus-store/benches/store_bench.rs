@@ -36,7 +36,7 @@ use nexus_store::AppendError;
 use nexus_store::Upcaster;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
-use nexus_store::store::RawEventStore;
+use nexus_store::store::{GlobalSeq, RawEventStore};
 use nexus_store::stream::EventStream;
 use tokio::sync::Mutex;
 
@@ -94,6 +94,7 @@ impl EventStream for InMemoryStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).unwrap(),
+            GlobalSeq::INITIAL,
             &row.1,
             1,
             &row.2,
@@ -262,6 +263,7 @@ fn bench_persisted_envelope_construction(c: &mut Criterion) {
         b.iter(|| {
             black_box(PersistedEnvelope::<()>::new_unchecked(
                 Version::INITIAL,
+                GlobalSeq::INITIAL,
                 black_box(event_type),
                 1,
                 black_box(&payload),

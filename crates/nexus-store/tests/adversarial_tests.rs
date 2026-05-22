@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::pending_envelope;
+use nexus_store::store::GlobalSeq;
 
 // =============================================================================
 // 1. Maximum version envelope
@@ -47,6 +48,7 @@ fn max_version_envelope() {
     // Also verify via PersistedEnvelope
     let persisted = PersistedEnvelope::<()>::new_unchecked(
         Version::new(u64::MAX).unwrap(),
+        GlobalSeq::INITIAL,
         "Event",
         1,
         &[],
@@ -146,8 +148,14 @@ fn persisted_envelope_binary_payload() {
     let payload: Vec<u8> = (0..=255).collect();
     assert_eq!(payload.len(), 256);
 
-    let persisted =
-        PersistedEnvelope::<()>::new_unchecked(Version::INITIAL, "BinaryEvent", 1, &payload, ());
+    let persisted = PersistedEnvelope::<()>::new_unchecked(
+        Version::INITIAL,
+        GlobalSeq::INITIAL,
+        "BinaryEvent",
+        1,
+        &payload,
+        (),
+    );
 
     assert_eq!(persisted.payload().len(), 256);
     for (i, &byte) in persisted.payload().iter().enumerate() {

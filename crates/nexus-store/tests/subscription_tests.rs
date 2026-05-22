@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use nexus::{Id, Version};
 use nexus_store::pending_envelope;
-use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
+use nexus_store::store::{RawEventStore, Subscription};
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use tokio::time::timeout;
@@ -135,16 +135,15 @@ async fn subscribe_from_checkpoint() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn drop_and_resubscribe_from_checkpoint() {
+async fn drop_and_resubscribe_from_position() {
     let store = InMemoryStore::new();
     let id = TestId::new("stream-1");
-    let checkpoint_id = TestId::new("sub-1");
 
     // Append event 1.
     append_one(&store, &id, 1, None, "E1").await;
 
-    // Subscribe, read event, save checkpoint, drop.
-    {
+    // Subscribe, read event, capture position, drop.
+    let position = {
         let mut sub_stream = store.subscribe(&id, None).await.unwrap();
         let first_env = timeout(TIMEOUT, sub_stream.next())
             .await
@@ -152,23 +151,18 @@ async fn drop_and_resubscribe_from_checkpoint() {
             .unwrap()
             .unwrap();
         assert_eq!(first_env.version(), Version::new(1).unwrap());
-        store
-            .save(&checkpoint_id, first_env.version())
-            .await
-            .unwrap();
-    }
+        first_env.version()
+    };
+    assert_eq!(position, Version::new(1).unwrap());
 
     // Append more events while subscription is dropped.
     append_one(&store, &id, 2, Version::new(1), "E2").await;
     append_one(&store, &id, 3, Version::new(2), "E3").await;
 
-    // Re-subscribe from saved checkpoint.
-    let checkpoint = store.load(&checkpoint_id).await.unwrap();
-    assert_eq!(checkpoint, Some(Version::new(1).unwrap()));
+    // Re-subscribe from the captured position.
+    let mut stream = store.subscribe(&id, Some(position)).await.unwrap();
 
-    let mut stream = store.subscribe(&id, checkpoint).await.unwrap();
-
-    // Should get events 2 and 3 (after the checkpoint).
+    // Should get events 2 and 3 (after the position).
     let env2 = timeout(TIMEOUT, stream.next())
         .await
         .unwrap()
@@ -241,39 +235,6 @@ async fn subscribe_to_nonexistent_stream_waits() {
         .unwrap();
     assert_eq!(env.event_type(), "E1");
     assert_eq!(env.version(), Version::new(1).unwrap());
-}
-
-#[tokio::test]
-async fn checkpoint_load_unknown_returns_none() {
-    let store = InMemoryStore::new();
-    let unknown = TestId::new("nonexistent-subscription");
-
-    let result = store.load(&unknown).await.unwrap();
-    assert_eq!(result, None);
-}
-
-#[tokio::test]
-async fn checkpoint_save_load_roundtrip() {
-    let store = InMemoryStore::new();
-    let sub_id = TestId::new("my-subscription");
-    let version = Version::new(42).unwrap();
-
-    store.save(&sub_id, version).await.unwrap();
-    let loaded = store.load(&sub_id).await.unwrap();
-
-    assert_eq!(loaded, Some(version));
-}
-
-#[tokio::test]
-async fn checkpoint_save_overwrites() {
-    let store = InMemoryStore::new();
-    let sub_id = TestId::new("my-subscription");
-
-    store.save(&sub_id, Version::new(1).unwrap()).await.unwrap();
-    store.save(&sub_id, Version::new(5).unwrap()).await.unwrap();
-
-    let loaded = store.load(&sub_id).await.unwrap();
-    assert_eq!(loaded, Some(Version::new(5).unwrap()));
 }
 
 /// Subscribe with `from` version beyond current stream head.

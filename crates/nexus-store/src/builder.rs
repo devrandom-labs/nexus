@@ -34,8 +34,8 @@ pub struct NoSnapshot;
 
 /// Snapshot configuration, created by builder methods.
 ///
-/// `SS` is a typed state store — the codec (if needed) is composed inside
-/// the store adapter (e.g., [`CodecStateStore`](crate::state::CodecStateStore)).
+/// `SS` is a typed snapshot store — the codec (if needed) is composed inside
+/// the store adapter (e.g., [`CodecSnapshotStore`](crate::state::CodecSnapshotStore)).
 #[cfg(feature = "snapshot")]
 pub struct WithSnapshot<SS, T> {
     store: SS,
@@ -159,8 +159,9 @@ const DEFAULT_SCHEMA_VERSION: std::num::NonZeroU32 = std::num::NonZeroU32::MIN;
 impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     /// Configure a snapshot store with JSON codec (default).
     ///
-    /// Accepts a byte-level [`StateStore<Vec<u8>>`](state::StateStore) and wraps
-    /// it in [`CodecStateStore`](state::CodecStateStore) with [`JsonCodec`](crate::JsonCodec).
+    /// Accepts a byte-level [`SnapshotStore<Vec<u8>, Version>`](state::SnapshotStore)
+    /// and wraps it in [`CodecSnapshotStore`](state::CodecSnapshotStore) with
+    /// [`JsonCodec`](crate::JsonCodec).
     ///
     /// Pre-fills:
     /// - Trigger: [`EveryNEvents(100)`](state::EveryNEvents)
@@ -184,9 +185,10 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
         S,
         C,
         U,
-        WithSnapshot<state::CodecStateStore<SS, crate::JsonCodec>, state::EveryNEvents>,
+        WithSnapshot<state::CodecSnapshotStore<SS, crate::JsonCodec>, state::EveryNEvents>,
     > {
-        let typed_store = state::CodecStateStore::new(snapshot_store, crate::JsonCodec::default());
+        let typed_store =
+            state::CodecSnapshotStore::new(snapshot_store, crate::JsonCodec::default());
         RepositoryBuilder {
             store: self.store,
             codec: self.codec,
@@ -208,9 +210,9 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
 impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     /// Configure a snapshot store.
     ///
-    /// Accepts a pre-composed typed [`StateStore<S>`](state::StateStore).
+    /// Accepts a pre-composed typed [`SnapshotStore<S, Version>`](state::SnapshotStore).
     /// If your store is byte-level, compose it with
-    /// [`CodecStateStore`](state::CodecStateStore) before passing it here.
+    /// [`CodecSnapshotStore`](state::CodecSnapshotStore) before passing it here.
     ///
     /// Pre-fills:
     /// - Trigger: [`EveryNEvents(100)`](state::EveryNEvents)

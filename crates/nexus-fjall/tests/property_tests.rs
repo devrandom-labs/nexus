@@ -266,17 +266,19 @@ proptest! {
         prop_assert_eq!(decoded, version, "version round-trip failed");
     }
 
-    /// For any (u32, String, Vec<u8>) triple where event_type.len() <= u16::MAX,
+    /// For any (u64, u32, String, Vec<u8>) tuple where event_type.len() <= u16::MAX,
     /// encode_event_value -> decode_event_value is identity.
     #[test]
     fn attack_encoding_event_value_round_trip_any_data(
+        global_seq in any::<u64>(),
         schema_ver in any::<u32>(),
         event_type in "[a-zA-Z_][a-zA-Z0-9_]{0,200}",
         payload in prop::collection::vec(any::<u8>(), 0..1024),
     ) {
         let mut buf = Vec::new();
-        encode_event_value(&mut buf, schema_ver, &event_type, &payload).unwrap();
-        let (dec_sv, dec_et, dec_payload) = decode_event_value(&buf).unwrap();
+        encode_event_value(&mut buf, global_seq, schema_ver, &event_type, &payload).unwrap();
+        let (dec_gs, dec_sv, dec_et, dec_payload) = decode_event_value(&buf).unwrap();
+        prop_assert_eq!(dec_gs, global_seq, "global_seq round-trip failed");
         prop_assert_eq!(dec_sv, schema_ver, "schema_version round-trip failed");
         prop_assert_eq!(dec_et, &event_type, "event_type round-trip failed");
         prop_assert_eq!(dec_payload, payload.as_slice(), "payload round-trip failed");
@@ -328,10 +330,11 @@ fn attack_encoding_event_value_evil_event_types() {
 
     let mut buf = Vec::new();
     for (evil_type, description) in &evil_types {
-        let result = encode_event_value(&mut buf, 1, evil_type, b"test");
+        let result = encode_event_value(&mut buf, 1, 1, evil_type, b"test");
         match result {
             Ok(()) => {
-                let (sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+                let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+                assert_eq!(gs, 1, "global_seq corrupted for: {}", description);
                 assert_eq!(sv, 1, "schema_version corrupted for: {}", description);
                 assert_eq!(
                     decoded_type, *evil_type,
@@ -352,17 +355,17 @@ fn attack_encoding_event_value_evil_event_types() {
 
     // Very long string near u16::MAX bytes
     let long_type = "a".repeat(usize::from(u16::MAX));
-    let result = encode_event_value(&mut buf, 1, &long_type, b"x");
+    let result = encode_event_value(&mut buf, 1, 1, &long_type, b"x");
     assert!(
         result.is_ok(),
         "event_type at exactly u16::MAX bytes must be accepted"
     );
-    let (_, decoded, _) = decode_event_value(&buf).unwrap();
+    let (_, _, decoded, _) = decode_event_value(&buf).unwrap();
     assert_eq!(decoded.len(), usize::from(u16::MAX));
 
     // One byte over u16::MAX must be rejected
     let too_long_type = "a".repeat(usize::from(u16::MAX) + 1);
-    let result = encode_event_value(&mut buf, 1, &too_long_type, b"x");
+    let result = encode_event_value(&mut buf, 1, 1, &too_long_type, b"x");
     assert!(
         result.is_err(),
         "event_type exceeding u16::MAX bytes must be rejected"
