@@ -4,6 +4,7 @@ use crate::store::FjallStore;
 use crate::stream::FjallStream;
 use arrayvec::ArrayString;
 use nexus::{Id, Version};
+use nexus_store::GlobalSeq;
 use nexus_store::PersistedEnvelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::stream::EventStream;
@@ -131,7 +132,9 @@ impl EventStream for FjallSubscriptionStream<'_> {
                     self.inner.prev_version = Some(version_raw);
                 }
 
-                let Ok((schema_version, event_type, payload)) = decode_event_value(value) else {
+                let Ok((global_seq_raw, schema_version, event_type, payload)) =
+                    decode_event_value(value)
+                else {
                     self.inner.poisoned = true;
                     return Err(FjallError::CorruptValue {
                         stream_id: self.label,
@@ -147,9 +150,22 @@ impl EventStream for FjallSubscriptionStream<'_> {
                     });
                 };
 
-                let Ok(envelope) =
-                    PersistedEnvelope::try_new(version, event_type, schema_version, payload, ())
-                else {
+                let Some(global_seq) = GlobalSeq::new(global_seq_raw) else {
+                    self.inner.poisoned = true;
+                    return Err(FjallError::CorruptValue {
+                        stream_id: self.label,
+                        version: Some(version_raw),
+                    });
+                };
+
+                let Ok(envelope) = PersistedEnvelope::try_new(
+                    version,
+                    global_seq,
+                    event_type,
+                    schema_version,
+                    payload,
+                    (),
+                ) else {
                     self.inner.poisoned = true;
                     return Err(FjallError::CorruptValue {
                         stream_id: self.label,

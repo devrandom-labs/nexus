@@ -10,10 +10,10 @@ use crate::state;
 /// Wraps an inner repository (e.g., `EventStore` or `ZeroCopyEventStore`)
 /// and adds transparent snapshot support:
 ///
-/// - **Load:** tries the state store first; on hit with matching schema
-///   version, restores state from snapshot and replays only subsequent events.
-///   On miss or schema mismatch, falls back to full event replay via the
-///   inner repository. Optionally creates a snapshot after a full replay
+/// - **Load:** tries the snapshot store first; on hit with matching schema
+///   version, restores state from the snapshot and replays only subsequent
+///   events. On miss or schema mismatch, falls back to full event replay via
+///   the inner repository. Optionally creates a snapshot after a full replay
 ///   (lazy/on-read snapshotting) if `snapshot_on_read` is enabled.
 ///
 /// - **Save:** delegates event persistence to the inner repository, then
@@ -25,13 +25,13 @@ use crate::state;
 /// zero-cost monomorphization — the compiler inlines `should_persist()`
 /// calls entirely.
 ///
-/// The state store `SS` is generic over the aggregate's state type at the
+/// The snapshot store `SS` is generic over the aggregate's state type at the
 /// `Repository` impl level — the struct itself is agnostic of the state type.
-/// Codec responsibility lives in the state store adapter (e.g.,
-/// [`CodecStateStore`](crate::state::CodecStateStore)).
+/// Codec responsibility lives in the snapshot store adapter (e.g.,
+/// [`CodecSnapshotStore`](crate::state::CodecSnapshotStore)).
 pub struct Snapshotting<R, SS, T> {
     inner: R,
-    state_store: SS,
+    snapshot_store: SS,
     trigger: T,
     schema_version: NonZeroU32,
     snapshot_on_read: bool,
@@ -41,14 +41,14 @@ impl<R, SS, T> Snapshotting<R, SS, T> {
     /// Create a new snapshot-aware repository.
     pub const fn new(
         inner: R,
-        state_store: SS,
+        snapshot_store: SS,
         trigger: T,
         schema_version: NonZeroU32,
         snapshot_on_read: bool,
     ) -> Self {
         Self {
             inner,
-            state_store,
+            snapshot_store,
             trigger,
             schema_version,
             snapshot_on_read,
@@ -62,7 +62,7 @@ where
     A::State: Clone,
     R: Repository<A> + ReplayFrom<A, Error = <R as Repository<A>>::Error>,
     <R as Repository<A>>::Error: From<KernelError>,
-    SS: state::StateStore<A::State>,
+    SS: state::SnapshotStore<A::State, Version>,
     T: state::PersistTrigger,
     EventOf<A>: DomainEvent,
 {
@@ -122,14 +122,13 @@ where
     async fn try_load_from_snapshot<A>(&self, id: &A::Id) -> Option<(AggregateRoot<A>, Version)>
     where
         A: Aggregate,
-        SS: state::StateStore<A::State>,
+        SS: state::SnapshotStore<A::State, Version>,
     {
-        let persisted = self
-            .state_store
-            .load(id, self.schema_version)
+        let (version, typed_state) = self
+            .snapshot_store
+            .hydrate(id, self.schema_version)
             .await
             .ok()??;
-        let (version, _schema, typed_state) = persisted.into_parts();
         let root = AggregateRoot::<A>::restore(id.clone(), typed_state, version);
         let next = version.next()?;
         Some((root, next))
@@ -139,10 +138,16 @@ where
     async fn try_save_snapshot<A>(&self, aggregate: &AggregateRoot<A>, version: Version)
     where
         A: Aggregate,
-        A::State: Clone,
-        SS: state::StateStore<A::State>,
+        SS: state::SnapshotStore<A::State, Version>,
     {
-        let pending = state::State::new(version, self.schema_version, aggregate.state().clone());
-        let _ = self.state_store.save(aggregate.id(), &pending).await;
+        let _ = self
+            .snapshot_store
+            .commit(
+                aggregate.id(),
+                self.schema_version,
+                version,
+                aggregate.state(),
+            )
+            .await;
     }
 }

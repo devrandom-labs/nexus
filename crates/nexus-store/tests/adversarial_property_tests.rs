@@ -71,7 +71,7 @@ use nexus_store::codec::Codec;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::{StoreError, UpcastError};
 use nexus_store::pending_envelope;
-use nexus_store::store::RawEventStore;
+use nexus_store::store::{GlobalSeq, RawEventStore};
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
@@ -335,6 +335,7 @@ proptest! {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = PersistedEnvelope::<()>::new_unchecked(
                 Version::new(version).unwrap(),
+                GlobalSeq::INITIAL,
                 &event_type,
                 0, // ATTACK: schema_version = 0
                 &payload,
@@ -352,6 +353,7 @@ proptest! {
     ) {
         let result = PersistedEnvelope::<()>::try_new(
             Version::new(version).unwrap(),
+            GlobalSeq::INITIAL,
             &event_type,
             0, // ATTACK
             &payload,
@@ -378,6 +380,7 @@ proptest! {
     ) {
         let env = PersistedEnvelope::new_unchecked(
             Version::new(version).unwrap(),
+            GlobalSeq::INITIAL,
             &event_type,
             schema_version,
             &payload,
@@ -1470,19 +1473,19 @@ proptest! {
         if schema_version == 0 {
             // Must panic
             let result = std::panic::catch_unwind(|| {
-                let _ = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), "E", 0, &[], ());
+                let _ = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", 0, &[], ());
             });
             prop_assert!(result.is_err(), "schema_version=0 must panic");
 
             // try_new must return Err
-            let result = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), "E", 0, &[], ());
+            let result = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", 0, &[], ());
             prop_assert!(result.is_err(), "try_new(schema_version=0) must error");
         } else {
             // Must succeed
-            let env = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), "E", schema_version, &[], ());
+            let env = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", schema_version, &[], ());
             prop_assert_eq!(env.schema_version(), schema_version);
 
-            let env = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), "E", schema_version, &[], ());
+            let env = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", schema_version, &[], ());
             prop_assert!(env.is_ok());
             prop_assert_eq!(env.unwrap().schema_version(), schema_version);
         }

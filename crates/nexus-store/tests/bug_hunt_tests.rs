@@ -33,7 +33,7 @@ use nexus_store::InMemoryStoreError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
-use nexus_store::store::RawEventStore;
+use nexus_store::store::{GlobalSeq, RawEventStore};
 use nexus_store::stream::EventStream;
 use std::collections::HashMap;
 use std::fmt;
@@ -104,6 +104,7 @@ impl EventStream for ProbeStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).unwrap(),
+            GlobalSeq::INITIAL,
             &row.1,
             1,
             &row.2,
@@ -358,6 +359,7 @@ fn bug_probe_persisted_envelope_public_constructor() {
     // This compiles — PersistedEnvelope::new_unchecked is fully public
     let forged = PersistedEnvelope::<()>::new_unchecked(
         Version::new(999).unwrap(),
+        GlobalSeq::INITIAL,
         "ForgedEvent",
         1,
         b"malicious payload",

@@ -32,8 +32,9 @@ const EVENT_KEY_VERSION_SIZE: usize = 8;
 /// Size of an encoded stream version value in bytes: `[u64 LE version]`.
 pub const STREAM_VERSION_SIZE: usize = 8;
 
-/// Size of the fixed header in an encoded event value: `[u32 LE schema_version][u16 LE event_type_len]`.
-pub const EVENT_VALUE_HEADER_SIZE: usize = 6;
+/// Size of the fixed header in an encoded event value:
+/// `[u64 LE global_seq][u32 LE schema_version][u16 LE event_type_len]`.
+pub const EVENT_VALUE_HEADER_SIZE: usize = 14;
 
 /// Compute the total size of an event key for a given ID length.
 ///
@@ -132,7 +133,8 @@ pub fn decode_stream_version(value: &[u8]) -> Result<u64, DecodeError> {
     ]))
 }
 
-/// Encode an event value as `[u32 LE schema_version][u16 LE event_type_len][event_type UTF-8][payload]`.
+/// Encode an event value as
+/// `[u64 LE global_seq][u32 LE schema_version][u16 LE event_type_len][event_type UTF-8][payload]`.
 ///
 /// The buffer is cleared and reused (no reallocation if capacity suffices).
 ///
@@ -141,6 +143,7 @@ pub fn decode_stream_version(value: &[u8]) -> Result<u64, DecodeError> {
 /// Returns [`EncodeError::EventTypeTooLong`] if `event_type` exceeds `u16::MAX` bytes.
 pub fn encode_event_value(
     buf: &mut Vec<u8>,
+    global_seq: u64,
     schema_version: u32,
     event_type: &str,
     payload: &[u8],
@@ -157,6 +160,7 @@ pub fn encode_event_value(
     let total_len = EVENT_VALUE_HEADER_SIZE + event_type_len + payload.len();
     buf.reserve(total_len);
 
+    buf.extend_from_slice(&global_seq.to_le_bytes());
     buf.extend_from_slice(&schema_version.to_le_bytes());
 
     // Safety of unwrap alternative: we already checked event_type_len <= u16::MAX above.
@@ -172,14 +176,15 @@ pub fn encode_event_value(
     Ok(())
 }
 
-/// Decode an event value from `[u32 LE schema_version][u16 LE event_type_len][event_type UTF-8][payload]`.
+/// Decode an event value from
+/// `[u64 LE global_seq][u32 LE schema_version][u16 LE event_type_len][event_type UTF-8][payload]`.
 ///
 /// # Errors
 ///
 /// Returns [`DecodeError::ValueTooShort`] if `value` is shorter than the header or
 /// the claimed event-type length, or [`DecodeError::InvalidUtf8`] if the event-type
 /// bytes are not valid UTF-8.
-pub fn decode_event_value(value: &[u8]) -> Result<(u32, &str, &[u8]), DecodeError> {
+pub fn decode_event_value(value: &[u8]) -> Result<(u64, u32, &str, &[u8]), DecodeError> {
     if value.len() < EVENT_VALUE_HEADER_SIZE {
         return Err(DecodeError::ValueTooShort {
             min: EVENT_VALUE_HEADER_SIZE,
@@ -187,8 +192,11 @@ pub fn decode_event_value(value: &[u8]) -> Result<(u32, &str, &[u8]), DecodeErro
         });
     }
 
-    let schema_version = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
-    let event_type_len = u16::from_le_bytes([value[4], value[5]]);
+    let global_seq = u64::from_le_bytes([
+        value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7],
+    ]);
+    let schema_version = u32::from_le_bytes([value[8], value[9], value[10], value[11]]);
+    let event_type_len = u16::from_le_bytes([value[12], value[13]]);
     let event_type_len_usize = usize::from(event_type_len);
 
     let event_type_end = EVENT_VALUE_HEADER_SIZE + event_type_len_usize;
@@ -203,7 +211,7 @@ pub fn decode_event_value(value: &[u8]) -> Result<(u32, &str, &[u8]), DecodeErro
     let event_type = std::str::from_utf8(event_type_bytes).map_err(DecodeError::InvalidUtf8)?;
     let payload = &value[event_type_end..];
 
-    Ok((schema_version, event_type, payload))
+    Ok((global_seq, schema_version, event_type, payload))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -337,13 +345,16 @@ mod tests {
     #[test]
     fn event_value_round_trips() {
         let mut buf = Vec::new();
+        let global_seq: u64 = 42;
         let schema_version: u32 = 3;
         let event_type = "UserCreated";
         let payload = b"some-json-bytes";
 
-        encode_event_value(&mut buf, schema_version, event_type, payload).unwrap();
-        let (decoded_sv, decoded_et, decoded_payload) = decode_event_value(&buf).unwrap();
+        encode_event_value(&mut buf, global_seq, schema_version, event_type, payload).unwrap();
+        let (decoded_gs, decoded_sv, decoded_et, decoded_payload) =
+            decode_event_value(&buf).unwrap();
 
+        assert_eq!(decoded_gs, global_seq);
         assert_eq!(decoded_sv, schema_version);
         assert_eq!(decoded_et, event_type);
         assert_eq!(decoded_payload, payload);
@@ -352,8 +363,9 @@ mod tests {
     #[test]
     fn event_value_empty_payload() {
         let mut buf = Vec::new();
-        encode_event_value(&mut buf, 1, "Empty", b"").unwrap();
-        let (sv, et, payload) = decode_event_value(&buf).unwrap();
+        encode_event_value(&mut buf, 7, 1, "Empty", b"").unwrap();
+        let (gs, sv, et, payload) = decode_event_value(&buf).unwrap();
+        assert_eq!(gs, 7);
         assert_eq!(sv, 1);
         assert_eq!(et, "Empty");
         assert!(payload.is_empty());
@@ -361,15 +373,17 @@ mod tests {
 
     #[test]
     fn event_value_decode_rejects_truncated_header() {
-        let short = [0u8; 4]; // less than EVENT_VALUE_HEADER_SIZE (6)
+        let short = [0u8; 4]; // less than EVENT_VALUE_HEADER_SIZE (14)
         let result = decode_event_value(&short);
         assert!(result.is_err());
     }
 
     #[test]
     fn event_value_decode_rejects_truncated_event_type() {
-        // Build a header that claims event_type_len = 100 but provide no type bytes
+        // Build a valid 14-byte header that claims event_type_len = 100 but
+        // provide no type bytes.
         let mut buf = Vec::new();
+        buf.extend_from_slice(&1u64.to_le_bytes()); // global_seq
         buf.extend_from_slice(&1u32.to_le_bytes()); // schema_version
         buf.extend_from_slice(&100u16.to_le_bytes()); // event_type_len = 100
         // No event_type bytes follow
@@ -382,15 +396,16 @@ mod tests {
         let mut buf = Vec::new();
 
         // First encode
-        encode_event_value(&mut buf, 1, "First", b"aaa").unwrap();
+        encode_event_value(&mut buf, 1, 1, "First", b"aaa").unwrap();
         let cap_after_first = buf.capacity();
 
         // Second encode reuses the buffer (clear, no realloc if capacity suffices)
-        encode_event_value(&mut buf, 2, "Sec", b"bb").unwrap();
+        encode_event_value(&mut buf, 2, 2, "Sec", b"bb").unwrap();
         assert_eq!(buf.capacity(), cap_after_first);
 
         // Verify the second encode is correct (not contaminated by first)
-        let (sv, et, payload) = decode_event_value(&buf).unwrap();
+        let (gs, sv, et, payload) = decode_event_value(&buf).unwrap();
+        assert_eq!(gs, 2);
         assert_eq!(sv, 2);
         assert_eq!(et, "Sec");
         assert_eq!(payload, b"bb");

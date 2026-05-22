@@ -1,4 +1,6 @@
+use core::fmt;
 use std::future::Future;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use nexus::{Id, Version};
@@ -92,6 +94,15 @@ pub trait RawEventStore<M = ()>: Send + Sync {
     /// `expected_version + 1`. Implementations **must** reject batches
     /// where versions are out of order, have gaps, or contain duplicates.
     /// Accepting malformed batches corrupts the event stream.
+    ///
+    /// # Global sequence
+    ///
+    /// Each appended event is assigned a [`GlobalSeq`] — a store-local
+    /// counter that increases across *all* streams in append order. The
+    /// sequence **must** be monotonic but is **not** required to be
+    /// gapless: an adapter may skip values (e.g. after an aborted append),
+    /// and readers must tolerate gaps. The assigned value is surfaced on
+    /// the read path via `PersistedEnvelope::global_seq`.
     fn append(
         &self,
         id: &impl Id,
@@ -182,60 +193,61 @@ impl<T: Subscription<M> + Sync, M: 'static> Subscription<M> for &T {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CheckpointStore — durable subscription positions
+// GlobalSeq — store-local global sequence number
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Persists subscription positions for resume-after-restart.
+/// A store-local global sequence number.
 ///
-/// A checkpoint records how far a subscription has processed events
-/// in a stream. On restart, the subscriber loads its checkpoint and
-/// passes it as `from` to [`Subscription::subscribe`].
+/// Every event a producer appends — across *all* of its streams — receives
+/// the next `GlobalSeq` at append time. It is the position an all-streams
+/// subscription resumes from, the same way [`Version`] is the position
+/// within a single stream.
 ///
-/// # Contract
+/// The sequence is **monotonic but not gapless**: an aborted append may
+/// burn values, so consumers must tolerate gaps and never assume
+/// `next == prev + 1`.
 ///
-/// - `load` returns `None` for unknown subscription IDs (not an error).
-/// - `save` overwrites the previous checkpoint for the given ID.
-/// - Implementations must be durable — a saved checkpoint must survive
-///   process restart.
-pub trait CheckpointStore {
-    /// The error type for checkpoint operations.
-    type Error: core::error::Error + Send + Sync + 'static;
+/// `GlobalSeq` is a store artifact, not a domain fact. It is local to one
+/// producer's store and is not portable across producers — two stores each
+/// assign their own independent sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GlobalSeq(NonZeroU64);
 
-    /// Load the last saved checkpoint for a subscription.
+impl GlobalSeq {
+    /// The first sequence number (1).
+    pub const INITIAL: Self = Self(NonZeroU64::MIN);
+
+    /// The next sequence number.
     ///
-    /// Returns `None` if no checkpoint has been saved for this ID.
-    fn load(
-        &self,
-        subscription_id: &impl Id,
-    ) -> impl Future<Output = Result<Option<Version>, Self::Error>> + Send + '_;
-
-    /// Save (overwrite) the checkpoint for a subscription.
-    fn save(
-        &self,
-        subscription_id: &impl Id,
-        version: Version,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send + '_;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Delegation implementation — share via reference
-// ═══════════════════════════════════════════════════════════════════════════
-
-impl<T: CheckpointStore> CheckpointStore for &T {
-    type Error = T::Error;
-
-    fn load(
-        &self,
-        subscription_id: &impl Id,
-    ) -> impl Future<Output = Result<Option<Version>, Self::Error>> + Send + '_ {
-        (**self).load(subscription_id)
+    /// Returns `None` if the sequence is `u64::MAX` (overflow).
+    #[must_use]
+    pub const fn next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(n) => Some(Self(n)),
+            None => None,
+        }
     }
 
-    fn save(
-        &self,
-        subscription_id: &impl Id,
-        version: Version,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send + '_ {
-        (**self).save(subscription_id, version)
+    /// The underlying integer value. Always >= 1.
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
+        self.0.get()
+    }
+
+    /// Construct a `GlobalSeq` from a `u64`.
+    ///
+    /// Returns `None` if `v` is 0. Mirrors [`NonZeroU64::new`].
+    #[must_use]
+    pub const fn new(v: u64) -> Option<Self> {
+        match NonZeroU64::new(v) {
+            Some(nz) => Some(Self(nz)),
+            None => None,
+        }
+    }
+}
+
+impl fmt::Display for GlobalSeq {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }

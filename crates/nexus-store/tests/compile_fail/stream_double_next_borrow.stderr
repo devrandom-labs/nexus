@@ -1,11 +1,11 @@
 error[E0499]: cannot borrow `stream` as mutable more than once at a time
-  --> tests/compile_fail/stream_double_next_borrow.rs:49:18
+  --> tests/compile_fail/stream_double_next_borrow.rs:51:18
    |
-47 |     let env = stream.next().await.unwrap().unwrap();
+49 |     let env = stream.next().await.unwrap().unwrap();
    |               ------ first mutable borrow occurs here
-48 |     // Holding `env` here aliases the cursor — calling `next()` again must fail.
-49 |     let _again = stream.next().await;
+50 |     // Holding `env` here aliases the cursor — calling `next()` again must fail.
+51 |     let _again = stream.next().await;
    |                  ^^^^^^ second mutable borrow occurs here
-50 |     // Use `env` after the second `next()` to force the borrow to overlap.
-51 |     let _ = env.payload();
+52 |     // Use `env` after the second `next()` to force the borrow to overlap.
+53 |     let _ = env.payload();
    |             --- first borrow later used here

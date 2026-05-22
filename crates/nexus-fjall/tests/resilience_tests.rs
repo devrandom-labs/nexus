@@ -41,6 +41,7 @@ use std::sync::Arc;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{decode_event_value, encode_event_value};
+use nexus_store::GlobalSeq;
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
@@ -672,13 +673,14 @@ async fn attack_concurrent_append_same_stream_conflict() {
 fn attack_encoding_event_type_exactly_u16_max_bytes() {
     let event_type = "a".repeat(usize::from(u16::MAX));
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 1, &event_type, b"payload");
+    let result = encode_event_value(&mut buf, 7, 1, &event_type, b"payload");
     assert!(
         result.is_ok(),
         "event type at exactly u16::MAX bytes should succeed"
     );
 
-    let (sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    assert_eq!(gs, 7);
     assert_eq!(sv, 1);
     assert_eq!(decoded_type.len(), usize::from(u16::MAX));
     assert_eq!(payload, b"payload");
@@ -688,7 +690,7 @@ fn attack_encoding_event_type_exactly_u16_max_bytes() {
 fn attack_encoding_event_type_one_over_u16_max() {
     let event_type = "a".repeat(usize::from(u16::MAX) + 1);
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 1, &event_type, b"payload");
+    let result = encode_event_value(&mut buf, 1, 1, &event_type, b"payload");
     assert!(
         result.is_err(),
         "event type over u16::MAX must fail with EncodeError"
@@ -698,13 +700,14 @@ fn attack_encoding_event_type_one_over_u16_max() {
 #[test]
 fn attack_encoding_empty_event_type() {
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 1, "", b"payload");
+    let result = encode_event_value(&mut buf, 3, 1, "", b"payload");
     assert!(
         result.is_ok(),
         "empty event type should encode successfully"
     );
 
-    let (sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    assert_eq!(gs, 3);
     assert_eq!(sv, 1);
     assert_eq!(decoded_type, "");
     assert_eq!(payload, b"payload");
@@ -713,10 +716,11 @@ fn attack_encoding_empty_event_type() {
 #[test]
 fn attack_encoding_empty_payload() {
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 1, "Test", b"");
+    let result = encode_event_value(&mut buf, 5, 1, "Test", b"");
     assert!(result.is_ok(), "empty payload should encode successfully");
 
-    let (sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    assert_eq!(gs, 5);
     assert_eq!(sv, 1);
     assert_eq!(decoded_type, "Test");
     assert!(payload.is_empty());
@@ -726,8 +730,8 @@ fn attack_encoding_empty_payload() {
 fn attack_encoding_null_bytes_in_payload() {
     let evil_payload = b"\x00\x00\x00\x00\x00";
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, "Test", evil_payload).unwrap();
-    let (_, _, payload) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, 1, "Test", evil_payload).unwrap();
+    let (_, _, _, payload) = decode_event_value(&buf).unwrap();
     assert_eq!(payload, evil_payload, "null bytes in payload must survive");
 }
 
@@ -735,8 +739,8 @@ fn attack_encoding_null_bytes_in_payload() {
 fn attack_encoding_schema_version_boundaries() {
     // Test schema_version = 0 (should encode fine, but PersistedEnvelope::try_new rejects it)
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 0, "Test", b"data").unwrap();
-    let (sv, _, _) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, 0, "Test", b"data").unwrap();
+    let (_, sv, _, _) = decode_event_value(&buf).unwrap();
     assert_eq!(
         sv, 0,
         "schema_version=0 should round-trip in encoding layer"
@@ -744,8 +748,8 @@ fn attack_encoding_schema_version_boundaries() {
 
     // Test schema_version = u32::MAX
     buf.clear();
-    encode_event_value(&mut buf, u32::MAX, "Test", b"data").unwrap();
-    let (sv, _, _) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, u32::MAX, "Test", b"data").unwrap();
+    let (_, sv, _, _) = decode_event_value(&buf).unwrap();
     assert_eq!(
         sv,
         u32::MAX,
@@ -758,8 +762,8 @@ fn attack_encoding_large_payload() {
     // 1MB payload
     let large = vec![0xABu8; 1_048_576];
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, "Big", &large).unwrap();
-    let (_, _, payload) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, 1, "Big", &large).unwrap();
+    let (_, _, _, payload) = decode_event_value(&buf).unwrap();
     assert_eq!(
         payload.len(),
         1_048_576,
@@ -848,6 +852,83 @@ async fn attack_empty_batch_does_not_advance_version() {
 
     let count = count_events(&store, &tid("empty-batch")).await;
     assert_eq!(count, 2, "should have exactly 2 events after empty batch");
+}
+
+// ============================================================================
+// CATEGORY K2: Global sequence assignment across appends and streams
+// ============================================================================
+
+/// `FjallStore::append` must assign each event a store-global `GlobalSeq` that
+/// increases monotonically across events within a batch, across separate
+/// appends, and across appends to *different* streams. The sequence starts at
+/// 1. Readers surface the assigned value via `PersistedEnvelope::global_seq()`.
+#[tokio::test]
+async fn append_assigns_monotonic_global_seq_across_streams() {
+    let (store, _dir) = temp_store();
+
+    async fn read_global_seqs(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
+        let mut stream = store
+            .read_stream(stream_id, Version::INITIAL)
+            .await
+            .unwrap();
+        let mut seqs = Vec::new();
+        while let Some(env) = stream.next().await.unwrap() {
+            seqs.push(env.global_seq().as_u64());
+        }
+        seqs
+    }
+
+    // Append 1: two events to stream "a" -> global_seq 1, 2.
+    store
+        .append(
+            &tid("a"),
+            None,
+            &[make_envelope(1, "A1", b"a1"), make_envelope(2, "A2", b"a2")],
+        )
+        .await
+        .unwrap();
+
+    // Append 2: one event to a different stream "b" -> global_seq 3.
+    store
+        .append(&tid("b"), None, &[make_envelope(1, "B1", b"b1")])
+        .await
+        .unwrap();
+
+    // Append 3: continue stream "a" -> global_seq 4, 5.
+    store
+        .append(
+            &tid("a"),
+            Version::new(2),
+            &[make_envelope(3, "A3", b"a3"), make_envelope(4, "A4", b"a4")],
+        )
+        .await
+        .unwrap();
+
+    let seqs_a = read_global_seqs(&store, &tid("a")).await;
+    let seqs_b = read_global_seqs(&store, &tid("b")).await;
+
+    // Stream "a" got events at append positions 1,2 then 4,5.
+    assert_eq!(
+        seqs_a,
+        vec![1, 2, 4, 5],
+        "stream a global_seqs must match append order"
+    );
+    // Stream "b" got the single event between a's two appends.
+    assert_eq!(
+        seqs_b,
+        vec![3],
+        "stream b global_seq must be assigned between a's appends"
+    );
+
+    // Every assigned global_seq across the whole store is unique and strictly
+    // increasing in append order: 1,2,3,4,5.
+    let mut all: Vec<u64> = seqs_a.iter().chain(seqs_b.iter()).copied().collect();
+    all.sort_unstable();
+    assert_eq!(
+        all,
+        vec![1, 2, 3, 4, 5],
+        "global_seq must be a contiguous monotonic sequence starting at 1"
+    );
 }
 
 // ============================================================================
@@ -998,7 +1079,14 @@ fn attack_schema_version_zero_rejected_by_type_system() {
     // NonZeroU32::new(0) returns None — 0 is structurally unrepresentable
     assert!(NonZeroU32::new(0).is_none(), "NonZeroU32 must reject 0");
     // And try_new on the read path still rejects 0
-    let result = nexus_store::PersistedEnvelope::try_new(Version::INITIAL, "E", 0, b"", ());
+    let result = nexus_store::PersistedEnvelope::try_new(
+        Version::INITIAL,
+        GlobalSeq::INITIAL,
+        "E",
+        0,
+        b"",
+        (),
+    );
     assert!(
         result.is_err(),
         "PersistedEnvelope::try_new must reject schema_version=0"

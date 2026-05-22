@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use nexus::Version;
 
 use crate::error::InvalidSchemaVersion;
+use crate::store::GlobalSeq;
 
 // =============================================================================
 // PendingEnvelope — typestate builder ensures compile-time valid construction
@@ -185,6 +186,7 @@ pub const fn pending_envelope(version: Version) -> WithVersion {
 #[derive(Debug)]
 pub struct PersistedEnvelope<'a, M = ()> {
     version: Version,
+    global_seq: GlobalSeq,
     event_type: &'a str,
     schema_version: u32,
     payload: &'a [u8],
@@ -207,6 +209,7 @@ impl<'a, M> PersistedEnvelope<'a, M> {
     )]
     pub const fn new_unchecked(
         version: Version,
+        global_seq: GlobalSeq,
         event_type: &'a str,
         schema_version: u32,
         payload: &'a [u8],
@@ -218,6 +221,7 @@ impl<'a, M> PersistedEnvelope<'a, M> {
         );
         Self {
             version,
+            global_seq,
             event_type,
             schema_version,
             payload,
@@ -239,6 +243,7 @@ impl<'a, M> PersistedEnvelope<'a, M> {
     )]
     pub fn try_new(
         version: Version,
+        global_seq: GlobalSeq,
         event_type: &'a str,
         schema_version: u32,
         payload: &'a [u8],
@@ -249,6 +254,7 @@ impl<'a, M> PersistedEnvelope<'a, M> {
         }
         Ok(Self {
             version,
+            global_seq,
             event_type,
             schema_version,
             payload,
@@ -260,6 +266,14 @@ impl<'a, M> PersistedEnvelope<'a, M> {
     #[must_use]
     pub const fn version(&self) -> Version {
         self.version
+    }
+
+    /// The store-global sequence number assigned to this event at append time.
+    ///
+    /// Monotonic across all streams, but not gapless — see [`GlobalSeq`].
+    #[must_use]
+    pub const fn global_seq(&self) -> GlobalSeq {
+        self.global_seq
     }
 
     /// The event type name.

@@ -10,7 +10,7 @@ use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
-use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
+use nexus_store::store::{RawEventStore, Subscription};
 use std::fmt::Write;
 use std::path::Path;
 use tokio::sync::Notify;
@@ -23,13 +23,9 @@ fn reason_label(value: &impl std::fmt::Display) -> ArrayString<128> {
     buf
 }
 
-/// Format a lossy UTF-8 representation into a stack-allocated label,
-/// silently truncating at 64 bytes on a char boundary.
-fn lossy_label(bytes: &[u8]) -> ArrayString<64> {
-    let mut buf = ArrayString::<64>::new();
-    let _ = write!(buf, "{}", String::from_utf8_lossy(bytes));
-    buf
-}
+/// The single key under which the store-global sequence counter is kept
+/// in the `global` partition.
+const GLOBAL_SEQ_KEY: &[u8] = b"global_seq";
 
 /// Fjall-backed event store.
 ///
@@ -37,6 +33,7 @@ fn lossy_label(bytes: &[u8]) -> ArrayString<64> {
 /// ID bytes to a version counter for optimistic concurrency, `events`
 /// stores event rows keyed by `[u16 BE id_len][id_bytes][u64 BE version]`.
 ///
+/// The `global` partition holds the store-wide global sequence counter.
 /// When the `snapshot` feature is enabled, an additional `snapshots`
 /// partition is available for storing aggregate snapshots.
 ///
@@ -47,7 +44,7 @@ pub struct FjallStore {
     pub(crate) events: fjall::SingleWriterTxKeyspace,
     #[cfg(feature = "snapshot")]
     pub(crate) snapshots: fjall::SingleWriterTxKeyspace,
-    pub(crate) checkpoints: fjall::SingleWriterTxKeyspace,
+    pub(crate) global: fjall::SingleWriterTxKeyspace,
     pub(crate) notify: Notify,
 }
 
@@ -141,9 +138,33 @@ impl RawEventStore for FjallStore {
             }
         }
 
-        // Write each envelope into the events partition.
+        // Read the current store-global sequence counter (monotonic, shared
+        // across all streams). Absent key = no events appended yet.
+        let current_global = match tx
+            .get(&self.global, GLOBAL_SEQ_KEY)
+            .map_err(|e| AppendError::Store(FjallError::Io(e)))?
+        {
+            Some(bytes) => {
+                let raw: [u8; 8] = bytes.as_ref().try_into().map_err(|_| {
+                    AppendError::Store(FjallError::CorruptMeta {
+                        stream_id: id.to_label(),
+                    })
+                })?;
+                u64::from_le_bytes(raw)
+            }
+            None => 0,
+        };
+
+        // Write each envelope into the events partition, stamping each with
+        // the next GlobalSeq. The sequence is monotonic; gaps are permitted.
         let mut value_buf = Vec::new();
-        for env in envelopes {
+        for (i, env) in envelopes.iter().enumerate() {
+            let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
+            let global_seq = current_global
+                .checked_add(1)
+                .and_then(|v| v.checked_add(i_u64))
+                .ok_or(AppendError::Store(FjallError::GlobalSeqOverflow))?;
+
             let key = encode_event_key(id_bytes, env.version().as_u64()).map_err(|e| {
                 AppendError::Store(FjallError::InvalidInput {
                     stream_id: id.to_label(),
@@ -153,6 +174,7 @@ impl RawEventStore for FjallStore {
             })?;
             encode_event_value(
                 &mut value_buf,
+                global_seq,
                 env.schema_version(),
                 env.event_type(),
                 env.payload(),
@@ -166,6 +188,14 @@ impl RawEventStore for FjallStore {
             })?;
             tx.insert(&self.events, &key, Slice::from(&*value_buf));
         }
+
+        // Advance the global counter by the batch size, in the same
+        // transaction as the event writes — counter and events commit together.
+        let batch_len = u64::try_from(envelopes.len()).unwrap_or(u64::MAX);
+        let new_global = current_global
+            .checked_add(batch_len)
+            .ok_or(AppendError::Store(FjallError::GlobalSeqOverflow))?;
+        tx.insert(&self.global, GLOBAL_SEQ_KEY, new_global.to_le_bytes());
 
         // Update stream version.
         let new_version = envelopes
@@ -250,33 +280,26 @@ impl RawEventStore for FjallStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// StateStore<Vec<u8>> implementation (snapshot storage)
+// SnapshotStore<Vec<u8>, Version> implementation
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
     use super::*;
     use crate::encoding::{decode_snapshot_value, encode_snapshot_value};
-    use nexus_store::state::{State, StateStore};
+    use nexus_store::state::SnapshotStore;
     use std::num::NonZeroU32;
 
-    impl StateStore<Vec<u8>> for FjallStore {
+    impl SnapshotStore<Vec<u8>, Version> for FjallStore {
         type Error = FjallError;
 
-        async fn load(
+        async fn hydrate(
             &self,
             id: &impl Id,
-            expected_schema_version: NonZeroU32,
-        ) -> Result<Option<State<Vec<u8>>>, FjallError> {
-            let id_bytes = id.as_ref();
-
-            // Check if the stream exists.
-            if self.streams.get(id_bytes)?.is_none() {
-                return Ok(None);
-            }
-
+            schema_version: NonZeroU32,
+        ) -> Result<Option<(Version, Vec<u8>)>, FjallError> {
             // Snapshot key is the ID bytes directly.
-            let Some(bytes) = self.snapshots.get(id_bytes)? else {
+            let Some(bytes) = self.snapshots.get(id.as_ref())? else {
                 return Ok(None);
             };
 
@@ -286,9 +309,8 @@ mod snapshot_impl {
                     version: None,
                 })?;
 
-            // Filter by schema version before constructing the state
-            // (avoids cloning payload bytes for stale snapshots).
-            if schema_version_raw != expected_schema_version.get() {
+            // Schema mismatch → treat as absent (avoids cloning a stale payload).
+            if schema_version_raw != schema_version.get() {
                 return Ok(None);
             }
 
@@ -297,53 +319,20 @@ mod snapshot_impl {
                 version: None,
             })?;
 
-            Ok(Some(State::new(
-                version,
-                expected_schema_version,
-                payload.to_vec(),
-            )))
+            Ok(Some((version, payload.to_vec())))
         }
 
-        async fn save(&self, id: &impl Id, state: &State<Vec<u8>>) -> Result<(), FjallError> {
-            let id_bytes = id.as_ref();
-
-            // Check if stream exists — can't snapshot an aggregate with no events.
-            let mut tx = self.db.write_tx();
-            if tx
-                .get(&self.streams, id_bytes)
-                .map_err(FjallError::Io)?
-                .is_none()
-            {
-                return Ok(());
-            }
-
+        async fn commit(
+            &self,
+            id: &impl Id,
+            schema_version: NonZeroU32,
+            position: Version,
+            state: &Vec<u8>,
+        ) -> Result<(), FjallError> {
             let mut buf = Vec::new();
-            encode_snapshot_value(
-                &mut buf,
-                state.schema_version().get(),
-                state.version().as_u64(),
-                state.state(),
-            );
-            tx.insert(&self.snapshots, id_bytes, fjall::Slice::from(&*buf));
-
-            tx.commit().map_err(FjallError::Io)?;
-            Ok(())
-        }
-
-        async fn delete(&self, id: &impl Id) -> Result<(), FjallError> {
-            let id_bytes = id.as_ref();
-            let mut tx = self.db.write_tx();
-
-            if tx
-                .get(&self.streams, id_bytes)
-                .map_err(FjallError::Io)?
-                .is_none()
-            {
-                return Ok(());
-            }
-
-            tx.remove(&self.snapshots, id_bytes);
-            tx.commit().map_err(FjallError::Io)?;
+            encode_snapshot_value(&mut buf, schema_version.get(), position.as_u64(), state);
+            self.snapshots
+                .insert(id.as_ref(), fjall::Slice::from(&*buf))?;
             Ok(())
         }
     }
@@ -372,58 +361,6 @@ impl Subscription<()> for FjallStore {
         Ok(FjallSubscriptionStream::new(
             self, owned_id, label, inner, from,
         ))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CheckpointStore implementation
-// ═══════════════════════════════════════════════════════════════════════════
-
-impl CheckpointStore for FjallStore {
-    type Error = FjallError;
-
-    fn load(
-        &self,
-        subscription_id: &impl Id,
-    ) -> impl std::future::Future<Output = Result<Option<Version>, FjallError>> + Send + '_ {
-        let key: Vec<u8> = subscription_id.as_ref().to_vec();
-        async move {
-            let Some(bytes) = self.checkpoints.get(&key)? else {
-                return Ok(None);
-            };
-            // Value: u64 big-endian (8 bytes)
-            let raw_bytes: [u8; 8] =
-                bytes
-                    .as_ref()
-                    .try_into()
-                    .map_err(|_| FjallError::CorruptValue {
-                        stream_id: lossy_label(&key),
-                        version: None,
-                    })?;
-            let raw = u64::from_be_bytes(raw_bytes);
-            Version::new(raw).map_or_else(
-                || {
-                    Err(FjallError::CorruptValue {
-                        stream_id: lossy_label(&key),
-                        version: Some(raw),
-                    })
-                },
-                |v| Ok(Some(v)),
-            )
-        }
-    }
-
-    fn save(
-        &self,
-        subscription_id: &impl Id,
-        version: Version,
-    ) -> impl std::future::Future<Output = Result<(), FjallError>> + Send + '_ {
-        let key: Vec<u8> = subscription_id.as_ref().to_vec();
-        async move {
-            self.checkpoints
-                .insert(&key, version.as_u64().to_be_bytes())?;
-            Ok(())
-        }
     }
 }
 
