@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::future::Future;
 use std::num::{NonZeroU32, NonZeroU64};
 
@@ -6,129 +5,89 @@ use nexus::{Id, Version};
 
 use crate::codec::Codec;
 
-/// Versioned state payload — used for both read and write paths.
-///
-/// Generic over `S` — the adapter decides serialization format.
-/// For byte-level adapters (fjall): `State<Vec<u8>>`.
-/// For typed adapters (postgres): `State<MyDomainState>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct State<S> {
-    version: Version,
-    schema_version: NonZeroU32,
-    payload: S,
-}
-
-impl<S> State<S> {
-    #[must_use]
-    pub const fn new(version: Version, schema_version: NonZeroU32, payload: S) -> Self {
-        Self {
-            version,
-            schema_version,
-            payload,
-        }
-    }
-
-    #[must_use]
-    pub const fn version(&self) -> Version {
-        self.version
-    }
-
-    #[must_use]
-    pub const fn schema_version(&self) -> NonZeroU32 {
-        self.schema_version
-    }
-
-    #[must_use]
-    pub const fn state(&self) -> &S {
-        &self.payload
-    }
-
-    #[must_use]
-    pub fn into_parts(self) -> (Version, NonZeroU32, S) {
-        (self.version, self.schema_version, self.payload)
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-// StateStore<S> — versioned state persistence trait
+// SnapshotStore<S, P> — atomic state + position persistence
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Versioned state persistence trait.
+/// Atomic persistence of a snapshot — derived state plus the position it
+/// was folded up to.
 ///
-/// Unified trait for both projection state and aggregate snapshots.
-/// Generic over `S` — the adapter decides how to serialize.
+/// One trait, two callers:
+/// - aggregate snapshots — the aggregate's state, at its `Version`.
+/// - projections — the projection's state, at its position.
 ///
-/// `()` is the no-op implementation: `load` returns `None`,
-/// `save` and `delete` silently discard.
-pub trait StateStore<S>: Send + Sync {
+/// State and position are saved and loaded *together*. A half-write
+/// (state without position, or position without state) is impossible:
+/// the trait exposes only the two *combined* operations, never "save
+/// state alone". Atomicity itself is the adapter's responsibility — it
+/// owns both the state and position storage and commits them in one
+/// transaction.
+///
+/// Generic over the position type `P` so one trait serves a single
+/// stream (`P = Version`) and a multi-stream, single-producer projection
+/// (`P = GlobalSeq`).
+pub trait SnapshotStore<S, P>: Send + Sync {
     /// Adapter-specific error type.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: core::error::Error + Send + Sync + 'static;
 
-    /// Load persisted state, filtering by schema version.
+    /// Load the saved state and position from a single consistent snapshot.
     ///
-    /// Returns `None` if no state exists or schema version mismatches.
-    fn load(
+    /// Returns `None` if nothing has been saved for `id`, or if the saved
+    /// state's schema version does not match `schema_version`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` if the underlying store fails to read.
+    fn hydrate(
         &self,
         id: &impl Id,
         schema_version: NonZeroU32,
-    ) -> impl Future<Output = Result<Option<State<S>>, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Option<(P, S)>, Self::Error>> + Send;
 
-    /// Persist state (overwrites existing).
-    fn save(
+    /// Save state and position together, in a single transaction.
+    ///
+    /// Either both are durably stored, or neither is.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` if the underlying store fails to commit.
+    fn commit(
         &self,
         id: &impl Id,
-        state: &State<S>,
+        schema_version: NonZeroU32,
+        position: P,
+        state: &S,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Delete persisted state (idempotent).
-    fn delete(&self, id: &impl Id) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Delegation implementation — share via reference
 // ═══════════════════════════════════════════════════════════════════════════
 
-impl<S: Send + Sync, T: StateStore<S>> StateStore<S> for &T {
+impl<S, P, T> SnapshotStore<S, P> for &T
+where
+    S: Send + Sync,
+    P: Send,
+    T: SnapshotStore<S, P>,
+{
     type Error = T::Error;
 
-    async fn load(
+    fn hydrate(
         &self,
         id: &impl Id,
         schema_version: NonZeroU32,
-    ) -> Result<Option<State<S>>, Self::Error> {
-        (**self).load(id, schema_version).await
+    ) -> impl Future<Output = Result<Option<(P, S)>, Self::Error>> + Send {
+        (**self).hydrate(id, schema_version)
     }
 
-    async fn save(&self, id: &impl Id, state: &State<S>) -> Result<(), Self::Error> {
-        (**self).save(id, state).await
-    }
-
-    async fn delete(&self, id: &impl Id) -> Result<(), Self::Error> {
-        (**self).delete(id).await
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// No-op implementation — state persistence disabled
-// ═══════════════════════════════════════════════════════════════════════════
-
-impl<S: Send + Sync> StateStore<S> for () {
-    type Error = Infallible;
-
-    async fn load(
+    fn commit(
         &self,
-        _id: &impl Id,
-        _schema_version: NonZeroU32,
-    ) -> Result<Option<State<S>>, Infallible> {
-        Ok(None)
-    }
-
-    async fn save(&self, _id: &impl Id, _state: &State<S>) -> Result<(), Infallible> {
-        Ok(())
-    }
-
-    async fn delete(&self, _id: &impl Id) -> Result<(), Infallible> {
-        Ok(())
+        id: &impl Id,
+        schema_version: NonZeroU32,
+        position: P,
+        state: &S,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        (**self).commit(id, schema_version, position, state)
     }
 }
 
@@ -200,91 +159,82 @@ impl PersistTrigger for AfterEventTypes {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CodecStateStore<SS, C> — byte-level <-> typed bridge via Codec<S>
+// CodecSnapshotStore<SS, C> — byte-level <-> typed bridge via Codec<S>
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Adapter that bridges a byte-level [`StateStore<Vec<u8>>`] to a typed
-/// [`StateStore<S>`] by encoding/decoding through a [`Codec<S>`].
+/// Adapter that bridges a byte-level [`SnapshotStore<Vec<u8>, P>`] to a typed
+/// [`SnapshotStore<S, P>`] by encoding/decoding through a [`Codec<S>`].
 ///
 /// Use this when your storage backend works with raw bytes (e.g., fjall)
-/// but consumers need typed state.
-///
-/// # Example
-///
-/// ```ignore
-/// let byte_store: impl StateStore<Vec<u8>> = fjall_store;
-/// let typed_store = CodecStateStore::new(byte_store, JsonCodec::default());
-/// // typed_store: impl StateStore<MyState>
-/// ```
-pub struct CodecStateStore<SS, C> {
+/// but consumers need typed state. The position `P` is opaque to the
+/// bridge — it passes through untouched.
+pub struct CodecSnapshotStore<SS, C> {
     store: SS,
     codec: C,
 }
 
-impl<SS, C> CodecStateStore<SS, C> {
-    /// Create a new codec-bridged state store.
+impl<SS, C> CodecSnapshotStore<SS, C> {
+    /// Create a new codec-bridged snapshot store.
     #[must_use]
     pub const fn new(store: SS, codec: C) -> Self {
         Self { store, codec }
     }
 }
 
-impl<S, SS, C> StateStore<S> for CodecStateStore<SS, C>
+impl<S, P, SS, C> SnapshotStore<S, P> for CodecSnapshotStore<SS, C>
 where
     S: Send + Sync + 'static,
-    SS: StateStore<Vec<u8>>,
+    P: Send,
+    SS: SnapshotStore<Vec<u8>, P>,
     C: Codec<S>,
 {
-    type Error = CodecStateStoreError<SS::Error, C::Error>;
+    type Error = CodecSnapshotStoreError<SS::Error, C::Error>;
 
-    async fn load(
+    async fn hydrate(
         &self,
         id: &impl Id,
         schema_version: NonZeroU32,
-    ) -> Result<Option<State<S>>, Self::Error> {
-        let Some(raw) = self
+    ) -> Result<Option<(P, S)>, Self::Error> {
+        let Some((position, bytes)) = self
             .store
-            .load(id, schema_version)
+            .hydrate(id, schema_version)
             .await
-            .map_err(CodecStateStoreError::Store)?
+            .map_err(CodecSnapshotStoreError::Store)?
         else {
             return Ok(None);
         };
 
-        let (version, schema_ver, bytes) = raw.into_parts();
         let label = id.to_label();
         let state = self
             .codec
             .decode(&label, &bytes)
-            .map_err(CodecStateStoreError::Codec)?;
+            .map_err(CodecSnapshotStoreError::Codec)?;
 
-        Ok(Some(State::new(version, schema_ver, state)))
+        Ok(Some((position, state)))
     }
 
-    async fn save(&self, id: &impl Id, state: &State<S>) -> Result<(), Self::Error> {
+    async fn commit(
+        &self,
+        id: &impl Id,
+        schema_version: NonZeroU32,
+        position: P,
+        state: &S,
+    ) -> Result<(), Self::Error> {
         let bytes = self
             .codec
-            .encode(state.state())
-            .map_err(CodecStateStoreError::Codec)?;
+            .encode(state)
+            .map_err(CodecSnapshotStoreError::Codec)?;
 
-        let raw = State::new(state.version(), state.schema_version(), bytes);
         self.store
-            .save(id, &raw)
+            .commit(id, schema_version, position, &bytes)
             .await
-            .map_err(CodecStateStoreError::Store)
-    }
-
-    async fn delete(&self, id: &impl Id) -> Result<(), Self::Error> {
-        self.store
-            .delete(id)
-            .await
-            .map_err(CodecStateStoreError::Store)
+            .map_err(CodecSnapshotStoreError::Store)
     }
 }
 
-/// Error from [`CodecStateStore`] — either the underlying store or the codec.
+/// Error from [`CodecSnapshotStore`] — either the underlying store or the codec.
 #[derive(Debug, thiserror::Error)]
-pub enum CodecStateStoreError<S, C> {
+pub enum CodecSnapshotStoreError<S, C> {
     /// The underlying byte-level store failed.
     #[error(transparent)]
     Store(S),
@@ -306,51 +256,57 @@ mod testing {
     use nexus::Id;
     use tokio::sync::RwLock;
 
-    use super::{State, StateStore};
+    use super::SnapshotStore;
 
-    /// In-memory state store for tests.
+    /// In-memory snapshot store for tests.
     #[derive(Debug, Default)]
-    pub struct InMemoryStateStore<S> {
-        states: RwLock<HashMap<String, State<S>>>,
+    pub struct InMemorySnapshotStore<S, P> {
+        snapshots: RwLock<HashMap<String, (NonZeroU32, P, S)>>,
     }
 
-    impl<S> InMemoryStateStore<S> {
+    impl<S, P> InMemorySnapshotStore<S, P> {
         #[must_use]
         pub fn new() -> Self {
             Self {
-                states: RwLock::new(HashMap::new()),
+                snapshots: RwLock::new(HashMap::new()),
             }
         }
     }
 
-    impl<S: Clone + Send + Sync + 'static> StateStore<S> for InMemoryStateStore<S> {
+    impl<S, P> SnapshotStore<S, P> for InMemorySnapshotStore<S, P>
+    where
+        S: Clone + Send + Sync + 'static,
+        P: Clone + Send + Sync + 'static,
+    {
         type Error = Infallible;
 
-        async fn load(
+        async fn hydrate(
             &self,
             id: &impl Id,
             schema_version: NonZeroU32,
-        ) -> Result<Option<State<S>>, Infallible> {
-            let states = self.states.read().await;
-            let key = id.to_string();
-            Ok(states
-                .get(&key)
-                .filter(|s| s.schema_version() == schema_version)
-                .cloned())
+        ) -> Result<Option<(P, S)>, Infallible> {
+            let snapshots = self.snapshots.read().await;
+            Ok(snapshots
+                .get(&id.to_string())
+                .filter(|(stored_schema, _, _)| *stored_schema == schema_version)
+                .map(|(_, position, state)| (position.clone(), state.clone())))
         }
 
-        async fn save(&self, id: &impl Id, state: &State<S>) -> Result<(), Infallible> {
-            let key = id.to_string();
-            self.states.write().await.insert(key, state.clone());
-            Ok(())
-        }
-
-        async fn delete(&self, id: &impl Id) -> Result<(), Infallible> {
-            self.states.write().await.remove(&id.to_string());
+        async fn commit(
+            &self,
+            id: &impl Id,
+            schema_version: NonZeroU32,
+            position: P,
+            state: &S,
+        ) -> Result<(), Infallible> {
+            self.snapshots
+                .write()
+                .await
+                .insert(id.to_string(), (schema_version, position, state.clone()));
             Ok(())
         }
     }
 }
 
 #[cfg(feature = "testing")]
-pub use testing::InMemoryStateStore;
+pub use testing::InMemorySnapshotStore;

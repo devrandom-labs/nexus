@@ -40,6 +40,7 @@ use nexus::Version;
 use nexus_store::codec::{BorrowingCodec, Codec};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::DecodeStreamError;
+use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{EventStream, EventStreamExt};
 use thiserror::Error;
 
@@ -111,6 +112,7 @@ impl EventStream for VecStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).expect("non-zero"),
+            GlobalSeq::INITIAL,
             &row.1,
             1,
             &row.2,

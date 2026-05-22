@@ -3,6 +3,7 @@
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::pending_envelope;
+use nexus_store::store::GlobalSeq;
 
 #[test]
 fn pending_envelope_accessors() {
@@ -41,6 +42,7 @@ fn persisted_envelope_borrows_from_source() {
 
     let envelope = PersistedEnvelope::<()>::new_unchecked(
         Version::new(3).unwrap(),
+        GlobalSeq::INITIAL,
         &event_type,
         1,
         &payload,
@@ -48,6 +50,7 @@ fn persisted_envelope_borrows_from_source() {
     );
 
     assert_eq!(envelope.version(), Version::new(3).unwrap());
+    assert_eq!(envelope.global_seq(), GlobalSeq::INITIAL);
     assert_eq!(envelope.event_type(), "UserActivated");
     assert_eq!(envelope.payload(), &[10, 20, 30]);
 }
@@ -64,6 +67,7 @@ fn persisted_envelope_metadata_is_owned() {
 
     let envelope = PersistedEnvelope::new_unchecked(
         Version::new(1).unwrap(),
+        GlobalSeq::INITIAL,
         event_type,
         1,
         &payload,
@@ -87,6 +91,7 @@ fn persisted_envelope_zero_allocation_for_core_fields() {
 
     let envelope = PersistedEnvelope::<()>::new_unchecked(
         Version::new(1).unwrap(),
+        GlobalSeq::INITIAL,
         source_type,
         1,
         &source_payload,
@@ -120,6 +125,7 @@ fn persisted_envelope_debug_output() {
     let payload = [10u8, 20];
     let envelope = PersistedEnvelope::<()>::new_unchecked(
         Version::new(2).unwrap(),
+        GlobalSeq::INITIAL,
         event_type,
         1,
         &payload,
@@ -156,7 +162,14 @@ fn build_without_metadata_equals_build_unit() {
 
 #[test]
 fn try_new_rejects_zero_schema_version() {
-    let result = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), "E", 0, &[], ());
+    let result = PersistedEnvelope::<()>::try_new(
+        Version::new(1).unwrap(),
+        GlobalSeq::INITIAL,
+        "E",
+        0,
+        &[],
+        (),
+    );
     assert!(result.is_err());
     let msg = format!("{}", result.unwrap_err());
     assert!(msg.contains("schema version"), "should describe the error");
@@ -164,7 +177,14 @@ fn try_new_rejects_zero_schema_version() {
 
 #[test]
 fn try_new_accepts_valid_schema_version() {
-    let result = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), "E", 1, &[], ());
+    let result = PersistedEnvelope::<()>::try_new(
+        Version::new(1).unwrap(),
+        GlobalSeq::INITIAL,
+        "E",
+        1,
+        &[],
+        (),
+    );
     assert!(result.is_ok());
     let env = result.unwrap();
     assert_eq!(env.schema_version(), 1);
@@ -172,7 +192,14 @@ fn try_new_accepts_valid_schema_version() {
 
 #[test]
 fn try_new_accepts_max_schema_version() {
-    let result = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), "E", u32::MAX, &[], ());
+    let result = PersistedEnvelope::<()>::try_new(
+        Version::new(1).unwrap(),
+        GlobalSeq::INITIAL,
+        "E",
+        u32::MAX,
+        &[],
+        (),
+    );
     assert!(result.is_ok());
     assert_eq!(result.unwrap().schema_version(), u32::MAX);
 }

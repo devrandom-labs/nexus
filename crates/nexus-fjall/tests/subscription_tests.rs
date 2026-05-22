@@ -1,7 +1,7 @@
 //! Subscription tests for the fjall event store adapter.
 //!
 //! Covers 4 cross-cutting test categories:
-//! 1. Sequence/Protocol — catch-up then live, checkpoint resume
+//! 1. Sequence/Protocol — catch-up then live, subscribe from position
 //! 2. Lifecycle — drop/resubscribe, close/reopen/subscribe
 //! 3. Defensive Boundary — nonexistent stream, beyond-head subscribe
 //! 4. Linearizability — concurrent append+subscribe, multiple subscribers
@@ -18,7 +18,7 @@ use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
-use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};
+use nexus_store::store::{RawEventStore, Subscription};
 use nexus_store::stream::EventStream;
 use tokio::time::timeout;
 
@@ -410,62 +410,4 @@ async fn multiple_subscribers_same_stream() {
         .unwrap();
     assert_eq!(env2.event_type(), "SharedEvent");
     assert_eq!(env2.version(), Version::new(1).unwrap());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CheckpointStore tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[tokio::test]
-async fn checkpoint_load_unknown_returns_none() {
-    let (store, _dir) = temp_store();
-    let result = store.load(&TestId::new("nonexistent")).await.unwrap();
-    assert_eq!(result, None);
-}
-
-#[tokio::test]
-async fn checkpoint_save_load_roundtrip() {
-    let (store, _dir) = temp_store();
-    store
-        .save(&TestId::new("sub-1"), Version::new(42).unwrap())
-        .await
-        .unwrap();
-    let loaded = store.load(&TestId::new("sub-1")).await.unwrap();
-    assert_eq!(loaded, Some(Version::new(42).unwrap()));
-}
-
-#[tokio::test]
-async fn checkpoint_save_overwrites() {
-    let (store, _dir) = temp_store();
-    store
-        .save(&TestId::new("sub-1"), Version::new(1).unwrap())
-        .await
-        .unwrap();
-    store
-        .save(&TestId::new("sub-1"), Version::new(5).unwrap())
-        .await
-        .unwrap();
-    let loaded = store.load(&TestId::new("sub-1")).await.unwrap();
-    assert_eq!(loaded, Some(Version::new(5).unwrap()));
-}
-
-#[tokio::test]
-async fn checkpoint_persists_across_reopen() {
-    let dir = tempfile::tempdir().unwrap();
-    let db_path = dir.path().join("db");
-
-    {
-        let store = FjallStore::builder(&db_path).open().unwrap();
-        store
-            .save(&TestId::new("sub-1"), Version::new(10).unwrap())
-            .await
-            .unwrap();
-        drop(store);
-    }
-
-    {
-        let store = FjallStore::builder(&db_path).open().unwrap();
-        let loaded = store.load(&TestId::new("sub-1")).await.unwrap();
-        assert_eq!(loaded, Some(Version::new(10).unwrap()));
-    }
 }

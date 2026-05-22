@@ -75,6 +75,7 @@ use nexus::Version;
 use nexus_store::codec::{BorrowingCodec, Codec};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::{DecodeStreamError, UpcastError};
+use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{
     BorrowedDecodedStream, DecodedStream, DecoderBuilder, EventStream, EventStreamExt,
 };
@@ -136,6 +137,7 @@ impl EventStream for VecStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).expect("test version must be non-zero"),
+            GlobalSeq::INITIAL,
             &row.1,
             1,
             &row.2,
@@ -167,6 +169,7 @@ impl EventStream for SchemaStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).expect("test version must be non-zero"),
+            GlobalSeq::INITIAL,
             &row.1,
             row.2,
             &row.3,
@@ -198,6 +201,7 @@ impl EventStream<String> for MetadataStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).expect("test version must be non-zero"),
+            GlobalSeq::INITIAL,
             &row.1,
             1,
             &row.2,
@@ -244,6 +248,7 @@ impl EventStream for FailingStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).expect("test version must be non-zero"),
+            GlobalSeq::INITIAL,
             &row.1,
             1,
             &row.2,
@@ -1740,6 +1745,7 @@ impl EventStream<DropProbe> for DropProbeStream {
         let v = Version::new(self.pos as u64).expect("pos >= 1");
         Ok(Some(PersistedEnvelope::new_unchecked(
             v,
+            GlobalSeq::INITIAL,
             &self.et,
             1,
             &self.payload,
@@ -2391,6 +2397,7 @@ impl EventStream for SlowStream {
         self.pos += 1;
         Ok(Some(PersistedEnvelope::new_unchecked(
             Version::new(row.0).expect("nz"),
+            GlobalSeq::INITIAL,
             &row.1,
             1,
             &row.2,

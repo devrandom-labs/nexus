@@ -32,12 +32,12 @@ pub use repository::{EventStore, Repository, ZeroCopyEventStore};
 #[cfg(feature = "snapshot")]
 pub use snapshot::Snapshotting;
 #[cfg(feature = "testing")]
-pub use state::InMemoryStateStore;
+pub use state::InMemorySnapshotStore;
 pub use state::{
-    AfterEventTypes, CodecStateStore, CodecStateStoreError, EveryNEvents, PersistTrigger, State,
-    StateStore,
+    AfterEventTypes, CodecSnapshotStore, CodecSnapshotStoreError, EveryNEvents, PersistTrigger,
+    SnapshotStore,
 };
-pub use store::{CheckpointStore, RawEventStore, Store, Subscription};
+pub use store::{GlobalSeq, RawEventStore, Store, Subscription};
 pub use stream::{
     BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition, EventStream, EventStreamExt,
 };

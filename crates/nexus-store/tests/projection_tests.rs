@@ -15,7 +15,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::Version;
 use nexus_store::Projector;
-use nexus_store::state::{AfterEventTypes, EveryNEvents, PersistTrigger, State, StateStore};
+use nexus_store::state::{AfterEventTypes, EveryNEvents, PersistTrigger, SnapshotStore};
 
 const SV1: NonZeroU32 = NonZeroU32::MIN;
 
@@ -36,60 +36,6 @@ impl AsRef<[u8]> for TestId {
 
 impl nexus::Id for TestId {
     const BYTE_LEN: usize = 0;
-}
-
-#[test]
-fn pending_state_stores_version_and_payload() {
-    let version = Version::new(42).unwrap();
-    let payload = vec![1, 2, 3];
-    let sv = NonZeroU32::new(1).unwrap();
-    let state = State::new(version, sv, payload.clone());
-
-    assert_eq!(state.version(), version);
-    assert_eq!(state.schema_version(), sv);
-    assert_eq!(state.state(), &payload);
-}
-
-#[test]
-fn persisted_state_stores_version_and_payload() {
-    let version = Version::new(10).unwrap();
-    let sv = NonZeroU32::new(2).unwrap();
-    let state = State::new(version, sv, vec![4, 5, 6]);
-
-    assert_eq!(state.version(), version);
-    assert_eq!(state.schema_version(), sv);
-    assert_eq!(state.state(), &[4, 5, 6]);
-}
-
-// ── () no-op StateStore ─────────────────────────────────────────
-
-#[tokio::test]
-async fn unit_state_store_returns_none() {
-    let store: () = ();
-    let id = TestId("proj-1".into());
-    let result: Result<Option<State<Vec<u8>>>, _> = store.load(&id, SV1).await;
-    assert!(result.unwrap().is_none());
-}
-
-#[tokio::test]
-async fn unit_state_store_save_succeeds() {
-    let store: () = ();
-    let id = TestId("proj-1".into());
-    let state = State::new(
-        Version::new(1).unwrap(),
-        NonZeroU32::new(1).unwrap(),
-        vec![1, 2, 3],
-    );
-    let result = store.save(&id, &state).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn unit_state_store_delete_succeeds() {
-    let store: () = ();
-    let id = TestId("proj-1".into());
-    let result: Result<(), _> = StateStore::<Vec<u8>>::delete(&store, &id).await;
-    assert!(result.is_ok());
 }
 
 // ── EveryNEvents ────────────────────────────────────────────────────
@@ -174,133 +120,131 @@ fn proj_after_event_types_does_not_trigger_on_empty_events() {
     assert!(!trigger.should_persist(None, Version::new(5).unwrap(), std::iter::empty::<&str>()));
 }
 
-// ── InMemoryStateStore ───────────────────────────────────────────
+// ── InMemorySnapshotStore ────────────────────────────────────────
 
 #[cfg(feature = "testing")]
 mod in_memory_tests {
     use super::*;
-    use nexus_store::state::InMemoryStateStore;
+    use nexus_store::state::InMemorySnapshotStore;
 
     #[tokio::test]
-    async fn load_returns_none_when_empty() {
-        let store = InMemoryStateStore::<Vec<u8>>::new();
-        let result = store.load(&TestId("proj-1".into()), SV1).await.unwrap();
+    async fn hydrate_returns_none_when_empty() {
+        let store = InMemorySnapshotStore::<Vec<u8>, Version>::new();
+        let result = store.hydrate(&TestId("proj-1".into()), SV1).await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
-    async fn save_then_load_roundtrips() {
-        let store = InMemoryStateStore::<Vec<u8>>::new();
+    async fn commit_then_hydrate_roundtrips() {
+        let store = InMemorySnapshotStore::<Vec<u8>, Version>::new();
         let id = TestId("proj-1".into());
         let version = Version::new(10).unwrap();
-        let state = State::new(version, NonZeroU32::new(1).unwrap(), vec![1, 2, 3]);
 
-        store.save(&id, &state).await.unwrap();
-        let loaded = store.load(&id, SV1).await.unwrap().unwrap();
+        store
+            .commit(&id, NonZeroU32::new(1).unwrap(), version, &vec![1, 2, 3])
+            .await
+            .unwrap();
+        let (loaded_version, loaded_state) = store.hydrate(&id, SV1).await.unwrap().unwrap();
 
-        assert_eq!(loaded.version(), version);
-        assert_eq!(loaded.schema_version(), NonZeroU32::new(1).unwrap());
-        assert_eq!(loaded.state(), &[1, 2, 3]);
+        assert_eq!(loaded_version, version);
+        assert_eq!(loaded_state, vec![1, 2, 3]);
     }
 
     #[tokio::test]
-    async fn save_overwrites_previous_state() {
-        let store = InMemoryStateStore::<Vec<u8>>::new();
+    async fn commit_overwrites_previous_state() {
+        let store = InMemorySnapshotStore::<Vec<u8>, Version>::new();
         let id = TestId("proj-1".into());
 
-        let state1 = State::new(
-            Version::new(10).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            vec![1],
-        );
-        store.save(&id, &state1).await.unwrap();
+        store
+            .commit(
+                &id,
+                NonZeroU32::new(1).unwrap(),
+                Version::new(10).unwrap(),
+                &vec![1],
+            )
+            .await
+            .unwrap();
 
-        let state2 = State::new(
-            Version::new(20).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            vec![2],
-        );
-        store.save(&id, &state2).await.unwrap();
+        store
+            .commit(
+                &id,
+                NonZeroU32::new(1).unwrap(),
+                Version::new(20).unwrap(),
+                &vec![2],
+            )
+            .await
+            .unwrap();
 
-        let loaded = store.load(&id, SV1).await.unwrap().unwrap();
-        assert_eq!(loaded.version(), Version::new(20).unwrap());
-        assert_eq!(loaded.state(), &[2]);
+        let (loaded_version, loaded_state) = store.hydrate(&id, SV1).await.unwrap().unwrap();
+        assert_eq!(loaded_version, Version::new(20).unwrap());
+        assert_eq!(loaded_state, vec![2]);
     }
 
     #[tokio::test]
     async fn different_projections_have_separate_state() {
-        let store = InMemoryStateStore::<Vec<u8>>::new();
+        let store = InMemorySnapshotStore::<Vec<u8>, Version>::new();
 
-        let state1 = State::new(
-            Version::new(5).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            vec![1],
-        );
-        store.save(&TestId("proj-1".into()), &state1).await.unwrap();
+        store
+            .commit(
+                &TestId("proj-1".into()),
+                NonZeroU32::new(1).unwrap(),
+                Version::new(5).unwrap(),
+                &vec![1],
+            )
+            .await
+            .unwrap();
 
-        let state2 = State::new(
-            Version::new(10).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            vec![2],
-        );
-        store.save(&TestId("proj-2".into()), &state2).await.unwrap();
+        store
+            .commit(
+                &TestId("proj-2".into()),
+                NonZeroU32::new(1).unwrap(),
+                Version::new(10).unwrap(),
+                &vec![2],
+            )
+            .await
+            .unwrap();
 
-        let loaded1 = store
-            .load(&TestId("proj-1".into()), SV1)
+        let (version1, _) = store
+            .hydrate(&TestId("proj-1".into()), SV1)
             .await
             .unwrap()
             .unwrap();
-        let loaded2 = store
-            .load(&TestId("proj-2".into()), SV1)
+        let (version2, _) = store
+            .hydrate(&TestId("proj-2".into()), SV1)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(loaded1.version(), Version::new(5).unwrap());
-        assert_eq!(loaded2.version(), Version::new(10).unwrap());
+        assert_eq!(version1, Version::new(5).unwrap());
+        assert_eq!(version2, Version::new(10).unwrap());
     }
 
     #[tokio::test]
-    async fn delete_removes_state() {
-        let store = InMemoryStateStore::<Vec<u8>>::new();
+    async fn hydrate_filters_by_schema_version() {
+        let store = InMemorySnapshotStore::<Vec<u8>, Version>::new();
         let id = TestId("proj-1".into());
 
-        let state = State::new(
-            Version::new(10).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            vec![1],
-        );
-        store.save(&id, &state).await.unwrap();
-
-        store.delete(&id).await.unwrap();
-        let loaded = store.load(&id, SV1).await.unwrap();
-        assert!(loaded.is_none());
-    }
-
-    #[tokio::test]
-    async fn delete_nonexistent_is_ok() {
-        let store = InMemoryStateStore::<Vec<u8>>::new();
-        let result = store.delete(&TestId("nope".into())).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn load_filters_by_schema_version() {
-        let store = InMemoryStateStore::<Vec<u8>>::new();
-        let id = TestId("proj-1".into());
-
-        let state = State::new(
-            Version::new(10).unwrap(),
-            NonZeroU32::new(1).unwrap(),
-            vec![1, 2, 3],
-        );
-        store.save(&id, &state).await.unwrap();
+        store
+            .commit(
+                &id,
+                NonZeroU32::new(1).unwrap(),
+                Version::new(10).unwrap(),
+                &vec![1, 2, 3],
+            )
+            .await
+            .unwrap();
 
         // Matching schema version returns state
-        let loaded = store.load(&id, NonZeroU32::new(1).unwrap()).await.unwrap();
+        let loaded = store
+            .hydrate(&id, NonZeroU32::new(1).unwrap())
+            .await
+            .unwrap();
         assert!(loaded.is_some());
 
         // Mismatched schema version returns None
-        let loaded = store.load(&id, NonZeroU32::new(2).unwrap()).await.unwrap();
+        let loaded = store
+            .hydrate(&id, NonZeroU32::new(2).unwrap())
+            .await
+            .unwrap();
         assert!(loaded.is_none());
     }
 }

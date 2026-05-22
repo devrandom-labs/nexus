@@ -36,6 +36,10 @@ pub enum FjallError {
     /// Event version would overflow `u64::MAX`.
     #[error("version overflow: cannot advance past u64::MAX")]
     VersionOverflow,
+
+    /// The store-global sequence counter would overflow `u64::MAX`.
+    #[error("global sequence overflow: cannot advance past u64::MAX")]
+    GlobalSeqOverflow,
 }
 
 #[cfg(test)]

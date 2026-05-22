@@ -8,6 +8,7 @@ use std::future::Future;
 
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
+use nexus_store::store::GlobalSeq;
 use nexus_store::stream::EventStream;
 
 struct Single {
@@ -28,6 +29,7 @@ impl EventStream for Single {
             self.served = true;
             Ok(Some(PersistedEnvelope::new_unchecked(
                 Version::new(1).unwrap(),
+                GlobalSeq::INITIAL,
                 "E",
                 1,
                 &self.payload,

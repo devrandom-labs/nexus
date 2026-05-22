@@ -1,11 +1,13 @@
 error[E0597]: `payload` does not live long enough
- --> tests/compile_fail/persisted_envelope_lifetime_escape.rs:7:82
-  |
-5 |     let envelope = {
-  |         -------- borrow later stored here
-6 |         let payload = vec![1, 2, 3];
-  |             ------- binding `payload` declared here
-7 |         PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), "E", 1, &payload, ())
-  |                                                                                  ^^^^^^^^ borrowed value does not live long enough
-8 |     };
-  |     - `payload` dropped here while still borrowed
+  --> tests/compile_fail/persisted_envelope_lifetime_escape.rs:13:13
+   |
+ 6 |     let envelope = {
+   |         -------- borrow later stored here
+ 7 |         let payload = vec![1, 2, 3];
+   |             ------- binding `payload` declared here
+...
+13 |             &payload,
+   |             ^^^^^^^^ borrowed value does not live long enough
+...
+16 |     };
+   |     - `payload` dropped here while still borrowed

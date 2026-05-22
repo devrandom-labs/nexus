@@ -103,7 +103,7 @@ fn encoding_benchmarks(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("encode_event_value", label), &p, |b, p| {
             let mut buf = Vec::with_capacity(size + 64);
             b.iter(|| {
-                encode_event_value(&mut buf, 1, "BenchEvent", p).unwrap();
+                encode_event_value(&mut buf, 1, 1, "BenchEvent", p).unwrap();
             });
         });
     }
@@ -115,7 +115,7 @@ fn encoding_benchmarks(c: &mut Criterion) {
     ] {
         let p = payload(size);
         let mut buf = Vec::new();
-        encode_event_value(&mut buf, 1, "BenchEvent", &p).unwrap();
+        encode_event_value(&mut buf, 1, 1, "BenchEvent", &p).unwrap();
         let encoded = buf.clone();
         group.bench_with_input(
             BenchmarkId::new("decode_event_value", label),
@@ -138,7 +138,7 @@ fn encoding_benchmarks(c: &mut Criterion) {
             |b, p| {
                 let mut buf = Vec::with_capacity(size + 64);
                 b.iter(|| {
-                    encode_event_value(&mut buf, 1, "BenchEvent", p).unwrap();
+                    encode_event_value(&mut buf, 1, 1, "BenchEvent", p).unwrap();
                     decode_event_value(&buf).unwrap();
                 });
             },
