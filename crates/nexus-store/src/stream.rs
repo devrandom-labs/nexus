@@ -34,6 +34,112 @@ pub enum Disposition {
     Interrupted,
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Progress — accumulator for a checkpointed scan over an event stream
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Accumulator for a checkpointed scan over an event stream.
+///
+/// Carries the in-memory state plus two cursors: the last position
+/// durably saved (`saved`), and the last position seen by the scan
+/// (`seen`). The relationship `seen > saved` means the scan has
+/// observed events that have not yet been persisted — work the
+/// caller may want to flush before yielding the accumulator.
+///
+/// Generic over both the state type `S` and the position type `P`,
+/// so the same shape works for per-stream scans (`P = Version`) and
+/// multi-stream subscriptions (`P = GlobalSeq`).
+///
+/// # Invariants
+///
+/// - After [`fresh`](Progress::fresh): `saved == seen == None`.
+/// - After [`resume`](Progress::resume): `saved == seen == Some(_)`.
+/// - The scan body is responsible for advancing `seen` monotonically
+///   as it observes events; this type does not enforce that beyond
+///   the [`dirty`](Progress::dirty) / [`unsaved`](Progress::unsaved)
+///   predicates relying on `Option<P>`'s derived ordering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Progress<S, P> {
+    /// In-memory accumulator state.
+    pub state: S,
+    /// Position last durably saved.
+    pub saved: Option<P>,
+    /// Position last observed by the scan.
+    pub seen: Option<P>,
+}
+
+impl<S, P> Progress<S, P> {
+    /// Cold start — no prior cursor, no state has been observed or saved.
+    ///
+    /// Both `saved` and `seen` are `None`.
+    pub const fn fresh(state: S) -> Self {
+        Self {
+            state,
+            saved: None,
+            seen: None,
+        }
+    }
+}
+
+impl<S, P: Copy> Progress<S, P> {
+    /// Resume from a previously saved cursor and state.
+    ///
+    /// Both `saved` and `seen` are set to `saved_at` so the resumed
+    /// scan starts in a non-dirty state.
+    pub const fn resume(saved_at: P, state: S) -> Self {
+        Self {
+            state,
+            saved: Some(saved_at),
+            seen: Some(saved_at),
+        }
+    }
+}
+
+impl<S, P: Copy + Ord> Progress<S, P> {
+    /// `true` when the scan has observed positions past the last save.
+    ///
+    /// Relies on the derived `PartialOrd` for `Option<P>`, where
+    /// `None < Some(_)`. So `Some(seen) > None` (saved nothing yet,
+    /// observed something) and `Some(seen) > Some(saved)` (observed
+    /// beyond the saved point) both return `true`.
+    pub fn dirty(&self) -> bool {
+        self.seen > self.saved
+    }
+
+    /// The position to save at when [`dirty`](Self::dirty), else `None`.
+    ///
+    /// Returns the value the caller needs to persist alongside `state`
+    /// — no separate `unwrap` of `seen` required at the call site.
+    pub fn unsaved(&self) -> Option<P> {
+        self.dirty().then_some(self.seen).flatten()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step — per-iteration outcome of a checkpointed scan
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Per-iteration outcome of a checkpointed scan.
+///
+/// Returned by the scan body to tell the caller what to do next:
+/// either persist the carried [`Progress`] before continuing, or
+/// carry it forward without IO. The enum (rather than a `bool`)
+/// makes the contract a `match` the compiler enforces — leave a
+/// variant unhandled and the build fails.
+pub enum Step<S, P> {
+    /// The scan body's policy fired — caller should durably save the
+    /// carried `Progress` (typically at `progress.seen`) before the
+    /// next iteration.
+    Save(Progress<S, P>),
+    /// The scan body's policy did not fire — caller carries the
+    /// `Progress` forward without performing any IO.
+    Skip(Progress<S, P>),
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EventStream — GAT lending cursor over persisted envelopes
+// ═══════════════════════════════════════════════════════════════════════════
+
 /// GAT lending cursor for zero-allocation event streaming.
 ///
 /// Each call to `next()` returns a `PersistedEnvelope` that borrows
@@ -234,6 +340,112 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
                 };
                 acc = f(acc, env).await?;
             }
+        }
+    }
+
+    /// Scan a stream with checkpointed progress, interruptible by a shutdown signal.
+    ///
+    /// Threads a [`Progress<S, P>`] accumulator through the lending cursor,
+    /// dispatching on the per-iteration [`Step`] outcome the `step` closure
+    /// returns:
+    ///
+    /// - [`Step::Save`] → invoke `save(position, state)` to persist, then
+    ///   continue with `saved` advanced to `seen`.
+    /// - [`Step::Skip`] → continue without IO, carrying the updated progress.
+    ///
+    /// When the stream completes naturally or `shutdown` resolves, the
+    /// flush-tail runs: if [`Progress::unsaved`] returns `Some(pos)`, one
+    /// final `save(pos, state)` is invoked before the method returns. This
+    /// guarantees no observed-but-unsaved work is dropped on exit regardless
+    /// of [`Disposition`].
+    ///
+    /// # Closures
+    ///
+    /// `step` follows the same "extract owned values before `async move`"
+    /// pattern as [`try_fold_async_until`](Self::try_fold_async_until) — the
+    /// returned future must not borrow from the envelope.
+    ///
+    /// `save` consumes the state by value and returns it back inside its
+    /// future. This avoids the borrow lifetime that would otherwise require
+    /// boxing (`AsyncFnMut`'s returned-future `Send` bound is unstable on
+    /// the current toolchain). Moves are size-agnostic, so a large `State`
+    /// is no more expensive to thread through `save` than a small one.
+    ///
+    /// # Bias and cancel-safety
+    ///
+    /// Same as [`try_fold_async_until`](Self::try_fold_async_until): shutdown
+    /// is polled before the stream's `next()` each iteration; the in-flight
+    /// `next()` is dropped when shutdown wins (implementors of [`EventStream`]
+    /// must keep `next()` cancel-safe). Once the `step` closure begins, it
+    /// runs to completion before shutdown is re-checked.
+    ///
+    /// # Errors
+    ///
+    /// - `step` returns `Err` → propagated immediately; no flush-tail runs.
+    /// - `save` returns `Err` → propagated immediately; remaining work is lost.
+    /// - Stream cursor errors are auto-converted via `E: From<Self::Error>`.
+    fn try_scan_until<S, P, E, StepFn, StepFut, SaveFn, SaveFut, Sh>(
+        &mut self,
+        initial: Progress<S, P>,
+        mut step: StepFn,
+        mut save: SaveFn,
+        shutdown: Sh,
+    ) -> impl Future<Output = Result<(Progress<S, P>, Disposition), E>> + Send
+    where
+        Self: Send,
+        M: Send,
+        S: Send,
+        P: Send + Copy + Ord,
+        E: From<Self::Error> + Send,
+        StepFn: FnMut(Progress<S, P>, PersistedEnvelope<'_, M>) -> StepFut + Send,
+        StepFut: Future<Output = Result<Step<S, P>, E>> + Send,
+        SaveFn: FnMut(P, S) -> SaveFut + Send,
+        SaveFut: Future<Output = Result<S, E>> + Send,
+        Sh: Future<Output = ()> + Send,
+    {
+        async move {
+            let mut pinned_shutdown = pin!(shutdown);
+            let mut progress = initial;
+            let disposition = loop {
+                let next_fut = pin!(self.next());
+                let env = match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
+                    Selected::Shutdown => break Disposition::Interrupted,
+                    Selected::Stream(Err(e)) => return Err(E::from(e)),
+                    Selected::Stream(Ok(None)) => break Disposition::Completed,
+                    Selected::Stream(Ok(Some(env))) => env,
+                };
+                progress = match step(progress, env).await? {
+                    Step::Save(Progress { state, seen, .. }) => {
+                        let saved_state = match seen {
+                            Some(pos) => save(pos, state).await?,
+                            None => state,
+                        };
+                        Progress {
+                            state: saved_state,
+                            saved: seen,
+                            seen,
+                        }
+                    }
+                    Step::Skip(updated) => updated,
+                };
+            };
+
+            // Flush tail — runs for both Completed and Interrupted exits.
+            if let Some(pos) = progress.unsaved() {
+                let Progress {
+                    state: prev_state,
+                    seen,
+                    ..
+                } = progress;
+                let saved_state = save(pos, prev_state).await?;
+                progress = Progress {
+                    state: saved_state,
+                    saved: seen,
+                    seen,
+                };
+            }
+
+            Ok((progress, disposition))
         }
     }
 
@@ -706,5 +918,94 @@ impl<S, C: ?Sized, U, M> BorrowedDecodedStream<'_, S, C, U, M> {
             acc = f(acc, version, event)?;
         }
         Ok(acc)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests — pure sync coverage for Progress constructors and predicates
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+#[allow(
+    clippy::missing_const_for_fn,
+    clippy::panic,
+    clippy::unwrap_used,
+    reason = "test code — relaxed lints"
+)]
+mod tests {
+    use nexus::Version;
+
+    use super::Progress;
+
+    fn v(n: u64) -> Version {
+        Version::new(n).unwrap()
+    }
+
+    // ── Progress::fresh — cold start invariants ───────────────────────
+
+    #[test]
+    fn fresh_has_no_saved_or_seen() {
+        let p: Progress<u64, Version> = Progress::fresh(0);
+        assert_eq!(p.state, 0);
+        assert!(p.saved.is_none());
+        assert!(p.seen.is_none());
+    }
+
+    // ── Progress::resume — warm start invariants ──────────────────────
+
+    #[test]
+    fn resume_aligns_saved_and_seen() {
+        let p: Progress<u64, Version> = Progress::resume(v(7), 42);
+        assert_eq!(p.state, 42);
+        assert_eq!(p.saved, Some(v(7)));
+        assert_eq!(p.seen, Some(v(7)));
+    }
+
+    // ── Progress::dirty — three-case truth table ──────────────────────
+
+    #[test]
+    fn dirty_is_false_when_seen_is_none() {
+        // Nothing observed yet → nothing to flush.
+        let p: Progress<u64, Version> = Progress::fresh(0);
+        assert!(!p.dirty());
+    }
+
+    #[test]
+    fn dirty_is_false_when_seen_equals_saved() {
+        // Just resumed (or just saved) → aligned, nothing to flush.
+        let p: Progress<u64, Version> = Progress::resume(v(3), 0);
+        assert!(!p.dirty());
+    }
+
+    #[test]
+    fn dirty_is_true_when_seen_is_ahead_of_saved() {
+        // Saved at None, seen at Some — observed something never saved.
+        let mut p: Progress<u64, Version> = Progress::fresh(0);
+        p.seen = Some(v(1));
+        assert!(p.dirty());
+
+        // Saved at Some(x), seen at Some(y) with y > x — pending events
+        // since last save.
+        let mut p: Progress<u64, Version> = Progress::resume(v(3), 0);
+        p.seen = Some(v(7));
+        assert!(p.dirty());
+    }
+
+    // ── Progress::unsaved — returns the position to save at ───────────
+
+    #[test]
+    fn unsaved_returns_none_when_not_dirty() {
+        let p: Progress<u64, Version> = Progress::fresh(0);
+        assert!(p.unsaved().is_none());
+
+        let p: Progress<u64, Version> = Progress::resume(v(3), 0);
+        assert!(p.unsaved().is_none());
+    }
+
+    #[test]
+    fn unsaved_returns_seen_when_dirty() {
+        let mut p: Progress<u64, Version> = Progress::resume(v(3), 0);
+        p.seen = Some(v(7));
+        assert_eq!(p.unsaved(), Some(v(7)));
     }
 }
