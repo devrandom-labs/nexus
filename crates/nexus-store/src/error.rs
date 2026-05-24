@@ -4,10 +4,16 @@ use thiserror::Error;
 
 /// Errors from the event store layer.
 ///
-/// Generic over adapter (`A`), codec (`C`), and upcaster transform (`U`)
-/// error types — zero allocation, no `Box<dyn Error>`.
+/// Generic over adapter (`A`), encode (`EncErr`), decode (`DecErr`), and
+/// upcaster transform (`U`) error types — zero allocation, no `Box<dyn Error>`.
+///
+/// `EncErr` and `DecErr` are independent so write-only and read-only codecs
+/// can each set the unused side to `Infallible`. For the common case where
+/// a single underlying format powers both directions, the implementor picks
+/// the same `Error` associated type on both `Encode` and `Decode` impls and
+/// `EncErr == DecErr` falls out without a where-clause.
 #[derive(Debug, Error)]
-pub enum StoreError<A, C, U> {
+pub enum StoreError<A, EncErr, DecErr, U> {
     /// Optimistic concurrency conflict.
     #[error(
         "concurrency conflict on stream '{stream_id}': expected version {expected:?}, actual {actual:?}"
@@ -26,9 +32,13 @@ pub enum StoreError<A, C, U> {
     #[error("adapter error: {0}")]
     Adapter(#[source] A),
 
-    /// Serialization/deserialization failure.
-    #[error("codec error: {0}")]
-    Codec(#[source] C),
+    /// Serialization failure on the write path.
+    #[error("encode error: {0}")]
+    Encode(#[source] EncErr),
+
+    /// Deserialization failure on the read path.
+    #[error("decode error: {0}")]
+    Decode(#[source] DecErr),
 
     /// Upcaster transform failure.
     #[error("upcast error: {0}")]
@@ -43,11 +53,13 @@ pub enum StoreError<A, C, U> {
     VersionOverflow,
 }
 
-impl<A, C, U> From<DecodeStreamError<A, C, U>> for StoreError<A, C, U> {
-    fn from(err: DecodeStreamError<A, C, U>) -> Self {
+impl<A, EncErr, DecErr, U> From<DecodeStreamError<A, DecErr, U>>
+    for StoreError<A, EncErr, DecErr, U>
+{
+    fn from(err: DecodeStreamError<A, DecErr, U>) -> Self {
         match err {
             DecodeStreamError::Stream(e) => Self::Adapter(e),
-            DecodeStreamError::Codec(e) => Self::Codec(e),
+            DecodeStreamError::Decode(e) => Self::Decode(e),
             DecodeStreamError::Upcast(e) => Self::Upcast(e),
         }
     }
@@ -83,18 +95,19 @@ pub struct InvalidSchemaVersion;
 /// Convenience error type for [`DecodedStream`](crate::stream::DecodedStream)
 /// and [`BorrowedDecodedStream`](crate::stream::BorrowedDecodedStream) fold operations.
 ///
-/// Each variant carries the underlying error from one stage of the pipeline.
-/// Generic over the three error sources so callers may use it directly or
-/// define their own enum with `From` impls for the same three errors.
+/// Each variant carries the underlying error from one stage of the read
+/// pipeline. Generic over the three error sources so callers may use it
+/// directly or define their own enum with `From` impls for the same three
+/// errors.
 #[derive(Debug, Error)]
-pub enum DecodeStreamError<S, C, U> {
+pub enum DecodeStreamError<S, DecErr, U> {
     /// Underlying stream failure.
     #[error("stream error: {0}")]
     Stream(#[source] S),
 
-    /// Codec decode failure.
-    #[error("codec decode error: {0}")]
-    Codec(#[source] C),
+    /// Decode failure.
+    #[error("decode error: {0}")]
+    Decode(#[source] DecErr),
 
     /// Upcaster transform failure.
     #[error("upcaster error: {0}")]

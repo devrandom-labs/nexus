@@ -10,6 +10,7 @@
 #![allow(clippy::str_to_string, reason = "tests")]
 #![allow(clippy::shadow_unrelated, reason = "tests")]
 #![allow(clippy::shadow_reuse, reason = "tests")]
+#![allow(clippy::no_effect_underscore_binding, reason = "tests")]
 #![allow(
     clippy::significant_drop_tightening,
     reason = "lock guard lifetime is fine in test adapters"
@@ -40,7 +41,8 @@ use std::fmt;
 use tokio::sync::Mutex;
 
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
-type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::convert::Infallible>;
+type TestStoreError =
+    StoreError<InMemoryStoreError, std::io::Error, std::io::Error, std::convert::Infallible>;
 
 fn label(s: &str) -> ArrayString<64> {
     ArrayString::try_from(s).unwrap()
@@ -212,9 +214,9 @@ fn bug_probe_codec_not_object_safe() {
     // This is a design trade-off, not necessarily a bug, but it limits flexibility.
 
     // We can verify the trait itself compiles with concrete types
-    use nexus_store::codec::Codec;
+    use nexus_store::codec::{Decode, Encode};
 
-    fn _takes_codec<C: Codec<()>>(c: &C) {
+    fn _takes_codec<C: Encode<()> + Decode<()>>(c: &C) {
         // Fine — generic parameter
         let _ = c;
     }
@@ -421,8 +423,12 @@ fn bug_probe_error_source_chain_preserved() {
     // Source chain should work with concrete types
     // InMemoryStoreError::CorruptVersion has no source, so source is None.
     // Test with an error type that does have source:
-    let io_store_err: StoreError<std::io::Error, std::io::Error, std::convert::Infallible> =
-        StoreError::Adapter(inner);
+    let io_store_err: StoreError<
+        std::io::Error,
+        std::io::Error,
+        std::io::Error,
+        std::convert::Infallible,
+    > = StoreError::Adapter(inner);
     let source = io_store_err.source().expect("should have source");
     assert!(
         source.to_string().contains("database connection refused"),

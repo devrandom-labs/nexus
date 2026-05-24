@@ -41,10 +41,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use nexus::*;
-use nexus_store::BorrowingCodec;
 use nexus_store::Repository;
 use nexus_store::Store;
-use nexus_store::codec::Codec;
+use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::error::StoreError;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
@@ -200,7 +199,7 @@ impl Aggregate for DeltaAggregate {
 /// Correct owning codec for `CounterEvent`.
 struct SimpleCodec;
 
-impl Codec<CounterEvent> for SimpleCodec {
+impl Encode<CounterEvent> for SimpleCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
@@ -210,6 +209,10 @@ impl Codec<CounterEvent> for SimpleCodec {
             CounterEvent::Set(v) => Ok(format!("set:{v}").into_bytes()),
         }
     }
+}
+
+impl Decode<CounterEvent> for SimpleCodec {
+    type Error = std::io::Error;
 
     fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
         let s = std::str::from_utf8(payload)
@@ -247,7 +250,7 @@ impl FailAfterNEncodesCodec {
     }
 }
 
-impl Codec<CounterEvent> for FailAfterNEncodesCodec {
+impl Encode<CounterEvent> for FailAfterNEncodesCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
@@ -259,6 +262,10 @@ impl Codec<CounterEvent> for FailAfterNEncodesCodec {
         }
         SimpleCodec.encode(event)
     }
+}
+
+impl Decode<CounterEvent> for FailAfterNEncodesCodec {
+    type Error = std::io::Error;
 
     fn decode(&self, event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
         SimpleCodec.decode(event_type, payload)
@@ -282,12 +289,16 @@ impl FailAfterNDecodesCodec {
     }
 }
 
-impl Codec<CounterEvent> for FailAfterNDecodesCodec {
+impl Encode<CounterEvent> for FailAfterNDecodesCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
         self.inner.encode(event)
     }
+}
+
+impl Decode<CounterEvent> for FailAfterNDecodesCodec {
+    type Error = std::io::Error;
 
     fn decode(&self, event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
         let count = self.decode_count.fetch_add(1, Ordering::SeqCst);
@@ -306,7 +317,7 @@ struct ToggleableCodec {
     fail_flag: Arc<AtomicBool>,
 }
 
-impl Codec<CounterEvent> for ToggleableCodec {
+impl Encode<CounterEvent> for ToggleableCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
@@ -315,6 +326,10 @@ impl Codec<CounterEvent> for ToggleableCodec {
         }
         SimpleCodec.encode(event)
     }
+}
+
+impl Decode<CounterEvent> for ToggleableCodec {
+    type Error = std::io::Error;
 
     fn decode(&self, event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
         if self.fail_flag.load(Ordering::SeqCst) {
@@ -327,12 +342,16 @@ impl Codec<CounterEvent> for ToggleableCodec {
 /// Zero-copy codec for `DeltaEvent` — reinterprets bytes as `&DeltaEvent`.
 struct DeltaBorrowingCodec;
 
-impl BorrowingCodec<DeltaEvent> for DeltaBorrowingCodec {
+impl Encode<DeltaEvent> for DeltaBorrowingCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &DeltaEvent) -> Result<Vec<u8>, Self::Error> {
         Ok(event.delta.to_le_bytes().to_vec())
     }
+}
+
+impl BorrowingDecode<DeltaEvent> for DeltaBorrowingCodec {
+    type Error = std::io::Error;
 
     fn decode<'a>(
         &self,
@@ -483,8 +502,8 @@ async fn d1_encode_failure_mid_batch_returns_codec_error() {
         .await;
     assert!(result.is_err());
     assert!(
-        matches!(result.unwrap_err(), StoreError::Codec(_)),
-        "mid-batch encode failure must surface as StoreError::Codec"
+        matches!(result.unwrap_err(), StoreError::Encode(_)),
+        "mid-batch encode failure must surface as StoreError::Encode"
     );
 }
 
@@ -499,7 +518,7 @@ async fn d1_encode_failure_first_event_returns_codec_error() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
 
     let result = es.save(&mut agg, &[CounterEvent::Incremented]).await;
-    assert!(matches!(result.unwrap_err(), StoreError::Codec(_)));
+    assert!(matches!(result.unwrap_err(), StoreError::Encode(_)));
 }
 
 #[tokio::test]
@@ -528,8 +547,8 @@ async fn d1_decode_failure_mid_stream_returns_codec_error() {
         es.load(CounterId("counter-1".into())).await;
     assert!(result.is_err());
     assert!(
-        matches!(result.unwrap_err(), StoreError::Codec(_)),
-        "mid-stream decode failure must surface as StoreError::Codec"
+        matches!(result.unwrap_err(), StoreError::Decode(_)),
+        "mid-stream decode failure must surface as StoreError::Decode"
     );
 }
 
@@ -548,7 +567,7 @@ async fn d1_decode_failure_first_event_returns_codec_error() {
 
     let result: Result<AggregateRoot<CounterAggregate>, _> =
         es.load(CounterId("counter-1".into())).await;
-    assert!(matches!(result.unwrap_err(), StoreError::Codec(_)));
+    assert!(matches!(result.unwrap_err(), StoreError::Decode(_)));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1146,13 +1165,13 @@ async fn d8_codec_encode_error_is_store_error_codec() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
 
     match es.save(&mut agg, &[CounterEvent::Incremented]).await {
-        Err(StoreError::Codec(inner)) => {
+        Err(StoreError::Encode(inner)) => {
             assert!(
                 inner.to_string().contains("encode limit"),
                 "inner error should describe encode failure: {inner}"
             );
         }
-        other => panic!("expected StoreError::Codec, got: {other:?}"),
+        other => panic!("expected StoreError::Encode, got: {other:?}"),
     }
 }
 
@@ -1171,10 +1190,10 @@ async fn d8_codec_decode_error_is_store_error_codec() {
     let result: Result<AggregateRoot<CounterAggregate>, _> =
         es.load(CounterId("counter-1".into())).await;
     match result {
-        Err(StoreError::Codec(inner)) => {
+        Err(StoreError::Decode(inner)) => {
             assert!(inner.to_string().contains("decode limit"));
         }
-        other => panic!("expected StoreError::Codec, got: {other:?}"),
+        other => panic!("expected StoreError::Decode, got: {other:?}"),
     }
 }
 

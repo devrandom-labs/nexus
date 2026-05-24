@@ -97,6 +97,7 @@ impl EventStream for FjallStream {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 #[allow(clippy::panic, reason = "test code")]
+#[allow(clippy::too_many_arguments, reason = "test fixture helper")]
 mod tests {
     use super::*;
     use crate::encoding::{encode_event_key, encode_event_value};

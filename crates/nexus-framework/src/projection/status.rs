@@ -33,7 +33,7 @@ pub enum ProjectionStatus<S> {
 /// Folds the event through the projector, evaluates the trigger against
 /// the checkpoint carried in the current status, and returns the new
 /// status. Pure — no IO, no async.
-pub(crate) fn apply_event<P, E, Trig>(
+pub(super) fn apply_event<P, E, Trig>(
     projector: &P,
     trigger: &Trig,
     status: ProjectionStatus<P::State>,
@@ -46,11 +46,14 @@ where
     Trig: PersistTrigger,
 {
     let (state, checkpoint) = match status {
-        ProjectionStatus::Idle { state, checkpoint } => (state, checkpoint),
-        ProjectionStatus::Pending {
+        ProjectionStatus::Idle { state, checkpoint }
+        | ProjectionStatus::Pending {
             state, checkpoint, ..
         } => (state, checkpoint),
-        ProjectionStatus::Committed { state, version } => (state, Some(version)),
+        ProjectionStatus::Committed {
+            state,
+            version: committed_version,
+        } => (state, Some(committed_version)),
     };
 
     let new_state = projector.apply(state, event)?;
@@ -74,11 +77,10 @@ impl<S> ProjectionStatus<S> {
     /// The checkpoint (last persisted version), if any.
     ///
     /// Used by `Projection::run()` to determine the subscribe-from position.
-    pub(crate) fn checkpoint(&self) -> Option<Version> {
+    pub(super) const fn checkpoint(&self) -> Option<Version> {
         match self {
-            ProjectionStatus::Idle { checkpoint, .. } => *checkpoint,
-            ProjectionStatus::Pending { checkpoint, .. } => *checkpoint,
-            ProjectionStatus::Committed { version, .. } => Some(*version),
+            Self::Idle { checkpoint, .. } | Self::Pending { checkpoint, .. } => *checkpoint,
+            Self::Committed { version, .. } => Some(*version),
         }
     }
 }
@@ -87,6 +89,9 @@ impl<S> ProjectionStatus<S> {
 #[allow(
     clippy::unwrap_used,
     clippy::panic,
+    clippy::shadow_reuse,
+    clippy::shadow_unrelated,
+    clippy::shadow_same,
     reason = "test code — relaxed lints"
 )]
 mod tests {

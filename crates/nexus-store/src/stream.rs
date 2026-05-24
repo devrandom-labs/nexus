@@ -5,7 +5,7 @@ use std::task::Poll;
 
 use nexus::Version;
 
-use crate::codec::{BorrowingCodec, Codec};
+use crate::codec::{BorrowingDecode, Decode};
 use crate::envelope::PersistedEnvelope;
 use crate::error::DecodeStreamError;
 use crate::upcasting::{EventMorsel, Upcaster};
@@ -322,10 +322,10 @@ where
 /// Initial typestate marker: builder needs a codec before it can `.build()`.
 pub struct NeedsCodec;
 
-/// Typestate marker: an owning [`Codec`] reference has been bound.
+/// Typestate marker: an owning [`Decode`] reference has been bound.
 pub struct WithCodec<'a, C>(&'a C);
 
-/// Typestate marker: a [`BorrowingCodec`] reference has been bound.
+/// Typestate marker: a [`BorrowingDecode`] reference has been bound.
 pub struct WithBorrowingCodec<'a, C: ?Sized>(&'a C);
 
 /// Typestate marker: no upcaster set; `.build()` supplies the no-op `()`.
@@ -359,7 +359,7 @@ impl<S> DecoderBuilder<S, NeedsCodec, NoUpcaster> {
         }
     }
 
-    /// Bind an owning [`Codec`]. Transitions to the [`DecodedStream`] arm
+    /// Bind an owning [`Decode`]. Transitions to the [`DecodedStream`] arm
     /// (owned events decoded per envelope).
     pub fn codec<C>(self, codec: &C) -> DecoderBuilder<S, WithCodec<'_, C>, NoUpcaster> {
         DecoderBuilder {
@@ -369,7 +369,7 @@ impl<S> DecoderBuilder<S, NeedsCodec, NoUpcaster> {
         }
     }
 
-    /// Bind a zero-copy [`BorrowingCodec`]. Transitions to the
+    /// Bind a zero-copy [`BorrowingDecode`]. Transitions to the
     /// [`BorrowedDecodedStream`] arm (events borrowed from cursor payload).
     pub fn borrowing_codec<C: ?Sized>(
         self,
@@ -461,9 +461,9 @@ impl<'a, S, C: ?Sized, U> DecoderBuilder<S, WithBorrowingCodec<'a, C>, WithUpcas
 // DecodedStream — owning-codec wrapper, yields owned `E`
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// An [`EventStream`] paired with an owning [`Codec`] and [`Upcaster`].
+/// An [`EventStream`] paired with an owning [`Decode`] and [`Upcaster`].
 ///
-/// Produced by [`DecoderBuilder::build`] after binding a [`Codec`]. The
+/// Produced by [`DecoderBuilder::build`] after binding a [`Decode`]. The
 /// [`try_fold`](Self::try_fold) method walks the underlying stream,
 /// applies the upcaster to each envelope, decodes the result into an
 /// owned event, and folds it through the caller-supplied closure.
@@ -495,12 +495,12 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
     /// Returns [`Err`] propagated from any pipeline stage:
     /// - stream cursor failure → [`DecodeStreamError::Stream`]
     /// - upcaster transform failure → [`DecodeStreamError::Upcast`]
-    /// - codec decode failure → [`DecodeStreamError::Codec`]
+    /// - codec decode failure → [`DecodeStreamError::Decode`]
     /// - the closure returning `Err` short-circuits the fold immediately
     pub async fn try_fold<E, B, F, Err>(mut self, init: B, mut f: F) -> Result<B, Err>
     where
         S: EventStream<M> + Send,
-        C: Codec<E>,
+        C: Decode<E>,
         U: Upcaster,
         M: Send,
         B: Send,
@@ -527,7 +527,7 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
             let event = self
                 .codec
                 .decode(transformed.event_type(), transformed.payload())
-                .map_err(|e| Err::from(DecodeStreamError::Codec(e)))?;
+                .map_err(|e| Err::from(DecodeStreamError::Decode(e)))?;
             acc = f(acc, version, event)?;
         }
         Ok(acc)
@@ -598,7 +598,7 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
     ) -> Result<(B, Disposition), Err>
     where
         S: EventStream<M> + Send,
-        C: Codec<E>,
+        C: Decode<E>,
         U: Upcaster,
         M: Send,
         B: Send,
@@ -629,7 +629,7 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
                     let event = self
                         .codec
                         .decode(transformed.event_type(), transformed.payload())
-                        .map_err(|e| Err::from(DecodeStreamError::Codec(e)))?;
+                        .map_err(|e| Err::from(DecodeStreamError::Decode(e)))?;
                     acc = f(acc, version, event).await?;
                 }
             }
@@ -641,9 +641,9 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
 // BorrowedDecodedStream — borrowing-codec wrapper, yields &E
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// An [`EventStream`] paired with a [`BorrowingCodec`] and [`Upcaster`].
+/// An [`EventStream`] paired with a [`BorrowingDecode`] and [`Upcaster`].
 ///
-/// Produced by [`DecoderBuilder::build`] after binding a [`BorrowingCodec`].
+/// Produced by [`DecoderBuilder::build`] after binding a [`BorrowingDecode`].
 /// Each decoded event is yielded as `&E` borrowing from the cursor's
 /// payload buffer — zero allocation per event for formats like rkyv and
 /// flatbuffers.
@@ -669,12 +669,12 @@ impl<S, C: ?Sized, U, M> BorrowedDecodedStream<'_, S, C, U, M> {
     /// Returns [`Err`] propagated from any pipeline stage:
     /// - stream cursor failure → [`DecodeStreamError::Stream`]
     /// - upcaster transform failure → [`DecodeStreamError::Upcast`]
-    /// - codec decode failure → [`DecodeStreamError::Codec`]
+    /// - codec decode failure → [`DecodeStreamError::Decode`]
     /// - the closure returning `Err` short-circuits the fold immediately
     pub async fn try_fold<E, B, F, Err>(mut self, init: B, mut f: F) -> Result<B, Err>
     where
         S: EventStream<M> + Send,
-        C: BorrowingCodec<E>,
+        C: BorrowingDecode<E>,
         E: ?Sized,
         U: Upcaster,
         M: Send,
@@ -702,7 +702,7 @@ impl<S, C: ?Sized, U, M> BorrowedDecodedStream<'_, S, C, U, M> {
             let event = self
                 .codec
                 .decode(transformed.event_type(), transformed.payload())
-                .map_err(|e| Err::from(DecodeStreamError::Codec(e)))?;
+                .map_err(|e| Err::from(DecodeStreamError::Decode(e)))?;
             acc = f(acc, version, event)?;
         }
         Ok(acc)

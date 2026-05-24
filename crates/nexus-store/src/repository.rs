@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
-use crate::codec::{BorrowingCodec, Codec};
+use crate::codec::{BorrowingDecode, Decode, Encode};
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
 use crate::store::{RawEventStore, Store};
@@ -45,14 +45,16 @@ use crate::upcasting::Upcaster;
 ///
 /// # Error handling
 ///
-/// Implementations must bridge errors from three sources:
+/// Implementations must bridge errors from four sources:
 /// - [`RawEventStore`](crate::RawEventStore) errors (I/O, conflicts)
-/// - [`Codec`](crate::Codec) errors (serialization failures)
+/// - [`Encode`](crate::Encode) errors (serialization failures on write)
+/// - [`Decode`](crate::Decode) / [`BorrowingDecode`](crate::BorrowingDecode)
+///   errors (deserialization failures on read)
 /// - [`KernelError`](nexus::KernelError) (version mismatch during replay)
 ///
-/// [`StoreError`](crate::StoreError) can represent all three via its
-/// `Adapter`, `Codec`, and `Kernel` variants. Use `StoreError` as
-/// `Self::Error` or define a custom error with `From` impls.
+/// [`StoreError`](crate::StoreError) can represent all four via its
+/// `Adapter`, `Encode`, `Decode`, and `Kernel` variants. Use `StoreError`
+/// as `Self::Error` or define a custom error with `From` impls.
 pub trait Repository<A: Aggregate>: Send + Sync {
     /// The error type for repository operations.
     type Error: std::error::Error + Send + Sync + 'static;
@@ -123,7 +125,7 @@ pub(super) fn version_to_nz32(version: Version) -> Option<NonZeroU32> {
 // EventStore — owning codec (serde, bincode, postcard, etc.)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Event store using an owning [`Codec`] — one allocation per decoded event.
+/// Event store using owning [`Encode`] + [`Decode`] — one allocation per decoded event.
 ///
 /// For serde-based formats where deserialization produces an owned value.
 ///
@@ -161,12 +163,17 @@ impl<A, S, C, U> ReplayFrom<A> for EventStore<S, C, U>
 where
     A: Aggregate,
     S: RawEventStore,
-    C: Codec<EventOf<A>>,
+    C: Encode<EventOf<A>> + Decode<EventOf<A>>,
     U: Upcaster,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
-    type Error = StoreError<S::Error, C::Error, U::Error>;
+    type Error = StoreError<
+        S::Error,
+        <C as Encode<EventOf<A>>>::Error,
+        <C as Decode<EventOf<A>>>::Error,
+        U::Error,
+    >;
 
     async fn replay_from(
         &self,
@@ -197,12 +204,17 @@ impl<A, S, C, U> Repository<A> for EventStore<S, C, U>
 where
     A: Aggregate,
     S: RawEventStore,
-    C: Codec<EventOf<A>>,
+    C: Encode<EventOf<A>> + Decode<EventOf<A>>,
     U: Upcaster,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
-    type Error = StoreError<S::Error, C::Error, U::Error>;
+    type Error = StoreError<
+        S::Error,
+        <C as Encode<EventOf<A>>>::Error,
+        <C as Decode<EventOf<A>>>::Error,
+        U::Error,
+    >;
 
     async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, Self::Error> {
         let root = AggregateRoot::<A>::new(id);
@@ -229,7 +241,8 @@ where
         let mut envelopes = Vec::with_capacity(events.len());
 
         for event in events {
-            let payload = self.codec.encode(event).map_err(StoreError::Codec)?;
+            let payload = <C as Encode<EventOf<A>>>::encode(&self.codec, event)
+                .map_err(StoreError::Encode)?;
 
             let event_name = event.name();
             let schema_version = self
@@ -290,7 +303,7 @@ where
 // ZeroCopyEventStore — borrowing codec (rkyv, flatbuffers, etc.)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Event store using a [`BorrowingCodec`] — zero allocation on decode.
+/// Event store using [`Encode`] + [`BorrowingDecode`] — zero allocation on decode.
 ///
 /// For zero-copy formats where the serialized bytes can be reinterpreted
 /// in-place. The decoded `&E` borrows directly from the cursor buffer.
@@ -329,12 +342,17 @@ impl<A, S, C, U> ReplayFrom<A> for ZeroCopyEventStore<S, C, U>
 where
     A: Aggregate,
     S: RawEventStore,
-    C: BorrowingCodec<EventOf<A>>,
+    C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>>,
     U: Upcaster,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
-    type Error = StoreError<S::Error, C::Error, U::Error>;
+    type Error = StoreError<
+        S::Error,
+        <C as Encode<EventOf<A>>>::Error,
+        <C as BorrowingDecode<EventOf<A>>>::Error,
+        U::Error,
+    >;
 
     async fn replay_from(
         &self,
@@ -365,12 +383,17 @@ impl<A, S, C, U> Repository<A> for ZeroCopyEventStore<S, C, U>
 where
     A: Aggregate,
     S: RawEventStore,
-    C: BorrowingCodec<EventOf<A>>,
+    C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>>,
     U: Upcaster,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send,
 {
-    type Error = StoreError<S::Error, C::Error, U::Error>;
+    type Error = StoreError<
+        S::Error,
+        <C as Encode<EventOf<A>>>::Error,
+        <C as BorrowingDecode<EventOf<A>>>::Error,
+        U::Error,
+    >;
 
     async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, Self::Error> {
         let root = AggregateRoot::<A>::new(id);
@@ -397,7 +420,8 @@ where
         let mut envelopes = Vec::with_capacity(events.len());
 
         for event in events {
-            let payload = self.codec.encode(event).map_err(StoreError::Codec)?;
+            let payload = <C as Encode<EventOf<A>>>::encode(&self.codec, event)
+                .map_err(StoreError::Encode)?;
 
             let event_name = event.name();
             let schema_version = self

@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus_store::state::EveryNEvents;
 
-use super::projection::{Configured, Projection};
+use super::{Configured, Projection};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Typestate markers — compile-time guards for required fields

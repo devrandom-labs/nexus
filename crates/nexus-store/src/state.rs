@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use nexus::{Id, Version};
 
-use crate::codec::Codec;
+use crate::codec::{Decode, Encode};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SnapshotStore<S, P> — atomic state + position persistence
@@ -159,11 +159,12 @@ impl PersistTrigger for AfterEventTypes {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CodecSnapshotStore<SS, C> — byte-level <-> typed bridge via Codec<S>
+// CodecSnapshotStore<SS, C> — byte-level <-> typed bridge via Encode + Decode
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Adapter that bridges a byte-level [`SnapshotStore<Vec<u8>, P>`] to a typed
-/// [`SnapshotStore<S, P>`] by encoding/decoding through a [`Codec<S>`].
+/// [`SnapshotStore<S, P>`] by encoding/decoding through an [`Encode<S>`] +
+/// [`Decode<S>`] pair.
 ///
 /// Use this when your storage backend works with raw bytes (e.g., fjall)
 /// but consumers need typed state. The position `P` is opaque to the
@@ -186,9 +187,10 @@ where
     S: Send + Sync + 'static,
     P: Send,
     SS: SnapshotStore<Vec<u8>, P>,
-    C: Codec<S>,
+    C: Encode<S> + Decode<S>,
 {
-    type Error = CodecSnapshotStoreError<SS::Error, C::Error>;
+    type Error =
+        CodecSnapshotStoreError<SS::Error, <C as Encode<S>>::Error, <C as Decode<S>>::Error>;
 
     async fn hydrate(
         &self,
@@ -205,10 +207,8 @@ where
         };
 
         let label = id.to_label();
-        let state = self
-            .codec
-            .decode(&label, &bytes)
-            .map_err(CodecSnapshotStoreError::Codec)?;
+        let state = <C as Decode<S>>::decode(&self.codec, &label, &bytes)
+            .map_err(CodecSnapshotStoreError::Decode)?;
 
         Ok(Some((position, state)))
     }
@@ -220,10 +220,8 @@ where
         position: P,
         state: &S,
     ) -> Result<(), Self::Error> {
-        let bytes = self
-            .codec
-            .encode(state)
-            .map_err(CodecSnapshotStoreError::Codec)?;
+        let bytes = <C as Encode<S>>::encode(&self.codec, state)
+            .map_err(CodecSnapshotStoreError::Encode)?;
 
         self.store
             .commit(id, schema_version, position, &bytes)
@@ -232,15 +230,18 @@ where
     }
 }
 
-/// Error from [`CodecSnapshotStore`] — either the underlying store or the codec.
+/// Error from [`CodecSnapshotStore`] — the underlying store, the encoder, or the decoder.
 #[derive(Debug, thiserror::Error)]
-pub enum CodecSnapshotStoreError<S, C> {
+pub enum CodecSnapshotStoreError<S, EncErr, DecErr> {
     /// The underlying byte-level store failed.
     #[error(transparent)]
     Store(S),
-    /// Encoding or decoding failed.
+    /// Encoding failed.
     #[error(transparent)]
-    Codec(C),
+    Encode(EncErr),
+    /// Decoding failed.
+    #[error(transparent)]
+    Decode(DecErr),
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

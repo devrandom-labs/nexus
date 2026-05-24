@@ -7,6 +7,10 @@
     clippy::shadow_same,
     clippy::shadow_unrelated,
     clippy::as_conversions,
+    clippy::missing_const_for_fn,
+    clippy::io_other_error,
+    clippy::useless_vec,
+    clippy::iter_on_single_items,
     reason = "test harness — relaxed lints for test code"
 )]
 
@@ -587,11 +591,14 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
     use nexus_store::state::CodecSnapshotStore;
 
     struct FailCodec;
-    impl nexus_store::Codec<CounterState> for FailCodec {
+    impl nexus_store::Encode<CounterState> for FailCodec {
         type Error = std::io::Error;
         fn encode(&self, _state: &CounterState) -> Result<Vec<u8>, Self::Error> {
             Ok(vec![1, 2, 3])
         }
+    }
+    impl nexus_store::Decode<CounterState> for FailCodec {
+        type Error = std::io::Error;
         fn decode(&self, _event_type: &str, _payload: &[u8]) -> Result<CounterState, Self::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
