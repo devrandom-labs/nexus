@@ -7,13 +7,13 @@ use std::convert::Infallible;
 use std::fmt;
 
 use nexus::*;
-use nexus_store::Codec;
 use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::UpcastError;
 use nexus_store::Upcaster;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
+use nexus_store::{Decode, Encode};
 
 // -- Test domain --
 
@@ -82,7 +82,7 @@ impl Aggregate for TodoAggregate {
 
 struct TestCodec;
 
-impl Codec<TodoEvent> for TestCodec {
+impl Encode<TodoEvent> for TestCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &TodoEvent) -> Result<Vec<u8>, Self::Error> {
@@ -91,6 +91,10 @@ impl Codec<TodoEvent> for TestCodec {
             TodoEvent::Done => Ok(b"done".to_vec()),
         }
     }
+}
+
+impl Decode<TodoEvent> for TestCodec {
+    type Error = std::io::Error;
 
     fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<TodoEvent, Self::Error> {
         let s = std::str::from_utf8(payload)

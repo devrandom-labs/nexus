@@ -2,17 +2,21 @@
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 
-use nexus_store::BorrowingCodec;
+use nexus_store::{BorrowingDecode, Encode};
 
 /// A test codec that "decodes" by reinterpreting bytes as a u32 slice.
 struct U32Codec;
 
-impl BorrowingCodec<[u32]> for U32Codec {
+impl Encode<[u32]> for U32Codec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &[u32]) -> Result<Vec<u8>, Self::Error> {
         Ok(event.iter().flat_map(|n| n.to_le_bytes()).collect())
     }
+}
+
+impl BorrowingDecode<[u32]> for U32Codec {
+    type Error = std::io::Error;
 
     fn decode<'a>(&self, _event_type: &str, payload: &'a [u8]) -> Result<&'a [u32], Self::Error> {
         if !payload.len().is_multiple_of(4) {

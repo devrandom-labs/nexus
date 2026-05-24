@@ -7,6 +7,9 @@
     clippy::shadow_same,
     clippy::shadow_unrelated,
     clippy::as_conversions,
+    clippy::use_self,
+    clippy::too_many_lines,
+    clippy::no_effect_underscore_binding,
     reason = "test harness — relaxed lints for test code"
 )]
 
@@ -17,7 +20,8 @@ use nexus::{DomainEvent, Message, Version};
 use nexus_framework::projection::{Projection, ProjectionError, ProjectionStatus, StartupDecision};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{
-    Codec, EventStreamExt, InMemorySnapshotStore, RawEventStore, SnapshotStore, pending_envelope,
+    Decode, Encode, EventStreamExt, InMemorySnapshotStore, RawEventStore, SnapshotStore,
+    pending_envelope,
 };
 use nexus_store::{EveryNEvents, Projector};
 
@@ -102,7 +106,7 @@ impl Projector for CountingProjector {
 /// Simple event codec for tests.
 struct TestEventCodec;
 
-impl Codec<TestEvent> for TestEventCodec {
+impl Encode<TestEvent> for TestEventCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &TestEvent) -> Result<Vec<u8>, Self::Error> {
@@ -119,6 +123,10 @@ impl Codec<TestEvent> for TestEventCodec {
             }
         }
     }
+}
+
+impl Decode<TestEvent> for TestEventCodec {
+    type Error = std::io::Error;
 
     fn decode(&self, _name: &str, payload: &[u8]) -> Result<TestEvent, Self::Error> {
         if payload.len() != 9 {

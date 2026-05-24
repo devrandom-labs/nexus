@@ -7,8 +7,7 @@
 use std::fmt;
 
 use nexus::*;
-use nexus_store::Codec;
-use nexus_store::{Json, JsonCodec, SerdeCodec, SerdeFormat};
+use nexus_store::{Decode, Encode, Json, JsonCodec, SerdeCodec, SerdeFormat};
 use serde::{Deserialize, Serialize};
 
 // -- Test domain --

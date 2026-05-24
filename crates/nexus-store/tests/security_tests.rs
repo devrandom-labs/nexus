@@ -36,7 +36,8 @@ use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
-type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::convert::Infallible>;
+type TestStoreError =
+    StoreError<InMemoryStoreError, std::io::Error, std::io::Error, std::convert::Infallible>;
 
 fn label(s: &str) -> ArrayString<64> {
     ArrayString::try_from(s).unwrap()
@@ -274,7 +275,8 @@ fn store_error_variants_are_known() {
     match err {
         StoreError::Conflict { .. } => {}
         StoreError::StreamNotFound { .. } => {}
-        StoreError::Codec(_) => {}
+        StoreError::Encode(_) => {}
+        StoreError::Decode(_) => {}
         StoreError::Adapter(_) => {}
         StoreError::Upcast(_) => {}
         StoreError::Kernel(_) => {}

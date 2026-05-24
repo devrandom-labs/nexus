@@ -1,28 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Codec<E> — owning serialization (serde-based formats)
+// Encode<E> — serialize a typed value to bytes
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Pluggable serialization for typed values.
+/// Serialize a typed value to bytes.
 ///
-/// Converts between typed values and byte payloads. The type parameter
-/// `E` is the concrete type — implementors add whatever bounds they
-/// need (e.g. `Serialize + DeserializeOwned` for JSON codecs).
+/// The write half of the codec story. Independent from [`Decode`] and
+/// [`BorrowingDecode`] so write-only adapters need not implement decoding,
+/// and so the encode path can be bounded without forcing a decode strategy
+/// on the caller.
 ///
-/// Used for both domain events (where `name` = event type from
-/// `DomainEvent::name()`) and aggregate snapshots (where `name` =
-/// aggregate identifier via `Display`).
-///
-/// Knows nothing about envelopes, streams, versions, or metadata.
-/// Just bytes in, bytes out.
-///
-/// # When to use
-///
-/// Use `Codec<E>` for serde-based formats (JSON, bincode, postcard)
-/// where deserialization produces an owned value. For zero-copy formats
-/// (rkyv, flatbuffers) where the serialized bytes can be reinterpreted
-/// in-place, use [`BorrowingCodec<E>`] instead.
-pub trait Codec<E>: Send + Sync + 'static {
-    /// The error type for serialization/deserialization failures.
+/// `E: ?Sized` allows unsized event types (e.g. `Archived<MyEvent>`).
+pub trait Encode<E: ?Sized>: Send + Sync + 'static {
+    /// The error type for serialization failures.
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Serialize a typed value to bytes.
@@ -31,6 +20,23 @@ pub trait Codec<E>: Send + Sync + 'static {
     ///
     /// Returns `Self::Error` if the value cannot be serialized.
     fn encode(&self, event: &E) -> Result<Vec<u8>, Self::Error>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Decode<E> — owning deserialize from bytes
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Deserialize bytes to an owned typed value.
+///
+/// The owning read half. For serde-based formats (JSON, bincode, postcard)
+/// where deserialization produces an owned value.
+///
+/// Independent from [`Encode`] and [`BorrowingDecode`]: a codec may
+/// implement only `Decode` (read-only replica), only `Encode` (write-only
+/// shipper), or any combination.
+pub trait Decode<E>: Send + Sync + 'static {
+    /// The error type for deserialization failures.
+    type Error: std::error::Error + Send + Sync + 'static;
 
     /// Deserialize bytes back to a typed value.
     ///
@@ -46,42 +52,26 @@ pub trait Codec<E>: Send + Sync + 'static {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BorrowingCodec<E> — zero-copy decode (rkyv, flatbuffers)
+// BorrowingDecode<E> — zero-copy deserialize (returns &E)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Zero-copy codec for typed values.
+/// Decode bytes by borrowing directly from the payload buffer.
 ///
-/// Unlike [`Codec<E>`] which returns an owned `E`,
-/// `BorrowingCodec` returns `&'a E` borrowing directly from the payload
-/// buffer. This enables zero-allocation event streaming for codecs
-/// like rkyv and flatbuffers where the serialized bytes ARE the data.
+/// Unlike [`Decode`] which returns an owned `E`, `BorrowingDecode` returns
+/// `&'a E` borrowing directly from the payload buffer. This enables
+/// zero-allocation event streaming for codecs like rkyv and flatbuffers
+/// where the serialized bytes ARE the data.
 ///
 /// `E: ?Sized` allows unsized event types (e.g. `Archived<MyEvent>`).
 ///
-/// Used for both domain events (where `name` = event type) and
-/// aggregate snapshots (where `name` = aggregate identifier).
-///
-/// # When to use
-///
-/// - **Use `Codec<E>`** for serde-based formats (JSON, bincode, postcard)
-///   where deserialization produces an owned value.
-/// - **Use `BorrowingCodec<E>`** for zero-copy formats (rkyv, flatbuffers)
-///   where the serialized bytes can be reinterpreted in-place.
-pub trait BorrowingCodec<E: ?Sized>: Send + Sync + 'static {
-    /// The error type for serialization/deserialization failures.
+/// Independent from [`Encode`] and [`Decode`].
+pub trait BorrowingDecode<E: ?Sized>: Send + Sync + 'static {
+    /// The error type for deserialization failures.
     type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Serialize a typed value to bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Self::Error` if the value cannot be serialized.
-    fn encode(&self, event: &E) -> Result<Vec<u8>, Self::Error>;
 
     /// Decode bytes by borrowing directly from the payload buffer.
     ///
-    /// `name` identifies the type being decoded — for events this is the
-    /// variant name, for snapshots this is the aggregate identifier.
+    /// `name` identifies the type being decoded.
     ///
     /// The returned reference has lifetime `'a` tied to `payload` —
     /// it borrows from the cursor's row buffer. No allocation occurs.
@@ -94,19 +84,20 @@ pub trait BorrowingCodec<E: ?Sized>: Send + Sync + 'static {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Serde adapter — feature-gated `Codec<E>` impl driven by a `SerdeFormat`
+// Serde adapter — feature-gated Encode/Decode impls driven by a SerdeFormat
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "serde")]
 pub mod serde {
     use ::serde::{Serialize, de::DeserializeOwned};
 
-    use super::Codec;
+    use super::{Decode, Encode};
 
     /// Format-agnostic serialization strategy for serde-compatible events.
     ///
     /// Implementors provide the wire format (JSON, bincode, postcard, etc.)
-    /// while [`SerdeCodec`] handles the plumbing to satisfy [`Codec<E>`].
+    /// while [`SerdeCodec`] handles the plumbing to satisfy [`Encode`] and
+    /// [`Decode`].
     ///
     /// # Implementor contract
     ///
@@ -135,16 +126,14 @@ pub mod serde {
     /// Generic serde-based codec parameterized by a [`SerdeFormat`].
     ///
     /// Wraps any `SerdeFormat` implementation and bridges it to the
-    /// store's [`Codec<E>`] trait. The format handles the wire encoding
-    /// while `SerdeCodec` satisfies the event store contract.
+    /// store's [`Encode`] and [`Decode`] traits. Both directions share
+    /// the same underlying format and thus the same error type.
     ///
     /// # Variant dispatch
     ///
-    /// Unlike raw `Codec<E>` implementations that may use `name` to
-    /// select which variant to deserialize, `SerdeCodec` ignores `name`
-    /// entirely. Serde formats embed variant discriminants in the payload
-    /// (e.g. `{"Credited": {...}}` in JSON), so the codec delegates dispatch
-    /// to serde itself.
+    /// `SerdeCodec` ignores the `name` argument on `decode`. Serde formats
+    /// embed variant discriminants in the payload (e.g. `{"Credited": {...}}`
+    /// in JSON), so the codec delegates dispatch to serde itself.
     ///
     /// # Examples
     ///
@@ -174,9 +163,9 @@ pub mod serde {
         }
     }
 
-    impl<E, F> Codec<E> for SerdeCodec<F>
+    impl<E, F> Encode<E> for SerdeCodec<F>
     where
-        E: Serialize + DeserializeOwned + Send + Sync + 'static,
+        E: Serialize + Send + Sync + 'static,
         F: SerdeFormat,
     {
         type Error = F::Error;
@@ -184,6 +173,14 @@ pub mod serde {
         fn encode(&self, event: &E) -> Result<Vec<u8>, Self::Error> {
             self.format.serialize(event)
         }
+    }
+
+    impl<E, F> Decode<E> for SerdeCodec<F>
+    where
+        E: DeserializeOwned + Send + Sync + 'static,
+        F: SerdeFormat,
+    {
+        type Error = F::Error;
 
         fn decode(&self, _name: &str, payload: &[u8]) -> Result<E, Self::Error> {
             self.format.deserialize(payload)

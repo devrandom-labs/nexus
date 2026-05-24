@@ -8,7 +8,8 @@ use nexus_store::{StoreError, UpcastError};
 
 /// Concrete `StoreError` for tests: adapter = `std::io::Error`, codec = `std::io::Error`,
 /// upcaster = `std::convert::Infallible`.
-type TestStoreError = StoreError<std::io::Error, std::io::Error, std::convert::Infallible>;
+type TestStoreError =
+    StoreError<std::io::Error, std::io::Error, std::io::Error, std::convert::Infallible>;
 
 fn label(s: &str) -> ArrayString<64> {
     ArrayString::try_from(s).unwrap()
@@ -49,15 +50,32 @@ fn stream_not_found_display_contains_stream_id() {
 }
 
 #[test]
-fn codec_display_contains_inner_message() {
+fn encode_display_contains_inner_message() {
     let inner = std::io::Error::new(std::io::ErrorKind::InvalidData, "bad json");
-    let err: TestStoreError = StoreError::Codec(inner);
+    let err: TestStoreError = StoreError::Encode(inner);
     let msg = format!("{err}");
-    assert!(msg.contains("codec"), "should mention codec");
+    assert!(msg.contains("encode"), "should mention encode");
     assert!(msg.contains("bad json"), "should contain inner message");
-    // Codec has a source chain
+    // Encode has a source chain
     let source = std::error::Error::source(&err);
-    assert!(source.is_some(), "Codec variant should have a source");
+    assert!(source.is_some(), "Encode variant should have a source");
+    let source_msg = format!("{}", source.unwrap());
+    assert!(
+        source_msg.contains("bad json"),
+        "source should contain inner message"
+    );
+}
+
+#[test]
+fn decode_display_contains_inner_message() {
+    let inner = std::io::Error::new(std::io::ErrorKind::InvalidData, "bad json");
+    let err: TestStoreError = StoreError::Decode(inner);
+    let msg = format!("{err}");
+    assert!(msg.contains("decode"), "should mention decode");
+    assert!(msg.contains("bad json"), "should contain inner message");
+    // Decode has a source chain
+    let source = std::error::Error::source(&err);
+    assert!(source.is_some(), "Decode variant should have a source");
     let source_msg = format!("{}", source.unwrap());
     assert!(
         source_msg.contains("bad json"),

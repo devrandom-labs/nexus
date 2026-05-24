@@ -24,7 +24,7 @@ use nexus::*;
 use nexus_store::store::RawEventStore;
 use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{Codec, pending_envelope};
+use nexus_store::{Decode, Encode, pending_envelope};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -187,12 +187,16 @@ impl Handle<Withdraw> for BankAccount {
 /// JSON codec for `AccountEvent` using serde_json.
 struct JsonCodec;
 
-impl Codec<AccountEvent> for JsonCodec {
+impl Encode<AccountEvent> for JsonCodec {
     type Error = serde_json::Error;
 
     fn encode(&self, event: &AccountEvent) -> Result<Vec<u8>, Self::Error> {
         serde_json::to_vec(event)
     }
+}
+
+impl Decode<AccountEvent> for JsonCodec {
+    type Error = serde_json::Error;
 
     fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<AccountEvent, Self::Error> {
         serde_json::from_slice(payload)

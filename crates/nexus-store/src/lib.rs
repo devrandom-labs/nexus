@@ -22,7 +22,7 @@ pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
 pub use codec::serde::json::{Json, JsonCodec};
 #[cfg(feature = "serde")]
 pub use codec::serde::{SerdeCodec, SerdeFormat};
-pub use codec::{BorrowingCodec, Codec};
+pub use codec::{BorrowingDecode, Decode, Encode};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::{AppendError, DecodeStreamError, InvalidSchemaVersion, StoreError, UpcastError};
 pub use nexus::Version;

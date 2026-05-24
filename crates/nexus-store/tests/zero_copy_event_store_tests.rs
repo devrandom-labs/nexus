@@ -10,10 +10,10 @@
 use std::fmt;
 
 use nexus::*;
-use nexus_store::BorrowingCodec;
 use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::testing::InMemoryStore;
+use nexus_store::{BorrowingDecode, Encode};
 
 // -- Domain where Event is a fixed-layout type decodable from bytes --
 
@@ -76,12 +76,16 @@ impl Aggregate for CounterAggregate {
 
 struct CounterBorrowingCodec;
 
-impl BorrowingCodec<CounterEvent> for CounterBorrowingCodec {
+impl Encode<CounterEvent> for CounterBorrowingCodec {
     type Error = std::io::Error;
 
     fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
         Ok(event.delta.to_le_bytes().to_vec())
     }
+}
+
+impl BorrowingDecode<CounterEvent> for CounterBorrowingCodec {
+    type Error = std::io::Error;
 
     fn decode<'a>(
         &self,

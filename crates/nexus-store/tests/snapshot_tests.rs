@@ -7,6 +7,10 @@
     clippy::shadow_same,
     clippy::shadow_unrelated,
     clippy::as_conversions,
+    clippy::useless_vec,
+    clippy::doc_markdown,
+    clippy::single_call_fn,
+    clippy::iter_on_single_items,
     reason = "test harness — relaxed lints for test code"
 )]
 

@@ -67,7 +67,7 @@ use nexus_store::InMemoryStoreError;
 use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::Upcaster;
-use nexus_store::codec::Codec;
+use nexus_store::codec::{Decode, Encode};
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::{StoreError, UpcastError};
 use nexus_store::pending_envelope;
@@ -79,7 +79,7 @@ use nexus_store::upcasting::EventMorsel;
 use proptest::prelude::*;
 
 /// Concrete `StoreError` for tests using `InMemoryStore` + `JsonCodec` + no upcaster.
-type TestStoreError = StoreError<InMemoryStoreError, JsonCodecError, Infallible>;
+type TestStoreError = StoreError<InMemoryStoreError, JsonCodecError, JsonCodecError, Infallible>;
 
 fn label(s: &str) -> ArrayString<64> {
     ArrayString::try_from(s).unwrap()
@@ -183,7 +183,7 @@ struct JsonCodec;
 #[error("{0}")]
 struct JsonCodecError(String);
 
-impl Codec<TestEvent> for JsonCodec {
+impl Encode<TestEvent> for JsonCodec {
     type Error = JsonCodecError;
     fn encode(&self, event: &TestEvent) -> Result<Vec<u8>, Self::Error> {
         let json = match event {
@@ -192,6 +192,10 @@ impl Codec<TestEvent> for JsonCodec {
         };
         Ok(json.into_bytes())
     }
+}
+
+impl Decode<TestEvent> for JsonCodec {
+    type Error = JsonCodecError;
     fn decode(&self, event_type: &str, payload: &[u8]) -> Result<TestEvent, Self::Error> {
         let s = std::str::from_utf8(payload).map_err(|e| JsonCodecError(e.to_string()))?;
         match event_type {

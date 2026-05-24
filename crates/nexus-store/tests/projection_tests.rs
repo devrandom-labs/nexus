@@ -7,6 +7,9 @@
     clippy::shadow_same,
     clippy::shadow_unrelated,
     clippy::as_conversions,
+    clippy::useless_vec,
+    clippy::use_self,
+    clippy::iter_on_single_items,
     reason = "test harness — relaxed lints for test code"
 )]
 

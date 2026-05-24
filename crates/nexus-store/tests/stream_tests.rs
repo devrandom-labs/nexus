@@ -23,7 +23,7 @@
 //!    - codec / borrowing_codec / +upcaster / build
 //! 4. `DecodedStream::try_fold` (owning codec)
 //!    - empty / single / many / order / version threading
-//!    - errors split correctly into `Stream`/`Upcast`/`Codec` variants
+//!    - errors split correctly into `Stream`/`Upcast`/`Decode` variants
 //!    - closure-error short-circuit
 //!    - upcaster transform actually fires (payload modified before decode)
 //!    - no-op upcaster passthrough (payload unchanged)
@@ -63,6 +63,12 @@
 #![allow(clippy::arithmetic_side_effects, reason = "tests")]
 #![allow(clippy::indexing_slicing, reason = "tests")]
 #![allow(clippy::similar_names, reason = "tests")]
+#![allow(
+    clippy::disallowed_types,
+    reason = "tests use std Mutex for shared in-memory state and counters"
+)]
+#![allow(clippy::await_holding_lock, reason = "tests")]
+#![allow(clippy::missing_const_for_fn, reason = "tests")]
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -72,7 +78,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrayvec::ArrayString;
 use nexus::Version;
-use nexus_store::codec::{BorrowingCodec, Codec};
+use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::{DecodeStreamError, UpcastError};
 use nexus_store::store::GlobalSeq;
@@ -268,12 +274,16 @@ struct U64Codec;
 #[error("u64 decode failed: payload had {0} bytes, expected 8")]
 struct U64DecodeError(usize);
 
-impl Codec<u64> for U64Codec {
+impl Encode<u64> for U64Codec {
     type Error = U64DecodeError;
 
     fn encode(&self, value: &u64) -> Result<Vec<u8>, Self::Error> {
         Ok(value.to_le_bytes().to_vec())
     }
+}
+
+impl Decode<u64> for U64Codec {
+    type Error = U64DecodeError;
 
     fn decode(&self, _name: &str, payload: &[u8]) -> Result<u64, Self::Error> {
         let bytes: [u8; 8] = payload
@@ -290,12 +300,16 @@ struct BytesBorrowingCodec;
 #[error("bytes borrow failed")]
 struct BytesBorrowError;
 
-impl BorrowingCodec<[u8]> for BytesBorrowingCodec {
+impl Encode<[u8]> for BytesBorrowingCodec {
     type Error = BytesBorrowError;
 
     fn encode(&self, value: &[u8]) -> Result<Vec<u8>, Self::Error> {
         Ok(value.to_vec())
     }
+}
+
+impl BorrowingDecode<[u8]> for BytesBorrowingCodec {
+    type Error = BytesBorrowError;
 
     fn decode<'a>(&self, _name: &str, payload: &'a [u8]) -> Result<&'a [u8], Self::Error> {
         Ok(payload)
@@ -303,19 +317,23 @@ impl BorrowingCodec<[u8]> for BytesBorrowingCodec {
 }
 
 /// Codec that unconditionally fails — used to assert
-/// `DecodeStreamError::Codec` propagation.
+/// `DecodeStreamError::Decode` propagation.
 struct AlwaysFailingOwningCodec;
 
 #[derive(Debug, Error)]
 #[error("codec hard-failed: {0}")]
 struct CodecHardFail(&'static str);
 
-impl Codec<u64> for AlwaysFailingOwningCodec {
+impl Encode<u64> for AlwaysFailingOwningCodec {
     type Error = CodecHardFail;
 
     fn encode(&self, _v: &u64) -> Result<Vec<u8>, Self::Error> {
         Err(CodecHardFail("encode"))
     }
+}
+
+impl Decode<u64> for AlwaysFailingOwningCodec {
+    type Error = CodecHardFail;
 
     fn decode(&self, _n: &str, _p: &[u8]) -> Result<u64, Self::Error> {
         Err(CodecHardFail("decode"))
@@ -324,12 +342,16 @@ impl Codec<u64> for AlwaysFailingOwningCodec {
 
 struct AlwaysFailingBorrowingCodec;
 
-impl BorrowingCodec<[u8]> for AlwaysFailingBorrowingCodec {
+impl Encode<[u8]> for AlwaysFailingBorrowingCodec {
     type Error = CodecHardFail;
 
     fn encode(&self, _v: &[u8]) -> Result<Vec<u8>, Self::Error> {
         Err(CodecHardFail("encode"))
     }
+}
+
+impl BorrowingDecode<[u8]> for AlwaysFailingBorrowingCodec {
+    type Error = CodecHardFail;
 
     fn decode<'a>(&self, _n: &str, _p: &'a [u8]) -> Result<&'a [u8], Self::Error> {
         Err(CodecHardFail("decode"))
@@ -1102,7 +1124,7 @@ async fn decoded_owning_upcaster_runs_before_codec() {
 
     assert!(matches!(
         result,
-        Err(DecodeStreamError::Codec(U64DecodeError(9)))
+        Err(DecodeStreamError::Decode(U64DecodeError(9)))
     ));
 }
 
@@ -1203,7 +1225,7 @@ async fn decoded_owning_codec_error_to_decode_stream_error_codec() {
         .build()
         .try_fold((), |(), _v, _e: u64| Ok(()))
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Codec(_))));
+    assert!(matches!(result, Err(DecodeStreamError::Decode(_))));
 }
 
 #[tokio::test]
@@ -1392,7 +1414,7 @@ async fn borrowed_codec_error_to_decode_stream_error_codec() {
         .build()
         .try_fold((), |(), _v, _b: &[u8]| Ok(()))
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Codec(_))));
+    assert!(matches!(result, Err(DecodeStreamError::Decode(_))));
 }
 
 #[tokio::test]
@@ -1826,12 +1848,16 @@ async fn drop_envelope_drops_even_when_closure_errors() {
 /// Owning codec that returns `Vec<u8>` — the payload cloned per event.
 struct BytesOwningCodec;
 
-impl Codec<Vec<u8>> for BytesOwningCodec {
+impl Encode<Vec<u8>> for BytesOwningCodec {
     type Error = Infallible;
 
     fn encode(&self, value: &Vec<u8>) -> Result<Vec<u8>, Self::Error> {
         Ok(value.clone())
     }
+}
+
+impl Decode<Vec<u8>> for BytesOwningCodec {
+    type Error = Infallible;
 
     fn decode(&self, _n: &str, payload: &[u8]) -> Result<Vec<u8>, Self::Error> {
         Ok(payload.to_vec())

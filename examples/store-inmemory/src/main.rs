@@ -28,7 +28,7 @@ use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 use nexus_store::upcasting::Upcaster;
-use nexus_store::{Codec, pending_envelope};
+use nexus_store::{Decode, Encode, pending_envelope};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -111,12 +111,16 @@ enum CodecError {
     UnknownType(String),
 }
 
-impl Codec<TodoEvent> for JsonCodec {
+impl Encode<TodoEvent> for JsonCodec {
     type Error = CodecError;
 
     fn encode(&self, event: &TodoEvent) -> Result<Vec<u8>, Self::Error> {
         serde_json::to_vec(event).map_err(CodecError::Serialize)
     }
+}
+
+impl Decode<TodoEvent> for JsonCodec {
+    type Error = CodecError;
 
     fn decode(&self, event_type: &str, payload: &[u8]) -> Result<TodoEvent, Self::Error> {
         // In a real system you might dispatch on `event_type` to pick

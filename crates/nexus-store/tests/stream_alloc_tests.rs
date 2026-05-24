@@ -30,6 +30,10 @@
 #![allow(clippy::doc_markdown, reason = "tests")]
 #![allow(clippy::uninlined_format_args, reason = "tests")]
 #![allow(clippy::arithmetic_side_effects, reason = "tests")]
+#![allow(
+    clippy::disallowed_types,
+    reason = "tests need std Mutex for global allocator gate"
+)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::convert::Infallible;
@@ -37,7 +41,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nexus::Version;
-use nexus_store::codec::{BorrowingCodec, Codec};
+use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::DecodeStreamError;
 use nexus_store::store::GlobalSeq;
@@ -128,12 +132,16 @@ struct Utf8Err;
 /// Owning codec: returns a fresh `String` per event (heap-allocates).
 struct StringOwningCodec;
 
-impl Codec<String> for StringOwningCodec {
+impl Encode<String> for StringOwningCodec {
     type Error = Utf8Err;
 
     fn encode(&self, value: &String) -> Result<Vec<u8>, Self::Error> {
         Ok(value.as_bytes().to_vec())
     }
+}
+
+impl Decode<String> for StringOwningCodec {
+    type Error = Utf8Err;
 
     fn decode(&self, _n: &str, payload: &[u8]) -> Result<String, Self::Error> {
         std::str::from_utf8(payload)
@@ -145,12 +153,16 @@ impl Codec<String> for StringOwningCodec {
 /// Borrowing codec: validates UTF-8 in-place, returns `&str` (no allocation).
 struct StrBorrowingCodec;
 
-impl BorrowingCodec<str> for StrBorrowingCodec {
+impl Encode<str> for StrBorrowingCodec {
     type Error = Utf8Err;
 
     fn encode(&self, value: &str) -> Result<Vec<u8>, Self::Error> {
         Ok(value.as_bytes().to_vec())
     }
+}
+
+impl BorrowingDecode<str> for StrBorrowingCodec {
+    type Error = Utf8Err;
 
     fn decode<'a>(&self, _n: &str, payload: &'a [u8]) -> Result<&'a str, Self::Error> {
         std::str::from_utf8(payload).map_err(|_| Utf8Err)
