@@ -1,10 +1,11 @@
-//! Allocation-counting proof for `nexus-store::stream::BorrowedDecodedStream`.
+//! Allocation-counting proof for the inline-decode pipeline that replaced
+//! the deleted `BorrowedDecodedStream` facade.
 //!
 //! ## Why a separate test binary
 //!
 //! This file installs a `#[global_allocator]` that increments process-wide
-//! atomic counters when a "gate" flag is open. The whole point of
-//! `BorrowedDecodedStream` is zero allocation per event — but in our main
+//! atomic counters when a "gate" flag is open. The whole point of the
+//! borrowing-codec path is zero allocation per event — but in our main
 //! test binary 70+ tests run concurrently on multiple threads, each
 //! allocating. Their allocations would race the counter and pollute the
 //! measurement. By living in its own integration-test binary (each
@@ -13,8 +14,9 @@
 //!
 //! ## What is proved
 //!
-//! 1. `BorrowedDecodedStream::try_fold` over 1024 envelopes allocates ≤ 4x
-//!    the bytes of folding 16 envelopes (so growth is O(1), not O(n)).
+//! 1. `try_fold` over 1024 envelopes with a borrowing codec called inside
+//!    the closure allocates ≤ 4x the bytes of folding 16 envelopes (so
+//!    growth is O(1), not O(n)).
 //! 2. An owning `Codec<String>` over the same data allocates ≥ N times
 //!    (one String per event). This negative control proves the harness
 //!    can detect linear-in-N allocation when present.
@@ -43,10 +45,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use nexus::Version;
 use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
-use nexus_store::error::DecodeStreamError;
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{BaseEventStream, EventStream, EventStreamExt};
 use thiserror::Error;
+
+#[derive(Debug, Error)]
+enum FoldErr {
+    #[error("stream")]
+    Stream(#[from] Infallible),
+    #[error("decode")]
+    Decode,
+}
+
+impl From<Utf8Err> for FoldErr {
+    fn from(_: Utf8Err) -> Self {
+        Self::Decode
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Counting allocator + gate
@@ -198,12 +213,11 @@ fn borrowed_fold_is_constant_regardless_of_stream_length() {
         let rows: Vec<_> = (1..=n).map(|v| (v, "E".into(), payload.clone())).collect();
         let stream = VecStream::new(rows);
         rt.block_on(async {
-            let fut = stream.decoder().borrowing_codec(&codec).build().try_fold(
-                0usize,
-                |acc, _v, s: &str| -> Result<usize, DecodeStreamError<_, _, _>> {
-                    Ok(acc + s.len())
-                },
-            );
+            let mut s = stream;
+            let fut = s.try_fold(0usize, |acc, env| {
+                let bytes: &str = codec.decode(env.event_type(), env.payload())?;
+                Ok::<_, FoldErr>(acc + bytes.len())
+            });
             let (r, c, b) = measure_async(fut).await;
             (r.expect("fold ok"), c, b)
         })
@@ -246,12 +260,11 @@ fn owning_string_codec_scales_linearly_with_stream_length() {
         let rows: Vec<_> = (1..=n).map(|v| (v, "E".into(), payload.clone())).collect();
         let stream = VecStream::new(rows);
         rt.block_on(async {
-            let fut = stream.decoder().codec(&codec).build().try_fold(
-                0usize,
-                |acc, _v, s: String| -> Result<usize, DecodeStreamError<_, _, _>> {
-                    Ok(acc + s.len())
-                },
-            );
+            let mut s = stream;
+            let fut = s.try_fold(0usize, |acc, env| {
+                let decoded: String = codec.decode(env.event_type(), env.payload())?;
+                Ok::<_, FoldErr>(acc + decoded.len())
+            });
             let (r, c, b) = measure_async(fut).await;
             (r.expect("fold ok"), c, b)
         })

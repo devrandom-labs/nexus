@@ -38,10 +38,7 @@ pub use state::{
     SnapshotStore,
 };
 pub use store::{GlobalSeq, RawEventStore, Store, Subscription};
-pub use stream::{
-    BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition, EventStream, EventStreamExt,
-    Progress, Step,
-};
+pub use stream::{BaseEventStream, Disposition, EventStream, EventStreamExt, Progress, Step};
 #[cfg(feature = "futures-bridge")]
 pub use stream::{IntoStream, OwnedEventStream};
 #[cfg(feature = "testing")]

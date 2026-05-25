@@ -17,6 +17,7 @@ struct Single {
 }
 
 impl EventStream for Single {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     fn next(

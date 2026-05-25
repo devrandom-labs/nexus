@@ -4,10 +4,10 @@ use std::pin::pin;
 use std::task::Poll;
 
 use super::combinators::{Map, TryMap, TryScan};
-use super::decoder::{DecoderBuilder, NeedsCodec, NoUpcaster};
 #[cfg(feature = "futures-bridge")]
 use super::owned::{IntoStream, OwnedEventStream};
 use super::progress::{Progress, Step};
+use crate::envelope::PersistedEnvelope;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Disposition — why an interruptible fold returned
@@ -96,6 +96,47 @@ pub trait EventStream<M = ()> {
     /// [`PersistedEnvelope`], does) — drop it before calling `next()`
     /// again.
     fn next(&mut self) -> impl Future<Output = Result<Option<Self::Item<'_>>, Self::Error>> + Send;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BaseEventStream — structural sub-trait for "raw envelope cursor" streams
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Sub-trait for streams whose items *are* [`PersistedEnvelope`]s.
+///
+/// Hand-implemented (no blanket) by every base cursor —
+/// [`InMemoryStream`](crate::testing::InMemoryStream),
+/// [`InMemorySubscriptionStream`](crate::testing::InMemorySubscriptionStream),
+/// `FjallStream`, `FjallSubscriptionStream`, and the test fixtures used
+/// by adapter conformance suites. Each implementation's
+/// [`to_envelope`](BaseEventStream::to_envelope) is identity since
+/// `Self::Item<'a>` already equals `PersistedEnvelope<'a, M>`.
+///
+/// Combinators ([`Map`](crate::stream::Map), [`TryMap`](crate::stream::TryMap),
+/// [`TryScan`](crate::stream::TryScan)) do **not** implement this trait —
+/// their `Item<'a>` is whatever the closure produced. The trait identifies
+/// streams that are still envelope-shaped, before any decode/transform.
+///
+/// # Why a sub-trait instead of an HRTB type equality
+///
+/// A bound like `for<'a> S: EventStream<M, Item<'a> = PersistedEnvelope<'a, M>>`
+/// propagates `EventStream`'s `where Self: 'a` clause into the HRTB and
+/// forces `Self: 'static`. With `Sub::Stream<'_>` (a GAT itself), the
+/// nested HRTB is rejected as not being "general enough" on stable Rust.
+/// Routing the conversion through a sub-trait method moves the per-`'a`
+/// lifetime constraint onto the method (`where Self: 'a`) instead of the
+/// trait bound, which the compiler resolves cleanly. See PR1 / PR3
+/// deviation log entries in the stream-refactor plan for the full story.
+pub trait BaseEventStream<M = ()>: EventStream<M> {
+    /// Convert a yielded item to its underlying [`PersistedEnvelope`].
+    ///
+    /// For base cursors this is identity; the indirection exists only
+    /// so generic consumers — projection runners, conformance harnesses
+    /// — can recover the envelope from `Self::Item<'a>` without an
+    /// HRTB type equality.
+    fn to_envelope<'a>(item: Self::Item<'a>) -> PersistedEnvelope<'a, M>
+    where
+        Self: 'a;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -376,39 +417,6 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
 
             Ok((progress, disposition))
         }
-    }
-
-    /// Enter the decoder builder chain to produce a typed decoded stream.
-    ///
-    /// Pairs this stream with a codec and (optionally) an upcaster, yielding
-    /// a [`DecodedStream`] or [`BorrowedDecodedStream`] whose `try_fold`
-    /// receives fully decoded events alongside their [`Version`].
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Owning codec, no upcaster:
-    /// let state = stream
-    ///     .decoder()
-    ///     .codec(&codec)
-    ///     .build()
-    ///     .try_fold(initial, |s, _version, event| projector.apply(s, &event))
-    ///     .await?;
-    ///
-    /// // Zero-copy codec with upcaster:
-    /// let root = stream
-    ///     .decoder()
-    ///     .borrowing_codec(&codec)
-    ///     .upcaster(&upcaster)
-    ///     .build()
-    ///     .try_fold(root, |mut r, v, e| { r.replay(v, e)?; Ok(r) })
-    ///     .await?;
-    /// ```
-    fn decoder(self) -> DecoderBuilder<Self, NeedsCodec, NoUpcaster>
-    where
-        Self: Sized,
-    {
-        DecoderBuilder::new(self)
     }
 
     /// Project each yielded item to an owned `T` via a closure.
