@@ -97,7 +97,17 @@ pub struct InMemoryStream {
     prev_version: Option<u64>,
 }
 
+impl crate::stream::BaseEventStream for InMemoryStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for InMemoryStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = InMemoryStoreError;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -308,7 +318,20 @@ impl InMemorySubscriptionStream<'_> {
     }
 }
 
+impl crate::stream::BaseEventStream for InMemorySubscriptionStream<'_> {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for InMemorySubscriptionStream<'_> {
+    type Item<'a>
+        = PersistedEnvelope<'a>
+    where
+        Self: 'a;
     type Error = InMemoryStoreError;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {

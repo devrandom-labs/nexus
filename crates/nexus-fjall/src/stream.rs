@@ -5,7 +5,7 @@ use fjall::Slice;
 use nexus::Version;
 use nexus_store::GlobalSeq;
 use nexus_store::PersistedEnvelope;
-use nexus_store::stream::EventStream;
+use nexus_store::stream::{BaseEventStream, EventStream};
 
 /// Lending cursor over fjall event rows.
 ///
@@ -24,7 +24,17 @@ pub struct FjallStream {
     pub(crate) prev_version: Option<u64>,
 }
 
+impl BaseEventStream for FjallStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for FjallStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = FjallError;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {

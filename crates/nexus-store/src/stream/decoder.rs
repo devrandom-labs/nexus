@@ -7,10 +7,52 @@ use std::pin::pin;
 use nexus::Version;
 
 use crate::codec::{BorrowingDecode, Decode};
+use crate::envelope::PersistedEnvelope;
 use crate::error::DecodeStreamError;
 use crate::upcasting::{EventMorsel, Upcaster};
 
 use super::cursor::{Disposition, EventStream, Selected, select_next_or_shutdown};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BaseEventStream — sub-trait the decoder bounds on, providing a static
+// `Self::Item<'a> -> PersistedEnvelope<'a, M>` conversion. Sidesteps the
+// HRTB-on-GAT issues that block expressing the same constraint via a
+// type equality at the trait bound (which would force `S: 'static`).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Sub-trait for streams whose items *are* [`PersistedEnvelope`]s.
+///
+/// Hand-implemented (no blanket) by the base cursors —
+/// [`InMemoryStream`](crate::testing::InMemoryStream),
+/// [`InMemorySubscriptionStream`](crate::testing::InMemorySubscriptionStream),
+/// `FjallStream`, `FjallSubscriptionStream`, and test fixtures. Each
+/// implementation's `to_envelope` is identity since `Self::Item<'a>`
+/// already equals `PersistedEnvelope<'a, M>`.
+///
+/// Why a sub-trait instead of an HRTB type equality on the consumer
+/// side: a bound like
+/// `for<'a> S: EventStream<M, Item<'a> = PersistedEnvelope<'a, M>>`
+/// (or `for<'a> S::Item<'a>: IntoPersistedEnvelope<'a, M>` via a
+/// witness trait) propagates the GAT's `where Self: 'a` clause into the
+/// HRTB. With `Sub::Stream<'_>` (a GAT itself), the resulting nested
+/// HRTB can't be discharged, and the compiler rejects the bound as not
+/// being "general enough" for an `InMemorySubscriptionStream<'a>` impl.
+/// Routing the conversion through a sub-trait method moves the
+/// per-`'a` lifetime constraint onto the method (`where Self: 'a`)
+/// instead of the trait bound, which the compiler resolves cleanly.
+///
+/// PR3 of the stream refactor deletes both this trait and the decoder
+/// facade in the same drop.
+pub trait BaseEventStream<M = ()>: EventStream<M> {
+    /// Convert a yielded item to its underlying [`PersistedEnvelope`].
+    ///
+    /// For base cursors this is identity; the indirection exists only
+    /// so the decoder facade can recover the envelope from
+    /// `Self::Item<'a>` without an HRTB type equality.
+    fn to_envelope<'a>(item: Self::Item<'a>) -> PersistedEnvelope<'a, M>
+    where
+        Self: 'a;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DecoderBuilder — typestate chain binding codec + upcaster to a stream
@@ -196,7 +238,7 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
     /// - the closure returning `Err` short-circuits the fold immediately
     pub async fn try_fold<E, B, F, Err>(mut self, init: B, mut f: F) -> Result<B, Err>
     where
-        S: EventStream<M> + Send,
+        S: BaseEventStream<M> + Send,
         C: Decode<E>,
         U: Upcaster,
         M: Send,
@@ -205,12 +247,13 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
         Err: From<DecodeStreamError<S::Error, C::Error, U::Error>>,
     {
         let mut acc = init;
-        while let Some(env) = self
+        while let Some(item) = self
             .stream
             .next()
             .await
             .map_err(|e| Err::from(DecodeStreamError::Stream(e)))?
         {
+            let env = S::to_envelope(item);
             let version = env.version();
             let morsel = EventMorsel::borrowed(
                 env.event_type(),
@@ -294,7 +337,7 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
         shutdown: Sh,
     ) -> Result<(B, Disposition), Err>
     where
-        S: EventStream<M> + Send,
+        S: BaseEventStream<M> + Send,
         C: Decode<E>,
         U: Upcaster,
         M: Send,
@@ -312,7 +355,8 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
                 Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
                 Selected::Stream(Err(e)) => return Err(Err::from(DecodeStreamError::Stream(e))),
                 Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),
-                Selected::Stream(Ok(Some(env))) => {
+                Selected::Stream(Ok(Some(item))) => {
+                    let env = S::to_envelope(item);
                     let version = env.version();
                     let morsel = EventMorsel::borrowed(
                         env.event_type(),
@@ -370,7 +414,7 @@ impl<S, C: ?Sized, U, M> BorrowedDecodedStream<'_, S, C, U, M> {
     /// - the closure returning `Err` short-circuits the fold immediately
     pub async fn try_fold<E, B, F, Err>(mut self, init: B, mut f: F) -> Result<B, Err>
     where
-        S: EventStream<M> + Send,
+        S: BaseEventStream<M> + Send,
         C: BorrowingDecode<E>,
         E: ?Sized,
         U: Upcaster,
@@ -380,12 +424,13 @@ impl<S, C: ?Sized, U, M> BorrowedDecodedStream<'_, S, C, U, M> {
         Err: From<DecodeStreamError<S::Error, C::Error, U::Error>>,
     {
         let mut acc = init;
-        while let Some(env) = self
+        while let Some(item) = self
             .stream
             .next()
             .await
             .map_err(|e| Err::from(DecodeStreamError::Stream(e)))?
         {
+            let env = S::to_envelope(item);
             let version = env.version();
             let morsel = EventMorsel::borrowed(
                 env.event_type(),

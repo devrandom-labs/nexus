@@ -1,9 +1,9 @@
 use std::future::{Future, poll_fn};
+use std::marker::PhantomData;
 use std::pin::pin;
 use std::task::Poll;
 
-use crate::envelope::PersistedEnvelope;
-
+use super::combinators::{Map, TryMap, TryScan};
 use super::decoder::{DecoderBuilder, NeedsCodec, NoUpcaster};
 use super::progress::{Progress, Step};
 
@@ -36,35 +36,64 @@ pub enum Disposition {
 
 /// GAT lending cursor for zero-allocation event streaming.
 ///
-/// Each call to `next()` returns a `PersistedEnvelope` that borrows
-/// from the cursor's internal buffer. The previous envelope must be
-/// dropped before calling `next()` again — enforced by the lifetime.
+/// Each call to `next()` returns an item — by default a
+/// [`PersistedEnvelope`] — that borrows from the cursor's internal
+/// buffer. The previous item must be dropped before calling `next()`
+/// again — enforced by the lifetime on the [`Item`](EventStream::Item)
+/// GAT.
+///
+/// The base stream impls (`InMemoryStream`, `FjallStream`, the
+/// subscription cursors) set `Item<'a> = PersistedEnvelope<'a, M>`.
+/// Combinators on [`EventStreamExt`] (e.g. [`map`](EventStreamExt::map),
+/// [`try_map`](EventStreamExt::try_map),
+/// [`try_scan`](EventStreamExt::try_scan)) project that to different
+/// shapes — owned values from a closure or state-borrowed views from a
+/// scan.
 ///
 /// Used during aggregate rehydration where events are processed
 /// one at a time (apply to state, drop, advance cursor).
 ///
 /// # Implementor contract
 ///
-/// Implementations **must** yield events with monotonically increasing
-/// versions. That is, for consecutive calls to `next()` that return
-/// `Some(Ok(envelope))`, each envelope's `version()` must be strictly
-/// greater than the previous one's. Violating this invariant will cause
-/// incorrect aggregate rehydration (events applied out of order).
+/// Base impls (cursors over a real backing store) **must** yield events
+/// with monotonically increasing versions. That is, for consecutive
+/// calls to `next()` that return `Some(Ok(envelope))`, each envelope's
+/// `version()` must be strictly greater than the previous one's.
+/// Violating this invariant will cause incorrect aggregate rehydration
+/// (events applied out of order).
+///
+/// Combinators are pure relays — they preserve order and propagate
+/// monotonicity from the wrapped stream.
 pub trait EventStream<M = ()> {
+    /// The item type yielded by `next()`. The base cursors set this to
+    /// `PersistedEnvelope<'a, M>`; combinators redefine it (e.g.
+    /// `Map<S, F>::Item<'a>` is the closure output).
+    ///
+    /// The `where Self: 'a` clause is the lending-iterator standard — the
+    /// item may borrow from `&'a mut self`, so it must not outlive
+    /// `self`. Code that needs HRTB constraints like
+    /// "`Item<'a>` *is* `PersistedEnvelope<'a, M>`" should phrase them as
+    /// trait bounds, not type equalities (e.g.
+    /// `for<'a> S::Item<'a>: IntoPersistedEnvelope<'a, M>`), because the
+    /// type-equality form leaks the `Self: 'a` requirement into the HRTB
+    /// and forces `Self: 'static`.
+    type Item<'a>
+    where
+        Self: 'a;
+
     /// The error type for stream operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Advance the cursor and return the next event envelope.
+    /// Advance the cursor and return the next item.
     ///
     /// Returns `Ok(None)` when the stream is exhausted. Once this method
     /// returns `Ok(None)`, all subsequent calls must also return `Ok(None)`
     /// (fused behavior).
     ///
-    /// The returned envelope borrows from `self` — drop it before
-    /// calling `next()` again.
-    fn next(
-        &mut self,
-    ) -> impl Future<Output = Result<Option<PersistedEnvelope<'_, M>>, Self::Error>> + Send;
+    /// The returned item may borrow from `self` (the default `Item<'a>`,
+    /// [`PersistedEnvelope`], does) — drop it before calling `next()`
+    /// again.
+    fn next(&mut self) -> impl Future<Output = Result<Option<Self::Item<'_>>, Self::Error>> + Send;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -102,46 +131,50 @@ pub trait EventStream<M = ()> {
 /// }).await?;
 /// ```
 pub trait EventStreamExt<M = ()>: EventStream<M> {
-    /// Fold every event into an accumulator, short-circuiting on error.
+    /// Fold every item into an accumulator, short-circuiting on error.
     ///
     /// This is the primitive — [`try_for_each`](Self::try_for_each),
     /// [`try_collect_map`](Self::try_collect_map), and
     /// [`try_count`](Self::try_count) are built on top of it.
+    ///
+    /// The closure receives the stream's [`Item`](EventStream::Item) —
+    /// for the base cursors that's a [`PersistedEnvelope`], for
+    /// combinator-wrapped streams whatever the combinator projects to.
     ///
     /// Stream errors are auto-converted via `E: From<Self::Error>`.
     fn try_fold<B, E, F>(&mut self, init: B, mut f: F) -> impl Future<Output = Result<B, E>> + Send
     where
         Self: Send,
         B: Send,
-        F: FnMut(B, PersistedEnvelope<'_, M>) -> Result<B, E> + Send,
+        F: for<'a> FnMut(B, Self::Item<'a>) -> Result<B, E> + Send,
         E: From<Self::Error>,
     {
         async move {
             let mut acc = init;
-            while let Some(env) = self.next().await.map_err(E::from)? {
-                acc = f(acc, env)?;
+            while let Some(item) = self.next().await.map_err(E::from)? {
+                acc = f(acc, item)?;
             }
             Ok(acc)
         }
     }
 
-    /// Process each event with a fallible closure, short-circuiting on error.
+    /// Process each item with a fallible closure, short-circuiting on error.
     ///
     /// Stream errors are auto-converted via `E: From<Self::Error>`.
     fn try_for_each<E, F>(&mut self, mut f: F) -> impl Future<Output = Result<(), E>> + Send
     where
         Self: Send,
-        F: FnMut(PersistedEnvelope<'_, M>) -> Result<(), E> + Send,
+        F: for<'a> FnMut(Self::Item<'a>) -> Result<(), E> + Send,
         E: From<Self::Error>,
     {
-        async move { self.try_fold((), |(), env| f(env)).await }
+        async move { self.try_fold((), |(), item| f(item)).await }
     }
 
-    /// Map each event to an owned value and collect into a `Vec`.
+    /// Map each item to an owned value and collect into a `Vec`.
     ///
-    /// Since envelopes borrow from the cursor and can't outlive each
-    /// iteration, the closure must extract an owned `T` from each
-    /// envelope. This is the GAT-safe equivalent of
+    /// Since stream items may borrow from the cursor and can't outlive
+    /// each iteration, the closure must extract an owned `T` from each
+    /// item. This is the GAT-safe equivalent of
     /// `stream.map(f).collect()`.
     ///
     /// Stream errors are auto-converted via `E: From<Self::Error>`.
@@ -152,12 +185,12 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
     where
         Self: Send,
         T: Send,
-        F: FnMut(PersistedEnvelope<'_, M>) -> Result<T, E> + Send,
+        F: for<'a> FnMut(Self::Item<'a>) -> Result<T, E> + Send,
         E: From<Self::Error>,
     {
         async move {
-            self.try_fold(Vec::new(), |mut items, env| {
-                items.push(f(env)?);
+            self.try_fold(Vec::new(), |mut items, item| {
+                items.push(f(item)?);
                 Ok(items)
             })
             .await
@@ -183,12 +216,12 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
     ///
     /// # Closure contract
     ///
-    /// The closure receives the lent envelope and returns a `Fut` that
+    /// The closure receives the lent item and returns a `Fut` that
     /// produces the next accumulator. Because the bound is
-    /// `for<'a> FnMut(B, PersistedEnvelope<'a, M>) -> Fut` with `Fut`
-    /// concrete, the closure must extract owned values from the envelope
-    /// *before* the `async move {}` block — the returned future must not
-    /// borrow from the envelope.
+    /// `for<'a> FnMut(B, Self::Item<'a>) -> Fut` with `Fut` concrete,
+    /// the closure must extract owned values from the item *before* the
+    /// `async move {}` block — the returned future must not borrow from
+    /// the item.
     ///
     /// Typical pattern:
     /// ```ignore
@@ -216,7 +249,7 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
         Self: Send,
         B: Send,
         M: Send,
-        F: FnMut(B, PersistedEnvelope<'_, M>) -> Fut + Send,
+        F: for<'a> FnMut(B, Self::Item<'a>) -> Fut + Send,
         Fut: Future<Output = Result<B, E>> + Send,
         Sh: Future<Output = ()> + Send,
         E: From<Self::Error>,
@@ -226,13 +259,13 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
             let mut acc = init;
             loop {
                 let next_fut = pin!(self.next());
-                let env = match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
+                let item = match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
                     Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
                     Selected::Stream(Err(e)) => return Err(E::from(e)),
                     Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),
-                    Selected::Stream(Ok(Some(env))) => env,
+                    Selected::Stream(Ok(Some(item))) => item,
                 };
-                acc = f(acc, env).await?;
+                acc = f(acc, item).await?;
             }
         }
     }
@@ -257,7 +290,7 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
     ///
     /// `step` follows the same "extract owned values before `async move`"
     /// pattern as [`try_fold_async_until`](Self::try_fold_async_until) — the
-    /// returned future must not borrow from the envelope.
+    /// returned future must not borrow from the item.
     ///
     /// `save` consumes the state by value and returns it back inside its
     /// future. This avoids the borrow lifetime that would otherwise require
@@ -291,7 +324,7 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
         S: Send,
         P: Send + Copy + Ord,
         E: From<Self::Error> + Send,
-        StepFn: FnMut(Progress<S, P>, PersistedEnvelope<'_, M>) -> StepFut + Send,
+        StepFn: for<'a> FnMut(Progress<S, P>, Self::Item<'a>) -> StepFut + Send,
         StepFut: Future<Output = Result<Step<S, P>, E>> + Send,
         SaveFn: FnMut(P, S) -> SaveFut + Send,
         SaveFut: Future<Output = Result<S, E>> + Send,
@@ -302,13 +335,13 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
             let mut progress = initial;
             let disposition = loop {
                 let next_fut = pin!(self.next());
-                let env = match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
+                let item = match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
                     Selected::Shutdown => break Disposition::Interrupted,
                     Selected::Stream(Err(e)) => return Err(E::from(e)),
                     Selected::Stream(Ok(None)) => break Disposition::Completed,
-                    Selected::Stream(Ok(Some(env))) => env,
+                    Selected::Stream(Ok(Some(item))) => item,
                 };
-                progress = match step(progress, env).await? {
+                progress = match step(progress, item).await? {
                     Step::Save(Progress { state, seen, .. }) => {
                         let saved_state = match seen {
                             Some(pos) => save(pos, state).await?,
@@ -374,6 +407,65 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
         Self: Sized,
     {
         DecoderBuilder::new(self)
+    }
+
+    /// Project each yielded item to an owned `T` via a closure.
+    ///
+    /// The closure bound is `for<'a> FnMut(Self::Item<'a>) -> T` — `T`
+    /// cannot borrow from the lent item (use [`try_scan`](Self::try_scan)
+    /// for borrowing-output cases). The returned [`Map`] is itself an
+    /// [`EventStream`] (with `Item<'a> = T`), so combinators chain:
+    /// `stream.map(f).try_map(g).try_fold(init, h)`.
+    fn map<F, T>(self, f: F) -> Map<Self, F>
+    where
+        Self: Sized,
+        F: for<'a> FnMut(Self::Item<'a>) -> T,
+    {
+        Map { inner: self, f }
+    }
+
+    /// Fallible variant of [`map`](Self::map).
+    ///
+    /// The closure returns `Result<T, E>`; underlying stream errors are
+    /// auto-converted via `E: From<Self::Error>`. Closure errors and stream
+    /// errors both surface from the wrapped stream's `next()`.
+    fn try_map<F, T, E>(self, f: F) -> TryMap<Self, F, E>
+    where
+        Self: Sized,
+        F: for<'a> FnMut(Self::Item<'a>) -> Result<T, E>,
+        E: From<Self::Error>,
+    {
+        TryMap {
+            inner: self,
+            f,
+            _err: PhantomData,
+        }
+    }
+
+    /// Stateful scan — the **borrowing-output** combinator.
+    ///
+    /// Threads `&mut State` plus each lent item through `f`, which returns
+    /// a borrowed reference into `state`. The wrapped stream's `Item<'a>`
+    /// becomes `&'a T` (borrow tied to the scan's own state, not to the
+    /// closure stack), so callers can decode into a buffer and yield
+    /// references into it without HRTB helper-trait stacks.
+    ///
+    /// Use this for zero-copy decode and any pipeline where the
+    /// per-iteration output must outlive the source item but is
+    /// invalidated by the next iteration.
+    fn try_scan<State, F, T, E>(self, state: State, f: F) -> TryScan<Self, State, F, T, E>
+    where
+        Self: Sized,
+        T: ?Sized,
+        F: for<'s, 'a> FnMut(&'s mut State, Self::Item<'a>) -> Result<&'s T, E>,
+        E: From<Self::Error>,
+    {
+        TryScan {
+            inner: self,
+            state,
+            f,
+            _marker: PhantomData,
+        }
     }
 }
 

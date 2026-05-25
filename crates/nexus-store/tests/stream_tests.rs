@@ -83,8 +83,8 @@ use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::{DecodeStreamError, UpcastError};
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{
-    BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition, EventStream, EventStreamExt,
-    Progress, Step,
+    BaseEventStream, BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition,
+    EventStream, EventStreamExt, Progress, Step,
 };
 use nexus_store::upcasting::{EventMorsel, Upcaster};
 use proptest::prelude::*;
@@ -133,7 +133,17 @@ impl VecStream {
     }
 }
 
+impl BaseEventStream for VecStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for VecStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -165,7 +175,17 @@ impl SchemaStream {
     }
 }
 
+impl BaseEventStream for SchemaStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for SchemaStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -197,7 +217,17 @@ impl MetadataStream {
     }
 }
 
+impl BaseEventStream<String> for MetadataStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a, String>) -> PersistedEnvelope<'a, String>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream<String> for MetadataStream {
+    type Item<'a> = PersistedEnvelope<'a, String>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_, String>>, Self::Error> {
@@ -241,7 +271,17 @@ impl FailingStream {
     }
 }
 
+impl BaseEventStream for FailingStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for FailingStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = StreamIoError;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -1757,7 +1797,17 @@ impl DropProbeStream {
     }
 }
 
+impl BaseEventStream<DropProbe> for DropProbeStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a, DropProbe>) -> PersistedEnvelope<'a, DropProbe>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream<DropProbe> for DropProbeStream {
+    type Item<'a> = PersistedEnvelope<'a, DropProbe>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_, DropProbe>>, Self::Error> {
@@ -2411,7 +2461,17 @@ impl SlowStream {
     }
 }
 
+impl BaseEventStream for SlowStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for SlowStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {

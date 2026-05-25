@@ -45,7 +45,7 @@ use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::DecodeStreamError;
 use nexus_store::store::GlobalSeq;
-use nexus_store::stream::{EventStream, EventStreamExt};
+use nexus_store::stream::{BaseEventStream, EventStream, EventStreamExt};
 use thiserror::Error;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,7 +105,17 @@ impl VecStream {
     }
 }
 
+impl BaseEventStream for VecStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for VecStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {

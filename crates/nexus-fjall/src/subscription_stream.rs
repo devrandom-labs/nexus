@@ -7,7 +7,7 @@ use nexus::{Id, Version};
 use nexus_store::GlobalSeq;
 use nexus_store::PersistedEnvelope;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::stream::{BaseEventStream, EventStream};
 
 /// Owned byte-key wrapper to satisfy the [`Id`] trait's `'static` bound
 /// when re-reading from the store during subscription refills.
@@ -97,7 +97,20 @@ impl<'a> FjallSubscriptionStream<'a> {
     }
 }
 
+impl BaseEventStream for FjallSubscriptionStream<'_> {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for FjallSubscriptionStream<'_> {
+    type Item<'a>
+        = PersistedEnvelope<'a>
+    where
+        Self: 'a;
     type Error = FjallError;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {

@@ -9,7 +9,7 @@ use nexus_store::Decode;
 use nexus_store::projection::Projector;
 use nexus_store::state::{PersistTrigger, SnapshotStore};
 use nexus_store::store::Subscription;
-use nexus_store::stream::EventStreamExt;
+use nexus_store::stream::{BaseEventStream, EventStreamExt};
 
 pub use builder::ProjectionBuilder;
 pub use error::ProjectionError;
@@ -262,11 +262,12 @@ where
         let (final_status, _disposition) = stream
             .try_fold_async_until(
                 status,
-                move |acc, envelope| {
+                move |acc, item| {
                     // Sync prelude: decode into owned values, drop the
                     // envelope before the async move. The returned future
                     // must not borrow from the envelope (HRTB requirement
                     // for `try_fold_async_until`'s single concrete `Fut`).
+                    let envelope = <Sub::Stream<'_> as BaseEventStream>::to_envelope(item);
                     let event_version = envelope.version();
                     let decoded = event_codec_ref.decode(envelope.event_type(), envelope.payload());
                     async move {
