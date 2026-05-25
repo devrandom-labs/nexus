@@ -77,11 +77,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use arrayvec::ArrayString;
 use nexus::Version;
 use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
-use nexus_store::error::UpcastError;
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{
     BaseEventStream, Disposition, EventStream, EventStreamExt, Progress, Step,
@@ -414,10 +412,7 @@ struct PrependError;
 impl Upcaster for PrependOne {
     type Error = PrependError;
 
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         let mut new_payload = Vec::with_capacity(morsel.payload().len() + 1);
         new_payload.push(1);
         new_payload.extend_from_slice(morsel.payload());
@@ -433,7 +428,7 @@ impl Upcaster for PrependOne {
     }
 }
 
-/// Upcaster that always returns `TransformFailed`.
+/// Upcaster that always returns an error.
 struct FailingUpcaster;
 
 #[derive(Debug, Error)]
@@ -443,15 +438,8 @@ struct UpcastBoom;
 impl Upcaster for FailingUpcaster {
     type Error = UpcastBoom;
 
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
-        Err(UpcastError::TransformFailed {
-            event_type: ArrayString::<64>::from(morsel.event_type()).unwrap_or_default(),
-            schema_version: morsel.schema_version(),
-            source: UpcastBoom,
-        })
+    fn upcast<'a>(&self, _morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
+        Err(UpcastBoom)
     }
 
     fn current_version(&self, _event_type: &str) -> Option<Version> {
@@ -479,10 +467,7 @@ impl RecordingUpcaster {
 impl Upcaster for RecordingUpcaster {
     type Error = Infallible;
 
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         self.seen.lock().expect("test mutex").push((
             morsel.event_type().to_owned(),
             morsel.schema_version().as_u64(),
@@ -1082,7 +1067,7 @@ async fn inline_decode_owning_with_upcaster_runs_upcast_before_codec() {
                 env.payload(),
             );
             let transformed = upcaster
-                .apply(morsel)
+                .upcast(morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
@@ -1124,7 +1109,7 @@ async fn inline_decode_borrowing_with_upcaster_runs_upcast_before_codec() {
                 env.payload(),
             );
             let transformed = upcaster
-                .apply(morsel)
+                .upcast(morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let bytes: &[u8] = codec
                 .decode(transformed.event_type(), transformed.payload())
@@ -1202,7 +1187,7 @@ async fn inline_decode_owning_upcaster_runs_before_codec() {
                 env.payload(),
             );
             let transformed = upcaster
-                .apply(morsel)
+                .upcast(morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
@@ -1297,7 +1282,7 @@ async fn inline_decode_owning_upcaster_error_propagates() {
                 env.payload(),
             );
             let transformed = upcaster
-                .apply(morsel)
+                .upcast(morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
@@ -1342,7 +1327,7 @@ async fn inline_decode_schema_version_visible_to_upcaster() {
                 env.payload(),
             );
             let transformed = upcaster
-                .apply(morsel)
+                .upcast(morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
@@ -1368,7 +1353,7 @@ async fn inline_decode_owning_noop_upcaster_passthrough() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = <() as Upcaster>::apply(&noop, morsel)
+            let transformed = <() as Upcaster>::upcast(&noop, morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
@@ -1509,7 +1494,7 @@ async fn inline_decode_borrowing_upcaster_error_propagates() {
                 env.payload(),
             );
             let transformed = upcaster
-                .apply(morsel)
+                .upcast(morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _bytes: &[u8] = codec
                 .decode(transformed.event_type(), transformed.payload())
@@ -1549,7 +1534,7 @@ async fn inline_decode_borrowing_noop_upcaster_passthrough() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = <() as Upcaster>::apply(&noop, morsel)
+            let transformed = <() as Upcaster>::upcast(&noop, morsel)
                 .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let bytes: &[u8] = codec
                 .decode(transformed.event_type(), transformed.payload())

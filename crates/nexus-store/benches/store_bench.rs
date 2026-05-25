@@ -177,11 +177,10 @@ struct NoopV1ToV6;
 impl Upcaster for NoopV1ToV6 {
     type Error = Infallible;
 
-    fn apply<'a>(
+    fn upcast<'a>(
         &self,
         mut morsel: nexus_store::upcasting::EventMorsel<'a>,
-    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError<Self::Error>>
-    {
+    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, Self::Error> {
         loop {
             morsel = match (morsel.event_type(), morsel.schema_version()) {
                 ("UserCreated", v) if v == Version::new(1).unwrap() => {
@@ -348,7 +347,7 @@ fn bench_upcaster(c: &mut Criterion) {
                 Version::new(1).unwrap(),
                 black_box(&payload),
             );
-            let result = upcaster.apply(morsel).unwrap();
+            let result = upcaster.upcast(morsel).unwrap();
             black_box(result)
         });
     });

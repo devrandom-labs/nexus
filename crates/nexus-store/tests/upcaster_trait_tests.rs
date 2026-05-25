@@ -8,7 +8,7 @@ use nexus_store::upcasting::EventMorsel;
 fn unit_upcaster_is_passthrough() {
     let upcaster = ();
     let morsel = EventMorsel::borrowed("OrderCreated", Version::INITIAL, b"payload");
-    let result = upcaster.apply(morsel).unwrap();
+    let result = upcaster.upcast(morsel).unwrap();
     assert_eq!(result.event_type(), "OrderCreated");
     assert_eq!(result.schema_version(), Version::INITIAL);
     assert_eq!(result.payload(), b"payload");

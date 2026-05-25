@@ -1,15 +1,14 @@
-//! Unit tests for `StoreError` and `UpcastError` Display output and `source()` chain.
+//! Unit tests for `StoreError` Display output and `source()` chain.
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 
 use arrayvec::ArrayString;
 use nexus::{KernelError, Version};
-use nexus_store::{StoreError, UpcastError};
+use nexus_store::StoreError;
 
 /// Concrete `StoreError` for tests: adapter = `std::io::Error`, codec = `std::io::Error`,
-/// upcaster = `std::convert::Infallible`.
-type TestStoreError =
-    StoreError<std::io::Error, std::io::Error, std::io::Error, std::convert::Infallible>;
+/// upcaster = `std::io::Error`.
+type TestStoreError = StoreError<std::io::Error, std::io::Error, std::io::Error, std::io::Error>;
 
 fn label(s: &str) -> ArrayString<64> {
     ArrayString::try_from(s).unwrap()
@@ -122,16 +121,15 @@ fn kernel_error_has_source_chain() {
 }
 
 #[test]
-fn transform_failed_error_displays_context() {
-    let err = UpcastError::<std::io::Error>::TransformFailed {
-        event_type: label("OrderCreated"),
-        schema_version: Version::INITIAL,
-        source: std::io::Error::new(std::io::ErrorKind::InvalidData, "bad json"),
-    };
-    let msg = err.to_string();
-    assert!(msg.contains("OrderCreated"), "should contain event type");
-    assert!(msg.contains("bad json"), "should contain source message");
-
+fn upcast_display_contains_inner_message() {
+    let inner = std::io::Error::new(std::io::ErrorKind::InvalidData, "bad transform");
+    let err: TestStoreError = StoreError::Upcast(inner);
+    let msg = format!("{err}");
+    assert!(msg.contains("upcast"), "should mention upcast");
+    assert!(
+        msg.contains("bad transform"),
+        "should contain inner message"
+    );
     let source = std::error::Error::source(&err);
-    assert!(source.is_some(), "TransformFailed should have a source");
+    assert!(source.is_some(), "Upcast variant should have a source");
 }

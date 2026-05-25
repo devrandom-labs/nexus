@@ -97,6 +97,7 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 /// # Attributes
 ///
 /// - `aggregate = Type` — the aggregate type these transforms belong to
+/// - `error = Type` — the error type returned by transform functions
 ///
 /// Each method must be annotated with `#[transform(...)]`:
 /// - `event = "EventName"` — the event type this transform handles
@@ -106,14 +107,17 @@ fn parse_domain_event(ast: &DeriveInput) -> Result<proc_macro2::TokenStream> {
 ///
 /// # Compile-time validation
 ///
-/// - No duplicate `(event, from)` pairs
-/// - `to == from + 1` for each transform
 /// - `from >= 1`
+/// - `to == from + 1` for each transform (contiguity per step)
+/// - No duplicate `(event, from)` pairs
+/// - **Chain coverage**: for each event type, every schema version in
+///   `[1, current_version]` is reachable via a contiguous chain — gaps
+///   produce a compile error naming the missing step
 ///
 /// # Example
 ///
 /// ```ignore
-/// #[nexus::transforms(aggregate = Order)]
+/// #[nexus::transforms(aggregate = Order, error = MyError)]
 /// impl OrderTransforms {
 ///     #[transform(event = "OrderCreated", from = 1, to = 2)]
 ///     fn v1_to_v2(payload: &[u8]) -> Result<Vec<u8>, MyError> {
@@ -282,6 +286,47 @@ fn parse_transforms(
         }
     }
 
+    // 6b. Validate chain coverage per event type.
+    //
+    // For each event type, every schema version in [1, current_version]
+    // must be reachable through a contiguous chain. Find the smallest gap
+    // (i.e. the smallest `from` in [1, max_from] for which no transform
+    // exists) and reject with a diagnostic naming the missing step.
+    let mut from_versions_by_event: HashMap<String, HashSet<u64>> = HashMap::new();
+    let mut max_from_by_event: HashMap<String, u64> = HashMap::new();
+    for t in &transforms {
+        from_versions_by_event
+            .entry(t.event_type.clone())
+            .or_default()
+            .insert(t.from_version);
+        let entry = max_from_by_event.entry(t.event_type.clone()).or_insert(0);
+        if t.from_version > *entry {
+            *entry = t.from_version;
+        }
+    }
+    for t in &transforms {
+        let Some(from_set) = from_versions_by_event.get(&t.event_type) else {
+            continue;
+        };
+        let Some(&max_from) = max_from_by_event.get(&t.event_type) else {
+            continue;
+        };
+        for v in 1..max_from {
+            if !from_set.contains(&v) {
+                return Err(Error::new_spanned(
+                    &t.fn_name,
+                    format!(
+                        "transform chain gap for event '{}': missing step from version {} to version {} (chain must cover every version in [1, {}])",
+                        t.event_type,
+                        v,
+                        v + 1,
+                        max_from + 1,
+                    ),
+                ));
+            }
+        }
+    }
+
     // 7. Build the original impl block with #[transform] attrs stripped
     let stripped_methods: Vec<_> = ast
         .items
@@ -296,7 +341,7 @@ fn parse_transforms(
         })
         .collect();
 
-    // 8. Generate match arms for apply()
+    // 8. Generate match arms for upcast()
     let match_arms: Vec<_> = transforms
         .iter()
         .map(|t| {
@@ -308,16 +353,7 @@ fn parse_transforms(
 
             quote! {
                 (#event_type, v) if v == ::nexus::Version::new(#from_version).expect("nonzero") => {
-                    let payload = Self::#fn_name(morsel.payload())
-                        .map_err(|e| ::nexus_store::UpcastError::TransformFailed {
-                            event_type: {
-                                let mut buf = ::nexus_store::ArrayString::<64>::new();
-                                let _ = ::std::fmt::Write::write_str(&mut buf, #event_type);
-                                buf
-                            },
-                            schema_version: ::nexus::Version::new(#from_version).expect("nonzero"),
-                            source: e,
-                        })?;
+                    let payload = Self::#fn_name(morsel.payload())?;
                     ::nexus_store::upcasting::EventMorsel::new(
                         #output_event_type,
                         ::nexus::Version::new(#to_version).expect("nonzero"),
@@ -366,12 +402,12 @@ fn parse_transforms(
         impl ::nexus_store::Upcaster for #struct_ident {
             type Error = #error_type;
 
-            fn apply<'a>(
+            fn upcast<'a>(
                 &self,
                 mut morsel: ::nexus_store::upcasting::EventMorsel<'a>,
             ) -> ::core::result::Result<
                 ::nexus_store::upcasting::EventMorsel<'a>,
-                ::nexus_store::UpcastError<Self::Error>,
+                Self::Error,
             > {
                 loop {
                     morsel = match (morsel.event_type(), morsel.schema_version()) {
