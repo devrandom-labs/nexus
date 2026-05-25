@@ -18,9 +18,11 @@ snapshot = []
 snapshot-json = ["snapshot", "json"]
 projection = []
 projection-json = ["projection", "json"]
+futures-bridge = ["dep:futures-core"]
 
 [dependencies]
 arrayvec = { workspace = true }
+futures-core = { workspace = true, optional = true }
 nexus = { version = "0.1.0", path = "../nexus" }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
@@ -30,7 +32,8 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 criterion = { workspace = true }
-nexus-store = { path = ".", features = ["testing"] }
+futures = { workspace = true }
+nexus-store = { path = ".", features = ["testing", "futures-bridge"] }
 nexus-store-testing = { version = "0.1.0", path = "../nexus-store-testing" }
 proptest = { workspace = true }
 serde = { workspace = true }

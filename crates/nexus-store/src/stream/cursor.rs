@@ -5,6 +5,8 @@ use std::task::Poll;
 
 use super::combinators::{Map, TryMap, TryScan};
 use super::decoder::{DecoderBuilder, NeedsCodec, NoUpcaster};
+#[cfg(feature = "futures-bridge")]
+use super::owned::{IntoStream, OwnedEventStream};
 use super::progress::{Progress, Step};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -466,6 +468,47 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
             f,
             _marker: PhantomData,
         }
+    }
+
+    /// Bridge an owning-output lending stream into a [`futures_core::Stream`].
+    ///
+    /// Available only with the `futures-bridge` feature. Requires
+    /// [`OwnedEventStream<M>`] — implemented for the owning combinators
+    /// ([`Map`], [`TryMap`]) but **not** for raw cursors, whose `Item<'a>`
+    /// borrows from the cursor. To bridge a raw cursor, chain
+    /// `.map(...)` or `.try_map(...)` first so the per-event materialization
+    /// is named at the call site.
+    ///
+    /// The returned stream yields `Result<Self::OwnedItem, Self::Error>` and
+    /// terminates after the underlying cursor returns `Ok(None)` or surfaces
+    /// an error (the error is yielded once; subsequent polls return `None`).
+    ///
+    /// # Cost
+    ///
+    /// Each yielded item box-pins one async block holding the cursor — the
+    /// per-event allocation that makes the futures-stream combinator
+    /// surface available. If you don't need the futures ecosystem, stay
+    /// in lending-stream land (`.try_fold`, `.try_for_each`,
+    /// `.try_collect_map`) and pay no allocation.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use futures::StreamExt;
+    /// use nexus_store::stream::{EventStream, EventStreamExt};
+    ///
+    /// let owned: Vec<(Version, Vec<u8>)> = my_stream
+    ///     .try_map(|env| Ok::<_, MyErr>((env.version(), env.payload().to_vec())))
+    ///     .into_stream()
+    ///     .try_collect()
+    ///     .await?;
+    /// ```
+    #[cfg(feature = "futures-bridge")]
+    fn into_stream(self) -> IntoStream<Self, M>
+    where
+        Self: Sized + OwnedEventStream<M> + Send + 'static,
+    {
+        IntoStream::new(self)
     }
 }
 

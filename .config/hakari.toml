@@ -22,3 +22,14 @@ platforms = [
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true
+
+# Keep optional / feature-gated deps out of the unified workspace-hack dep
+# set so the "feature off → dep absent from dep tree" guarantee holds for
+# every workspace member, not just published consumers. Without this,
+# hakari pulls `futures-core` (used by nexus-store's `futures-bridge`
+# feature) into `workspace-hack`, which propagates into every member that
+# depends on `workspace-hack` regardless of feature selection.
+[final-excludes]
+third-party = [
+  { name = "futures-core" },
+]

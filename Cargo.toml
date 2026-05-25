@@ -18,6 +18,8 @@ members = [
 arrayvec = { version = "0.7.6", default-features = false }
 criterion = { version = "0.8", features = ["html_reports"] }
 fjall = "3"
+futures = "0.3"
+futures-core = { version = "0.3", default-features = false }
 insta = "1.47.2"
 proptest = "1.11.0"
 proptest-state-machine = "0.8.0"
