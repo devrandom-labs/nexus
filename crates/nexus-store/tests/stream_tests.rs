@@ -1,6 +1,6 @@
 //! Comprehensive tests for `nexus-store::stream`.
 //!
-//! Scope: every public item in `crates/nexus-store/src/stream.rs`.
+//! Scope: every public item in `crates/nexus-store/src/stream/`.
 //!
 //! Coverage matrix:
 //!
@@ -19,28 +19,29 @@
 //!    - `try_collect_map` — empty Vec / order preserved / short-circuit
 //!    - `try_count` — 0 / N / stream-error
 //!    - cross-consistency: `count == collect.len() == for_each-counter`
-//! 3. `DecoderBuilder` typestate
-//!    - codec / borrowing_codec / +upcaster / build
-//! 4. `DecodedStream::try_fold` (owning codec)
-//!    - empty / single / many / order / version threading
-//!    - errors split correctly into `Stream`/`Upcast`/`Decode` variants
-//!    - closure-error short-circuit
-//!    - upcaster transform actually fires (payload modified before decode)
-//!    - no-op upcaster passthrough (payload unchanged)
-//! 5. `BorrowedDecodedStream::try_fold` (zero-copy codec)
-//!    - same matrix as `DecodedStream`, `&E` instead of `E`
-//! 6. Defensive boundary
+//! 3. Inline decode-in-closure pipeline (covering the user-side pattern
+//!    that replaced the deleted `DecoderBuilder` typestate)
+//!    - owning codec decode inside `try_fold` closure
+//!    - borrowing codec decode inside `try_fold` closure
+//!    - upcaster firing before decode within the same closure
+//!    - error propagation: stream / decode / upcast — each surfaces
+//!      as the closure's chosen error type, no wrapping facade
+//! 4. Defensive boundary
 //!    - non-monotonic versions / duplicates / gaps relayed faithfully
 //!      (combinators are pure relays; detection lives in
 //!      `AggregateRoot::replay`)
-//! 7. Send + concurrency
-//!    - streams and decoded pipelines usable across `tokio::spawn`
+//! 5. Send + concurrency
+//!    - streams and combinator pipelines usable across `tokio::spawn`
 //!    - two disjoint streams run in parallel tasks without interference
-//! 8. Property-based
+//! 6. Property-based
 //!    - `try_count == try_collect_map.len()`
 //!    - `try_fold` preserves order
-//!    - decoder pipeline event count matches stream length
-//!    - versions in closure equal envelope versions
+//!    - inline-decode pipeline event count matches stream length
+//!    - versions reaching the closure equal envelope versions
+//! 7. Drop tracking — lending discipline at runtime
+//! 8. Differential testing — owning vs borrowing inline-decode paths
+//! 9. `try_fold_async_until` over inline-decode closures —
+//!    interruption, accumulator preservation, cancel-safety
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 #![allow(clippy::expect_used, reason = "tests")]
@@ -80,11 +81,10 @@ use arrayvec::ArrayString;
 use nexus::Version;
 use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
-use nexus_store::error::{DecodeStreamError, UpcastError};
+use nexus_store::error::UpcastError;
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{
-    BaseEventStream, BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition,
-    EventStream, EventStreamExt, Progress, Step,
+    BaseEventStream, Disposition, EventStream, EventStreamExt, Progress, Step,
 };
 use nexus_store::upcasting::{EventMorsel, Upcaster};
 use proptest::prelude::*;
@@ -1020,22 +1020,47 @@ async fn fold_matches_iterative_sum() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Section 7 — DecoderBuilder typestate transitions
+// Section 7 — Inline decode pipeline (user-side pattern that replaced the
+// deleted `DecoderBuilder` typestate). Each test exercises the upcast +
+// decode chain inside a `try_fold` closure — the same shape callers write
+// at the repository load site after PR3 of the stream refactor.
 // ═══════════════════════════════════════════════════════════════════════════
-//
-// The typestate prevents `.build()` until a codec is bound. The compile-fail
-// fixture `tests/compile_fail/decoder_build_without_codec.rs` verifies that
-// rejection. Here we exercise the four allowed combinations.
+
+/// Local error type that converts cleanly from all the stream/codec/upcast
+/// fault sources our combinator-chain tests exercise. Replaces the role
+/// `DecodeStreamError` played for the deleted decoder facade.
+#[derive(Debug, Error)]
+enum PipelineErr {
+    #[error("stream: {0}")]
+    Stream(String),
+    #[error("decode: {0}")]
+    Decode(String),
+    #[error("upcast: {0}")]
+    Upcast(String),
+}
+
+impl From<Infallible> for PipelineErr {
+    fn from(v: Infallible) -> Self {
+        match v {}
+    }
+}
+
+impl From<StreamIoError> for PipelineErr {
+    fn from(e: StreamIoError) -> Self {
+        Self::Stream(e.to_string())
+    }
+}
 
 #[tokio::test]
-async fn builder_owning_codec_no_upcaster() {
+async fn inline_decode_owning_no_upcaster_collects_events() {
     let stream = VecStream::new(vec![(1, "Tick".into(), enc_u64(42))]);
     let codec = U64Codec;
-    let v: Result<Vec<u64>, DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(Vec::new(), |mut acc, _ver, e: u64| {
+    let mut s = stream;
+    let v: Result<Vec<u64>, PipelineErr> = s
+        .try_fold(Vec::new(), |mut acc, env| {
+            let e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             acc.push(e);
             Ok(acc)
         })
@@ -1044,164 +1069,178 @@ async fn builder_owning_codec_no_upcaster() {
 }
 
 #[tokio::test]
-async fn builder_owning_codec_with_upcaster() {
+async fn inline_decode_owning_with_upcaster_runs_upcast_before_codec() {
     let stream = VecStream::new(vec![(1, "E".into(), enc_u64(1))]);
     let codec = U64Codec;
     let upcaster = RecordingUpcaster::new();
-    let count: Result<usize, DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .codec(&codec)
-        .upcaster(&upcaster)
-        .build()
-        .try_fold(0usize, |c, _v, _e: u64| Ok(c + 1))
+    let mut s = stream;
+    let count: Result<usize, PipelineErr> = s
+        .try_fold(0usize, |c, env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = upcaster
+                .apply(morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let _e: u64 = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(c + 1)
+        })
         .await;
     assert_eq!(count.unwrap(), 1);
     assert_eq!(upcaster.seen().len(), 1);
 }
 
 #[tokio::test]
-async fn builder_borrowing_codec_no_upcaster() {
+async fn inline_decode_borrowing_no_upcaster_observes_payload_bytes() {
     let stream = VecStream::new(vec![(1, "Blob".into(), vec![1, 2, 3])]);
     let codec = BytesBorrowingCodec;
-    let len: Result<usize, DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold(0usize, |acc, _v, b: &[u8]| Ok(acc + b.len()))
+    let mut s = stream;
+    let len: Result<usize, PipelineErr> = s
+        .try_fold(0usize, |acc, env| {
+            let bytes: &[u8] = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(acc + bytes.len())
+        })
         .await;
     assert_eq!(len.unwrap(), 3);
 }
 
 #[tokio::test]
-async fn builder_borrowing_codec_with_upcaster() {
+async fn inline_decode_borrowing_with_upcaster_runs_upcast_before_codec() {
     let stream = VecStream::new(vec![(1, "Blob".into(), vec![9])]);
     let codec = BytesBorrowingCodec;
     let upcaster = RecordingUpcaster::new();
-    let len: Result<usize, DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .upcaster(&upcaster)
-        .build()
-        .try_fold(0usize, |acc, _v, b: &[u8]| Ok(acc + b.len()))
+    let mut s = stream;
+    let len: Result<usize, PipelineErr> = s
+        .try_fold(0usize, |acc, env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = upcaster
+                .apply(morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let bytes: &[u8] = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(acc + bytes.len())
+        })
         .await;
     assert_eq!(len.unwrap(), 1);
     assert_eq!(upcaster.seen().len(), 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Section 8 — DecodedStream (owning codec) pipeline
+// Section 8 — Inline decode pipeline: order, version threading, errors
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn decoded_owning_folds_to_sum() {
+async fn inline_decode_owning_folds_to_sum() {
     let stream = VecStream::new(vec![
         (1, "Tick".into(), enc_u64(10)),
         (2, "Tick".into(), enc_u64(20)),
         (3, "Tick".into(), enc_u64(12)),
     ]);
     let codec = U64Codec;
-
-    let total = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(
-            0u64,
-            |sum, version, e: u64| -> Result<u64, DecodeStreamError<_, _, _>> {
-                assert!(version.as_u64() >= 1);
-                Ok(sum + e)
-            },
-        )
+    let mut s = stream;
+    let total = s
+        .try_fold(0u64, |sum, env| {
+            assert!(env.version().as_u64() >= 1);
+            let e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok::<_, PipelineErr>(sum + e)
+        })
         .await
         .unwrap();
-
     assert_eq!(total, 42);
 }
 
 #[tokio::test]
-async fn decoded_owning_threads_versions() {
+async fn inline_decode_owning_threads_versions() {
     let stream = VecStream::new(vec![
         (1, "E".into(), enc_u64(0)),
         (2, "E".into(), enc_u64(0)),
         (3, "E".into(), enc_u64(0)),
     ]);
     let codec = U64Codec;
-
-    let versions: Vec<u64> = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(
-            Vec::<u64>::new(),
-            |mut v, version, _e: u64| -> Result<_, DecodeStreamError<_, _, _>> {
-                v.push(version.as_u64());
-                Ok(v)
-            },
-        )
+    let mut s = stream;
+    let versions: Vec<u64> = s
+        .try_fold(Vec::<u64>::new(), |mut v, env| {
+            let version = env.version();
+            let _e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            v.push(version.as_u64());
+            Ok::<_, PipelineErr>(v)
+        })
         .await
         .unwrap();
-
     assert_eq!(versions, vec![1, 2, 3]);
 }
 
 #[tokio::test]
-async fn decoded_owning_upcaster_runs_before_codec() {
+async fn inline_decode_owning_upcaster_runs_before_codec() {
     // Upcaster prepends 1 byte, so the 8-byte u64 payload becomes 9 bytes
     // and the codec must reject it.
     let stream = VecStream::new(vec![(1, "Tick".into(), enc_u64(5))]);
     let codec = U64Codec;
     let upcaster = PrependOne;
 
-    let result = stream
-        .decoder()
-        .codec(&codec)
-        .upcaster(&upcaster)
-        .build()
-        .try_fold(
-            0u64,
-            |sum, _v, e: u64| -> Result<u64, DecodeStreamError<_, _, _>> { Ok(sum + e) },
-        )
+    let mut s = stream;
+    let result: Result<u64, PipelineErr> = s
+        .try_fold(0u64, |sum, env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = upcaster
+                .apply(morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let e: u64 = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(sum + e)
+        })
         .await;
 
-    assert!(matches!(
-        result,
-        Err(DecodeStreamError::Decode(U64DecodeError(9)))
-    ));
+    let err = result.unwrap_err();
+    assert!(matches!(err, PipelineErr::Decode(ref msg) if msg.contains('9')));
 }
 
 #[tokio::test]
-async fn decoded_owning_empty_returns_initial() {
+async fn inline_decode_owning_empty_returns_initial() {
     let stream = VecStream::new(vec![]);
     let codec = U64Codec;
-
-    let total = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(
-            99u64,
-            |sum, _v, e: u64| -> Result<u64, DecodeStreamError<_, _, _>> { Ok(sum + e) },
-        )
+    let mut s = stream;
+    let total = s
+        .try_fold(99u64, |sum, env| {
+            let e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok::<_, PipelineErr>(sum + e)
+        })
         .await
         .unwrap();
-
     assert_eq!(total, 99);
 }
 
 #[tokio::test]
-async fn decoded_owning_closure_error_short_circuits() {
+async fn inline_decode_owning_closure_error_short_circuits() {
     #[derive(Debug, Error)]
     #[error("custom: {0}")]
     struct CustomErr(u64);
 
-    impl<S, C, U> From<DecodeStreamError<S, C, U>> for CustomErr
-    where
-        S: std::fmt::Display,
-        C: std::fmt::Display,
-        U: std::fmt::Display,
-    {
-        fn from(_e: DecodeStreamError<S, C, U>) -> Self {
-            CustomErr(0)
+    impl From<Infallible> for CustomErr {
+        fn from(v: Infallible) -> Self {
+            match v {}
         }
     }
 
@@ -1211,12 +1250,12 @@ async fn decoded_owning_closure_error_short_circuits() {
         (3, "E".into(), enc_u64(30)),
     ]);
     let codec = U64Codec;
-
-    let result = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(0u64, |sum, _v, e: u64| -> Result<u64, CustomErr> {
+    let mut s = stream;
+    let result: Result<u64, CustomErr> = s
+        .try_fold(0u64, |sum, env| {
+            let e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .expect("u64 decode for closure-error test");
             if e == 99 {
                 Err(CustomErr(e))
             } else {
@@ -1229,48 +1268,64 @@ async fn decoded_owning_closure_error_short_circuits() {
 }
 
 #[tokio::test]
-async fn decoded_owning_stream_error_to_decode_stream_error_stream() {
+async fn inline_decode_owning_stream_error_propagates() {
     let stream = FailingStream::new(vec![(1, "E".into(), enc_u64(1))], 0);
     let codec = U64Codec;
-    let result: Result<(), DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold((), |(), _v, _e: u64| Ok(()))
+    let mut s = stream;
+    let result: Result<(), PipelineErr> = s
+        .try_fold((), |(), env| {
+            let _e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(())
+        })
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Stream(_))));
+    assert!(matches!(result, Err(PipelineErr::Stream(_))));
 }
 
 #[tokio::test]
-async fn decoded_owning_upcaster_error_to_decode_stream_error_upcast() {
+async fn inline_decode_owning_upcaster_error_propagates() {
     let stream = VecStream::new(vec![(1, "E".into(), enc_u64(1))]);
     let codec = U64Codec;
     let upcaster = FailingUpcaster;
-    let result: Result<(), DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .codec(&codec)
-        .upcaster(&upcaster)
-        .build()
-        .try_fold((), |(), _v, _e: u64| Ok(()))
+    let mut s = stream;
+    let result: Result<(), PipelineErr> = s
+        .try_fold((), |(), env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = upcaster
+                .apply(morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let _e: u64 = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(())
+        })
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Upcast(_))));
+    assert!(matches!(result, Err(PipelineErr::Upcast(_))));
 }
 
 #[tokio::test]
-async fn decoded_owning_codec_error_to_decode_stream_error_codec() {
+async fn inline_decode_owning_codec_error_propagates() {
     let stream = VecStream::new(vec![(1, "E".into(), enc_u64(1))]);
     let codec = AlwaysFailingOwningCodec;
-    let result: Result<(), DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold((), |(), _v, _e: u64| Ok(()))
+    let mut s = stream;
+    let result: Result<(), PipelineErr> = s
+        .try_fold((), |(), env| {
+            let _e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(())
+        })
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Decode(_))));
+    assert!(matches!(result, Err(PipelineErr::Decode(_))));
 }
 
 #[tokio::test]
-async fn decoded_owning_schema_version_visible_to_upcaster() {
+async fn inline_decode_schema_version_visible_to_upcaster() {
     let stream = SchemaStream::new(vec![
         (1, "E".into(), 1, enc_u64(0)),
         (2, "E".into(), 7, enc_u64(0)),
@@ -1278,12 +1333,22 @@ async fn decoded_owning_schema_version_visible_to_upcaster() {
     ]);
     let codec = U64Codec;
     let upcaster = RecordingUpcaster::new();
-    let _: Result<(), DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .codec(&codec)
-        .upcaster(&upcaster)
-        .build()
-        .try_fold((), |(), _v, _e: u64| Ok(()))
+    let mut s = stream;
+    let _: Result<(), PipelineErr> = s
+        .try_fold((), |(), env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = upcaster
+                .apply(morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let _e: u64 = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(())
+        })
         .await;
     let seen = upcaster.seen();
     let observed_versions: Vec<u64> = seen.iter().map(|(_, sv)| *sv).collect();
@@ -1291,107 +1356,103 @@ async fn decoded_owning_schema_version_visible_to_upcaster() {
 }
 
 #[tokio::test]
-async fn decoded_owning_noop_upcaster_passthrough() {
-    // With the default `()` upcaster, payloads must reach the codec unmodified.
+async fn inline_decode_owning_noop_upcaster_passthrough() {
     let stream = VecStream::new(vec![(1, "Tick".into(), enc_u64(123))]);
     let codec = U64Codec;
-    let v: u64 = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(
-            0u64,
-            |_a, _v, e: u64| -> Result<u64, DecodeStreamError<_, _, _>> { Ok(e) },
-        )
+    let noop = ();
+    let mut s = stream;
+    let v: u64 = s
+        .try_fold(0u64, |_a, env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = <() as Upcaster>::apply(&noop, morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let e: u64 = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok::<_, PipelineErr>(e)
+        })
         .await
         .unwrap();
     assert_eq!(v, 123);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Section 9 — BorrowedDecodedStream (borrowing codec) pipeline
+// Section 9 — Borrowing inline-decode pipeline (zero-copy)
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn borrowed_folds_payload_size() {
+async fn inline_decode_borrowing_folds_payload_size() {
     let stream = VecStream::new(vec![
         (1, "Blob".into(), vec![1, 2, 3]),
         (2, "Blob".into(), vec![4, 5]),
         (3, "Blob".into(), vec![6, 7, 8, 9]),
     ]);
     let codec = BytesBorrowingCodec;
-
-    let total = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold(
-            0usize,
-            |sum, _v, bytes: &[u8]| -> Result<usize, DecodeStreamError<_, _, _>> {
-                Ok(sum + bytes.len())
-            },
-        )
+    let mut s = stream;
+    let total = s
+        .try_fold(0usize, |sum, env| {
+            let bytes: &[u8] = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok::<_, PipelineErr>(sum + bytes.len())
+        })
         .await
         .unwrap();
-
     assert_eq!(total, 9);
 }
 
 #[tokio::test]
-async fn borrowed_threads_versions() {
+async fn inline_decode_borrowing_threads_versions() {
     let stream = VecStream::new(vec![
         (1, "E".into(), vec![]),
         (2, "E".into(), vec![]),
         (5, "E".into(), vec![]),
     ]);
     let codec = BytesBorrowingCodec;
-
-    let versions: Vec<u64> = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold(
-            Vec::<u64>::new(),
-            |mut v, ver, _b: &[u8]| -> Result<_, DecodeStreamError<_, _, _>> {
-                v.push(ver.as_u64());
-                Ok(v)
-            },
-        )
+    let mut s = stream;
+    let versions: Vec<u64> = s
+        .try_fold(Vec::<u64>::new(), |mut v, env| {
+            let ver = env.version();
+            let _bytes: &[u8] = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            v.push(ver.as_u64());
+            Ok::<_, PipelineErr>(v)
+        })
         .await
         .unwrap();
     assert_eq!(versions, vec![1, 2, 5]);
 }
 
 #[tokio::test]
-async fn borrowed_empty_returns_initial() {
+async fn inline_decode_borrowing_empty_returns_initial() {
     let stream = VecStream::new(vec![]);
     let codec = BytesBorrowingCodec;
-    let total: usize = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold(
-            7usize,
-            |sum, _v, _b: &[u8]| -> Result<usize, DecodeStreamError<_, _, _>> { Ok(sum) },
-        )
+    let mut s = stream;
+    let total: usize = s
+        .try_fold(7usize, |sum, env| {
+            let _bytes: &[u8] = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok::<_, PipelineErr>(sum)
+        })
         .await
         .unwrap();
     assert_eq!(total, 7);
 }
 
 #[tokio::test]
-async fn borrowed_closure_error_short_circuits() {
+async fn inline_decode_borrowing_closure_error_short_circuits() {
     #[derive(Debug, Error)]
     #[error("stop")]
     struct Stop;
-    impl<S, C, U> From<DecodeStreamError<S, C, U>> for Stop
-    where
-        S: std::fmt::Display,
-        C: std::fmt::Display,
-        U: std::fmt::Display,
-    {
-        fn from(_e: DecodeStreamError<S, C, U>) -> Self {
-            Stop
+    impl From<Infallible> for Stop {
+        fn from(v: Infallible) -> Self {
+            match v {}
         }
     }
 
@@ -1404,13 +1465,14 @@ async fn borrowed_closure_error_short_circuits() {
     let calls = Arc::new(Mutex::new(0usize));
     let calls_clone = Arc::clone(&calls);
 
-    let result = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold((), move |(), _v, b: &[u8]| -> Result<(), Stop> {
+    let mut s = stream;
+    let result: Result<(), Stop> = s
+        .try_fold((), move |(), env| {
+            let bytes: &[u8] = codec
+                .decode(env.event_type(), env.payload())
+                .expect("bytes decode for closure-error test");
             *calls_clone.lock().unwrap() += 1;
-            if b[0] == 2 { Err(Stop) } else { Ok(()) }
+            if bytes[0] == 2 { Err(Stop) } else { Ok(()) }
         })
         .await;
     assert!(matches!(result, Err(Stop)));
@@ -1418,61 +1480,83 @@ async fn borrowed_closure_error_short_circuits() {
 }
 
 #[tokio::test]
-async fn borrowed_stream_error_to_decode_stream_error_stream() {
+async fn inline_decode_borrowing_stream_error_propagates() {
     let stream = FailingStream::new(vec![(1, "E".into(), vec![1])], 0);
     let codec = BytesBorrowingCodec;
-    let result: Result<(), DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold((), |(), _v, _b: &[u8]| Ok(()))
+    let mut s = stream;
+    let result: Result<(), PipelineErr> = s
+        .try_fold((), |(), env| {
+            let _bytes: &[u8] = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(())
+        })
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Stream(_))));
+    assert!(matches!(result, Err(PipelineErr::Stream(_))));
 }
 
 #[tokio::test]
-async fn borrowed_upcaster_error_to_decode_stream_error_upcast() {
+async fn inline_decode_borrowing_upcaster_error_propagates() {
     let stream = VecStream::new(vec![(1, "E".into(), vec![1])]);
     let codec = BytesBorrowingCodec;
     let upcaster = FailingUpcaster;
-    let result: Result<(), DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .upcaster(&upcaster)
-        .build()
-        .try_fold((), |(), _v, _b: &[u8]| Ok(()))
+    let mut s = stream;
+    let result: Result<(), PipelineErr> = s
+        .try_fold((), |(), env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = upcaster
+                .apply(morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let _bytes: &[u8] = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(())
+        })
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Upcast(_))));
+    assert!(matches!(result, Err(PipelineErr::Upcast(_))));
 }
 
 #[tokio::test]
-async fn borrowed_codec_error_to_decode_stream_error_codec() {
+async fn inline_decode_borrowing_codec_error_propagates() {
     let stream = VecStream::new(vec![(1, "E".into(), vec![1])]);
     let codec = AlwaysFailingBorrowingCodec;
-    let result: Result<(), DecodeStreamError<_, _, _>> = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold((), |(), _v, _b: &[u8]| Ok(()))
+    let mut s = stream;
+    let result: Result<(), PipelineErr> = s
+        .try_fold((), |(), env| {
+            let _bytes: &[u8] = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok(())
+        })
         .await;
-    assert!(matches!(result, Err(DecodeStreamError::Decode(_))));
+    assert!(matches!(result, Err(PipelineErr::Decode(_))));
 }
 
 #[tokio::test]
-async fn borrowed_noop_upcaster_passthrough() {
+async fn inline_decode_borrowing_noop_upcaster_passthrough() {
     let stream = VecStream::new(vec![(1, "Blob".into(), vec![10, 20, 30])]);
     let codec = BytesBorrowingCodec;
-    let observed: Vec<u8> = stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold(
-            Vec::new(),
-            |mut acc, _v, b: &[u8]| -> Result<Vec<u8>, DecodeStreamError<_, _, _>> {
-                acc.extend_from_slice(b);
-                Ok(acc)
-            },
-        )
+    let noop = ();
+    let mut s = stream;
+    let observed: Vec<u8> = s
+        .try_fold(Vec::<u8>::new(), |mut acc, env| {
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = <() as Upcaster>::apply(&noop, morsel)
+                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let bytes: &[u8] = codec
+                .decode(transformed.event_type(), transformed.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            acc.extend_from_slice(bytes);
+            Ok::<_, PipelineErr>(acc)
+        })
         .await
         .unwrap();
     assert_eq!(observed, vec![10, 20, 30]);
@@ -1524,24 +1608,23 @@ async fn version_gaps_pass_through_combinators() {
 }
 
 #[tokio::test]
-async fn decoder_relays_non_monotonic_versions_to_closure() {
+async fn inline_decode_relays_non_monotonic_versions_to_closure() {
     let stream = VecStream::new(vec![
         (3, "Tick".into(), enc_u64(30)),
         (1, "Tick".into(), enc_u64(10)),
         (2, "Tick".into(), enc_u64(20)),
     ]);
     let codec = U64Codec;
-    let observed: Vec<(u64, u64)> = stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(
-            Vec::new(),
-            |mut acc, v, e: u64| -> Result<Vec<(u64, u64)>, DecodeStreamError<_, _, _>> {
-                acc.push((v.as_u64(), e));
-                Ok(acc)
-            },
-        )
+    let mut s = stream;
+    let observed: Vec<(u64, u64)> = s
+        .try_fold(Vec::new(), |mut acc, env| {
+            let v = env.version();
+            let e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            acc.push((v.as_u64(), e));
+            Ok::<_, PipelineErr>(acc)
+        })
         .await
         .unwrap();
     assert_eq!(observed, vec![(3, 30), (1, 10), (2, 20)]);
@@ -1590,22 +1673,21 @@ async fn disjoint_streams_run_in_parallel_tasks() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn decoded_stream_usable_across_tokio_spawn() {
+async fn inline_decode_pipeline_usable_across_tokio_spawn() {
     let handle = tokio::spawn(async move {
         let stream = VecStream::new(vec![
             (1, "Tick".into(), enc_u64(10)),
             (2, "Tick".into(), enc_u64(32)),
         ]);
         let codec = U64Codec;
-        stream
-            .decoder()
-            .codec(&codec)
-            .build()
-            .try_fold(
-                0u64,
-                |s, _v, e: u64| -> Result<u64, DecodeStreamError<_, _, _>> { Ok(s + e) },
-            )
-            .await
+        let mut s = stream;
+        s.try_fold(0u64, move |sum, env| {
+            let e: u64 = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+            Ok::<_, PipelineErr>(sum + e)
+        })
+        .await
     });
     let total = handle.await.unwrap().unwrap();
     assert_eq!(total, 42);
@@ -1695,10 +1777,10 @@ proptest! {
         })?;
     }
 
-    /// Decoded pipeline yields exactly `rows.len()` decoded events
+    /// Inline-decode pipeline yields exactly `rows.len()` decoded events
     /// (codec is bytes, so it can't fail on arbitrary payloads).
     #[test]
-    fn prop_borrowed_decoder_event_count_matches_stream(rows in rows_strategy()) {
+    fn prop_inline_decode_event_count_matches_stream(rows in rows_strategy()) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1706,14 +1788,14 @@ proptest! {
         rt.block_on(async {
             let stream = VecStream::new(rows.clone());
             let codec = BytesBorrowingCodec;
-            let count = stream
-                .decoder()
-                .borrowing_codec(&codec)
-                .build()
-                .try_fold(
-                    0usize,
-                    |c, _v, _b: &[u8]| -> Result<usize, DecodeStreamError<_, _, _>> { Ok(c + 1) },
-                )
+            let mut s = stream;
+            let count = s
+                .try_fold(0usize, |c, env| {
+                    let _bytes: &[u8] = codec
+                        .decode(env.event_type(), env.payload())
+                        .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+                    Ok::<_, PipelineErr>(c + 1)
+                })
                 .await
                 .unwrap();
             prop_assert_eq!(count, rows.len());
@@ -1721,10 +1803,10 @@ proptest! {
         })?;
     }
 
-    /// Versions reaching the decoder closure match the envelope versions
+    /// Versions reaching the inline-decode closure match the envelope versions
     /// the stream yields (no reordering, no synthesis).
     #[test]
-    fn prop_decoder_versions_match_envelope_versions(rows in rows_strategy()) {
+    fn prop_inline_decode_versions_match_envelope_versions(rows in rows_strategy()) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1733,17 +1815,16 @@ proptest! {
             let expected: Vec<u64> = rows.iter().map(|(v, _, _)| *v).collect();
             let stream = VecStream::new(rows);
             let codec = BytesBorrowingCodec;
-            let observed: Vec<u64> = stream
-                .decoder()
-                .borrowing_codec(&codec)
-                .build()
-                .try_fold(
-                    Vec::new(),
-                    |mut acc, ver, _b: &[u8]| -> Result<Vec<u64>, DecodeStreamError<_, _, _>> {
-                        acc.push(ver.as_u64());
-                        Ok(acc)
-                    },
-                )
+            let mut s = stream;
+            let observed: Vec<u64> = s
+                .try_fold(Vec::<u64>::new(), |mut acc, env| {
+                    let ver = env.version();
+                    let _bytes: &[u8] = codec
+                        .decode(env.event_type(), env.payload())
+                        .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+                    acc.push(ver.as_u64());
+                    Ok::<_, PipelineErr>(acc)
+                })
                 .await
                 .unwrap();
             prop_assert_eq!(observed, expected);
@@ -1918,41 +1999,37 @@ impl Decode<Vec<u8>> for BytesOwningCodec {
 async fn observe_owning(rows: Vec<(u64, String, Vec<u8>)>) -> Vec<(u64, String, Vec<u8>)> {
     let stream = VecStream::new(rows);
     let codec = BytesOwningCodec;
-    stream
-        .decoder()
-        .codec(&codec)
-        .build()
-        .try_fold(
-            Vec::new(),
-            |mut acc, v, e: Vec<u8>| -> Result<_, DecodeStreamError<_, _, _>> {
-                acc.push((v.as_u64(), "E".to_owned(), e));
-                Ok(acc)
-            },
-        )
-        .await
-        .expect("owning fold ok")
+    let mut s = stream;
+    s.try_fold(Vec::new(), |mut acc, env| {
+        let v = env.version();
+        let e: Vec<u8> = codec
+            .decode(env.event_type(), env.payload())
+            .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+        acc.push((v.as_u64(), "E".to_owned(), e));
+        Ok::<_, PipelineErr>(acc)
+    })
+    .await
+    .expect("owning fold ok")
 }
 
 async fn observe_borrowing(rows: Vec<(u64, String, Vec<u8>)>) -> Vec<(u64, String, Vec<u8>)> {
     let stream = VecStream::new(rows);
     let codec = BytesBorrowingCodec;
-    stream
-        .decoder()
-        .borrowing_codec(&codec)
-        .build()
-        .try_fold(
-            Vec::new(),
-            |mut acc, v, e: &[u8]| -> Result<_, DecodeStreamError<_, _, _>> {
-                acc.push((v.as_u64(), "E".to_owned(), e.to_vec()));
-                Ok(acc)
-            },
-        )
-        .await
-        .expect("borrowing fold ok")
+    let mut s = stream;
+    s.try_fold(Vec::new(), |mut acc, env| {
+        let v = env.version();
+        let e: &[u8] = codec
+            .decode(env.event_type(), env.payload())
+            .map_err(|e| PipelineErr::Decode(e.to_string()))?;
+        acc.push((v.as_u64(), "E".to_owned(), e.to_vec()));
+        Ok::<_, PipelineErr>(acc)
+    })
+    .await
+    .expect("borrowing fold ok")
 }
 
 #[tokio::test]
-async fn differential_both_decoder_arms_observe_same_sequence() {
+async fn differential_both_inline_decode_arms_observe_same_sequence() {
     let rows: Vec<(u64, String, Vec<u8>)> = vec![
         (1, "E".into(), vec![]),
         (2, "E".into(), vec![1]),
@@ -2161,23 +2238,10 @@ assert_impl_all!(BytesOwningCodec: Send, Sync);
 assert_impl_all!(PrependOne: Send, Sync);
 assert_impl_all!(RecordingUpcaster: Send, Sync);
 
-// The fully-bound wrapper types must be Send when all their parts are.
-assert_impl_all!(DecodedStream<'static, VecStream, U64Codec, (), ()>: Send);
-assert_impl_all!(DecodedStream<'static, VecStream, U64Codec, PrependOne, ()>: Send);
-assert_impl_all!(
-    BorrowedDecodedStream<'static, VecStream, BytesBorrowingCodec, (), ()>: Send
-);
-assert_impl_all!(
-    BorrowedDecodedStream<'static, VecStream, BytesBorrowingCodec, PrependOne, ()>: Send
-);
-
-// The builder is Send whenever its parts are — typestate markers carry no
-// hidden `!Send`. The `.build()` typestate is enforced by *trait absence*,
-// not Send-ness. This is the right model: cross-await is fine before the
-// codec is bound; only `.build()` is gated.
-assert_impl_all!(
-    DecoderBuilder<VecStream, nexus_store::stream::NeedsCodec, nexus_store::stream::NoUpcaster>: Send
-);
+// Combinator wrapper Send propagation lives in `tests/combinator_tests.rs`.
+// The decoder facade and its `DecoderBuilder` typestate were deleted in
+// PR3 of the stream refactor; the equivalent "Send when parts are Send"
+// guarantee is now carried by `Map`, `TryMap`, and `TryScan`.
 
 // Structural Send guarantee: the `EventStream` trait *requires* `next()` to
 // return `impl Future<...> + Send` (see `stream.rs` line 41). A `!Send`
@@ -2187,42 +2251,66 @@ assert_impl_all!(
 // that produces a `!Send` wrapper to begin with.
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Section 19 — try_fold_async_until (interruptible async fold on DecodedStream)
+// Section 19 — try_fold_async_until over inline-decode closures
 //
-// Mirrors fs2's `interruptWhen` + `compile.fold` contract. Coverage by the
+// Mirrors fs2's `interruptWhen` + `compile.fold` contract. The decoder
+// facade that fronted this combinator pre-PR3 is gone; the equivalent
+// pattern is `try_fold_async_until` with decode happening inside the
+// closure prelude (before the `async move {}` block). Coverage by the
 // four mandatory categories from CLAUDE.md:
 //   1. Sequence/protocol — order, async per-event side-effects, accumulator
 //      threading
 //   2. Lifecycle — empty/complete, shutdown-before-any-event,
-//      shutdown-after-stream-ends, multi-shot disposition
-//   3. Defensive — closure error, stream error, upcast error, codec error,
-//      shutdown-already-fired
+//      shutdown-after-stream-ends
+//   3. Defensive — closure error, stream error, shutdown-already-fired
 //   4. Concurrency — concurrent shutdown signal racing the producer
-//
-// Plus property: try_fold_async_until with `pending::<()>()` shutdown is
-// behaviorally equivalent to try_fold (modulo Disposition::Completed).
 // ═══════════════════════════════════════════════════════════════════════════
 
 use std::future::pending;
 use tokio::sync::oneshot;
 
+#[derive(Debug, Error)]
+#[error("test error: {0}")]
+struct TestErr(&'static str);
+
+impl From<Infallible> for TestErr {
+    fn from(v: Infallible) -> Self {
+        match v {}
+    }
+}
+
+impl From<StreamIoError> for TestErr {
+    fn from(_: StreamIoError) -> Self {
+        Self("stream")
+    }
+}
+
+impl From<U64DecodeError> for TestErr {
+    fn from(_: U64DecodeError) -> Self {
+        Self("decode")
+    }
+}
+
 // ---------- Sequence / protocol ----------
 
 #[tokio::test]
 async fn try_fold_async_until_no_shutdown_returns_completed() {
-    let stream = VecStream::new(vec![
+    let mut stream = VecStream::new(vec![
         (1, "E".into(), 1u64.to_le_bytes().to_vec()),
         (2, "E".into(), 2u64.to_le_bytes().to_vec()),
         (3, "E".into(), 3u64.to_le_bytes().to_vec()),
     ]);
     let codec = U64Codec;
     let (sum, dispo) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             0u64,
-            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            move |acc, env| {
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    Ok::<_, TestErr>(acc + e)
+                }
+            },
             pending::<()>(),
         )
         .await
@@ -2233,21 +2321,23 @@ async fn try_fold_async_until_no_shutdown_returns_completed() {
 
 #[tokio::test]
 async fn try_fold_async_until_threads_versions_in_order() {
-    let stream = VecStream::new(vec![
+    let mut stream = VecStream::new(vec![
         (1, "E".into(), 10u64.to_le_bytes().to_vec()),
         (2, "E".into(), 20u64.to_le_bytes().to_vec()),
         (3, "E".into(), 30u64.to_le_bytes().to_vec()),
     ]);
     let codec = U64Codec;
     let (seen, dispo) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             Vec::<(u64, u64)>::new(),
-            |mut acc, v, e| async move {
-                acc.push((v.as_u64(), e));
-                Ok::<_, TestErr>(acc)
+            move |mut acc, env| {
+                let v = env.version().as_u64();
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    acc.push((v, e));
+                    Ok::<_, TestErr>(acc)
+                }
             },
             pending::<()>(),
         )
@@ -2259,9 +2349,7 @@ async fn try_fold_async_until_threads_versions_in_order() {
 
 #[tokio::test]
 async fn try_fold_async_until_awaits_per_event_side_effect() {
-    // Per-event closure awaits a tokio sleep — proves async closure bodies
-    // actually run to completion before next iteration.
-    let stream = VecStream::new(vec![
+    let mut stream = VecStream::new(vec![
         (1, "E".into(), 1u64.to_le_bytes().to_vec()),
         (2, "E".into(), 2u64.to_le_bytes().to_vec()),
     ]);
@@ -2269,16 +2357,15 @@ async fn try_fold_async_until_awaits_per_event_side_effect() {
     let invocations = Arc::new(AtomicUsize::new(0));
     let inv = Arc::clone(&invocations);
     let (sum, _) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             0u64,
-            move |acc, _v, e| {
+            move |acc, env| {
                 let inv = Arc::clone(&inv);
+                let decoded = codec.decode(env.event_type(), env.payload());
                 async move {
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                     inv.fetch_add(1, Ordering::SeqCst);
+                    let e = decoded?;
                     Ok::<_, TestErr>(acc + e)
                 }
             },
@@ -2294,15 +2381,18 @@ async fn try_fold_async_until_awaits_per_event_side_effect() {
 
 #[tokio::test]
 async fn try_fold_async_until_empty_stream_completes_with_init() {
-    let stream = VecStream::new(vec![]);
+    let mut stream = VecStream::new(vec![]);
     let codec = U64Codec;
     let (acc, dispo) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             42u64,
-            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            move |acc, env| {
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    Ok::<_, TestErr>(acc + e)
+                }
+            },
             pending::<()>(),
         )
         .await
@@ -2315,19 +2405,22 @@ async fn try_fold_async_until_empty_stream_completes_with_init() {
 async fn try_fold_async_until_shutdown_already_fired_returns_init() {
     // Pre-fired shutdown: ready future yields immediately. Fold sees no
     // events; returns (init, Interrupted).
-    let stream = VecStream::new(vec![
+    let mut stream = VecStream::new(vec![
         (1, "E".into(), 1u64.to_le_bytes().to_vec()),
         (2, "E".into(), 2u64.to_le_bytes().to_vec()),
     ]);
     let codec = U64Codec;
     let shutdown = std::future::ready(());
     let (acc, dispo) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             999u64,
-            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            move |acc, env| {
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    Ok::<_, TestErr>(acc + e)
+                }
+            },
             shutdown,
         )
         .await
@@ -2341,21 +2434,21 @@ async fn try_fold_async_until_shutdown_already_fired_returns_init() {
 
 #[tokio::test]
 async fn try_fold_async_until_shutdown_after_stream_completes_yields_completed() {
-    // If the stream exhausts before shutdown fires, Disposition is Completed,
-    // not Interrupted — natural termination wins.
-    let stream = VecStream::new(vec![
+    let mut stream = VecStream::new(vec![
         (1, "E".into(), 1u64.to_le_bytes().to_vec()),
         (2, "E".into(), 2u64.to_le_bytes().to_vec()),
     ]);
     let codec = U64Codec;
-    // never-firing shutdown
     let (sum, dispo) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             0u64,
-            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            move |acc, env| {
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    Ok::<_, TestErr>(acc + e)
+                }
+            },
             pending::<()>(),
         )
         .await
@@ -2366,24 +2459,9 @@ async fn try_fold_async_until_shutdown_after_stream_completes_yields_completed()
 
 // ---------- Defensive boundary ----------
 
-#[derive(Debug, Error)]
-#[error("test error: {0}")]
-struct TestErr(&'static str);
-
-impl<
-    S: std::error::Error + 'static + Send + Sync,
-    C: std::error::Error + 'static + Send + Sync,
-    U: std::error::Error + 'static + Send + Sync,
-> From<DecodeStreamError<S, C, U>> for TestErr
-{
-    fn from(_: DecodeStreamError<S, C, U>) -> Self {
-        Self("from decode-stream")
-    }
-}
-
 #[tokio::test]
 async fn try_fold_async_until_closure_error_short_circuits_no_disposition() {
-    let stream = VecStream::new(vec![
+    let mut stream = VecStream::new(vec![
         (1, "E".into(), 1u64.to_le_bytes().to_vec()),
         (2, "E".into(), 2u64.to_le_bytes().to_vec()),
         (3, "E".into(), 3u64.to_le_bytes().to_vec()),
@@ -2392,15 +2470,14 @@ async fn try_fold_async_until_closure_error_short_circuits_no_disposition() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = Arc::clone(&calls);
     let result = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             0u64,
-            move |acc, _v, e| {
+            move |acc, env| {
                 let calls = Arc::clone(&calls_clone);
+                let decoded = codec.decode(env.event_type(), env.payload());
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
+                    let e = decoded?;
                     if e == 2 {
                         return Err(TestErr("boom on 2"));
                     }
@@ -2420,7 +2497,7 @@ async fn try_fold_async_until_closure_error_short_circuits_no_disposition() {
 
 #[tokio::test]
 async fn try_fold_async_until_stream_error_short_circuits_no_disposition() {
-    let stream = FailingStream::new(
+    let mut stream = FailingStream::new(
         vec![
             (1, "E".into(), 1u64.to_le_bytes().to_vec()),
             (2, "E".into(), 2u64.to_le_bytes().to_vec()),
@@ -2429,12 +2506,15 @@ async fn try_fold_async_until_stream_error_short_circuits_no_disposition() {
     );
     let codec = U64Codec;
     let result = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             0u64,
-            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            move |acc, env| {
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    Ok::<_, TestErr>(acc + e)
+                }
+            },
             pending::<()>(),
         )
         .await;
@@ -2519,13 +2599,17 @@ async fn try_fold_async_until_concurrent_shutdown_preserves_partial_accumulator(
         let _ = rx.await;
     };
 
+    let mut stream = stream;
     let (partial, dispo) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             0u64,
-            |acc, _v, e| async move { Ok::<_, TestErr>(acc + e) },
+            move |acc, env| {
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    Ok::<_, TestErr>(acc + e)
+                }
+            },
             shutdown,
         )
         .await
@@ -2561,15 +2645,17 @@ async fn try_fold_async_until_event_processed_before_shutdown_is_in_accumulator(
         let _ = rx.await;
     };
 
+    let mut stream = stream;
     let (seen, dispo) = stream
-        .decoder()
-        .codec(&codec)
-        .build()
         .try_fold_async_until(
             Vec::<u64>::new(),
-            |mut acc, _v, e| async move {
-                acc.push(e);
-                Ok::<_, TestErr>(acc)
+            move |mut acc, env| {
+                let decoded = codec.decode(env.event_type(), env.payload());
+                async move {
+                    let e = decoded?;
+                    acc.push(e);
+                    Ok::<_, TestErr>(acc)
+                }
             },
             shutdown,
         )

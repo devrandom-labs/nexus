@@ -7,8 +7,8 @@ use crate::codec::{BorrowingDecode, Decode, Encode};
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
 use crate::store::{RawEventStore, Store};
-use crate::stream::EventStreamExt;
-use crate::upcasting::Upcaster;
+use crate::stream::{BaseEventStream, EventStream};
+use crate::upcasting::{EventMorsel, Upcaster};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Repository<A> — high-level aggregate facade (load + save)
@@ -177,26 +177,34 @@ where
 
     async fn replay_from(
         &self,
-        root: AggregateRoot<A>,
+        mut root: AggregateRoot<A>,
         from: Version,
     ) -> Result<AggregateRoot<A>, Self::Error> {
-        let stream = self
+        let mut stream = self
             .store
             .raw()
             .read_stream(root.id(), from)
             .await
             .map_err(StoreError::Adapter)?;
 
-        stream
-            .decoder()
-            .codec(&self.codec)
-            .upcaster(&self.upcaster)
-            .build()
-            .try_fold(root, |mut acc, version, event| {
-                acc.replay(version, &event)?;
-                Ok(acc)
-            })
-            .await
+        while let Some(item) = stream.next().await.map_err(StoreError::Adapter)? {
+            let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
+            let version = env.version();
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = self.upcaster.apply(morsel).map_err(StoreError::Upcast)?;
+            let event = <C as Decode<EventOf<A>>>::decode(
+                &self.codec,
+                transformed.event_type(),
+                transformed.payload(),
+            )
+            .map_err(StoreError::Decode)?;
+            root.replay(version, &event)?;
+        }
+        Ok(root)
     }
 }
 
@@ -356,26 +364,34 @@ where
 
     async fn replay_from(
         &self,
-        root: AggregateRoot<A>,
+        mut root: AggregateRoot<A>,
         from: Version,
     ) -> Result<AggregateRoot<A>, Self::Error> {
-        let stream = self
+        let mut stream = self
             .store
             .raw()
             .read_stream(root.id(), from)
             .await
             .map_err(StoreError::Adapter)?;
 
-        stream
-            .decoder()
-            .borrowing_codec(&self.codec)
-            .upcaster(&self.upcaster)
-            .build()
-            .try_fold(root, |mut acc, version, event: &EventOf<A>| {
-                acc.replay(version, event)?;
-                Ok(acc)
-            })
-            .await
+        while let Some(item) = stream.next().await.map_err(StoreError::Adapter)? {
+            let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
+            let version = env.version();
+            let morsel = EventMorsel::borrowed(
+                env.event_type(),
+                env.schema_version_as_version(),
+                env.payload(),
+            );
+            let transformed = self.upcaster.apply(morsel).map_err(StoreError::Upcast)?;
+            let event: &EventOf<A> = <C as BorrowingDecode<EventOf<A>>>::decode(
+                &self.codec,
+                transformed.event_type(),
+                transformed.payload(),
+            )
+            .map_err(StoreError::Decode)?;
+            root.replay(version, event)?;
+        }
+        Ok(root)
     }
 }
 
