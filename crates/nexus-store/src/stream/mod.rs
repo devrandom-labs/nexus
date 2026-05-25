@@ -15,10 +15,15 @@
 //!   wrappers, [`DecodedStream`] (owning codec) and
 //!   [`BorrowedDecodedStream`] (zero-copy codec); also the
 //!   [`BaseEventStream`] sub-trait the decoder bounds on.
+//! - [`owned`] (feature-gated: `futures-bridge`) — the [`OwnedEventStream`]
+//!   sub-trait + [`IntoStream`] bridge that exposes an owning-output
+//!   lending stream as a [`futures_core::Stream`].
 
 mod combinators;
 mod cursor;
 mod decoder;
+#[cfg(feature = "futures-bridge")]
+mod owned;
 mod progress;
 
 pub use combinators::{Map, TryMap, TryScan};
@@ -27,4 +32,6 @@ pub use decoder::{
     BaseEventStream, BorrowedDecodedStream, DecodedStream, DecoderBuilder, NeedsCodec, NoUpcaster,
     WithBorrowingCodec, WithCodec, WithUpcaster,
 };
+#[cfg(feature = "futures-bridge")]
+pub use owned::{IntoStream, OwnedEventStream};
 pub use progress::{Progress, Step};

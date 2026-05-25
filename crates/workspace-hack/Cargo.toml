@@ -12,6 +12,7 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+memchr = { version = "2" }
 num-traits = { version = "0.2" }
 once_cell = { version = "1" }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
@@ -20,6 +21,7 @@ trybuild = { version = "1", default-features = false, features = ["diff"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [build-dependencies]
+memchr = { version = "2" }
 num-traits = { version = "0.2" }
 once_cell = { version = "1" }
 proc-macro2 = { version = "1", features = ["span-locations"] }

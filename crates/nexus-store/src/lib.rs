@@ -42,6 +42,8 @@ pub use stream::{
     BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition, EventStream, EventStreamExt,
     Progress, Step,
 };
+#[cfg(feature = "futures-bridge")]
+pub use stream::{IntoStream, OwnedEventStream};
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::{EventMorsel, Upcaster};
