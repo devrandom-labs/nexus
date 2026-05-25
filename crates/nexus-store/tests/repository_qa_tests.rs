@@ -43,12 +43,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use nexus::*;
 use nexus_store::Repository;
 use nexus_store::Store;
+use nexus_store::Upcaster;
 use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::error::StoreError;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
-use nexus_store::{UpcastError, Upcaster};
 use proptest::prelude::*;
 
 // StreamId has been removed from the API — use typed Id values directly
@@ -386,10 +386,7 @@ struct IncrementedV1ToV2;
 impl Upcaster for IncrementedV1ToV2 {
     type Error = Infallible;
 
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         match (morsel.event_type(), morsel.schema_version()) {
             ("Incremented", v) if v == Version::INITIAL => Ok(EventMorsel::new(
                 "Incremented",
@@ -414,10 +411,7 @@ struct IncrementedV1ToV3;
 impl Upcaster for IncrementedV1ToV3 {
     type Error = Infallible;
 
-    fn apply<'a>(
-        &self,
-        mut morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         loop {
             morsel = match (morsel.event_type(), morsel.schema_version()) {
                 ("Incremented", v) if v == Version::INITIAL => EventMorsel::new(
@@ -450,10 +444,7 @@ struct DeltaDoublingUpcaster;
 impl Upcaster for DeltaDoublingUpcaster {
     type Error = Infallible;
 
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         match (morsel.event_type(), morsel.schema_version()) {
             ("Delta", v) if v == Version::INITIAL => {
                 let delta = i32::from_le_bytes(morsel.payload()[0..4].try_into().unwrap());

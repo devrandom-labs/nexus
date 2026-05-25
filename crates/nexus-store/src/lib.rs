@@ -24,7 +24,7 @@ pub use codec::serde::json::{Json, JsonCodec};
 pub use codec::serde::{SerdeCodec, SerdeFormat};
 pub use codec::{BorrowingDecode, Decode, Encode};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
-pub use error::{AppendError, DecodeStreamError, InvalidSchemaVersion, StoreError, UpcastError};
+pub use error::{AppendError, InvalidSchemaVersion, StoreError};
 pub use nexus::Version;
 #[cfg(feature = "projection")]
 pub use projection::Projector;

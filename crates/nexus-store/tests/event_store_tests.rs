@@ -9,7 +9,6 @@ use std::fmt;
 use nexus::*;
 use nexus_store::Repository;
 use nexus_store::Store;
-use nexus_store::UpcastError;
 use nexus_store::Upcaster;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
@@ -195,10 +194,7 @@ struct V1ToV2Upcaster;
 impl Upcaster for V1ToV2Upcaster {
     type Error = Infallible;
 
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         match (morsel.event_type(), morsel.schema_version()) {
             ("Created", v) if v == Version::INITIAL => {
                 // Passthrough — payload format unchanged, just bump version.

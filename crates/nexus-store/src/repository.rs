@@ -195,7 +195,7 @@ where
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = self.upcaster.apply(morsel).map_err(StoreError::Upcast)?;
+            let transformed = self.upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
             let event = <C as Decode<EventOf<A>>>::decode(
                 &self.codec,
                 transformed.event_type(),
@@ -382,7 +382,7 @@ where
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = self.upcaster.apply(morsel).map_err(StoreError::Upcast)?;
+            let transformed = self.upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
             let event: &EventOf<A> = <C as BorrowingDecode<EventOf<A>>>::decode(
                 &self.codec,
                 transformed.event_type(),

@@ -1,0 +1,5 @@
+error: transform chain gap for event 'OrderCreated': missing step from version 2 to version 3 (chain must cover every version in [1, 5])
+  --> tests/macro_compile_fail/transforms_gap.rs:21:8
+   |
+21 |     fn v1_to_v2(payload: &[u8]) -> Result<Vec<u8>, MyError> {
+   |        ^^^^^^^^

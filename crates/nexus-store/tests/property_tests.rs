@@ -263,7 +263,7 @@ proptest! {
         impl Upcaster for V1ToV3Upcaster {
             type Error = Infallible;
 
-            fn apply<'a>(&self, mut morsel: nexus_store::upcasting::EventMorsel<'a>) -> Result<nexus_store::upcasting::EventMorsel<'a>, nexus_store::UpcastError<Self::Error>> {
+            fn upcast<'a>(&self, mut morsel: nexus_store::upcasting::EventMorsel<'a>) -> Result<nexus_store::upcasting::EventMorsel<'a>, Self::Error> {
                 loop {
                     morsel = match (morsel.event_type(), morsel.schema_version()) {
                         ("E", v) if v == Version::INITIAL => nexus_store::upcasting::EventMorsel::new("E", Version::new(2).unwrap(), morsel.payload().to_vec()),
@@ -282,7 +282,7 @@ proptest! {
         }
 
         let morsel = nexus_store::EventMorsel::borrowed("E", Version::INITIAL, &payload);
-        let result = V1ToV3Upcaster.apply(morsel).unwrap();
+        let result = V1ToV3Upcaster.upcast(morsel).unwrap();
 
         prop_assert_eq!(result.schema_version(), Version::new(3).unwrap(), "final version should be 3");
         prop_assert_eq!(

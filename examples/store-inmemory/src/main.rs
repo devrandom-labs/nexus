@@ -152,10 +152,7 @@ struct RenameUpcaster;
 impl Upcaster for RenameUpcaster {
     type Error = std::convert::Infallible;
 
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, nexus_store::UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         if morsel.event_type() != "TaskCreated" || morsel.schema_version().as_u64() >= 2 {
             return Ok(morsel);
         }
@@ -330,7 +327,7 @@ async fn main() {
     for (event_type, schema_version, payload, version) in &read_events {
         let schema_ver = Version::new(u64::from(*schema_version)).expect("schema version > 0");
         let morsel = EventMorsel::borrowed(event_type, schema_ver, payload);
-        let upcasted = upcaster.apply(morsel).expect("upcast should succeed");
+        let upcasted = upcaster.upcast(morsel).expect("upcast should succeed");
 
         if upcasted.event_type() != event_type {
             println!(

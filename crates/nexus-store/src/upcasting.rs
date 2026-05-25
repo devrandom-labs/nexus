@@ -2,8 +2,6 @@ use std::borrow::Cow;
 
 use nexus::Version;
 
-use crate::error::UpcastError;
-
 // ═══════════════════════════════════════════════════════════════════════════
 // EventMorsel — data unit flowing through the transform pipeline
 // ═══════════════════════════════════════════════════════════════════════════
@@ -97,9 +95,25 @@ impl<'a> EventMorsel<'a> {
 
 /// Upcast old events to the current schema version.
 ///
-/// `EventStore` calls `apply()` on the read path and `current_version()`
-/// on the write path. The proc macro `#[nexus::transforms]` generates
-/// implementations; `()` is the no-op passthrough.
+/// `EventStore` calls [`upcast`](Upcaster::upcast) on the read path and
+/// [`current_version`](Upcaster::current_version) on the write path. The proc
+/// macro `#[nexus::transforms]` generates implementations; `()` is the no-op
+/// passthrough.
+///
+/// # Compile-time guarantees (macro-generated impls)
+///
+/// The `#[nexus::transforms]` macro verifies, at compile time:
+/// - `from >= 1` on every transform.
+/// - `to == from + 1` on every transform (contiguity per step).
+/// - No duplicate `(event_type, from)` pairs.
+/// - **Chain coverage**: for each event type, every schema version in
+///   `[1, current_version]` is reachable via the declared chain (no gaps).
+///
+/// These guarantees make a number of runtime errors unrepresentable for
+/// macro-generated upcasters: the chain always terminates, every step
+/// advances the schema version, and event types are non-empty literals.
+/// Hand-rolled `Upcaster` implementations should preserve these properties
+/// themselves; the trait does not check them at runtime.
 pub trait Upcaster: Send + Sync {
     /// The error type produced by transform functions.
     ///
@@ -111,12 +125,12 @@ pub trait Upcaster: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`UpcastError`] if a transform function fails or validation detects
-    /// an invariant violation (version not advanced, empty event type, chain limit).
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>>;
+    /// Returns the implementation's `Self::Error` when a user-provided
+    /// transform function fails. Macro-generated implementations propagate
+    /// the transform's error verbatim; the wrapper context (event type,
+    /// schema version) is the user's responsibility to encode in their own
+    /// error type if needed.
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error>;
 
     /// Current schema version for an event type (stamped on new events).
     /// Returns `None` if the event type has no transforms.
@@ -128,10 +142,7 @@ impl Upcaster for () {
     type Error = std::convert::Infallible;
 
     #[inline]
-    fn apply<'a>(
-        &self,
-        morsel: EventMorsel<'a>,
-    ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
         Ok(morsel)
     }
 

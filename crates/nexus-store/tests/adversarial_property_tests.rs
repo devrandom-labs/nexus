@@ -69,7 +69,7 @@ use nexus_store::Store;
 use nexus_store::Upcaster;
 use nexus_store::codec::{Decode, Encode};
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
-use nexus_store::error::{StoreError, UpcastError};
+use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
 use nexus_store::stream::EventStream;
@@ -843,10 +843,7 @@ fn attack_upcaster_correct_final_state() {
     impl Upcaster for ThreeStepUpcaster {
         type Error = Infallible;
 
-        fn apply<'a>(
-            &self,
-            mut morsel: EventMorsel<'a>,
-        ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+        fn upcast<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
             loop {
                 match (morsel.event_type(), morsel.schema_version()) {
                     ("E", v) if v == Version::INITIAL => {
@@ -874,7 +871,7 @@ fn attack_upcaster_correct_final_state() {
 
     let payload = vec![42u8; 100];
     let morsel = EventMorsel::borrowed("E", Version::INITIAL, &payload);
-    let result = ThreeStepUpcaster.apply(morsel).unwrap();
+    let result = ThreeStepUpcaster.upcast(morsel).unwrap();
 
     assert_eq!(result.event_type(), "E");
     assert_eq!(result.schema_version(), Version::new(4).unwrap());
@@ -1086,10 +1083,7 @@ async fn attack_event_store_transforms_applied_on_load() {
     impl Upcaster for HappenedV1ToV2 {
         type Error = Infallible;
 
-        fn apply<'a>(
-            &self,
-            morsel: EventMorsel<'a>,
-        ) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+        fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
             match (morsel.event_type(), morsel.schema_version()) {
                 ("Happened", v) if v == Version::INITIAL => Ok(EventMorsel::new(
                     "Happened",
@@ -1643,7 +1637,7 @@ proptest! {
         let upcaster = ();
         let ver = Version::new(schema_version).unwrap();
         let morsel = EventMorsel::borrowed(&event_type, ver, &payload);
-        let result = upcaster.apply(morsel).unwrap();
+        let result = upcaster.upcast(morsel).unwrap();
 
         prop_assert_eq!(result.event_type(), event_type.as_str(), "event_type changed with no-op upcaster");
         prop_assert_eq!(result.schema_version(), ver, "version changed with no-op upcaster");
@@ -1704,47 +1698,11 @@ proptest! {
     }
 }
 
-// ============================================================================
-// ATTACK 36: UpcastError Display formatting
-// ============================================================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-
-    #[test]
-    fn attack_upcast_error_display_includes_context(
-        event_type in "[A-Z][a-z]{0,20}",
-        schema_version in 1..1000u64,
-    ) {
-        let ver = Version::new(schema_version).unwrap();
-
-        let et_label = label(&event_type);
-
-        let err1 = UpcastError::<Infallible>::VersionNotAdvanced {
-            event_type: et_label,
-            input_version: ver,
-            output_version: ver,
-        };
-        let msg1 = err1.to_string();
-        prop_assert!(msg1.contains(&event_type), "event_type missing from error: {}", msg1);
-
-        let err2 = UpcastError::<Infallible>::EmptyEventType {
-            input_event_type: et_label,
-            schema_version: ver,
-        };
-        let msg2 = err2.to_string();
-        prop_assert!(msg2.contains(&event_type), "event_type missing from error: {}", msg2);
-
-        let err3 = UpcastError::<Infallible>::ChainLimitExceeded {
-            event_type: et_label,
-            schema_version: ver,
-            limit: 100,
-        };
-        let msg3 = err3.to_string();
-        prop_assert!(msg3.contains(&event_type), "event_type missing from error: {}", msg3);
-        prop_assert!(msg3.contains("100"), "limit missing from error: {}", msg3);
-    }
-}
+// ATTACK 36 deleted in PR4: UpcastError type was removed when the Upcaster
+// trait shape was slimmed. The runtime invariants that produced those error
+// variants (chain coverage, contiguity, no duplicates) are now validated at
+// compile time by the #[transforms] macro, so no enum variants remain to
+// format-test.
 
 // ============================================================================
 // ATTACK 37: Concurrent writers racing on the same stream
@@ -1806,7 +1764,7 @@ proptest! {
         impl Upcaster for RenamingUpcaster {
             type Error = Infallible;
 
-            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+            fn upcast<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
                 loop {
                     match (morsel.event_type(), morsel.schema_version()) {
                         ("OldEvent", v) if v == Version::INITIAL => {
@@ -1834,7 +1792,7 @@ proptest! {
         }
 
         let morsel = EventMorsel::borrowed("OldEvent", Version::INITIAL, &payload);
-        let result = RenamingUpcaster.apply(morsel).unwrap();
+        let result = RenamingUpcaster.upcast(morsel).unwrap();
 
         prop_assert_eq!(result.event_type(), "NewEvent", "type rename chain failed");
         prop_assert_eq!(result.schema_version(), Version::new(3).unwrap());
@@ -1858,7 +1816,7 @@ proptest! {
         impl Upcaster for PrefixUpcaster {
             type Error = Infallible;
 
-            fn apply<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, UpcastError<Self::Error>> {
+            fn upcast<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
                 loop {
                     match (morsel.event_type(), morsel.schema_version()) {
                         ("E", v) if v == Version::INITIAL => {
@@ -1881,7 +1839,7 @@ proptest! {
         }
 
         let morsel = EventMorsel::borrowed("E", Version::INITIAL, &payload);
-        let result = PrefixUpcaster.apply(morsel).unwrap();
+        let result = PrefixUpcaster.upcast(morsel).unwrap();
 
         prop_assert_eq!(result.schema_version(), Version::new(2).unwrap());
         prop_assert_eq!(result.payload().len(), payload.len() + 2);
