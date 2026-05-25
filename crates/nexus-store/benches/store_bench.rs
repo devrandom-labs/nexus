@@ -37,7 +37,7 @@ use nexus_store::Upcaster;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::stream::EventStream;
+use nexus_store::stream::{BaseEventStream, EventStream};
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -83,7 +83,17 @@ struct InMemoryStream {
     pos: usize,
 }
 
+impl BaseEventStream for InMemoryStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for InMemoryStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = BenchError;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {

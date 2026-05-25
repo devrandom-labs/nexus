@@ -40,6 +40,7 @@ pub use state::{
 pub use store::{GlobalSeq, RawEventStore, Store, Subscription};
 pub use stream::{
     BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition, EventStream, EventStreamExt,
+    Progress, Step,
 };
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;

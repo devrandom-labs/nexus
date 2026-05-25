@@ -25,7 +25,7 @@ use nexus_fjall::{FjallError, FjallStore, FjallStream};
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::{PersistedEnvelope, pending_envelope};
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::stream::{BaseEventStream, EventStream};
 use nexus_store_testing::{ConformanceRow, assert_event_stream_conformance};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -57,7 +57,17 @@ struct OwnedFjallStream {
     _tempdir: tempfile::TempDir,
 }
 
+impl BaseEventStream for OwnedFjallStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for OwnedFjallStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = FjallError;
 
     fn next(

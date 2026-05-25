@@ -7,7 +7,7 @@ use nexus::{Id, Version};
 
 use crate::envelope::PendingEnvelope;
 use crate::error::AppendError;
-use crate::stream::EventStream;
+use crate::stream::BaseEventStream;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Store<S> — Arc-wrapped handle to a RawEventStore backend
@@ -71,7 +71,12 @@ pub trait RawEventStore<M = ()>: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// The lending cursor type for reading events.
-    type Stream<'a>: EventStream<M, Error = Self::Error> + 'a
+    ///
+    /// The [`BaseEventStream`] sub-trait bound lets facades like the
+    /// decoder recover the underlying [`PersistedEnvelope`](crate::envelope::PersistedEnvelope)
+    /// from `Self::Item<'_>` without an HRTB type equality (which would
+    /// force `Self: 'static`).
+    type Stream<'a>: BaseEventStream<M, Error = Self::Error> + 'a
     where
         Self: 'a;
 
@@ -156,7 +161,7 @@ pub trait Subscription<M: 'static> {
     /// at call sites, which conflict with non-`'static` subscription borrows
     /// (the `where Self: 'a` bound on `Stream<'a>` would force the borrow's
     /// lifetime to `'static`).
-    type Stream<'a>: EventStream<M, Error = Self::Error> + Send + 'a
+    type Stream<'a>: BaseEventStream<M, Error = Self::Error> + Send + 'a
     where
         Self: 'a;
 

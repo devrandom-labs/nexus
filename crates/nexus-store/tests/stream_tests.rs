@@ -83,7 +83,8 @@ use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::{DecodeStreamError, UpcastError};
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{
-    BorrowedDecodedStream, DecodedStream, DecoderBuilder, EventStream, EventStreamExt,
+    BaseEventStream, BorrowedDecodedStream, DecodedStream, DecoderBuilder, Disposition,
+    EventStream, EventStreamExt, Progress, Step,
 };
 use nexus_store::upcasting::{EventMorsel, Upcaster};
 use proptest::prelude::*;
@@ -132,7 +133,17 @@ impl VecStream {
     }
 }
 
+impl BaseEventStream for VecStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for VecStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -164,7 +175,17 @@ impl SchemaStream {
     }
 }
 
+impl BaseEventStream for SchemaStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for SchemaStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -196,7 +217,17 @@ impl MetadataStream {
     }
 }
 
+impl BaseEventStream<String> for MetadataStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a, String>) -> PersistedEnvelope<'a, String>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream<String> for MetadataStream {
+    type Item<'a> = PersistedEnvelope<'a, String>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_, String>>, Self::Error> {
@@ -240,7 +271,17 @@ impl FailingStream {
     }
 }
 
+impl BaseEventStream for FailingStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for FailingStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = StreamIoError;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -1756,7 +1797,17 @@ impl DropProbeStream {
     }
 }
 
+impl BaseEventStream<DropProbe> for DropProbeStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a, DropProbe>) -> PersistedEnvelope<'a, DropProbe>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream<DropProbe> for DropProbeStream {
+    type Item<'a> = PersistedEnvelope<'a, DropProbe>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_, DropProbe>>, Self::Error> {
@@ -2152,7 +2203,6 @@ assert_impl_all!(
 // behaviorally equivalent to try_fold (modulo Disposition::Completed).
 // ═══════════════════════════════════════════════════════════════════════════
 
-use nexus_store::stream::Disposition;
 use std::future::pending;
 use tokio::sync::oneshot;
 
@@ -2411,7 +2461,17 @@ impl SlowStream {
     }
 }
 
+impl BaseEventStream for SlowStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for SlowStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = Infallible;
 
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
@@ -2521,4 +2581,268 @@ async fn try_fold_async_until_event_processed_before_shutdown_is_in_accumulator(
     for (i, v) in seen.iter().enumerate() {
         assert_eq!(*v as usize, i + 1, "events must be a contiguous prefix");
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// try_scan_until — checkpointed scan over Progress/Step
+//
+// Coverage:
+// - empty stream → initial returned, Completed, no save calls
+// - all Skip → flush tail saves the last seen position
+// - all Save → save fires per event, no extra flush
+// - shutdown mid-stream with pending → flush tail fires on Interrupted
+// - step error → propagates, no flush
+// - save error → propagates, no further work
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Error)]
+enum ScanError {
+    #[error("stream io")]
+    Stream(#[from] Infallible),
+    #[error("test step error")]
+    Step,
+    #[error("test save error")]
+    Save,
+}
+
+type SaveLog = Arc<Mutex<Vec<(Version, u64)>>>;
+
+fn fresh_log() -> SaveLog {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+fn recording_save(
+    log: &SaveLog,
+) -> impl FnMut(
+    Version,
+    u64,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<u64, ScanError>> + Send>> {
+    let log = Arc::clone(log);
+    move |pos, state| {
+        let log = Arc::clone(&log);
+        Box::pin(async move {
+            log.lock().unwrap().push((pos, state));
+            Ok(state)
+        })
+    }
+}
+
+#[tokio::test]
+async fn scan_empty_stream_returns_initial_progress_no_save() {
+    let mut s = VecStream::new(vec![]);
+    let log = fresh_log();
+
+    let (progress, dispo) = s
+        .try_scan_until::<u64, Version, ScanError, _, _, _, _, _>(
+            Progress::fresh(0_u64),
+            |p, _env| async move { Ok(Step::Skip(p)) },
+            recording_save(&log),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dispo, Disposition::Completed);
+    assert_eq!(progress.state, 0);
+    assert!(progress.saved.is_none());
+    assert!(progress.seen.is_none());
+    assert!(log.lock().unwrap().is_empty(), "no events → no saves");
+}
+
+#[tokio::test]
+async fn scan_all_skip_flushes_tail_on_completion() {
+    let mut s = VecStream::new(vec![
+        (1, "T".to_string(), vec![]),
+        (2, "T".to_string(), vec![]),
+        (3, "T".to_string(), vec![]),
+    ]);
+    let log = fresh_log();
+
+    let (progress, dispo) = s
+        .try_scan_until::<u64, Version, ScanError, _, _, _, _, _>(
+            Progress::fresh(0_u64),
+            |p, env| {
+                let version = env.version();
+                async move {
+                    let next = Progress {
+                        state: p.state + 1,
+                        saved: p.saved,
+                        seen: Some(version),
+                    };
+                    Ok(Step::Skip(next))
+                }
+            },
+            recording_save(&log),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dispo, Disposition::Completed);
+    assert_eq!(progress.state, 3);
+    assert_eq!(progress.saved, Version::new(3));
+    assert_eq!(progress.seen, Version::new(3));
+
+    let saves = log.lock().unwrap();
+    assert_eq!(saves.len(), 1, "flush tail should save once");
+    assert_eq!(saves[0], (Version::new(3).unwrap(), 3));
+}
+
+#[tokio::test]
+async fn scan_all_save_persists_each_no_extra_flush() {
+    let mut s = VecStream::new(vec![
+        (1, "T".to_string(), vec![]),
+        (2, "T".to_string(), vec![]),
+        (3, "T".to_string(), vec![]),
+    ]);
+    let log = fresh_log();
+
+    let (progress, dispo) = s
+        .try_scan_until::<u64, Version, ScanError, _, _, _, _, _>(
+            Progress::fresh(0_u64),
+            |p, env| {
+                let version = env.version();
+                async move {
+                    let next = Progress {
+                        state: p.state + 1,
+                        saved: p.saved,
+                        seen: Some(version),
+                    };
+                    Ok(Step::Save(next))
+                }
+            },
+            recording_save(&log),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dispo, Disposition::Completed);
+    assert_eq!(progress.state, 3);
+    assert_eq!(progress.saved, Version::new(3));
+    assert_eq!(progress.seen, Version::new(3));
+
+    let saves = log.lock().unwrap();
+    assert_eq!(saves.len(), 3, "save fires per event, no extra flush");
+    assert_eq!(
+        saves.as_slice(),
+        &[
+            (Version::new(1).unwrap(), 1),
+            (Version::new(2).unwrap(), 2),
+            (Version::new(3).unwrap(), 3),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn scan_shutdown_with_pending_flushes_tail_as_interrupted() {
+    // Use SlowStream so the loop blocks on `next()` between events. Shutdown
+    // is guaranteed to fire mid-loop while waiting for the next event.
+    let mut s = SlowStream::new(
+        vec![
+            (1, "T".to_string(), vec![]),
+            (2, "T".to_string(), vec![]),
+            (3, "T".to_string(), vec![]),
+            (4, "T".to_string(), vec![]),
+            (5, "T".to_string(), vec![]),
+        ],
+        std::time::Duration::from_millis(50),
+    );
+    let log = fresh_log();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+
+    // Fire shutdown after ~120ms — enough for ~2 events to land before the
+    // next `sleep` blocks; shutdown then wins the biased select.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let _ = tx.send(());
+    });
+
+    let (progress, dispo) = s
+        .try_scan_until::<u64, Version, ScanError, _, _, _, _, _>(
+            Progress::fresh(0_u64),
+            |p, env| {
+                let version = env.version();
+                async move {
+                    let next = Progress {
+                        state: p.state + 1,
+                        saved: p.saved,
+                        seen: Some(version),
+                    };
+                    Ok(Step::Skip(next))
+                }
+            },
+            recording_save(&log),
+            async move {
+                let _ = rx.await;
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(dispo, Disposition::Interrupted);
+    assert!(
+        progress.state > 0 && progress.state < 5,
+        "expected partial progress, got state = {}",
+        progress.state,
+    );
+    // Flush tail must have aligned saved with seen for the events that did land.
+    assert_eq!(progress.saved, progress.seen);
+
+    let saves = log.lock().unwrap();
+    assert_eq!(saves.len(), 1, "flush tail saves exactly once on interrupt");
+    assert_eq!(saves[0].0, progress.seen.unwrap());
+    assert_eq!(saves[0].1, progress.state);
+}
+
+#[tokio::test]
+async fn scan_step_error_propagates_without_flush() {
+    let mut s = VecStream::new(vec![(1, "T".to_string(), vec![])]);
+    let log = fresh_log();
+
+    let err = s
+        .try_scan_until::<u64, Version, ScanError, _, _, _, _, _>(
+            Progress::fresh(0_u64),
+            |_p, _env| async move { Err(ScanError::Step) },
+            recording_save(&log),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ScanError::Step));
+    assert!(
+        log.lock().unwrap().is_empty(),
+        "step error short-circuits before any save"
+    );
+}
+
+#[tokio::test]
+async fn scan_save_error_propagates() {
+    let mut s = VecStream::new(vec![(1, "T".to_string(), vec![])]);
+
+    // save fails on first call.
+    let save = |_pos: Version, _state: u64| async move { Err(ScanError::Save) };
+
+    let err = s
+        .try_scan_until::<u64, Version, ScanError, _, _, _, _, _>(
+            Progress::fresh(0_u64),
+            |p, env| {
+                let version = env.version();
+                async move {
+                    let next = Progress {
+                        state: p.state + 1,
+                        saved: p.saved,
+                        seen: Some(version),
+                    };
+                    Ok(Step::Save(next))
+                }
+            },
+            save,
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ScanError::Save));
 }

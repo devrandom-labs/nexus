@@ -1,7 +1,8 @@
-use std::future::{Future, poll_fn};
+// DecoderBuilder typestate + DecodedStream + BorrowedDecodedStream —
+// codec/upcaster wrappers around a raw event stream.
+
 use std::marker::PhantomData;
 use std::pin::pin;
-use std::task::Poll;
 
 use nexus::Version;
 
@@ -10,309 +11,47 @@ use crate::envelope::PersistedEnvelope;
 use crate::error::DecodeStreamError;
 use crate::upcasting::{EventMorsel, Upcaster};
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Disposition — why an interruptible fold returned
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Why a [`try_fold_async_until`](EventStreamExt::try_fold_async_until) — or
-/// the same method on [`DecodedStream`]/[`BorrowedDecodedStream`] — exited.
-///
-/// Returned alongside the accumulator so the caller can distinguish a stream
-/// that ended naturally from one cut short by an external shutdown signal.
-///
-/// The accumulator is always returned in the state of the *last completed
-/// iteration* — events processed before the exit are visible; an in-flight
-/// `next()` that was dropped because shutdown won is **not**. This mirrors
-/// fs2's `interruptWhen` + `compile.fold` contract (see fs2 `Pull.scala`
-/// `OuterRun.interrupted` which returns `F.pure(accB)`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Disposition {
-    /// The stream's `next()` returned `Ok(None)`; the fold consumed every event.
-    Completed,
-    /// The shutdown future resolved before the stream finished; the fold
-    /// returned the accumulator at the last completed iteration.
-    Interrupted,
-}
-
-/// GAT lending cursor for zero-allocation event streaming.
-///
-/// Each call to `next()` returns a `PersistedEnvelope` that borrows
-/// from the cursor's internal buffer. The previous envelope must be
-/// dropped before calling `next()` again — enforced by the lifetime.
-///
-/// Used during aggregate rehydration where events are processed
-/// one at a time (apply to state, drop, advance cursor).
-///
-/// # Implementor contract
-///
-/// Implementations **must** yield events with monotonically increasing
-/// versions. That is, for consecutive calls to `next()` that return
-/// `Some(Ok(envelope))`, each envelope's `version()` must be strictly
-/// greater than the previous one's. Violating this invariant will cause
-/// incorrect aggregate rehydration (events applied out of order).
-pub trait EventStream<M = ()> {
-    /// The error type for stream operations.
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Advance the cursor and return the next event envelope.
-    ///
-    /// Returns `Ok(None)` when the stream is exhausted. Once this method
-    /// returns `Ok(None)`, all subsequent calls must also return `Ok(None)`
-    /// (fused behavior).
-    ///
-    /// The returned envelope borrows from `self` — drop it before
-    /// calling `next()` again.
-    fn next(
-        &mut self,
-    ) -> impl Future<Output = Result<Option<PersistedEnvelope<'_, M>>, Self::Error>> + Send;
-}
+use super::cursor::{Disposition, EventStream, Selected, select_next_or_shutdown};
 
 // ═══════════════════════════════════════════════════════════════════════════
-// EventStreamExt — functional combinators for lending cursors
+// BaseEventStream — sub-trait the decoder bounds on, providing a static
+// `Self::Item<'a> -> PersistedEnvelope<'a, M>` conversion. Sidesteps the
+// HRTB-on-GAT issues that block expressing the same constraint via a
+// type equality at the trait bound (which would force `S: 'static`).
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Functional combinators for [`EventStream`].
+/// Sub-trait for streams whose items *are* [`PersistedEnvelope`]s.
 ///
-/// Because `EventStream` is a GAT lending iterator (each envelope borrows
-/// from the cursor), standard `Iterator` combinators don't apply. This
-/// trait provides the equivalent vocabulary — fold, for-each, collect-map,
-/// and count — all with short-circuiting error propagation.
+/// Hand-implemented (no blanket) by the base cursors —
+/// [`InMemoryStream`](crate::testing::InMemoryStream),
+/// [`InMemorySubscriptionStream`](crate::testing::InMemorySubscriptionStream),
+/// `FjallStream`, `FjallSubscriptionStream`, and test fixtures. Each
+/// implementation's `to_envelope` is identity since `Self::Item<'a>`
+/// already equals `PersistedEnvelope<'a, M>`.
 ///
-/// Automatically available on every `EventStream` via blanket impl.
+/// Why a sub-trait instead of an HRTB type equality on the consumer
+/// side: a bound like
+/// `for<'a> S: EventStream<M, Item<'a> = PersistedEnvelope<'a, M>>`
+/// (or `for<'a> S::Item<'a>: IntoPersistedEnvelope<'a, M>` via a
+/// witness trait) propagates the GAT's `where Self: 'a` clause into the
+/// HRTB. With `Sub::Stream<'_>` (a GAT itself), the resulting nested
+/// HRTB can't be discharged, and the compiler rejects the bound as not
+/// being "general enough" for an `InMemorySubscriptionStream<'a>` impl.
+/// Routing the conversion through a sub-trait method moves the
+/// per-`'a` lifetime constraint onto the method (`where Self: 'a`)
+/// instead of the trait bound, which the compiler resolves cleanly.
 ///
-/// # Error handling
-///
-/// All methods convert stream errors via `E: From<Self::Error>`, so
-/// callers don't need per-envelope `.map_err()`. The closure's error
-/// type just needs a `From` impl for the stream's error type.
-///
-/// # Examples
-///
-/// ```ignore
-/// use nexus_store::stream::{EventStream, EventStreamExt};
-///
-/// // Fold events into a total payload size:
-/// let total = stream.try_fold(0u64, |sum, env| {
-///     Ok(sum + env.payload().len() as u64)
-/// }).await?;
-///
-/// // Collect all payloads:
-/// let payloads = stream.try_collect_map(|env| {
-///     Ok(env.payload().to_vec())
-/// }).await?;
-/// ```
-pub trait EventStreamExt<M = ()>: EventStream<M> {
-    /// Fold every event into an accumulator, short-circuiting on error.
+/// PR3 of the stream refactor deletes both this trait and the decoder
+/// facade in the same drop.
+pub trait BaseEventStream<M = ()>: EventStream<M> {
+    /// Convert a yielded item to its underlying [`PersistedEnvelope`].
     ///
-    /// This is the primitive — [`try_for_each`](Self::try_for_each),
-    /// [`try_collect_map`](Self::try_collect_map), and
-    /// [`try_count`](Self::try_count) are built on top of it.
-    ///
-    /// Stream errors are auto-converted via `E: From<Self::Error>`.
-    fn try_fold<B, E, F>(&mut self, init: B, mut f: F) -> impl Future<Output = Result<B, E>> + Send
+    /// For base cursors this is identity; the indirection exists only
+    /// so the decoder facade can recover the envelope from
+    /// `Self::Item<'a>` without an HRTB type equality.
+    fn to_envelope<'a>(item: Self::Item<'a>) -> PersistedEnvelope<'a, M>
     where
-        Self: Send,
-        B: Send,
-        F: FnMut(B, PersistedEnvelope<'_, M>) -> Result<B, E> + Send,
-        E: From<Self::Error>,
-    {
-        async move {
-            let mut acc = init;
-            while let Some(env) = self.next().await.map_err(E::from)? {
-                acc = f(acc, env)?;
-            }
-            Ok(acc)
-        }
-    }
-
-    /// Process each event with a fallible closure, short-circuiting on error.
-    ///
-    /// Stream errors are auto-converted via `E: From<Self::Error>`.
-    fn try_for_each<E, F>(&mut self, mut f: F) -> impl Future<Output = Result<(), E>> + Send
-    where
-        Self: Send,
-        F: FnMut(PersistedEnvelope<'_, M>) -> Result<(), E> + Send,
-        E: From<Self::Error>,
-    {
-        async move { self.try_fold((), |(), env| f(env)).await }
-    }
-
-    /// Map each event to an owned value and collect into a `Vec`.
-    ///
-    /// Since envelopes borrow from the cursor and can't outlive each
-    /// iteration, the closure must extract an owned `T` from each
-    /// envelope. This is the GAT-safe equivalent of
-    /// `stream.map(f).collect()`.
-    ///
-    /// Stream errors are auto-converted via `E: From<Self::Error>`.
-    fn try_collect_map<T, E, F>(
-        &mut self,
-        mut f: F,
-    ) -> impl Future<Output = Result<Vec<T>, E>> + Send
-    where
-        Self: Send,
-        T: Send,
-        F: FnMut(PersistedEnvelope<'_, M>) -> Result<T, E> + Send,
-        E: From<Self::Error>,
-    {
-        async move {
-            self.try_fold(Vec::new(), |mut items, env| {
-                items.push(f(env)?);
-                Ok(items)
-            })
-            .await
-        }
-    }
-
-    /// Count events in the stream, short-circuiting on the first error.
-    fn try_count(&mut self) -> impl Future<Output = Result<usize, Self::Error>> + Send
-    where
-        Self: Send,
-    {
-        async move { self.try_fold(0usize, |count, _| Ok(count + 1)).await }
-    }
-
-    /// Fold every event into an accumulator, interruptible by a shutdown signal.
-    ///
-    /// The async-closure, interruptible cousin of [`try_fold`](Self::try_fold).
-    /// The raw-envelope variant of
-    /// [`DecodedStream::try_fold_async_until`](DecodedStream::try_fold_async_until)
-    /// — use this when you want to handle decode yourself in the closure
-    /// (e.g. when the caller's error type doesn't have a `From` for the full
-    /// `DecodeStreamError<...>` pipeline).
-    ///
-    /// # Closure contract
-    ///
-    /// The closure receives the lent envelope and returns a `Fut` that
-    /// produces the next accumulator. Because the bound is
-    /// `for<'a> FnMut(B, PersistedEnvelope<'a, M>) -> Fut` with `Fut`
-    /// concrete, the closure must extract owned values from the envelope
-    /// *before* the `async move {}` block — the returned future must not
-    /// borrow from the envelope.
-    ///
-    /// Typical pattern:
-    /// ```ignore
-    /// stream.try_fold_async_until(init, move |acc, env| {
-    ///     let version = env.version();
-    ///     let decoded = codec.decode(env.event_type(), env.payload());
-    ///     async move {
-    ///         let event = decoded.map_err(MyErr::Codec)?;
-    ///         do_async_work(&event).await?;
-    ///         Ok(next_acc(acc, version, event))
-    ///     }
-    /// }, shutdown).await
-    /// ```
-    ///
-    /// All other semantics (bias, accumulator preservation, cancel-safety
-    /// of `next()`, closure runs to completion within an iteration) match
-    /// [`DecodedStream::try_fold_async_until`].
-    fn try_fold_async_until<B, E, F, Fut, Sh>(
-        &mut self,
-        init: B,
-        mut f: F,
-        shutdown: Sh,
-    ) -> impl Future<Output = Result<(B, Disposition), E>> + Send
-    where
-        Self: Send,
-        B: Send,
-        M: Send,
-        F: FnMut(B, PersistedEnvelope<'_, M>) -> Fut + Send,
-        Fut: Future<Output = Result<B, E>> + Send,
-        Sh: Future<Output = ()> + Send,
-        E: From<Self::Error>,
-    {
-        async move {
-            let mut pinned_shutdown = pin!(shutdown);
-            let mut acc = init;
-            loop {
-                let next_fut = pin!(self.next());
-                let env = match select_next_or_shutdown(next_fut, pinned_shutdown.as_mut()).await {
-                    Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
-                    Selected::Stream(Err(e)) => return Err(E::from(e)),
-                    Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),
-                    Selected::Stream(Ok(Some(env))) => env,
-                };
-                acc = f(acc, env).await?;
-            }
-        }
-    }
-
-    /// Enter the decoder builder chain to produce a typed decoded stream.
-    ///
-    /// Pairs this stream with a codec and (optionally) an upcaster, yielding
-    /// a [`DecodedStream`] or [`BorrowedDecodedStream`] whose `try_fold`
-    /// receives fully decoded events alongside their [`Version`].
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Owning codec, no upcaster:
-    /// let state = stream
-    ///     .decoder()
-    ///     .codec(&codec)
-    ///     .build()
-    ///     .try_fold(initial, |s, _version, event| projector.apply(s, &event))
-    ///     .await?;
-    ///
-    /// // Zero-copy codec with upcaster:
-    /// let root = stream
-    ///     .decoder()
-    ///     .borrowing_codec(&codec)
-    ///     .upcaster(&upcaster)
-    ///     .build()
-    ///     .try_fold(root, |mut r, v, e| { r.replay(v, e)?; Ok(r) })
-    ///     .await?;
-    /// ```
-    fn decoder(self) -> DecoderBuilder<Self, NeedsCodec, NoUpcaster>
-    where
-        Self: Sized,
-    {
-        DecoderBuilder::new(self)
-    }
-}
-
-/// Blanket impl — every [`EventStream`] gets [`EventStreamExt`] for free.
-impl<S: EventStream<M>, M> EventStreamExt<M> for S {}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Internal: biased select between the stream's next() and a shutdown future
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Outcome of one biased poll-race between the stream cursor and shutdown.
-enum Selected<T, E> {
-    /// The stream's `next()` resolved first (or alone).
-    Stream(Result<Option<T>, E>),
-    /// The shutdown future resolved first (or alone). The stream's `next()`
-    /// future is dropped in this branch; its work is forfeit.
-    Shutdown,
-}
-
-/// Poll the stream cursor and the shutdown future, biased toward shutdown.
-///
-/// On every wake, shutdown is polled first; if `Ready`, returns
-/// [`Selected::Shutdown`] without polling the stream. Otherwise polls the
-/// stream's `next()` and returns [`Selected::Stream`] on `Ready`.
-///
-/// The shutdown reference is reborrowed for each iteration, so a single
-/// pinned shutdown future can survive many fold iterations.
-async fn select_next_or_shutdown<NextFut, Sh, T, E>(
-    mut next: std::pin::Pin<&mut NextFut>,
-    mut shutdown: std::pin::Pin<&mut Sh>,
-) -> Selected<T, E>
-where
-    NextFut: Future<Output = Result<Option<T>, E>>,
-    Sh: Future<Output = ()>,
-{
-    poll_fn(move |cx| {
-        if shutdown.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(Selected::Shutdown);
-        }
-        match next.as_mut().poll(cx) {
-            Poll::Ready(r) => Poll::Ready(Selected::Stream(r)),
-            Poll::Pending => Poll::Pending,
-        }
-    })
-    .await
+        Self: 'a;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -499,7 +238,7 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
     /// - the closure returning `Err` short-circuits the fold immediately
     pub async fn try_fold<E, B, F, Err>(mut self, init: B, mut f: F) -> Result<B, Err>
     where
-        S: EventStream<M> + Send,
+        S: BaseEventStream<M> + Send,
         C: Decode<E>,
         U: Upcaster,
         M: Send,
@@ -508,12 +247,13 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
         Err: From<DecodeStreamError<S::Error, C::Error, U::Error>>,
     {
         let mut acc = init;
-        while let Some(env) = self
+        while let Some(item) = self
             .stream
             .next()
             .await
             .map_err(|e| Err::from(DecodeStreamError::Stream(e)))?
         {
+            let env = S::to_envelope(item);
             let version = env.version();
             let morsel = EventMorsel::borrowed(
                 env.event_type(),
@@ -597,7 +337,7 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
         shutdown: Sh,
     ) -> Result<(B, Disposition), Err>
     where
-        S: EventStream<M> + Send,
+        S: BaseEventStream<M> + Send,
         C: Decode<E>,
         U: Upcaster,
         M: Send,
@@ -615,7 +355,8 @@ impl<S, C, U, M> DecodedStream<'_, S, C, U, M> {
                 Selected::Shutdown => return Ok((acc, Disposition::Interrupted)),
                 Selected::Stream(Err(e)) => return Err(Err::from(DecodeStreamError::Stream(e))),
                 Selected::Stream(Ok(None)) => return Ok((acc, Disposition::Completed)),
-                Selected::Stream(Ok(Some(env))) => {
+                Selected::Stream(Ok(Some(item))) => {
+                    let env = S::to_envelope(item);
                     let version = env.version();
                     let morsel = EventMorsel::borrowed(
                         env.event_type(),
@@ -673,7 +414,7 @@ impl<S, C: ?Sized, U, M> BorrowedDecodedStream<'_, S, C, U, M> {
     /// - the closure returning `Err` short-circuits the fold immediately
     pub async fn try_fold<E, B, F, Err>(mut self, init: B, mut f: F) -> Result<B, Err>
     where
-        S: EventStream<M> + Send,
+        S: BaseEventStream<M> + Send,
         C: BorrowingDecode<E>,
         E: ?Sized,
         U: Upcaster,
@@ -683,12 +424,13 @@ impl<S, C: ?Sized, U, M> BorrowedDecodedStream<'_, S, C, U, M> {
         Err: From<DecodeStreamError<S::Error, C::Error, U::Error>>,
     {
         let mut acc = init;
-        while let Some(env) = self
+        while let Some(item) = self
             .stream
             .next()
             .await
             .map_err(|e| Err::from(DecodeStreamError::Stream(e)))?
         {
+            let env = S::to_envelope(item);
             let version = env.version();
             let morsel = EventMorsel::borrowed(
                 env.event_type(),

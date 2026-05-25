@@ -35,7 +35,7 @@ use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::stream::EventStream;
+use nexus_store::stream::{BaseEventStream, EventStream};
 use std::collections::HashMap;
 use std::fmt;
 use tokio::sync::Mutex;
@@ -96,7 +96,17 @@ enum ProbeError {
     Conflict,
 }
 
+impl BaseEventStream for ProbeStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
 impl EventStream for ProbeStream {
+    type Item<'a> = PersistedEnvelope<'a>;
     type Error = ProbeError;
     async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
         if self.pos >= self.events.len() {
