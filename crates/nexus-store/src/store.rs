@@ -305,10 +305,9 @@ pub trait SharedSubscription<M: 'static = ()> {
 ///
 /// Adapters implement this trait on the **bare** store type (e.g.
 /// `FjallStore`, [`InMemoryStore`](crate::testing::InMemoryStore)), not on
-/// `Arc<Store>`. The [blanket impl](#impl-SharedSubscription<M>-for-Arc<T>)
-/// below then provides [`SharedSubscription<M>`] on `Arc<Store>`
-/// automatically — users never name this trait directly. They call
-/// `store.subscribe(&id, None)` on an `Arc<Store>` and the blanket
+/// `Arc<Store>`. The blanket impl below then provides [`SharedSubscription<M>`]
+/// on `Arc<Store>` automatically — users never name this trait directly. They
+/// call `store.subscribe(&id, None)` on an `Arc<Store>` and the blanket
 /// dispatches here.
 ///
 /// # Why this trait exists
