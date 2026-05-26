@@ -204,7 +204,15 @@
       "WebFetch(domain:lib.rs)",
       "WebFetch(domain:axoniq.io)",
       "WebFetch(domain:tokio.rs)",
-      "WebFetch(domain:redbadger.github.io)"
+      "WebFetch(domain:redbadger.github.io)",
+      "Bash(sed -i '' -e 's|use nexus_store::store::{CheckpointStore, EventStream, RawEventStore, Subscription};|use nexus_store::store::{CheckpointStore, RawEventStore, Subscription};\\\\nuse nexus_store::stream::EventStream;|' crates/nexus-store/tests/subscription_tests.rs crates/nexus-fjall/tests/subscription_tests.rs)",
+      "Bash(sed -i '' -e 's|use nexus_store::store::{EventStream, RawEventStore};|use nexus_store::store::RawEventStore;\\\\nuse nexus_store::stream::EventStream;|' crates/nexus-fjall/src/subscription_stream.rs)",
+      "Bash(sed -i '' -e 's|use nexus_store::store::{EventStream, EventStreamExt};|use nexus_store::stream::{EventStream, EventStreamExt};|' crates/nexus-store/src/stream.rs)",
+      "Bash(TRYBUILD=overwrite nix develop -c cargo test -p nexus-store --test compile_fail_tests)",
+      "Bash(sed -n '/\\\\[features\\\\]/,/^\\\\[/p' crates/nexus-fjall/Cargo.toml)",
+      "Bash(sed -n '/\\\\[features\\\\]/,/^\\\\[/p' crates/nexus-store/Cargo.toml)",
+      "Bash(tee /tmp/nexus-flake-check.log)",
+      "Bash(tee -a /tmp/nexus-flake-check.log)"
     ]
   },
   "hooks": {

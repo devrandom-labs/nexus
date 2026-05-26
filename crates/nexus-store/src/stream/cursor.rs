@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::pin::pin;
 use std::task::Poll;
 
-use super::combinators::{Map, TryMap, TryScan};
+use super::combinators::{Map, MapErr, TryMap, TryScan};
 #[cfg(feature = "futures-bridge")]
 use super::owned::{IntoStream, OwnedEventStream};
 use super::progress::{Progress, Step};
@@ -446,6 +446,43 @@ pub trait EventStreamExt<M = ()>: EventStream<M> {
         E: From<Self::Error>,
     {
         TryMap {
+            inner: self,
+            f,
+            _err: PhantomData,
+        }
+    }
+
+    /// Convert the stream's error type via a closure.
+    ///
+    /// Builds a [`MapErr`] that re-types each `Self::Error` as `E2` and
+    /// leaves the [`Item`](EventStream::Item) projection untouched. The
+    /// returned stream's `Error` becomes `E2`, so a subsequent
+    /// [`try_map`](Self::try_map) / [`try_fold`](Self::try_fold) can use a
+    /// closure whose error is `E2` without needing `E2: From<Self::Error>`
+    /// at the call site — the conversion already happened here.
+    ///
+    /// # Why this combinator exists
+    ///
+    /// When the sink error type carries `#[from]` impls that overlap with
+    /// the stream's error type under monomorphization, the natural
+    /// `try_map(decode).try_fold(replay)` chain fails to type-check (the
+    /// `E: From<Self::Error>` bound on `try_map` plus the sink's own
+    /// `#[from]` impl would produce two overlapping `From` impls for the
+    /// same concrete type, which coherence rejects).
+    /// [`StoreError`](crate::StoreError) hits exactly this wall: it derives
+    /// `#[from] Kernel(KernelError)` for `try_fold(replay)`, while
+    /// `try_map(decode)` wants `From<S::Error>` for `Adapter` — and the two
+    /// overlap when `S::Error == KernelError`. Inserting `.map_err(StoreError::Adapter)`
+    /// before `.try_map(...)` converts the stream's error eagerly, so the
+    /// downstream combinator's `E: From<Self::Error>` bound is the
+    /// trivial reflexive one.
+    fn map_err<E2, F>(self, f: F) -> MapErr<Self, F, E2>
+    where
+        Self: Sized,
+        F: FnMut(Self::Error) -> E2,
+        E2: std::error::Error + Send + Sync + 'static,
+    {
+        MapErr {
             inner: self,
             f,
             _err: PhantomData,

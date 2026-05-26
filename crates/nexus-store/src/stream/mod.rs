@@ -22,7 +22,7 @@ mod cursor;
 mod owned;
 mod progress;
 
-pub use combinators::{Map, TryMap, TryScan};
+pub use combinators::{Map, MapErr, TryMap, TryScan};
 pub use cursor::{BaseEventStream, Disposition, EventStream, EventStreamExt};
 #[cfg(feature = "futures-bridge")]
 pub use owned::{IntoStream, OwnedEventStream};

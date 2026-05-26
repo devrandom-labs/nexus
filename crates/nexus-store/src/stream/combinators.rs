@@ -111,6 +111,54 @@ where
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MapErr<S, F, E2> — per-item error-type transform
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Wraps `S` and converts each `S::Error` to `E2` via `F`, leaving the
+/// [`Item`](EventStream::Item) projection untouched.
+///
+/// Built by [`EventStreamExt::map_err`](super::EventStreamExt::map_err).
+///
+/// # Why this exists
+///
+/// `EventStreamExt::try_map`, `try_fold`, and friends require the closure's
+/// error type to satisfy `E: From<Self::Error>`. When the desired sink error
+/// type (e.g. [`StoreError`](crate::StoreError)) already has a `From` impl
+/// for an unrelated error type that happens to coincide with `Self::Error`
+/// under monomorphization, the coherence checker rejects the natural
+/// `impl<A, ...> From<A> for StoreError<A, ...>` for `Adapter` (it would
+/// overlap with the existing `#[from] Kernel(KernelError)` once
+/// `A = KernelError`). `map_err` sidesteps this by converting the stream's
+/// error to the sink type *before* the closure-error bound enters the
+/// picture — the downstream combinator then sees `Self::Error = E2`, and
+/// `E: From<E2>` is the trivial reflexive impl.
+///
+/// See the PR3 deviation entry in the stream-refactor plan for the full
+/// coherence-wall story.
+pub struct MapErr<S, F, E2> {
+    pub(crate) inner: S,
+    pub(crate) f: F,
+    pub(crate) _err: PhantomData<fn() -> E2>,
+}
+
+impl<S, F, E2, M> EventStream<M> for MapErr<S, F, E2>
+where
+    S: EventStream<M> + Send,
+    F: FnMut(S::Error) -> E2 + Send,
+    E2: std::error::Error + Send + Sync + 'static,
+{
+    type Item<'a>
+        = S::Item<'a>
+    where
+        Self: 'a;
+    type Error = E2;
+
+    async fn next(&mut self) -> Result<Option<Self::Item<'_>>, Self::Error> {
+        self.inner.next().await.map_err(&mut self.f)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // (Filter intentionally not implemented in this iteration — see the
 // deviation log: stable Rust's borrow checker can't accept a natural
 // loop-based Filter impl over a lending GAT stream, and the Box::pin

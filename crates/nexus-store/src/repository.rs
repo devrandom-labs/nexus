@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
@@ -7,7 +8,7 @@ use crate::codec::{BorrowingDecode, Decode, Encode};
 use crate::envelope::pending_envelope;
 use crate::error::{AppendError, StoreError};
 use crate::store::{RawEventStore, Store};
-use crate::stream::{BaseEventStream, EventStream};
+use crate::stream::{BaseEventStream, EventStreamExt};
 use crate::upcasting::{EventMorsel, Upcaster};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -142,19 +143,28 @@ pub(super) fn version_to_nz32(version: Version) -> Option<NonZeroU32> {
 /// // With transforms:
 /// let orders = store.repository().codec(OrderCodec).upcaster(OrderTransforms).build();
 /// ```
+/// Owns the codec and upcaster as `Arc<C>` / `Arc<U>` so async load paths
+/// can clone the handles into combinator closures and capture them by
+/// value. Per Rust 2024's stricter capture rules (RFC 3498, rustc issue
+/// 133529), a closure that borrows from `&self` and is then handed to a
+/// `try_fold`-style combinator whose returned future is `+ Send` cannot
+/// satisfy the bound — the future-Send check effectively requires the
+/// borrow to be `'static`. Owning the components via `Arc` and cloning
+/// per call sidesteps the borrow entirely. Cost: one heap allocation at
+/// facade construction, one pointer bump per `load`.
 pub struct EventStore<S, C, U = ()> {
     store: Store<S>,
-    codec: C,
-    upcaster: U,
+    codec: Arc<C>,
+    upcaster: Arc<U>,
 }
 
 impl<S, C, U> EventStore<S, C, U> {
     /// Create an event store bound to a shared store, codec, and upcaster.
-    pub(crate) const fn new(store: Store<S>, codec: C, upcaster: U) -> Self {
+    pub(crate) fn new(store: Store<S>, codec: C, upcaster: U) -> Self {
         Self {
             store,
-            codec,
-            upcaster,
+            codec: Arc::new(codec),
+            upcaster: Arc::new(upcaster),
         }
     }
 }
@@ -162,11 +172,11 @@ impl<S, C, U> EventStore<S, C, U> {
 impl<A, S, C, U> ReplayFrom<A> for EventStore<S, C, U>
 where
     A: Aggregate,
-    S: RawEventStore,
-    C: Encode<EventOf<A>> + Decode<EventOf<A>>,
-    U: Upcaster,
+    S: RawEventStore + 'static,
+    C: Encode<EventOf<A>> + Decode<EventOf<A>> + 'static,
+    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
-    for<'a> S::Stream<'a>: Send,
+    for<'a> S::Stream<'a>: Send + 'static,
 {
     type Error = StoreError<
         S::Error,
@@ -177,45 +187,65 @@ where
 
     async fn replay_from(
         &self,
-        mut root: AggregateRoot<A>,
+        root: AggregateRoot<A>,
         from: Version,
     ) -> Result<AggregateRoot<A>, Self::Error> {
-        let mut stream = self
-            .store
+        // Clone everything into function-local owned values. The
+        // combinator closure captures the locals (Arc clones), with no
+        // borrow of `&self`. See the doc comment on `EventStore` for the
+        // full Rust 2024 capture-rules rationale. The `'static` bounds
+        // on S/C/U here discharge the "due to a current limitation of
+        // the type system" `'static` implied by `try_fold`'s HRTB-on-GAT
+        // closure bound (rustc note on the error path).
+        //
+        // `map_err` converts the adapter error eagerly into the sink type
+        // so the `try_fold` closure can use plain `?` propagation
+        // throughout. Without it, the closure-error `From` bound and
+        // `StoreError`'s `#[from] Kernel(KernelError)` impl overlap on
+        // `S::Error = KernelError` and coherence rejects the chain.
+        // See the PR3 deviation entry in the stream-refactor plan.
+        let store = self.store.clone();
+        let codec = Arc::<C>::clone(&self.codec);
+        let upcaster = Arc::<U>::clone(&self.upcaster);
+
+        let raw_stream = store
             .raw()
             .read_stream(root.id(), from)
             .await
             .map_err(StoreError::Adapter)?;
 
-        while let Some(item) = stream.next().await.map_err(StoreError::Adapter)? {
-            let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
-            let version = env.version();
-            let morsel = EventMorsel::borrowed(
-                env.event_type(),
-                env.schema_version_as_version(),
-                env.payload(),
-            );
-            let transformed = self.upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
-            let event = <C as Decode<EventOf<A>>>::decode(
-                &self.codec,
-                transformed.event_type(),
-                transformed.payload(),
-            )
-            .map_err(StoreError::Decode)?;
-            root.replay(version, &event)?;
-        }
-        Ok(root)
+        raw_stream
+            .map_err(StoreError::Adapter)
+            .try_fold(root, move |mut r, item| {
+                let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
+                let version = env.version();
+                let morsel = EventMorsel::borrowed(
+                    env.event_type(),
+                    env.schema_version_as_version(),
+                    env.payload(),
+                );
+                let transformed = upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
+                let event = <C as Decode<EventOf<A>>>::decode(
+                    &codec,
+                    transformed.event_type(),
+                    transformed.payload(),
+                )
+                .map_err(StoreError::Decode)?;
+                r.replay(version, &event)?;
+                Ok(r)
+            })
+            .await
     }
 }
 
 impl<A, S, C, U> Repository<A> for EventStore<S, C, U>
 where
     A: Aggregate,
-    S: RawEventStore,
-    C: Encode<EventOf<A>> + Decode<EventOf<A>>,
-    U: Upcaster,
+    S: RawEventStore + 'static,
+    C: Encode<EventOf<A>> + Decode<EventOf<A>> + 'static,
+    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
-    for<'a> S::Stream<'a>: Send,
+    for<'a> S::Stream<'a>: Send + 'static,
 {
     type Error = StoreError<
         S::Error,
@@ -329,19 +359,21 @@ where
 /// // With transforms:
 /// let orders = store.repository().codec(OrderCodec).upcaster(OrderTransforms).build_zero_copy();
 /// ```
+/// See [`EventStore`]'s doc comment for the rationale behind `Arc`-owning
+/// the codec and upcaster.
 pub struct ZeroCopyEventStore<S, C, U = ()> {
     store: Store<S>,
-    codec: C,
-    upcaster: U,
+    codec: Arc<C>,
+    upcaster: Arc<U>,
 }
 
 impl<S, C, U> ZeroCopyEventStore<S, C, U> {
     /// Create a zero-copy event store bound to a shared store, codec, and upcaster.
-    pub(crate) const fn new(store: Store<S>, codec: C, upcaster: U) -> Self {
+    pub(crate) fn new(store: Store<S>, codec: C, upcaster: U) -> Self {
         Self {
             store,
-            codec,
-            upcaster,
+            codec: Arc::new(codec),
+            upcaster: Arc::new(upcaster),
         }
     }
 }
@@ -349,11 +381,11 @@ impl<S, C, U> ZeroCopyEventStore<S, C, U> {
 impl<A, S, C, U> ReplayFrom<A> for ZeroCopyEventStore<S, C, U>
 where
     A: Aggregate,
-    S: RawEventStore,
-    C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>>,
-    U: Upcaster,
+    S: RawEventStore + 'static,
+    C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>> + 'static,
+    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
-    for<'a> S::Stream<'a>: Send,
+    for<'a> S::Stream<'a>: Send + 'static,
 {
     type Error = StoreError<
         S::Error,
@@ -364,45 +396,58 @@ where
 
     async fn replay_from(
         &self,
-        mut root: AggregateRoot<A>,
+        root: AggregateRoot<A>,
         from: Version,
     ) -> Result<AggregateRoot<A>, Self::Error> {
-        let mut stream = self
-            .store
+        // Same Arc-owned-captures pattern as `EventStore::replay_from`; see
+        // that comment for the Rust 2024 capture-rules rationale.
+        // `BorrowingDecode` returns `&'_ EventOf<A>` borrowing from the
+        // transformed morsel's payload; the borrow is consumed inside the
+        // closure body (`r.replay(v, event)` takes `&E`) before the next
+        // iteration invalidates it, so the lending discipline is honored
+        // entirely inside the `try_fold` closure.
+        let store = self.store.clone();
+        let codec = Arc::<C>::clone(&self.codec);
+        let upcaster = Arc::<U>::clone(&self.upcaster);
+
+        let raw_stream = store
             .raw()
             .read_stream(root.id(), from)
             .await
             .map_err(StoreError::Adapter)?;
 
-        while let Some(item) = stream.next().await.map_err(StoreError::Adapter)? {
-            let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
-            let version = env.version();
-            let morsel = EventMorsel::borrowed(
-                env.event_type(),
-                env.schema_version_as_version(),
-                env.payload(),
-            );
-            let transformed = self.upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
-            let event: &EventOf<A> = <C as BorrowingDecode<EventOf<A>>>::decode(
-                &self.codec,
-                transformed.event_type(),
-                transformed.payload(),
-            )
-            .map_err(StoreError::Decode)?;
-            root.replay(version, event)?;
-        }
-        Ok(root)
+        raw_stream
+            .map_err(StoreError::Adapter)
+            .try_fold(root, move |mut r, item| {
+                let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
+                let version = env.version();
+                let morsel = EventMorsel::borrowed(
+                    env.event_type(),
+                    env.schema_version_as_version(),
+                    env.payload(),
+                );
+                let transformed = upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
+                let event: &EventOf<A> = <C as BorrowingDecode<EventOf<A>>>::decode(
+                    &codec,
+                    transformed.event_type(),
+                    transformed.payload(),
+                )
+                .map_err(StoreError::Decode)?;
+                r.replay(version, event)?;
+                Ok(r)
+            })
+            .await
     }
 }
 
 impl<A, S, C, U> Repository<A> for ZeroCopyEventStore<S, C, U>
 where
     A: Aggregate,
-    S: RawEventStore,
-    C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>>,
-    U: Upcaster,
+    S: RawEventStore + 'static,
+    C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>> + 'static,
+    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
-    for<'a> S::Stream<'a>: Send,
+    for<'a> S::Stream<'a>: Send + 'static,
 {
     type Error = StoreError<
         S::Error,
