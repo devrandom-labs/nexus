@@ -38,7 +38,9 @@ pub use state::{
     AfterEventTypes, CodecSnapshotStore, CodecSnapshotStoreError, EveryNEvents, PersistTrigger,
     SnapshotStore,
 };
-pub use store::{GlobalSeq, RawEventStore, Store, Subscription};
+pub use store::{
+    GlobalSeq, RawEventStore, SharedSubscription, SharedSubscriptionBackend, Store, Subscription,
+};
 pub use stream::{
     BaseEventStream, Disposition, EventStream, EventStreamExt, Map, MapErr, Progress, Step, TryMap,
     TryScan,
