@@ -44,8 +44,44 @@ impl<S> Store<S> {
         }
     }
 
-    /// Access the underlying raw store.
-    pub(crate) fn raw(&self) -> &S {
+    /// Borrow the underlying raw store.
+    ///
+    /// The escape hatch for users who need the substrate directly — when
+    /// the [`Repository`](crate::Repository) facade's `load` / `save` isn't
+    /// flexible enough (e.g. you want to filter, peek, branch, or chain
+    /// custom combinators during load). Hand the borrowed `&S` to
+    /// [`RawEventStore::read_stream`] / [`RawEventStore::append`] and
+    /// compose your own chain via [`EventStreamExt`](crate::EventStreamExt).
+    ///
+    /// Users who just want "load this aggregate" should stay on the facade.
+    ///
+    /// # Example
+    ///
+    /// Substrate-path read: convert the adapter error eagerly via
+    /// [`map_err`](crate::EventStreamExt::map_err) and drive a custom fold.
+    ///
+    /// ```ignore
+    /// use nexus_store::{EventStreamExt, RawEventStore, Store};
+    ///
+    /// async fn count_events<S: RawEventStore>(
+    ///     store: &Store<S>,
+    ///     id: &impl nexus::Id,
+    ///     from: nexus::Version,
+    /// ) -> Result<usize, MyError> {
+    ///     store.raw()
+    ///         .read_stream(id, from).await
+    ///         .map_err(MyError::Adapter)?
+    ///         .map_err(MyError::Adapter)
+    ///         .try_count()
+    ///         .await
+    /// }
+    /// ```
+    ///
+    /// [`RawEventStore`]: crate::RawEventStore
+    /// [`RawEventStore::read_stream`]: crate::RawEventStore::read_stream
+    /// [`RawEventStore::append`]: crate::RawEventStore::append
+    #[must_use]
+    pub fn raw(&self) -> &S {
         &self.inner
     }
 }

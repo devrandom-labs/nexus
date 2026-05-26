@@ -296,6 +296,154 @@ async fn try_scan_state_accumulates_across_iterations() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 5. map_err — error-type conversion combinator
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Fixture stream that fails on the Nth next() call. Used to exercise the
+/// error path of `map_err` without needing a real adapter.
+struct FailingStream {
+    rows: Vec<(u64, String, Vec<u8>)>,
+    fail_at: usize,
+    pos: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("upstream failed at index {0}")]
+struct UpstreamError(usize);
+
+impl BaseEventStream for FailingStream {
+    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    where
+        Self: 'a,
+    {
+        item
+    }
+}
+
+impl EventStream for FailingStream {
+    type Item<'a> = PersistedEnvelope<'a>;
+    type Error = UpstreamError;
+
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+        if self.pos == self.fail_at {
+            return Err(UpstreamError(self.pos));
+        }
+        if self.pos >= self.rows.len() {
+            return Ok(None);
+        }
+        let row = &self.rows[self.pos];
+        self.pos += 1;
+        Ok(Some(PersistedEnvelope::new_unchecked(
+            Version::new(row.0).unwrap(),
+            GlobalSeq::INITIAL,
+            &row.1,
+            1,
+            &row.2,
+            (),
+        )))
+    }
+}
+
+/// Downstream sink error — represents the kind of error the user wants
+/// after `map_err` converts the stream's raw error.
+#[derive(Debug, thiserror::Error)]
+enum SinkError {
+    #[error("wrapped upstream: {0}")]
+    Wrapped(#[source] UpstreamError),
+}
+
+#[tokio::test]
+async fn map_err_passes_items_through_unchanged() {
+    // map_err leaves the Item projection alone — only the error type
+    // changes. `fail_at: usize::MAX` ensures the stream completes naturally.
+    let mut stream = FailingStream {
+        rows: rows(3),
+        fail_at: usize::MAX,
+        pos: 0,
+    }
+    .map_err(SinkError::Wrapped);
+    let collected: Result<Vec<u64>, SinkError> = stream
+        .try_fold(Vec::new(), |mut acc, env| {
+            acc.push(env.version().as_u64());
+            Ok(acc)
+        })
+        .await;
+    assert_eq!(collected.unwrap(), vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn map_err_over_empty_stream_yields_nothing() {
+    let mut stream = FailingStream {
+        rows: vec![],
+        fail_at: usize::MAX,
+        pos: 0,
+    }
+    .map_err(SinkError::Wrapped);
+    let n: Result<usize, SinkError> = stream.try_count().await;
+    assert_eq!(n.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn map_err_converts_upstream_error_to_sink_type() {
+    // Stream errors flow through the converter; the sink sees the wrapped form.
+    let mut stream = FailingStream {
+        rows: rows(5),
+        fail_at: 2,
+        pos: 0,
+    }
+    .map_err(SinkError::Wrapped);
+
+    let result: Result<Vec<u64>, SinkError> = stream
+        .try_fold(Vec::new(), |mut acc, env| {
+            acc.push(env.version().as_u64());
+            Ok(acc)
+        })
+        .await;
+
+    assert!(matches!(result, Err(SinkError::Wrapped(UpstreamError(2)))));
+}
+
+#[tokio::test]
+async fn map_err_identity_converter_preserves_error_payload() {
+    // Identity converter — error round-trips through map_err with no
+    // information loss. This is the smoke test for the closure
+    // wiring itself.
+    let mut stream = FailingStream {
+        rows: rows(3),
+        fail_at: 0,
+        pos: 0,
+    }
+    .map_err(|e: UpstreamError| e);
+
+    let result: Result<usize, UpstreamError> = stream.try_count().await;
+    assert!(matches!(result, Err(UpstreamError(0))));
+}
+
+#[tokio::test]
+async fn map_err_then_try_map_unblocks_coherence_wall() {
+    // This is the structural pattern PR3 wanted but couldn't write:
+    // .map_err(convert) .try_map(decode) — the converter eats the
+    // adapter error before try_map's `E: From<Self::Error>` bound asks
+    // for one. With map_err, Self::Error is already the sink type,
+    // and `E: From<E>` is the reflexive impl.
+    let mut stream = FailingStream {
+        rows: rows(4),
+        fail_at: usize::MAX,
+        pos: 0,
+    }
+    .map_err(SinkError::Wrapped)
+    .try_map(|env| Ok::<_, SinkError>(env.version().as_u64()));
+
+    let collected: Result<Vec<u64>, SinkError> = stream
+        .try_fold(Vec::new(), |mut acc, v| {
+            acc.push(v);
+            Ok(acc)
+        })
+        .await;
+    assert_eq!(collected.unwrap(), vec![1, 2, 3, 4]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Cross-consistency: count == collected.len() through each combinator
 // ═══════════════════════════════════════════════════════════════════════════
 

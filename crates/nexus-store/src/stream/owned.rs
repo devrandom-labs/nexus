@@ -34,7 +34,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::combinators::{Map, TryMap};
+use super::combinators::{Map, MapErr, TryMap};
 use super::cursor::EventStream;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -112,6 +112,36 @@ where
 
     fn into_owned(item: T) -> T {
         item
+    }
+}
+
+// ─── OwnedEventStream for MapErr ────────────────────────────────────────────
+
+// MapErr passes the inner stream's item through unchanged; the impl follows
+// whatever `S` is bound to, mirroring the CARRY-FORWARD note from the
+// PR2 deviation entry on `OwnedEventStream` ("if its output is owning, the
+// impl follows the inner").
+//
+// Why `'static` on both `S` and `F`: unlike `Map`/`TryMap`, whose
+// `type Item<'a> = T` is a fresh owned type that ignores the GAT lifetime,
+// `MapErr<S, F, E2>::Item<'a> = S::Item<'a>` propagates the GAT's
+// `where Self: 'a` clause back through `Self`. For the trait method
+// `into_owned(item: Self::Item<'_>)` to type-check for any `'_`, every
+// type parameter inside `Self` must outlive arbitrary lifetimes —
+// `'static` is the standard discharge. This matches actual usage: the
+// only consumer of `OwnedEventStream` is
+// [`IntoStream`](super::owned::IntoStream), which already requires the
+// stream to be `'static + Send + Unpin`.
+impl<S, F, E2, M> OwnedEventStream<M> for MapErr<S, F, E2>
+where
+    S: OwnedEventStream<M> + Send + 'static,
+    F: FnMut(S::Error) -> E2 + Send + 'static,
+    E2: std::error::Error + Send + Sync + 'static,
+{
+    type OwnedItem = S::OwnedItem;
+
+    fn into_owned(item: Self::Item<'_>) -> Self::OwnedItem {
+        S::into_owned(item)
     }
 }
 
