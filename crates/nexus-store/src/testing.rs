@@ -2,7 +2,7 @@
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::store::{GlobalSeq, RawEventStore, SharedSubscription, Subscription};
+use crate::store::{GlobalSeq, RawEventStore, SharedSubscriptionBackend, Subscription};
 use crate::stream::EventStream;
 use nexus::Id;
 use nexus::Version;
@@ -549,12 +549,12 @@ impl EventStream for SharedInMemorySubscriptionStream {
     }
 }
 
-impl SharedSubscription<()> for Arc<InMemoryStore> {
+impl SharedSubscriptionBackend<()> for InMemoryStore {
     type Stream = SharedInMemorySubscriptionStream;
     type Error = InMemoryStoreError;
 
     async fn subscribe(
-        &self,
+        arc: &Arc<Self>,
         id: &impl Id,
         from: Option<Version>,
     ) -> Result<SharedInMemorySubscriptionStream, InMemoryStoreError> {
@@ -565,7 +565,7 @@ impl SharedSubscription<()> for Arc<InMemoryStore> {
         };
 
         let mut sub = SharedInMemorySubscriptionStream {
-            store: Self::clone(self),
+            store: Arc::clone(arc),
             stream_id,
             buffer: Vec::new(),
             pos: 0,

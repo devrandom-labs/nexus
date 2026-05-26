@@ -298,6 +298,71 @@ pub trait SharedSubscription<M: 'static = ()> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SharedSubscriptionBackend<M> — adapter-facing primitive
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Adapter-facing primitive for the [`SharedSubscription`] blanket impl.
+///
+/// Adapters implement this trait on the **bare** store type (e.g.
+/// `FjallStore`, [`InMemoryStore`](crate::testing::InMemoryStore)), not on
+/// `Arc<Store>`. The [blanket impl](#impl-SharedSubscription<M>-for-Arc<T>)
+/// below then provides [`SharedSubscription<M>`] on `Arc<Store>`
+/// automatically — users never name this trait directly. They call
+/// `store.subscribe(&id, None)` on an `Arc<Store>` and the blanket
+/// dispatches here.
+///
+/// # Why this trait exists
+///
+/// Rust's orphan rule (E0117) forbids
+/// `impl SharedSubscription<M> for Arc<Store>` in an adapter crate when
+/// both `SharedSubscription` and `Arc` are foreign — `Store` at a covered
+/// position inside `Arc<Store>` does not satisfy coherence. The escape is
+/// this trait, whose `Self` is the bare store type (local to the adapter
+/// crate). The blanket in this crate translates to the user-facing shape.
+///
+/// PR3 of the arc-subscription refactor renames this alongside the
+/// `Shared` prefix on the user trait, or collapses the two if a cleaner
+/// design emerges.
+pub trait SharedSubscriptionBackend<M: 'static = ()>: Send + Sync + 'static {
+    /// The cursor type — concrete (no GAT) and `'static`. Per-record
+    /// borrowing happens via [`EventStream::Item<'a>`](crate::stream::EventStream::Item).
+    type Stream: EventStream<M, Error = Self::Error> + Send + 'static;
+
+    /// The error type for subscription operations.
+    type Error: core::error::Error + Send + Sync + 'static;
+
+    /// Subscribe to events.
+    ///
+    /// First parameter is `&Arc<Self>`, not a `self` receiver — the
+    /// adapter clones the Arc inside to give the returned cursor its
+    /// own owned reference to the store.
+    fn subscribe(
+        arc: &Arc<Self>,
+        id: &impl Id,
+        from: Option<Version>,
+    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
+}
+
+// ─── Blanket: Arc<T> + SharedSubscriptionBackend → SharedSubscription ───────
+
+impl<T, M> SharedSubscription<M> for Arc<T>
+where
+    T: SharedSubscriptionBackend<M>,
+    M: 'static,
+{
+    type Stream = T::Stream;
+    type Error = T::Error;
+
+    fn subscribe(
+        &self,
+        id: &impl Id,
+        from: Option<Version>,
+    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send {
+        T::subscribe(self, id, from)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // GlobalSeq — store-local global sequence number
 // ═══════════════════════════════════════════════════════════════════════════
 
