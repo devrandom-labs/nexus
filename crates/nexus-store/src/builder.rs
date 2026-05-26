@@ -55,6 +55,12 @@ pub struct WithSnapshot<SS, T> {
 /// default codec (when the `json` feature is enabled) or [`NeedsCodec`]
 /// (requiring an explicit `.codec()` call).
 ///
+/// Upcasting is not configured here — the resulting facade ships with
+/// the no-upcaster [`Repository::load`](crate::Repository::load) /
+/// [`save`](crate::Repository::save) path. For schema evolution, use the
+/// facade's inherent [`load_with`](EventStore::load_with) /
+/// [`save_with`](EventStore::save_with) methods after `build()`.
+///
 /// # Example
 ///
 /// ```ignore
@@ -66,41 +72,26 @@ pub struct WithSnapshot<SS, T> {
 /// // Custom codec:
 /// let repo = store.repository().codec(MyCodec).build();
 ///
-/// // With an upcaster:
-/// let repo = store.repository().upcaster(MyUpcaster).build();
+/// // With upcasting (drop to the facade after build):
+/// let repo = store.repository().codec(MyCodec).build();
+/// let root = repo.load_with(id, OrderTransforms::upcast).await?;
 /// ```
-pub struct RepositoryBuilder<S, C, U, Snap = NoSnapshot> {
+pub struct RepositoryBuilder<S, C, Snap = NoSnapshot> {
     store: Store<S>,
     codec: C,
-    upcaster: U,
     snapshot: Snap,
 }
 
-impl<S, C, U, Snap> RepositoryBuilder<S, C, U, Snap> {
+impl<S, C, Snap> RepositoryBuilder<S, C, Snap> {
     /// Replace the codec.
     ///
     /// Returns a new builder with the updated codec type, preserving
-    /// the store and upcaster.
+    /// the store and any snapshot configuration.
     #[must_use]
-    pub fn codec<NewC>(self, codec: NewC) -> RepositoryBuilder<S, NewC, U, Snap> {
+    pub fn codec<NewC>(self, codec: NewC) -> RepositoryBuilder<S, NewC, Snap> {
         RepositoryBuilder {
             store: self.store,
             codec,
-            upcaster: self.upcaster,
-            snapshot: self.snapshot,
-        }
-    }
-
-    /// Replace the upcaster.
-    ///
-    /// Returns a new builder with the updated upcaster type, preserving
-    /// the store and codec. Pass `()` for no upcasting.
-    #[must_use]
-    pub fn upcaster<NewU>(self, upcaster: NewU) -> RepositoryBuilder<S, C, NewU, Snap> {
-        RepositoryBuilder {
-            store: self.store,
-            codec: self.codec,
-            upcaster,
             snapshot: self.snapshot,
         }
     }
@@ -110,7 +101,7 @@ impl<S, C, U, Snap> RepositoryBuilder<S, C, U, Snap> {
 // NoSnapshot — plain EventStore / ZeroCopyEventStore
 // ═══════════════════════════════════════════════════════════════════════════
 
-impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot>
+impl<S, C> RepositoryBuilder<S, C, NoSnapshot>
 where
     S: RawEventStore,
     C: Send + Sync + 'static,
@@ -121,8 +112,8 @@ where
     /// or an explicit `.codec()` call). This method is gated on
     /// `C: Send + Sync + 'static`, which excludes [`NeedsCodec`].
     #[must_use]
-    pub fn build(self) -> EventStore<S, C, U> {
-        EventStore::new(self.store, self.codec, self.upcaster)
+    pub fn build(self) -> EventStore<S, C> {
+        EventStore::new(self.store, self.codec)
     }
 
     /// Build a [`ZeroCopyEventStore`] using a [`BorrowingCodec`](crate::BorrowingCodec).
@@ -131,8 +122,8 @@ where
     /// or an explicit `.codec()` call). This method is gated on
     /// `C: Send + Sync + 'static`, which excludes [`NeedsCodec`].
     #[must_use]
-    pub fn build_zero_copy(self) -> ZeroCopyEventStore<S, C, U> {
-        ZeroCopyEventStore::new(self.store, self.codec, self.upcaster)
+    pub fn build_zero_copy(self) -> ZeroCopyEventStore<S, C> {
+        ZeroCopyEventStore::new(self.store, self.codec)
     }
 }
 
@@ -156,7 +147,7 @@ const DEFAULT_SNAPSHOT_INTERVAL: u64 = 100;
 const DEFAULT_SCHEMA_VERSION: std::num::NonZeroU32 = std::num::NonZeroU32::MIN;
 
 #[cfg(all(feature = "snapshot-json", feature = "snapshot"))]
-impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
+impl<S, C> RepositoryBuilder<S, C, NoSnapshot> {
     /// Configure a snapshot store with JSON codec (default).
     ///
     /// Accepts a byte-level [`SnapshotStore<Vec<u8>, Version>`](state::SnapshotStore)
@@ -184,7 +175,6 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     ) -> RepositoryBuilder<
         S,
         C,
-        U,
         WithSnapshot<state::CodecSnapshotStore<SS, crate::JsonCodec>, state::EveryNEvents>,
     > {
         let typed_store =
@@ -192,7 +182,6 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
         RepositoryBuilder {
             store: self.store,
             codec: self.codec,
-            upcaster: self.upcaster,
             snapshot: WithSnapshot {
                 store: typed_store,
                 trigger: state::EveryNEvents(
@@ -207,7 +196,7 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
 }
 
 #[cfg(all(feature = "snapshot", not(feature = "snapshot-json")))]
-impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
+impl<S, C> RepositoryBuilder<S, C, NoSnapshot> {
     /// Configure a snapshot store.
     ///
     /// Accepts a pre-composed typed [`SnapshotStore<S, Version>`](state::SnapshotStore).
@@ -232,11 +221,10 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
     pub fn snapshot_store<SS>(
         self,
         snapshot_store: SS,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, state::EveryNEvents>> {
+    ) -> RepositoryBuilder<S, C, WithSnapshot<SS, state::EveryNEvents>> {
         RepositoryBuilder {
             store: self.store,
             codec: self.codec,
-            upcaster: self.upcaster,
             snapshot: WithSnapshot {
                 store: snapshot_store,
                 trigger: state::EveryNEvents(
@@ -251,17 +239,16 @@ impl<S, C, U> RepositoryBuilder<S, C, U, NoSnapshot> {
 }
 
 #[cfg(feature = "snapshot")]
-impl<S, C, U, SS, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, T>> {
+impl<S, C, SS, T> RepositoryBuilder<S, C, WithSnapshot<SS, T>> {
     /// Replace the snapshot trigger.
     #[must_use]
     pub fn snapshot_trigger<NewT: state::PersistTrigger>(
         self,
         trigger: NewT,
-    ) -> RepositoryBuilder<S, C, U, WithSnapshot<SS, NewT>> {
+    ) -> RepositoryBuilder<S, C, WithSnapshot<SS, NewT>> {
         RepositoryBuilder {
             store: self.store,
             codec: self.codec,
-            upcaster: self.upcaster,
             snapshot: WithSnapshot {
                 store: self.snapshot.store,
                 trigger,
@@ -291,15 +278,15 @@ impl<S, C, U, SS, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, T>> {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
-impl<S, C, U, SS, T> RepositoryBuilder<S, C, U, WithSnapshot<SS, T>>
+impl<S, C, SS, T> RepositoryBuilder<S, C, WithSnapshot<SS, T>>
 where
     S: RawEventStore,
     C: Send + Sync + 'static,
 {
     /// Build a snapshot-aware [`EventStore`] using an owning [`Codec`](crate::Codec).
     #[must_use]
-    pub fn build(self) -> Snapshotting<EventStore<S, C, U>, SS, T> {
-        let inner = EventStore::new(self.store, self.codec, self.upcaster);
+    pub fn build(self) -> Snapshotting<EventStore<S, C>, SS, T> {
+        let inner = EventStore::new(self.store, self.codec);
         let snap = self.snapshot;
         Snapshotting::new(
             inner,
@@ -312,8 +299,8 @@ where
 
     /// Build a snapshot-aware [`ZeroCopyEventStore`] using a [`BorrowingCodec`](crate::BorrowingCodec).
     #[must_use]
-    pub fn build_zero_copy(self) -> Snapshotting<ZeroCopyEventStore<S, C, U>, SS, T> {
-        let inner = ZeroCopyEventStore::new(self.store, self.codec, self.upcaster);
+    pub fn build_zero_copy(self) -> Snapshotting<ZeroCopyEventStore<S, C>, SS, T> {
+        let inner = ZeroCopyEventStore::new(self.store, self.codec);
         let snap = self.snapshot;
         Snapshotting::new(
             inner,
@@ -349,11 +336,10 @@ impl<S: RawEventStore> Store<S> {
     /// let repo = store.repository().codec(MyCodec).build();
     /// ```
     #[must_use]
-    pub fn repository(&self) -> RepositoryBuilder<S, crate::JsonCodec, ()> {
+    pub fn repository(&self) -> RepositoryBuilder<S, crate::JsonCodec> {
         RepositoryBuilder {
             store: self.clone(),
             codec: crate::JsonCodec::default(),
-            upcaster: (),
             snapshot: NoSnapshot,
         }
     }
@@ -373,11 +359,10 @@ impl<S: RawEventStore> Store<S> {
     /// let repo = store.repository().codec(MyCodec).build();
     /// ```
     #[must_use]
-    pub fn repository(&self) -> RepositoryBuilder<S, NeedsCodec, ()> {
+    pub fn repository(&self) -> RepositoryBuilder<S, NeedsCodec> {
         RepositoryBuilder {
             store: self.clone(),
             codec: NeedsCodec::new(),
-            upcaster: (),
             snapshot: NoSnapshot,
         }
     }

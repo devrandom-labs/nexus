@@ -24,6 +24,7 @@ pub use codec::serde::json::{Json, JsonCodec};
 pub use codec::serde::{SerdeCodec, SerdeFormat};
 pub use codec::{BorrowingDecode, Decode, Encode};
 pub use envelope::{PendingEnvelope, PersistedEnvelope, pending_envelope};
+pub use error::LoadWithError;
 pub use error::{AppendError, InvalidSchemaVersion, StoreError};
 pub use nexus::Version;
 #[cfg(feature = "projection")]
@@ -46,4 +47,4 @@ pub use stream::{
 pub use stream::{IntoStream, OwnedEventStream};
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
-pub use upcasting::{EventMorsel, Upcaster};
+pub use upcasting::EventMorsel;

@@ -2,7 +2,6 @@
 #![allow(clippy::expect_used, reason = "tests")]
 
 use nexus::Version;
-use nexus_store::Upcaster;
 use nexus_store::upcasting::EventMorsel;
 
 #[derive(Debug)]
@@ -42,7 +41,7 @@ impl TestTransforms {
 #[test]
 fn transforms_multi_step_upcast() {
     let morsel = EventMorsel::borrowed("OrderCreated", Version::INITIAL, b"data");
-    let result = TestTransforms.upcast(morsel).unwrap();
+    let result = TestTransforms::upcast(morsel).unwrap();
     assert_eq!(result.schema_version(), Version::new(3).unwrap());
     assert_eq!(result.payload(), b"data,v2,v3");
     assert_eq!(result.event_type(), "OrderCreated");
@@ -51,7 +50,7 @@ fn transforms_multi_step_upcast() {
 #[test]
 fn transforms_rename() {
     let morsel = EventMorsel::borrowed("OrderCancelled", Version::INITIAL, b"data");
-    let result = TestTransforms.upcast(morsel).unwrap();
+    let result = TestTransforms::upcast(morsel).unwrap();
     assert_eq!(result.event_type(), "OrderVoided");
     assert_eq!(result.schema_version(), Version::new(2).unwrap());
 }
@@ -59,26 +58,37 @@ fn transforms_rename() {
 #[test]
 fn transforms_passthrough_current_version() {
     let morsel = EventMorsel::borrowed("OrderCreated", Version::new(3).unwrap(), b"data");
-    let result = TestTransforms.upcast(morsel).unwrap();
+    let result = TestTransforms::upcast(morsel).unwrap();
     assert!(result.is_borrowed(), "current version should pass through");
 }
 
 #[test]
 fn transforms_unknown_event_passthrough() {
     let morsel = EventMorsel::borrowed("Unknown", Version::INITIAL, b"data");
-    let result = TestTransforms.upcast(morsel).unwrap();
+    let result = TestTransforms::upcast(morsel).unwrap();
     assert!(result.is_borrowed());
 }
 
 #[test]
 fn transforms_current_version_lookup() {
     assert_eq!(
-        TestTransforms.current_version("OrderCreated"),
+        TestTransforms::current_version("OrderCreated"),
         Some(Version::new(3).unwrap())
     );
     assert_eq!(
-        TestTransforms.current_version("OrderCancelled"),
+        TestTransforms::current_version("OrderCancelled"),
         Some(Version::new(2).unwrap())
     );
-    assert_eq!(TestTransforms.current_version("Unknown"), None);
+    assert_eq!(TestTransforms::current_version("Unknown"), None);
+}
+
+#[test]
+fn transforms_upcast_is_static_fn_pointer() {
+    // The macro emits `pub fn upcast(...)` as an associated function with
+    // no `self`, so it can be coerced to a function pointer and passed
+    // directly to `EventStore::load_with` (which requires a `'static`
+    // closure/fn).
+    let _: for<'a> fn(EventMorsel<'a>) -> Result<EventMorsel<'a>, TestError> =
+        TestTransforms::upcast;
+    let _: fn(&str) -> Option<Version> = TestTransforms::current_version;
 }
