@@ -226,12 +226,8 @@ impl EventStream for FjallSubscriptionStream<'_> {
 /// from the inner [`FjallStream`]'s row buffer, exactly as the borrowed
 /// variant. Only the subscribe-time borrow from store is replaced by
 /// `Arc::clone`.
-// Constructor and helpers are called by the `impl SharedSubscription<()> for
-// Arc<FjallStore>` added in PR1 Task 6 (next commit on this branch).
-#[allow(
-    dead_code,
-    reason = "used by impl SharedSubscription<()> for Arc<FjallStore>, added in PR1 Task 6"
-)]
+// Constructor and helpers are called by the `impl SharedSubscriptionBackend<()> for
+// FjallStore` in store.rs (PR1 Task 6b).
 pub struct SharedFjallSubscriptionStream {
     store: Arc<FjallStore>,
     /// Owned byte key for re-reading from the store on refill.
@@ -244,10 +240,6 @@ pub struct SharedFjallSubscriptionStream {
     last_version: Option<Version>,
 }
 
-#[allow(
-    dead_code,
-    reason = "used by impl SharedSubscription<()> for Arc<FjallStore>, added in PR1 Task 6"
-)]
 impl SharedFjallSubscriptionStream {
     /// Create a new subscription stream.
     ///
