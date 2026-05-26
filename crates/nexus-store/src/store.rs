@@ -7,7 +7,7 @@ use nexus::{Id, Version};
 
 use crate::envelope::PendingEnvelope;
 use crate::error::AppendError;
-use crate::stream::BaseEventStream;
+use crate::stream::{BaseEventStream, EventStream};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Store<S> — Arc-wrapped handle to a RawEventStore backend
@@ -259,13 +259,27 @@ impl<T: Subscription<M> + Sync, M: 'static> Subscription<M> for &T {
 /// deletes the borrowed shape entirely. The temporary `Shared` prefix is
 /// only there to let PR1 introduce the new shape alongside the existing
 /// one without breaking the workspace build.
+///
+/// # Contract
+///
+/// - `from: None` → start from the beginning of the stream (version 1)
+/// - `from: Some(v)` → start from the event *after* version `v`
+/// - The returned stream **never returns `None`**. When all existing
+///   events have been yielded, it blocks until new events are appended.
+/// - Events are yielded with monotonically increasing versions, same
+///   as [`EventStream`](crate::stream::EventStream).
+///
+/// # Difference from [`RawEventStore::read_stream`]
+///
+/// `read_stream` returns a fused stream that terminates when caught up.
+/// `subscribe` returns a stream that *waits* instead of terminating.
 pub trait SharedSubscription<M: 'static = ()> {
     /// The subscription stream type — an [`EventStream`](crate::stream::EventStream) that never exhausts.
     ///
     /// Concrete (non-GAT) and `'static`. The cursor's own per-record
     /// `Item<'a>` GAT on [`EventStream`](crate::stream::EventStream) is preserved — borrowing happens
     /// at the per-record level, not at the subscribe-time level.
-    type Stream: crate::stream::EventStream<M, Error = Self::Error> + Send + 'static;
+    type Stream: EventStream<M, Error = Self::Error> + Send + 'static;
 
     /// The error type for subscription operations.
     type Error: core::error::Error + Send + Sync + 'static;
@@ -280,7 +294,7 @@ pub trait SharedSubscription<M: 'static = ()> {
         &self,
         id: &impl Id,
         from: Option<Version>,
-    ) -> impl std::future::Future<Output = Result<Self::Stream, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
