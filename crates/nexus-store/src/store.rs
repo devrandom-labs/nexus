@@ -234,6 +234,56 @@ impl<T: Subscription<M> + Sync, M: 'static> Subscription<M> for &T {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SharedSubscription<M> — Arc-based 'static subscription shape
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A subscription whose cursor owns an `Arc<Store>` and is therefore `'static`.
+///
+/// Implemented on `Arc<Store>` directly so the trait method `subscribe`
+/// takes `&self` and returns a cursor that outlives the call. Each
+/// subscription pays one `Arc::clone` at `subscribe()` time; per-event
+/// cost is identical to the borrowed shape.
+///
+/// # Why this is separate from [`Subscription`]
+///
+/// The borrowed [`Subscription`] uses a GAT `type Stream<'a>: ... where Self: 'a`.
+/// HRTB type-equality on that GAT collapses to `Self: 'static` on stable
+/// Rust, so consumer sites cannot bound `for<'a> Stream<'a>::Item<'a>`
+/// without a witness sub-trait ([`BaseEventStream`](crate::stream::BaseEventStream)). This trait's
+/// `type Stream: EventStream<M> + Send + 'static` is a concrete, non-GAT
+/// associated type — the HRTB nesting goes away. The cursor's own per-record
+/// `Item<'a>` GAT on [`EventStream`](crate::stream::EventStream) is **preserved** — each `next()` still
+/// lends a `PersistedEnvelope<'_>` from the cursor's internal buffer.
+///
+/// PR3 of the arc-subscription refactor renames this to `Subscription` and
+/// deletes the borrowed shape entirely. The temporary `Shared` prefix is
+/// only there to let PR1 introduce the new shape alongside the existing
+/// one without breaking the workspace build.
+pub trait SharedSubscription<M: 'static = ()> {
+    /// The subscription stream type — an [`EventStream`](crate::stream::EventStream) that never exhausts.
+    ///
+    /// Concrete (non-GAT) and `'static`. The cursor's own per-record
+    /// `Item<'a>` GAT on [`EventStream`](crate::stream::EventStream) is preserved — borrowing happens
+    /// at the per-record level, not at the subscribe-time level.
+    type Stream: crate::stream::EventStream<M, Error = Self::Error> + Send + 'static;
+
+    /// The error type for subscription operations.
+    type Error: core::error::Error + Send + Sync + 'static;
+
+    /// Subscribe to events in a single stream.
+    ///
+    /// `from: None` starts from the beginning of the stream (version 1);
+    /// `from: Some(v)` starts from the event *after* version `v`. The
+    /// returned cursor **never returns `None`** — it waits for new events
+    /// when caught up instead of terminating.
+    fn subscribe(
+        &self,
+        id: &impl Id,
+        from: Option<Version>,
+    ) -> impl std::future::Future<Output = Result<Self::Stream, Self::Error>> + Send;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // GlobalSeq — store-local global sequence number
 // ═══════════════════════════════════════════════════════════════════════════
 
