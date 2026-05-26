@@ -44,3 +44,19 @@ here.
 - **Reason**: `Arc::clone(self)` triggers `clippy::use_self` because we're inside `impl ... for Arc<InMemoryStore>` and `Self` is the more local name.
 - **Impact**: None — `Self::clone` and `Arc::clone` resolve to the same function pointer here. The same pattern applies to the fjall task (PR1 Task 6).
 - **Date / PR link**: 2026-05-26, branch `refactor/arc-subscription`, commit `b771d7a`
+
+## [PR 1 | Task 5] — `FjallStore::notify` is `Notify`, not `Arc<Notify>` — clone the store Arc instead
+- **Type**: deviation / API-asymmetry-discovered
+- **Plan said**: `let notify = Arc::clone(&self.store.notify); let notified = notify.notified();` — clone the inner `Arc<Notify>` to detach the `Notified` future from `&self`. This pattern came from the in-memory cursor where `InMemoryStore::notify: Arc<Notify>`.
+- **Actually did**: `let store = Arc::clone(&self.store); let notified = store.notify.notified();` — clone the outer `Arc<FjallStore>` and read `notify` from the clone. The `Notified` future borrows from the cloned `FjallStore` (specifically its `notify` field), not from `self`.
+- **Reason**: `FjallStore::notify` is `Notify` (bare), while `InMemoryStore::notify` is `Arc<Notify>`. The two stores have asymmetric inner ownership of the notifier — `FjallStore` keeps the `Notify` inline, `InMemoryStore` wraps it in an `Arc` for the borrowed subscription cursor's needs. Cloning the outer `Arc<FjallStore>` and reading `notify` through the clone achieves identical race-free semantics: `Notified` registers before refill, and the local `store` clone lives through the iteration so the borrow is valid until `notified.await`.
+- **Impact**: One extra atomic ref-count bump per empty-buffer loop iteration on `Arc<FjallStore>` instead of on `Arc<Notify>`. Negligible. The in-memory cursor pattern (`Arc::clone(&self.store.notify)`) does NOT apply to the fjall side — they require different approaches. PR1.3's deviation note that "the same pattern applies to PR1 Task 5" was wrong; this is a different pattern with the same end goal.
+- **Date / PR link**: 2026-05-26, branch `refactor/arc-subscription`, commit `07c0ad2`
+
+## [PR 1 | Task 5] — `#[allow(dead_code)]` on the cursor struct + inherent impl
+- **Type**: added / transitional
+- **Plan said**: No `#[allow(dead_code)]` mentioned.
+- **Actually did**: Added `#[allow(dead_code, reason = "constructor wired in PR1.6")]` (or equivalent) on `SharedFjallSubscriptionStream` struct and its inherent `impl` block.
+- **Reason**: The cursor's `pub(crate) const fn new(...)` constructor and its inherent methods (`next_read_version`, `refill`) are only called from `impl SharedSubscription<()> for Arc<FjallStore>`, which lands in PR1.6. Workspace clippy treats `dead_code` as an error (`-D warnings`), so the build fails without the allow.
+- **Impact**: Transitional. PR1.6 (next task) wires the constructor + impl; the `#[allow(dead_code)]` attributes should be removed in that same commit (or a follow-up) once the call sites exist.
+- **Date / PR link**: 2026-05-26, branch `refactor/arc-subscription`, commit `07c0ad2`
