@@ -15,6 +15,7 @@
 
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
+use std::sync::Arc;
 
 use nexus::{DomainEvent, Message, Version};
 use nexus_framework::projection::{Projection, ProjectionError, ProjectionStatus, StartupDecision};
@@ -187,7 +188,7 @@ async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[Test
 
 #[tokio::test]
 async fn runner_processes_events_and_checkpoints() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -205,7 +206,7 @@ async fn runner_processes_events_and_checkpoints() {
 
     // Build runner with EveryNEvents(1) — checkpoint every event
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -242,7 +243,7 @@ async fn runner_processes_events_and_checkpoints() {
 
 #[tokio::test]
 async fn runner_resumes_from_checkpoint() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -259,7 +260,7 @@ async fn runner_resumes_from_checkpoint() {
     .await;
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -285,7 +286,7 @@ async fn runner_resumes_from_checkpoint() {
 
     // Run again — should resume from checkpoint (version 3)
     let runner2 = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -319,7 +320,7 @@ async fn runner_resumes_from_checkpoint() {
 
 #[tokio::test]
 async fn runner_trigger_controls_checkpoint_frequency() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -339,7 +340,7 @@ async fn runner_trigger_controls_checkpoint_frequency() {
 
     // Trigger every 3 events
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -375,7 +376,7 @@ async fn runner_trigger_controls_checkpoint_frequency() {
 
 #[tokio::test]
 async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -392,7 +393,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
     .await;
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -419,7 +420,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
     // Now restart with schema v2 — the schema-mismatched snapshot is invisible
     // to hydrate, so the projection replays from the beginning.
     let runner2 = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -455,7 +456,7 @@ async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
 
 #[tokio::test]
 async fn runner_resumes_normally_after_rebuild_completes() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -468,7 +469,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
     .await;
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -486,7 +487,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
 
     // Phase 2: restart with schema v2 — replays from the beginning
     let runner2 = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -507,7 +508,7 @@ async fn runner_resumes_normally_after_rebuild_completes() {
     append_events(&store, &stream_id, &[TestEvent::Added(30)]).await;
 
     let runner3 = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -546,12 +547,12 @@ async fn runner_resumes_normally_after_rebuild_completes() {
 
 #[tokio::test]
 async fn runner_immediate_shutdown_with_no_events() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("empty-stream".into());
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -582,7 +583,7 @@ async fn runner_immediate_shutdown_with_no_events() {
 
 #[tokio::test]
 async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -599,7 +600,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     .await;
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -632,7 +633,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     tx.send(()).unwrap();
 
     let runner2 = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -653,7 +654,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     // Phase 3: restart with schema v2 — whether Phase 2 processed some
     // events or none, the final result must be correct (idempotent)
     let runner3 = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -687,7 +688,7 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
 
 #[tokio::test]
 async fn runner_graceful_shutdown_flushes_dirty_state() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -702,7 +703,7 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
     // Trigger every 100 events — so the trigger never fires during these 2 events.
     // Only the shutdown flush should persist state.
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -738,7 +739,7 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
 
 #[tokio::test]
 async fn runner_stale_state_falls_back_to_initial() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -766,7 +767,7 @@ async fn runner_stale_state_falls_back_to_initial() {
 
     // Runner with schema version 2 — stale state should be ignored
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -804,7 +805,7 @@ async fn runner_stale_state_falls_back_to_initial() {
 
 #[tokio::test]
 async fn runner_first_run_with_state_persistence_is_not_rebuild() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -818,7 +819,7 @@ async fn runner_first_run_with_state_persistence_is_not_rebuild() {
     // First run ever — no snapshot. Should process from beginning
     // without treating it as a "rebuild".
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -850,7 +851,7 @@ async fn runner_first_run_with_state_persistence_is_not_rebuild() {
 
 #[tokio::test]
 async fn runner_returns_projector_error_on_apply_failure() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -865,7 +866,7 @@ async fn runner_returns_projector_error_on_apply_failure() {
     .await;
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -886,7 +887,7 @@ async fn runner_returns_projector_error_on_apply_failure() {
 
 #[tokio::test]
 async fn runner_returns_event_codec_error_on_bad_payload() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -901,7 +902,7 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
         .unwrap();
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -929,7 +930,7 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
 
 #[tokio::test]
 async fn runner_catches_up_and_processes_all_existing_events() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -948,7 +949,7 @@ async fn runner_catches_up_and_processes_all_existing_events() {
     .await;
 
     let runner = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1013,12 +1014,12 @@ fn projection_error_snapshot_variant_is_unconstructable_when_infallible() {
 
 #[tokio::test]
 async fn initialize_returns_starting_on_first_run() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("fresh-stream".into());
 
     let runner = Projection::builder(stream_id)
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1030,7 +1031,7 @@ async fn initialize_returns_starting_on_first_run() {
 
 #[tokio::test]
 async fn initialize_returns_resuming_after_successful_run() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -1038,7 +1039,7 @@ async fn initialize_returns_resuming_after_successful_run() {
 
     // First run
     Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1054,7 +1055,7 @@ async fn initialize_returns_resuming_after_successful_run() {
 
     // Second run — should resume
     let runner2 = Projection::builder(stream_id)
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1066,7 +1067,7 @@ async fn initialize_returns_resuming_after_successful_run() {
 
 #[tokio::test]
 async fn schema_bump_resolves_to_fresh() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -1074,7 +1075,7 @@ async fn schema_bump_resolves_to_fresh() {
 
     // First run with schema v1
     Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1091,7 +1092,7 @@ async fn schema_bump_resolves_to_fresh() {
     // Second run with schema v2 — the schema-mismatched snapshot is invisible
     // to hydrate, so initialize() resolves to Fresh and replays from scratch.
     let runner2 = Projection::builder(stream_id)
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1104,7 +1105,7 @@ async fn schema_bump_resolves_to_fresh() {
 
 #[tokio::test]
 async fn force_rebuild_replays_from_beginning() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -1117,7 +1118,7 @@ async fn force_rebuild_replays_from_beginning() {
 
     // First run
     Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1133,7 +1134,7 @@ async fn force_rebuild_replays_from_beginning() {
 
     // Second run — force rebuild despite valid state
     let runner2 = Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1169,7 +1170,7 @@ async fn force_rebuild_replays_from_beginning() {
 
 #[tokio::test]
 async fn resuming_accessors_return_correct_values() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
 
@@ -1177,7 +1178,7 @@ async fn resuming_accessors_return_correct_values() {
 
     // First run to create checkpoint + state
     Projection::builder(stream_id.clone())
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
@@ -1193,7 +1194,7 @@ async fn resuming_accessors_return_correct_values() {
 
     // Second run — inspect Resuming variant
     let runner2 = Projection::builder(stream_id)
-        .subscription(&store)
+        .subscription(Arc::clone(&store))
         .projector(CountingProjector)
         .event_codec(TestEventCodec)
         .snapshot_store(&snapshots)
