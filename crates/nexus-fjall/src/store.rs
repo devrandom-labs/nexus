@@ -4,15 +4,18 @@ use crate::encoding::{
 };
 use crate::error::FjallError;
 use crate::stream::FjallStream;
-use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
+use crate::subscription_stream::{
+    FjallSubscriptionStream, OwnedStreamId, SharedFjallSubscriptionStream,
+};
 use arrayvec::ArrayString;
 use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
-use nexus_store::store::{RawEventStore, Subscription};
+use nexus_store::store::{RawEventStore, SharedSubscriptionBackend, Subscription};
 use std::fmt::Write;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::sync::Notify;
 
 /// Format a `Display` value into a stack-allocated reason label,
@@ -360,6 +363,36 @@ impl Subscription<()> for FjallStore {
         let inner = self.read_stream(&owned_id, start).await?;
         Ok(FjallSubscriptionStream::new(
             self, owned_id, label, inner, from,
+        ))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SharedSubscriptionBackend impl (PR1 of arc-subscription refactor)
+// ═══════════════════════════════════════════════════════════════════════════
+
+impl SharedSubscriptionBackend<()> for FjallStore {
+    type Stream = SharedFjallSubscriptionStream;
+    type Error = FjallError;
+
+    async fn subscribe(
+        arc: &Arc<Self>,
+        id: &impl Id,
+        from: Option<Version>,
+    ) -> Result<SharedFjallSubscriptionStream, FjallError> {
+        let start = match from {
+            None => Version::INITIAL,
+            Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
+        };
+        let owned_id = OwnedStreamId::from_id(id);
+        let label = id.to_label();
+        let inner = arc.read_stream(&owned_id, start).await?;
+        Ok(SharedFjallSubscriptionStream::new(
+            Arc::clone(arc),
+            owned_id,
+            label,
+            inner,
+            from,
         ))
     }
 }
