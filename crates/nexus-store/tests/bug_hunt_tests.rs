@@ -41,8 +41,7 @@ use std::fmt;
 use tokio::sync::Mutex;
 
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
-type TestStoreError =
-    StoreError<InMemoryStoreError, std::io::Error, std::io::Error, std::convert::Infallible>;
+type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::io::Error>;
 
 fn label(s: &str) -> ArrayString<64> {
     ArrayString::try_from(s).unwrap()
@@ -433,12 +432,8 @@ fn bug_probe_error_source_chain_preserved() {
     // Source chain should work with concrete types
     // InMemoryStoreError::CorruptVersion has no source, so source is None.
     // Test with an error type that does have source:
-    let io_store_err: StoreError<
-        std::io::Error,
-        std::io::Error,
-        std::io::Error,
-        std::convert::Infallible,
-    > = StoreError::Adapter(inner);
+    let io_store_err: StoreError<std::io::Error, std::io::Error, std::io::Error> =
+        StoreError::Adapter(inner);
     let source = io_store_err.source().expect("should have source");
     assert!(
         source.to_string().contains("database connection refused"),

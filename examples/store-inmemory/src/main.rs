@@ -1,6 +1,8 @@
 // examples/store-inmemory — demonstrates all nexus-store traits with an
-// in-memory backend: Codec, RawEventStore, EventStream, Upcaster,
-// and the PendingEnvelope typestate builder.
+// in-memory backend: Codec, RawEventStore, EventStream, plain-function
+// upcasters, and the PendingEnvelope typestate builder. The final step
+// shows the substrate path: `Store::raw()` + `map_err` + `try_fold`
+// composing a typed pipeline over the lending cursor.
 //
 // Run with: cargo run -p nexus-example-store-inmemory
 
@@ -23,11 +25,11 @@
 
 use nexus::Id;
 use nexus::Version;
+use nexus_store::Store;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
+use nexus_store::stream::{EventStream, EventStreamExt};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
-use nexus_store::upcasting::Upcaster;
 use nexus_store::{Decode, Encode, pending_envelope};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -136,45 +138,30 @@ impl Decode<TodoEvent> for JsonCodec {
 }
 
 // =============================================================================
-// 3. RenameUpcaster — schema evolution demo
+// 3. rename_upcast — schema evolution demo (plain function)
 // =============================================================================
 
-/// Upcaster that renames `"TaskCreated"` to `"TodoCreated"`.
+/// Plain-function upcaster: renames `"TaskCreated"` to `"TodoCreated"`.
 ///
 /// Imagine we originally called the event `TaskCreated` (v1) and later
 /// renamed it to `TodoCreated` (v2). Old events stored as `TaskCreated`
 /// are transparently upgraded during reads.
 ///
-/// Upcasters operate on raw bytes BEFORE the codec deserializes — so
-/// the old Rust type doesn't need to exist.
-struct RenameUpcaster;
-
-impl Upcaster for RenameUpcaster {
-    type Error = std::convert::Infallible;
-
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        if morsel.event_type() != "TaskCreated" || morsel.schema_version().as_u64() >= 2 {
-            return Ok(morsel);
-        }
-        // Rename the event type. The payload JSON uses serde's
-        // tagged enum format, so we also need to rename the tag
-        // inside the JSON body.
-        let json = String::from_utf8_lossy(morsel.payload());
-        let upgraded = json.replace("TaskCreated", "TodoCreated");
-        Ok(EventMorsel::new(
-            "TodoCreated",
-            Version::new(2).expect("2 is non-zero"),
-            upgraded.into_bytes(),
-        ))
+/// Upcast functions operate on raw bytes BEFORE the codec deserializes —
+/// so the old Rust type doesn't need to exist.
+fn rename_upcast(morsel: EventMorsel<'_>) -> Result<EventMorsel<'_>, std::convert::Infallible> {
+    if morsel.event_type() != "TaskCreated" || morsel.schema_version().as_u64() >= 2 {
+        return Ok(morsel);
     }
-
-    fn current_version(&self, event_type: &str) -> Option<Version> {
-        if event_type == "TaskCreated" || event_type == "TodoCreated" {
-            Some(Version::new(2).expect("2 is non-zero"))
-        } else {
-            None
-        }
-    }
+    // Rename the event type. The payload JSON uses serde's tagged enum
+    // format, so we also rename the tag inside the JSON body.
+    let json = String::from_utf8_lossy(morsel.payload());
+    let upgraded = json.replace("TaskCreated", "TodoCreated");
+    Ok(EventMorsel::new(
+        "TodoCreated",
+        Version::new(2).expect("2 is non-zero"),
+        upgraded.into_bytes(),
+    ))
 }
 
 // =============================================================================
@@ -189,7 +176,6 @@ async fn main() {
     // --- Setup ---
     let codec = JsonCodec;
     let store = InMemoryStore::new();
-    let upcaster = RenameUpcaster;
     let stream_id = TodoId("todo-1".to_owned());
 
     // --- Step 1: Create domain events ---
@@ -323,11 +309,11 @@ async fn main() {
     println!();
 
     // --- Step 6: Upcast and decode ---
-    println!("Step 6: Apply upcaster, then decode with JsonCodec");
+    println!("Step 6: Apply upcast function, then decode with JsonCodec");
     for (event_type, schema_version, payload, version) in &read_events {
         let schema_ver = Version::new(u64::from(*schema_version)).expect("schema version > 0");
         let morsel = EventMorsel::borrowed(event_type, schema_ver, payload);
-        let upcasted = upcaster.upcast(morsel).expect("upcast should succeed");
+        let upcasted = rename_upcast(morsel).expect("upcast should succeed");
 
         if upcasted.event_type() != event_type {
             println!(
@@ -341,6 +327,67 @@ async fn main() {
             .expect("decode should succeed");
         println!("  version={version}: {decoded:?}");
     }
+    println!();
+
+    // --- Step 7: Substrate path ---
+    //
+    // Everything above used the high-level `RawEventStore` interface
+    // directly. For the same flow expressed against the composable
+    // *substrate* — `Store::raw()` exposing the underlying cursor, then
+    // `EventStreamExt::map_err` + `try_fold` composing a typed pipeline
+    // — see this section. This is the escape hatch power users reach
+    // for when `EventStore::load` / `load_with` isn't expressive enough
+    // (custom filtering, peeking, branching during load, etc.).
+    println!("Step 7: Substrate path — Store::raw() + map_err + try_fold");
+    let typed_store = Store::new(InMemoryStore::new());
+
+    // Pre-populate via a separate `RawEventStore` reference.
+    let payload = codec
+        .encode(&TodoEvent::Created {
+            id: "todo-2".to_owned(),
+            title: "Substrate task".to_owned(),
+        })
+        .expect("encode should succeed");
+    let envelope = pending_envelope(Version::INITIAL)
+        .event_type("TodoCreated")
+        .payload(payload)
+        .build_without_metadata();
+    typed_store
+        .raw()
+        .append(&TodoId("todo-2".to_owned()), None, &[envelope])
+        .await
+        .expect("append should succeed");
+
+    // The substrate chain: open a raw cursor, lift the adapter error into
+    // our domain error type, then fold the events into a count + last
+    // title using the lending `try_fold` combinator.
+    #[derive(Debug, thiserror::Error)]
+    enum SubstrateErr {
+        #[error("stream error: {0}")]
+        Stream(String),
+        #[error("decode error: {0}")]
+        Decode(String),
+    }
+    let raw_stream = typed_store
+        .raw()
+        .read_stream(&TodoId("todo-2".to_owned()), Version::INITIAL)
+        .await
+        .expect("read_stream should succeed");
+    let (count, last_title): (usize, Option<String>) = raw_stream
+        .map_err(|e| SubstrateErr::Stream(e.to_string()))
+        .try_fold((0usize, None::<String>), |(c, _last), env| {
+            let event = codec
+                .decode(env.event_type(), env.payload())
+                .map_err(|e| SubstrateErr::Decode(e.to_string()))?;
+            let title = match event {
+                TodoEvent::Created { title, .. } => Some(title),
+                _ => None,
+            };
+            Ok::<_, SubstrateErr>((c + 1, title))
+        })
+        .await
+        .expect("substrate pipeline should succeed");
+    println!("  Substrate fold: count={count}, last_title={last_title:?}");
     println!();
 
     println!("=== Done! All nexus-store traits demonstrated. ===");

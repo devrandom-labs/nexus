@@ -70,6 +70,10 @@
 )]
 #![allow(clippy::await_holding_lock, reason = "tests")]
 #![allow(clippy::missing_const_for_fn, reason = "tests")]
+#![allow(
+    clippy::unnecessary_wraps,
+    reason = "plain-function upcasters keep Result<_, E> so they can be passed to load_with"
+)]
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -84,7 +88,7 @@ use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{
     BaseEventStream, Disposition, EventStream, EventStreamExt, Progress, Step,
 };
-use nexus_store::upcasting::{EventMorsel, Upcaster};
+use nexus_store::upcasting::EventMorsel;
 use proptest::prelude::*;
 use proptest::proptest;
 use static_assertions::assert_impl_all;
@@ -401,54 +405,36 @@ impl BorrowingDecode<[u8]> for AlwaysFailingBorrowingCodec {
 // Test fixtures — upcasters
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Upcaster that prepends a `1` byte to every payload, verifying the
-/// transform runs ahead of the codec.
-struct PrependOne;
-
+/// Plain-function upcaster that prepends a `1` byte to every payload,
+/// verifying the transform runs ahead of the codec.
 #[derive(Debug, Error)]
 #[error("prepend transform failed")]
 struct PrependError;
 
-impl Upcaster for PrependOne {
-    type Error = PrependError;
-
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        let mut new_payload = Vec::with_capacity(morsel.payload().len() + 1);
-        new_payload.push(1);
-        new_payload.extend_from_slice(morsel.payload());
-        let version = Version::new(morsel.schema_version().as_u64() + 1)
-            .expect("incremented version is non-zero");
-        Ok(morsel
-            .with_payload(Cow::Owned(new_payload))
-            .with_schema_version(version))
-    }
-
-    fn current_version(&self, _event_type: &str) -> Option<Version> {
-        Version::new(2)
-    }
+fn prepend_one_upcast(morsel: EventMorsel<'_>) -> Result<EventMorsel<'_>, PrependError> {
+    let mut new_payload = Vec::with_capacity(morsel.payload().len() + 1);
+    new_payload.push(1);
+    new_payload.extend_from_slice(morsel.payload());
+    let version = Version::new(morsel.schema_version().as_u64() + 1)
+        .expect("incremented version is non-zero");
+    Ok(morsel
+        .with_payload(Cow::Owned(new_payload))
+        .with_schema_version(version))
 }
 
-/// Upcaster that always returns an error.
-struct FailingUpcaster;
-
+/// Plain-function upcaster that always returns an error.
 #[derive(Debug, Error)]
 #[error("upcast transform exploded")]
 struct UpcastBoom;
 
-impl Upcaster for FailingUpcaster {
-    type Error = UpcastBoom;
-
-    fn upcast<'a>(&self, _morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        Err(UpcastBoom)
-    }
-
-    fn current_version(&self, _event_type: &str) -> Option<Version> {
-        Version::new(2)
-    }
+fn failing_upcast(_morsel: EventMorsel<'_>) -> Result<EventMorsel<'_>, UpcastBoom> {
+    Err(UpcastBoom)
 }
 
-/// Upcaster that records the (event_type, schema_version) pair it saw
-/// for each morsel — used to verify ordering and schema threading.
+/// Records the (event_type, schema_version) pair it saw for each morsel
+/// — used to verify ordering and schema threading. State lives in the
+/// struct; the closure that calls `record` is what gets handed to the
+/// stream combinator.
 struct RecordingUpcaster {
     seen: Arc<Mutex<Vec<(String, u64)>>>,
 }
@@ -462,21 +448,12 @@ impl RecordingUpcaster {
     fn seen(&self) -> Vec<(String, u64)> {
         self.seen.lock().expect("test mutex").clone()
     }
-}
-
-impl Upcaster for RecordingUpcaster {
-    type Error = Infallible;
-
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
+    fn record<'a>(&self, morsel: EventMorsel<'a>) -> EventMorsel<'a> {
         self.seen.lock().expect("test mutex").push((
             morsel.event_type().to_owned(),
             morsel.schema_version().as_u64(),
         ));
-        Ok(morsel)
-    }
-
-    fn current_version(&self, _event_type: &str) -> Option<Version> {
-        None
+        morsel
     }
 }
 
@@ -1066,9 +1043,7 @@ async fn inline_decode_owning_with_upcaster_runs_upcast_before_codec() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = upcaster
-                .upcast(morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let transformed = upcaster.record(morsel);
             let _e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
@@ -1108,9 +1083,7 @@ async fn inline_decode_borrowing_with_upcaster_runs_upcast_before_codec() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = upcaster
-                .upcast(morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let transformed = upcaster.record(morsel);
             let bytes: &[u8] = codec
                 .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
@@ -1176,7 +1149,6 @@ async fn inline_decode_owning_upcaster_runs_before_codec() {
     // and the codec must reject it.
     let stream = VecStream::new(vec![(1, "Tick".into(), enc_u64(5))]);
     let codec = U64Codec;
-    let upcaster = PrependOne;
 
     let mut s = stream;
     let result: Result<u64, PipelineErr> = s
@@ -1186,9 +1158,8 @@ async fn inline_decode_owning_upcaster_runs_before_codec() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = upcaster
-                .upcast(morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let transformed =
+                prepend_one_upcast(morsel).map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
@@ -1272,7 +1243,6 @@ async fn inline_decode_owning_stream_error_propagates() {
 async fn inline_decode_owning_upcaster_error_propagates() {
     let stream = VecStream::new(vec![(1, "E".into(), enc_u64(1))]);
     let codec = U64Codec;
-    let upcaster = FailingUpcaster;
     let mut s = stream;
     let result: Result<(), PipelineErr> = s
         .try_fold((), |(), env| {
@@ -1281,9 +1251,8 @@ async fn inline_decode_owning_upcaster_error_propagates() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = upcaster
-                .upcast(morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let transformed =
+                failing_upcast(morsel).map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
@@ -1326,9 +1295,7 @@ async fn inline_decode_schema_version_visible_to_upcaster() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = upcaster
-                .upcast(morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let transformed = upcaster.record(morsel);
             let _e: u64 = codec
                 .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
@@ -1342,9 +1309,11 @@ async fn inline_decode_schema_version_visible_to_upcaster() {
 
 #[tokio::test]
 async fn inline_decode_owning_noop_upcaster_passthrough() {
+    // The no-op upcaster shape is just an identity function from morsel
+    // to morsel — the deleted `Upcaster for ()` impl that used to provide
+    // this is replaced by simply not running an upcast step at all.
     let stream = VecStream::new(vec![(1, "Tick".into(), enc_u64(123))]);
     let codec = U64Codec;
-    let noop = ();
     let mut s = stream;
     let v: u64 = s
         .try_fold(0u64, |_a, env| {
@@ -1353,10 +1322,9 @@ async fn inline_decode_owning_noop_upcaster_passthrough() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = <() as Upcaster>::upcast(&noop, morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            // No-op: just decode from the morsel directly.
             let e: u64 = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(morsel.event_type(), morsel.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok::<_, PipelineErr>(e)
         })
@@ -1484,7 +1452,6 @@ async fn inline_decode_borrowing_stream_error_propagates() {
 async fn inline_decode_borrowing_upcaster_error_propagates() {
     let stream = VecStream::new(vec![(1, "E".into(), vec![1])]);
     let codec = BytesBorrowingCodec;
-    let upcaster = FailingUpcaster;
     let mut s = stream;
     let result: Result<(), PipelineErr> = s
         .try_fold((), |(), env| {
@@ -1493,9 +1460,8 @@ async fn inline_decode_borrowing_upcaster_error_propagates() {
                 env.schema_version_as_version(),
                 env.payload(),
             );
-            let transformed = upcaster
-                .upcast(morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            let transformed =
+                failing_upcast(morsel).map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _bytes: &[u8] = codec
                 .decode(transformed.event_type(), transformed.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
@@ -1525,19 +1491,12 @@ async fn inline_decode_borrowing_codec_error_propagates() {
 async fn inline_decode_borrowing_noop_upcaster_passthrough() {
     let stream = VecStream::new(vec![(1, "Blob".into(), vec![10, 20, 30])]);
     let codec = BytesBorrowingCodec;
-    let noop = ();
     let mut s = stream;
     let observed: Vec<u8> = s
         .try_fold(Vec::<u8>::new(), |mut acc, env| {
-            let morsel = EventMorsel::borrowed(
-                env.event_type(),
-                env.schema_version_as_version(),
-                env.payload(),
-            );
-            let transformed = <() as Upcaster>::upcast(&noop, morsel)
-                .map_err(|e| PipelineErr::Upcast(e.to_string()))?;
+            // No-op upcaster: skip the transform step entirely.
             let bytes: &[u8] = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(env.event_type(), env.payload())
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             acc.extend_from_slice(bytes);
             Ok::<_, PipelineErr>(acc)
@@ -2220,7 +2179,6 @@ assert_impl_all!(FailingStream: Send);
 assert_impl_all!(U64Codec: Send, Sync);
 assert_impl_all!(BytesBorrowingCodec: Send, Sync);
 assert_impl_all!(BytesOwningCodec: Send, Sync);
-assert_impl_all!(PrependOne: Send, Sync);
 assert_impl_all!(RecordingUpcaster: Send, Sync);
 
 // Combinator wrapper Send propagation lives in `tests/combinator_tests.rs`.

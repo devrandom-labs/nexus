@@ -4,11 +4,15 @@
 
 use arrayvec::ArrayString;
 use nexus::{KernelError, Version};
-use nexus_store::StoreError;
+use nexus_store::{LoadWithError, StoreError};
 
-/// Concrete `StoreError` for tests: adapter = `std::io::Error`, codec = `std::io::Error`,
-/// upcaster = `std::io::Error`.
-type TestStoreError = StoreError<std::io::Error, std::io::Error, std::io::Error, std::io::Error>;
+/// Concrete `StoreError` for tests: adapter = `std::io::Error`, codec = `std::io::Error`.
+type TestStoreError = StoreError<std::io::Error, std::io::Error, std::io::Error>;
+
+/// Concrete `LoadWithError` for tests: same as `TestStoreError` plus a
+/// user-supplied upcaster error type.
+type TestLoadWithError =
+    LoadWithError<std::io::Error, std::io::Error, std::io::Error, std::io::Error>;
 
 fn label(s: &str) -> ArrayString<64> {
     ArrayString::try_from(s).unwrap()
@@ -121,9 +125,9 @@ fn kernel_error_has_source_chain() {
 }
 
 #[test]
-fn upcast_display_contains_inner_message() {
+fn load_with_upcast_display_contains_inner_message() {
     let inner = std::io::Error::new(std::io::ErrorKind::InvalidData, "bad transform");
-    let err: TestStoreError = StoreError::Upcast(inner);
+    let err: TestLoadWithError = LoadWithError::Upcast(inner);
     let msg = format!("{err}");
     assert!(msg.contains("upcast"), "should mention upcast");
     assert!(
@@ -132,4 +136,21 @@ fn upcast_display_contains_inner_message() {
     );
     let source = std::error::Error::source(&err);
     assert!(source.is_some(), "Upcast variant should have a source");
+}
+
+#[test]
+fn load_with_store_variant_wraps_store_error() {
+    // The `#[from] StoreError` impl lets `?` promote a StoreError into
+    // LoadWithError inside a load_with body.
+    let inner = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "db offline");
+    let store_err: TestStoreError = StoreError::Adapter(inner);
+    let load_err: TestLoadWithError = store_err.into();
+    let msg = format!("{load_err}");
+    assert!(
+        msg.contains("db offline"),
+        "Store variant should forward source"
+    );
+    // Source chain: LoadWithError -> StoreError -> io::Error
+    let source = std::error::Error::source(&load_err);
+    assert!(source.is_some(), "Store variant should have a source");
 }

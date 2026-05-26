@@ -4,16 +4,23 @@ use thiserror::Error;
 
 /// Errors from the event store layer.
 ///
-/// Generic over adapter (`A`), encode (`EncErr`), decode (`DecErr`), and
-/// upcaster transform (`UpErr`) error types — zero allocation, no `Box<dyn Error>`.
+/// Generic over adapter (`A`), encode (`EncErr`), and decode (`DecErr`) error
+/// types — zero allocation, no `Box<dyn Error>`.
 ///
 /// `EncErr` and `DecErr` are independent so write-only and read-only codecs
 /// can each set the unused side to `Infallible`. For the common case where
 /// a single underlying format powers both directions, the implementor picks
 /// the same `Error` associated type on both `Encode` and `Decode` impls and
 /// `EncErr == DecErr` falls out without a where-clause.
+///
+/// Upcast errors are *not* part of this type — the no-upcaster
+/// [`load`](crate::Repository::load) / [`save`](crate::Repository::save)
+/// path can't produce them. When the user calls
+/// [`EventStore::load_with`](crate::EventStore::load_with) (passing an
+/// upcast function), the result wraps `StoreError` in
+/// [`LoadWithError`] alongside the user's upcast error type.
 #[derive(Debug, Error)]
-pub enum StoreError<A, EncErr, DecErr, UpErr> {
+pub enum StoreError<A, EncErr, DecErr> {
     /// Optimistic concurrency conflict.
     #[error(
         "concurrency conflict on stream '{stream_id}': expected version {expected:?}, actual {actual:?}"
@@ -40,15 +47,6 @@ pub enum StoreError<A, EncErr, DecErr, UpErr> {
     #[error("decode error: {0}")]
     Decode(#[source] DecErr),
 
-    /// Upcaster transform failure.
-    ///
-    /// Carries the upcaster's raw error type (the `Self::Error` associated type
-    /// from the [`Upcaster`](crate::Upcaster) implementation). No wrapper is
-    /// applied; if the user wants diagnostic context (event type, schema
-    /// version), they should encode it in their own error type.
-    #[error("upcast error: {0}")]
-    Upcast(#[source] UpErr),
-
     /// Kernel error during replay (e.g. version mismatch, rehydration limit).
     #[error("kernel error: {0}")]
     Kernel(#[from] KernelError),
@@ -56,6 +54,36 @@ pub enum StoreError<A, EncErr, DecErr, UpErr> {
     /// Version overflow: cannot advance past `u64::MAX`.
     #[error("version overflow: cannot advance past u64::MAX")]
     VersionOverflow,
+}
+
+/// Errors from the with-upcaster load path.
+///
+/// Returned by [`EventStore::load_with`](crate::EventStore::load_with) and
+/// [`ZeroCopyEventStore::load_with`](crate::ZeroCopyEventStore::load_with).
+/// Wraps the four error sources [`StoreError`] already carries plus the
+/// user-supplied upcast function's error type.
+///
+/// `LoadWithError<A, EncErr, DecErr, UpErr>` is structurally `StoreError +
+/// Upcast(UpErr)`. The `From<StoreError<A, EncErr, DecErr>>` impl lets the
+/// `?` operator promote a `StoreError` into the wider variant inside a
+/// `load_with` body without manual matching.
+#[derive(Debug, Error)]
+pub enum LoadWithError<A, EncErr, DecErr, UpErr> {
+    /// All non-upcast errors — wrapped verbatim from the no-upcaster path.
+    #[error(transparent)]
+    Store(#[from] StoreError<A, EncErr, DecErr>),
+
+    /// Upcast function failure — carries the user-supplied error verbatim.
+    /// No wrapper is applied; encode diagnostic context (event type, schema
+    /// version) in your own error type if needed.
+    #[error("upcast error: {0}")]
+    Upcast(#[source] UpErr),
+}
+
+impl<A, EncErr, DecErr, UpErr> From<KernelError> for LoadWithError<A, EncErr, DecErr, UpErr> {
+    fn from(err: KernelError) -> Self {
+        Self::Store(StoreError::Kernel(err))
+    }
 }
 
 /// Structured error from [`RawEventStore::append`](crate::RawEventStore::append).

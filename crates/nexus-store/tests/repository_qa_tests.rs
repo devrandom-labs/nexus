@@ -34,6 +34,10 @@
     unsafe_code,
     reason = "test codec uses pointer cast to simulate zero-copy"
 )]
+#![allow(
+    clippy::unnecessary_wraps,
+    reason = "plain-function upcasters keep Result<_, E> so they can be passed to load_with"
+)]
 
 use std::convert::Infallible;
 use std::fmt;
@@ -43,7 +47,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use nexus::*;
 use nexus_store::Repository;
 use nexus_store::Store;
-use nexus_store::Upcaster;
 use nexus_store::codec::{BorrowingDecode, Decode, Encode};
 use nexus_store::error::StoreError;
 use nexus_store::store::RawEventStore;
@@ -380,90 +383,72 @@ impl BorrowingDecode<DeltaEvent> for DeltaBorrowingCodec {
 // Test upcasters
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Upcaster: bumps "Incremented" from schema v1→v2 (payload unchanged).
-struct IncrementedV1ToV2;
+/// Plain-function upcaster: bumps "Incremented" from schema v1→v2 (payload unchanged).
+fn incremented_v1_to_v2_upcast(morsel: EventMorsel<'_>) -> Result<EventMorsel<'_>, Infallible> {
+    match (morsel.event_type(), morsel.schema_version()) {
+        ("Incremented", v) if v == Version::INITIAL => Ok(EventMorsel::new(
+            "Incremented",
+            Version::new(2).unwrap(),
+            morsel.payload().to_vec(),
+        )),
+        _ => Ok(morsel),
+    }
+}
 
-impl Upcaster for IncrementedV1ToV2 {
-    type Error = Infallible;
+fn incremented_v1_to_v2_current_version(event_type: &str) -> Option<Version> {
+    match event_type {
+        "Incremented" => Some(Version::new(2).unwrap()),
+        _ => None,
+    }
+}
 
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        match (morsel.event_type(), morsel.schema_version()) {
-            ("Incremented", v) if v == Version::INITIAL => Ok(EventMorsel::new(
+/// Plain-function upcaster: bumps "Incremented" from v1→v3 in two steps (v1→v2→v3).
+fn incremented_v1_to_v3_upcast(mut morsel: EventMorsel<'_>) -> Result<EventMorsel<'_>, Infallible> {
+    loop {
+        morsel = match (morsel.event_type(), morsel.schema_version()) {
+            ("Incremented", v) if v == Version::INITIAL => EventMorsel::new(
                 "Incremented",
                 Version::new(2).unwrap(),
                 morsel.payload().to_vec(),
-            )),
-            _ => Ok(morsel),
-        }
+            ),
+            ("Incremented", v) if v == Version::new(2).unwrap() => EventMorsel::new(
+                "Incremented",
+                Version::new(3).unwrap(),
+                morsel.payload().to_vec(),
+            ),
+            _ => break,
+        };
     }
+    Ok(morsel)
+}
 
-    fn current_version(&self, event_type: &str) -> Option<Version> {
-        match event_type {
-            "Incremented" => Some(Version::new(2).unwrap()),
-            _ => None,
-        }
+fn incremented_v1_to_v3_current_version(event_type: &str) -> Option<Version> {
+    match event_type {
+        "Incremented" => Some(Version::new(3).unwrap()),
+        _ => None,
     }
 }
 
-/// Upcaster: bumps "Incremented" from v1→v3 in two steps (v1→v2→v3).
-struct IncrementedV1ToV3;
-
-impl Upcaster for IncrementedV1ToV3 {
-    type Error = Infallible;
-
-    fn upcast<'a>(&self, mut morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        loop {
-            morsel = match (morsel.event_type(), morsel.schema_version()) {
-                ("Incremented", v) if v == Version::INITIAL => EventMorsel::new(
-                    "Incremented",
-                    Version::new(2).unwrap(),
-                    morsel.payload().to_vec(),
-                ),
-                ("Incremented", v) if v == Version::new(2).unwrap() => EventMorsel::new(
-                    "Incremented",
-                    Version::new(3).unwrap(),
-                    morsel.payload().to_vec(),
-                ),
-                _ => break,
-            };
+/// Plain-function upcaster that doubles the i32 delta — actually mutates payload bytes.
+fn delta_doubling_upcast(morsel: EventMorsel<'_>) -> Result<EventMorsel<'_>, Infallible> {
+    match (morsel.event_type(), morsel.schema_version()) {
+        ("Delta", v) if v == Version::INITIAL => {
+            let delta = i32::from_le_bytes(morsel.payload()[0..4].try_into().unwrap());
+            let doubled = delta * 2;
+            Ok(EventMorsel::new(
+                "Delta",
+                Version::new(2).unwrap(),
+                doubled.to_le_bytes().to_vec(),
+            ))
         }
-        Ok(morsel)
-    }
-
-    fn current_version(&self, event_type: &str) -> Option<Version> {
-        match event_type {
-            "Incremented" => Some(Version::new(3).unwrap()),
-            _ => None,
-        }
+        _ => Ok(morsel),
     }
 }
 
-/// Upcaster that doubles the i32 delta — actually mutates payload bytes.
-struct DeltaDoublingUpcaster;
-
-impl Upcaster for DeltaDoublingUpcaster {
-    type Error = Infallible;
-
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        match (morsel.event_type(), morsel.schema_version()) {
-            ("Delta", v) if v == Version::INITIAL => {
-                let delta = i32::from_le_bytes(morsel.payload()[0..4].try_into().unwrap());
-                let doubled = delta * 2;
-                Ok(EventMorsel::new(
-                    "Delta",
-                    Version::new(2).unwrap(),
-                    doubled.to_le_bytes().to_vec(),
-                ))
-            }
-            _ => Ok(morsel),
-        }
-    }
-
-    fn current_version(&self, event_type: &str) -> Option<Version> {
-        match event_type {
-            "Delta" => Some(Version::new(2).unwrap()),
-            _ => None,
-        }
+fn delta_doubling_current_version(event_type: &str) -> Option<Version> {
+    match event_type {
+        "Delta" => Some(Version::new(2).unwrap()),
+        _ => None,
     }
 }
 
@@ -760,18 +745,22 @@ async fn d3_cross_stream_concurrent_saves_both_succeed() {
 #[tokio::test]
 async fn d4_single_upcaster_transforms_on_load() {
     let store = Store::new(InMemoryStore::new());
-    let es = store
-        .repository()
-        .codec(SimpleCodec)
-        .upcaster(IncrementedV1ToV2)
-        .build();
+    let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg, &[CounterEvent::Set(42)]).await.unwrap();
+    es.save_with(
+        &mut agg,
+        &[CounterEvent::Set(42)],
+        incremented_v1_to_v2_current_version,
+    )
+    .await
+    .unwrap();
 
-    // Load applies upcaster (v1→v2) but payload is unchanged
-    let loaded: AggregateRoot<CounterAggregate> =
-        es.load(CounterId("counter-1".into())).await.unwrap();
+    // load_with applies upcaster (v1→v2) but payload is unchanged
+    let loaded: AggregateRoot<CounterAggregate> = es
+        .load_with(CounterId("counter-1".into()), incremented_v1_to_v2_upcast)
+        .await
+        .unwrap();
     assert_eq!(loaded.state().value, 42);
     assert_eq!(loaded.version(), Some(Version::new(1).unwrap()));
 }
@@ -779,23 +768,22 @@ async fn d4_single_upcaster_transforms_on_load() {
 #[tokio::test]
 async fn d4_chained_upcasters_v1_to_v3() {
     let store = Store::new(InMemoryStore::new());
-    let es = store
-        .repository()
-        .codec(SimpleCodec)
-        .upcaster(IncrementedV1ToV3)
-        .build();
+    let es = store.repository().codec(SimpleCodec).build();
     // Flow: v1 → v2 → v3 (upcaster handles both steps internally)
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(
+    es.save_with(
         &mut agg,
         &[CounterEvent::Incremented, CounterEvent::Decremented],
+        incremented_v1_to_v3_current_version,
     )
     .await
     .unwrap();
 
-    let loaded: AggregateRoot<CounterAggregate> =
-        es.load(CounterId("counter-1".into())).await.unwrap();
+    let loaded: AggregateRoot<CounterAggregate> = es
+        .load_with(CounterId("counter-1".into()), incremented_v1_to_v3_upcast)
+        .await
+        .unwrap();
     assert_eq!(loaded.state().value, 0); // +1 -1 = 0
     assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
 }
@@ -835,10 +823,11 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
     let es = store
         .repository()
         .codec(DeltaBorrowingCodec)
-        .upcaster(DeltaDoublingUpcaster)
         .build_zero_copy();
-    let loaded: AggregateRoot<DeltaAggregate> =
-        es.load(CounterId("counter-1".into())).await.unwrap();
+    let loaded: AggregateRoot<DeltaAggregate> = es
+        .load_with(CounterId("counter-1".into()), delta_doubling_upcast)
+        .await
+        .unwrap();
     assert_eq!(
         loaded.state().total,
         10,
@@ -869,23 +858,30 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
     let es = store
         .repository()
         .codec(DeltaBorrowingCodec)
-        .upcaster(DeltaDoublingUpcaster)
         .build_zero_copy();
 
-    // Load: legacy delta=5 upcasted to 10. State total=10.
-    let mut loaded: AggregateRoot<DeltaAggregate> =
-        es.load(CounterId("counter-1".into())).await.unwrap();
-    assert_eq!(loaded.state().total, 10);
-
-    // Save second event: delta=3 (saved at schema_version=2, no upcasting).
-    es.save(&mut loaded, &[DeltaEvent { delta: 3 }])
+    // load_with: legacy delta=5 upcasted to 10. State total=10.
+    let mut loaded: AggregateRoot<DeltaAggregate> = es
+        .load_with(CounterId("counter-1".into()), delta_doubling_upcast)
         .await
         .unwrap();
+    assert_eq!(loaded.state().total, 10);
+
+    // save_with: delta=3 stamped at schema_version=2 per the version fn.
+    es.save_with(
+        &mut loaded,
+        &[DeltaEvent { delta: 3 }],
+        delta_doubling_current_version,
+    )
+    .await
+    .unwrap();
 
     // Reload: legacy event upcasted (5→10), new event untouched (3).
     // Total = 10 + 3 = 13.
-    let reloaded: AggregateRoot<DeltaAggregate> =
-        es.load(CounterId("counter-1".into())).await.unwrap();
+    let reloaded: AggregateRoot<DeltaAggregate> = es
+        .load_with(CounterId("counter-1".into()), delta_doubling_upcast)
+        .await
+        .unwrap();
     assert_eq!(
         reloaded.state().total,
         13,

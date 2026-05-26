@@ -6,10 +6,18 @@ use nexus::Version;
 // EventMorsel — data unit flowing through the transform pipeline
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// A single event as it flows through the transform pipeline.
+/// A single event as it flows through a transform pipeline.
 ///
 /// Borrows from the cursor buffer when no transform has fired (zero-copy).
 /// Becomes owned after the first transform allocates.
+///
+/// `EventMorsel` is the parameter and return type of upcast functions —
+/// the plain-function shape that replaced the prior `Upcaster` trait. The
+/// `#[nexus::transforms]` macro emits a `pub fn upcast` matching this
+/// signature; hand-rolled upcasters write the same shape. Pass the
+/// resulting function to [`EventStore::load_with`](crate::EventStore::load_with)
+/// or [`ZeroCopyEventStore::load_with`](crate::ZeroCopyEventStore::load_with)
+/// to plug it into the facade's read path.
 ///
 /// Inspired by Polars' Morsel pattern: data + metadata wrapped in a
 /// single type that flows through each pipeline step.
@@ -86,68 +94,5 @@ impl<'a> EventMorsel<'a> {
     #[must_use]
     pub fn with_event_type(self, event_type: Cow<'a, str>) -> Self {
         Self { event_type, ..self }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Upcaster — schema migration trait
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Upcast old events to the current schema version.
-///
-/// `EventStore` calls [`upcast`](Upcaster::upcast) on the read path and
-/// [`current_version`](Upcaster::current_version) on the write path. The proc
-/// macro `#[nexus::transforms]` generates implementations; `()` is the no-op
-/// passthrough.
-///
-/// # Compile-time guarantees (macro-generated impls)
-///
-/// The `#[nexus::transforms]` macro verifies, at compile time:
-/// - `from >= 1` on every transform.
-/// - `to == from + 1` on every transform (contiguity per step).
-/// - No duplicate `(event_type, from)` pairs.
-/// - **Chain coverage**: for each event type, every schema version in
-///   `[1, current_version]` is reachable via the declared chain (no gaps).
-///
-/// These guarantees make a number of runtime errors unrepresentable for
-/// macro-generated upcasters: the chain always terminates, every step
-/// advances the schema version, and event types are non-empty literals.
-/// Hand-rolled `Upcaster` implementations should preserve these properties
-/// themselves; the trait does not check them at runtime.
-pub trait Upcaster: Send + Sync {
-    /// The error type produced by transform functions.
-    ///
-    /// Each upcaster implementation specifies its own concrete error type.
-    /// The no-op `()` impl uses [`Infallible`](std::convert::Infallible).
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Run all matching transforms until the morsel is at the current schema version.
-    ///
-    /// # Errors
-    ///
-    /// Returns the implementation's `Self::Error` when a user-provided
-    /// transform function fails. Macro-generated implementations propagate
-    /// the transform's error verbatim; the wrapper context (event type,
-    /// schema version) is the user's responsibility to encode in their own
-    /// error type if needed.
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error>;
-
-    /// Current schema version for an event type (stamped on new events).
-    /// Returns `None` if the event type has no transforms.
-    fn current_version(&self, event_type: &str) -> Option<Version>;
-}
-
-/// No-op upcaster — passthrough, no transforms.
-impl Upcaster for () {
-    type Error = std::convert::Infallible;
-
-    #[inline]
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        Ok(morsel)
-    }
-
-    #[inline]
-    fn current_version(&self, _event_type: &str) -> Option<Version> {
-        None
     }
 }

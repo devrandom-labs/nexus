@@ -6,10 +6,10 @@ use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
 
 use crate::codec::{BorrowingDecode, Decode, Encode};
 use crate::envelope::pending_envelope;
-use crate::error::{AppendError, StoreError};
+use crate::error::{AppendError, LoadWithError, StoreError};
 use crate::store::{RawEventStore, Store};
 use crate::stream::{BaseEventStream, EventStreamExt};
-use crate::upcasting::{EventMorsel, Upcaster};
+use crate::upcasting::EventMorsel;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Repository<A> — high-level aggregate facade (load + save)
@@ -43,6 +43,16 @@ use crate::upcasting::{EventMorsel, Upcaster};
 /// in-memory state.
 ///
 /// An empty slice is a silent no-op.
+///
+/// # Schema evolution
+///
+/// The trait surface does not carry an upcaster — `load()` reads events
+/// at their stored schema version and decodes them directly, while `save()`
+/// stamps `Version::INITIAL` as the schema version on each new event. For
+/// schema evolution, drop to the concrete facade and call its inherent
+/// [`load_with`](EventStore::load_with) /
+/// [`save_with`](EventStore::save_with) methods (or compose the
+/// substrate via [`Store::raw`](crate::Store::raw)).
 ///
 /// # Error handling
 ///
@@ -136,54 +146,62 @@ pub(super) fn version_to_nz32(version: Version) -> Option<NonZeroU32> {
 ///
 /// ```ignore
 /// let store = Store::new(backend);
-///
-/// // No transforms:
 /// let orders = store.repository().codec(OrderCodec).build();
-///
-/// // With transforms:
-/// let orders = store.repository().codec(OrderCodec).upcaster(OrderTransforms).build();
 /// ```
-/// Owns the codec and upcaster as `Arc<C>` / `Arc<U>` so async load paths
-/// can clone the handles into combinator closures and capture them by
-/// value. Per Rust 2024's stricter capture rules (RFC 3498, rustc issue
-/// 133529), a closure that borrows from `&self` and is then handed to a
-/// `try_fold`-style combinator whose returned future is `+ Send` cannot
-/// satisfy the bound — the future-Send check effectively requires the
-/// borrow to be `'static`. Owning the components via `Arc` and cloning
-/// per call sidesteps the borrow entirely. Cost: one heap allocation at
-/// facade construction, one pointer bump per `load`.
-pub struct EventStore<S, C, U = ()> {
+///
+/// # Schema evolution
+///
+/// The plain [`load`](Repository::load) / [`save`](Repository::save) path
+/// performs no upcasting. For schema evolution, call
+/// [`load_with`](Self::load_with) with the macro-generated function
+/// (e.g. `OrderTransforms::upcast`) on the read path, and
+/// [`save_with`](Self::save_with) with `OrderTransforms::current_version`
+/// on the write path:
+///
+/// ```ignore
+/// // Read path:
+/// let root = es.load_with(id, OrderTransforms::upcast).await?;
+///
+/// // Write path:
+/// es.save_with(&mut root, &events, OrderTransforms::current_version).await?;
+/// ```
+///
+/// # Internal ownership
+///
+/// Owns the codec as `Arc<C>` so async load paths can clone the handle
+/// into combinator closures and capture it by value. Per Rust 2024's
+/// stricter capture rules (RFC 3498, rustc issue 133529), a closure that
+/// borrows from `&self` and is then handed to a `try_fold`-style
+/// combinator whose returned future is `+ Send` cannot satisfy the
+/// bound — the future-Send check effectively requires the borrow to be
+/// `'static`. Owning the component via `Arc` and cloning per call
+/// sidesteps the borrow entirely. Cost: one heap allocation at facade
+/// construction, one pointer bump per `load`.
+pub struct EventStore<S, C> {
     store: Store<S>,
     codec: Arc<C>,
-    upcaster: Arc<U>,
 }
 
-impl<S, C, U> EventStore<S, C, U> {
-    /// Create an event store bound to a shared store, codec, and upcaster.
-    pub(crate) fn new(store: Store<S>, codec: C, upcaster: U) -> Self {
+impl<S, C> EventStore<S, C> {
+    /// Create an event store bound to a shared store and codec.
+    pub(crate) fn new(store: Store<S>, codec: C) -> Self {
         Self {
             store,
             codec: Arc::new(codec),
-            upcaster: Arc::new(upcaster),
         }
     }
 }
 
-impl<A, S, C, U> ReplayFrom<A> for EventStore<S, C, U>
+impl<A, S, C> ReplayFrom<A> for EventStore<S, C>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
     C: Encode<EventOf<A>> + Decode<EventOf<A>> + 'static,
-    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send + 'static,
 {
-    type Error = StoreError<
-        S::Error,
-        <C as Encode<EventOf<A>>>::Error,
-        <C as Decode<EventOf<A>>>::Error,
-        U::Error,
-    >;
+    type Error =
+        StoreError<S::Error, <C as Encode<EventOf<A>>>::Error, <C as Decode<EventOf<A>>>::Error>;
 
     async fn replay_from(
         &self,
@@ -193,20 +211,9 @@ where
         // Clone everything into function-local owned values. The
         // combinator closure captures the locals (Arc clones), with no
         // borrow of `&self`. See the doc comment on `EventStore` for the
-        // full Rust 2024 capture-rules rationale. The `'static` bounds
-        // on S/C/U here discharge the "due to a current limitation of
-        // the type system" `'static` implied by `try_fold`'s HRTB-on-GAT
-        // closure bound (rustc note on the error path).
-        //
-        // `map_err` converts the adapter error eagerly into the sink type
-        // so the `try_fold` closure can use plain `?` propagation
-        // throughout. Without it, the closure-error `From` bound and
-        // `StoreError`'s `#[from] Kernel(KernelError)` impl overlap on
-        // `S::Error = KernelError` and coherence rejects the chain.
-        // See the PR3 deviation entry in the stream-refactor plan.
+        // full Rust 2024 capture-rules rationale.
         let store = self.store.clone();
         let codec = Arc::<C>::clone(&self.codec);
-        let upcaster = Arc::<U>::clone(&self.upcaster);
 
         let raw_stream = store
             .raw()
@@ -219,18 +226,9 @@ where
             .try_fold(root, move |mut r, item| {
                 let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
                 let version = env.version();
-                let morsel = EventMorsel::borrowed(
-                    env.event_type(),
-                    env.schema_version_as_version(),
-                    env.payload(),
-                );
-                let transformed = upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
-                let event = <C as Decode<EventOf<A>>>::decode(
-                    &codec,
-                    transformed.event_type(),
-                    transformed.payload(),
-                )
-                .map_err(StoreError::Decode)?;
+                let event =
+                    <C as Decode<EventOf<A>>>::decode(&codec, env.event_type(), env.payload())
+                        .map_err(StoreError::Decode)?;
                 r.replay(version, &event)?;
                 Ok(r)
             })
@@ -238,21 +236,16 @@ where
     }
 }
 
-impl<A, S, C, U> Repository<A> for EventStore<S, C, U>
+impl<A, S, C> Repository<A> for EventStore<S, C>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
     C: Encode<EventOf<A>> + Decode<EventOf<A>> + 'static,
-    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send + 'static,
 {
-    type Error = StoreError<
-        S::Error,
-        <C as Encode<EventOf<A>>>::Error,
-        <C as Decode<EventOf<A>>>::Error,
-        U::Error,
-    >;
+    type Error =
+        StoreError<S::Error, <C as Encode<EventOf<A>>>::Error, <C as Decode<EventOf<A>>>::Error>;
 
     async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, Self::Error> {
         let root = AggregateRoot::<A>::new(id);
@@ -264,77 +257,203 @@ where
         aggregate: &mut AggregateRoot<A>,
         events: &[EventOf<A>],
     ) -> Result<(), Self::Error> {
-        if events.is_empty() {
-            return Ok(());
-        }
-
-        let expected_version = aggregate.version();
-
-        // Compute the first event's version.
-        let mut next_version = match expected_version {
-            None => Version::INITIAL,
-            Some(v) => v.next().ok_or(StoreError::VersionOverflow)?,
-        };
-
-        let mut envelopes = Vec::with_capacity(events.len());
-
-        for event in events {
-            let payload = <C as Encode<EventOf<A>>>::encode(&self.codec, event)
-                .map_err(StoreError::Encode)?;
-
-            let event_name = event.name();
-            let schema_version = self
-                .upcaster
-                .current_version(event_name)
-                .unwrap_or(Version::INITIAL);
-            let schema_nz32 = version_to_nz32(schema_version).ok_or(StoreError::VersionOverflow)?;
-
-            let envelope = pending_envelope(next_version)
-                .event_type(event_name)
-                .payload(payload)
-                .schema_version(schema_nz32)
-                .build_without_metadata();
-
-            envelopes.push(envelope);
-
-            // Advance version for next event (if any).
-            // Track last_version before advancing so we don't lose it.
-            if envelopes.len() < events.len() {
-                next_version = next_version.next().ok_or(StoreError::VersionOverflow)?;
-            }
-        }
-
-        // Append to store.
-        self.store
-            .raw()
-            .append(aggregate.id(), expected_version, &envelopes)
-            .await
-            .map_err(|err| match err {
-                AppendError::Conflict {
-                    stream_id,
-                    expected,
-                    actual,
-                } => StoreError::Conflict {
-                    stream_id,
-                    expected,
-                    actual,
-                },
-                AppendError::Store(e) => StoreError::Adapter(e),
-            })?;
-
-        // The last envelope's version is the new aggregate version.
-        #[allow(
-            clippy::expect_used,
-            reason = "envelopes is non-empty: checked events.is_empty() above"
-        )]
-        let last_version = envelopes.last().expect("envelopes is non-empty").version();
-
-        aggregate.advance_version(last_version);
-        for event in events {
-            aggregate.apply_event(event);
-        }
-        Ok(())
+        // The no-upcaster save stamps Version::INITIAL as the schema
+        // version on every event — the schema-version-lookup function
+        // is only needed when an upcaster is in play. See `save_with`.
+        save_owning::<A, S, C, _>(&self.store, &self.codec, aggregate, events, |_| None).await
     }
+}
+
+impl<S, C> EventStore<S, C> {
+    /// Load an aggregate, running `upcast` over each persisted event
+    /// before decoding it.
+    ///
+    /// `upcast` is the schema-evolution function — typically the
+    /// associated function the `#[nexus::transforms]` macro emits
+    /// (e.g. `OrderTransforms::upcast`). Pass it directly as a function
+    /// pointer; the `'static` bound on `F` and the `+ Send + Sync` bounds
+    /// are required by the `try_fold` combinator chain (see the doc
+    /// comment on [`EventStore`] for the full Rust 2024 capture-rules
+    /// rationale).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LoadWithError::Store`] for any non-upcast error
+    /// (adapter, codec, kernel) and [`LoadWithError::Upcast`] for any
+    /// error returned by the `upcast` function.
+    pub async fn load_with<A, F, E>(
+        &self,
+        id: A::Id,
+        upcast: F,
+    ) -> Result<
+        AggregateRoot<A>,
+        LoadWithError<
+            S::Error,
+            <C as Encode<EventOf<A>>>::Error,
+            <C as Decode<EventOf<A>>>::Error,
+            E,
+        >,
+    >
+    where
+        A: Aggregate,
+        S: RawEventStore + 'static,
+        C: Encode<EventOf<A>> + Decode<EventOf<A>> + 'static,
+        F: for<'a> Fn(EventMorsel<'a>) -> Result<EventMorsel<'a>, E> + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+        EventOf<A>: DomainEvent,
+        for<'a> S::Stream<'a>: Send + 'static,
+    {
+        let store = self.store.clone();
+        let codec = Arc::<C>::clone(&self.codec);
+        let root = AggregateRoot::<A>::new(id);
+
+        let raw_stream = store
+            .raw()
+            .read_stream(root.id(), Version::INITIAL)
+            .await
+            .map_err(|e| LoadWithError::Store(StoreError::Adapter(e)))?;
+
+        raw_stream
+            .map_err(|e| LoadWithError::Store(StoreError::Adapter(e)))
+            .try_fold(root, move |mut r, item| {
+                let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
+                let version = env.version();
+                let morsel = EventMorsel::borrowed(
+                    env.event_type(),
+                    env.schema_version_as_version(),
+                    env.payload(),
+                );
+                let transformed = upcast(morsel).map_err(LoadWithError::Upcast)?;
+                let event = <C as Decode<EventOf<A>>>::decode(
+                    &codec,
+                    transformed.event_type(),
+                    transformed.payload(),
+                )
+                .map_err(|e| LoadWithError::Store(StoreError::Decode(e)))?;
+                r.replay(version, &event)
+                    .map_err(|e| LoadWithError::Store(StoreError::Kernel(e)))?;
+                Ok(r)
+            })
+            .await
+    }
+
+    /// Persist decided events, stamping the schema version on each via
+    /// `current_version`.
+    ///
+    /// `current_version` is typically the associated function the
+    /// `#[nexus::transforms]` macro emits (e.g.
+    /// `OrderTransforms::current_version`). For event types it doesn't
+    /// know about, it returns `None` and the schema version falls back
+    /// to [`Version::INITIAL`] (the same default as the no-upcaster
+    /// [`save`](Repository::save)).
+    ///
+    /// # Errors
+    ///
+    /// The same set of errors [`save`](Repository::save) can produce —
+    /// the schema-version lookup itself is infallible.
+    pub async fn save_with<A, F>(
+        &self,
+        aggregate: &mut AggregateRoot<A>,
+        events: &[EventOf<A>],
+        current_version: F,
+    ) -> Result<
+        (),
+        StoreError<S::Error, <C as Encode<EventOf<A>>>::Error, <C as Decode<EventOf<A>>>::Error>,
+    >
+    where
+        A: Aggregate,
+        S: RawEventStore + 'static,
+        C: Encode<EventOf<A>> + Decode<EventOf<A>> + 'static,
+        F: Fn(&str) -> Option<Version>,
+        EventOf<A>: DomainEvent,
+    {
+        save_owning::<A, S, C, _>(&self.store, &self.codec, aggregate, events, current_version)
+            .await
+    }
+}
+
+// Internal save path shared between Repository::save (no upcaster, always
+// stamps Version::INITIAL) and EventStore::save_with (uses the user's
+// current_version fn). The owning-codec variant.
+async fn save_owning<A, S, C, F>(
+    store: &Store<S>,
+    codec: &Arc<C>,
+    aggregate: &mut AggregateRoot<A>,
+    events: &[EventOf<A>],
+    current_version: F,
+) -> Result<
+    (),
+    StoreError<S::Error, <C as Encode<EventOf<A>>>::Error, <C as Decode<EventOf<A>>>::Error>,
+>
+where
+    A: Aggregate,
+    S: RawEventStore,
+    C: Encode<EventOf<A>> + Decode<EventOf<A>>,
+    F: Fn(&str) -> Option<Version>,
+    EventOf<A>: DomainEvent,
+{
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    let expected_version = aggregate.version();
+
+    let mut next_version = match expected_version {
+        None => Version::INITIAL,
+        Some(v) => v.next().ok_or(StoreError::VersionOverflow)?,
+    };
+
+    let mut envelopes = Vec::with_capacity(events.len());
+
+    for event in events {
+        let payload =
+            <C as Encode<EventOf<A>>>::encode(codec, event).map_err(StoreError::Encode)?;
+
+        let event_name = event.name();
+        let schema_version = current_version(event_name).unwrap_or(Version::INITIAL);
+        let schema_nz32 = version_to_nz32(schema_version).ok_or(StoreError::VersionOverflow)?;
+
+        let envelope = pending_envelope(next_version)
+            .event_type(event_name)
+            .payload(payload)
+            .schema_version(schema_nz32)
+            .build_without_metadata();
+
+        envelopes.push(envelope);
+
+        if envelopes.len() < events.len() {
+            next_version = next_version.next().ok_or(StoreError::VersionOverflow)?;
+        }
+    }
+
+    store
+        .raw()
+        .append(aggregate.id(), expected_version, &envelopes)
+        .await
+        .map_err(|err| match err {
+            AppendError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            } => StoreError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            },
+            AppendError::Store(e) => StoreError::Adapter(e),
+        })?;
+
+    #[allow(
+        clippy::expect_used,
+        reason = "envelopes is non-empty: checked events.is_empty() above"
+    )]
+    let last_version = envelopes.last().expect("envelopes is non-empty").version();
+
+    aggregate.advance_version(last_version);
+    for event in events {
+        aggregate.apply_event(event);
+    }
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -352,38 +471,32 @@ where
 ///
 /// ```ignore
 /// let store = Store::new(backend);
-///
-/// // No transforms:
 /// let orders = store.repository().codec(OrderCodec).build_zero_copy();
-///
-/// // With transforms:
-/// let orders = store.repository().codec(OrderCodec).upcaster(OrderTransforms).build_zero_copy();
 /// ```
-/// See [`EventStore`]'s doc comment for the rationale behind `Arc`-owning
-/// the codec and upcaster.
-pub struct ZeroCopyEventStore<S, C, U = ()> {
+///
+/// See [`EventStore`]'s doc comment for the upcasting story (use
+/// [`load_with`](Self::load_with) / [`save_with`](Self::save_with)) and
+/// the rationale behind `Arc`-owning the codec.
+pub struct ZeroCopyEventStore<S, C> {
     store: Store<S>,
     codec: Arc<C>,
-    upcaster: Arc<U>,
 }
 
-impl<S, C, U> ZeroCopyEventStore<S, C, U> {
-    /// Create a zero-copy event store bound to a shared store, codec, and upcaster.
-    pub(crate) fn new(store: Store<S>, codec: C, upcaster: U) -> Self {
+impl<S, C> ZeroCopyEventStore<S, C> {
+    /// Create a zero-copy event store bound to a shared store and codec.
+    pub(crate) fn new(store: Store<S>, codec: C) -> Self {
         Self {
             store,
             codec: Arc::new(codec),
-            upcaster: Arc::new(upcaster),
         }
     }
 }
 
-impl<A, S, C, U> ReplayFrom<A> for ZeroCopyEventStore<S, C, U>
+impl<A, S, C> ReplayFrom<A> for ZeroCopyEventStore<S, C>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
     C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>> + 'static,
-    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send + 'static,
 {
@@ -391,7 +504,6 @@ where
         S::Error,
         <C as Encode<EventOf<A>>>::Error,
         <C as BorrowingDecode<EventOf<A>>>::Error,
-        U::Error,
     >;
 
     async fn replay_from(
@@ -399,16 +511,8 @@ where
         root: AggregateRoot<A>,
         from: Version,
     ) -> Result<AggregateRoot<A>, Self::Error> {
-        // Same Arc-owned-captures pattern as `EventStore::replay_from`; see
-        // that comment for the Rust 2024 capture-rules rationale.
-        // `BorrowingDecode` returns `&'_ EventOf<A>` borrowing from the
-        // transformed morsel's payload; the borrow is consumed inside the
-        // closure body (`r.replay(v, event)` takes `&E`) before the next
-        // iteration invalidates it, so the lending discipline is honored
-        // entirely inside the `try_fold` closure.
         let store = self.store.clone();
         let codec = Arc::<C>::clone(&self.codec);
-        let upcaster = Arc::<U>::clone(&self.upcaster);
 
         let raw_stream = store
             .raw()
@@ -421,16 +525,10 @@ where
             .try_fold(root, move |mut r, item| {
                 let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
                 let version = env.version();
-                let morsel = EventMorsel::borrowed(
-                    env.event_type(),
-                    env.schema_version_as_version(),
-                    env.payload(),
-                );
-                let transformed = upcaster.upcast(morsel).map_err(StoreError::Upcast)?;
                 let event: &EventOf<A> = <C as BorrowingDecode<EventOf<A>>>::decode(
                     &codec,
-                    transformed.event_type(),
-                    transformed.payload(),
+                    env.event_type(),
+                    env.payload(),
                 )
                 .map_err(StoreError::Decode)?;
                 r.replay(version, event)?;
@@ -440,12 +538,11 @@ where
     }
 }
 
-impl<A, S, C, U> Repository<A> for ZeroCopyEventStore<S, C, U>
+impl<A, S, C> Repository<A> for ZeroCopyEventStore<S, C>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
     C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>> + 'static,
-    U: Upcaster + 'static,
     EventOf<A>: DomainEvent,
     for<'a> S::Stream<'a>: Send + 'static,
 {
@@ -453,7 +550,6 @@ where
         S::Error,
         <C as Encode<EventOf<A>>>::Error,
         <C as BorrowingDecode<EventOf<A>>>::Error,
-        U::Error,
     >;
 
     async fn load(&self, id: A::Id) -> Result<AggregateRoot<A>, Self::Error> {
@@ -466,73 +562,197 @@ where
         aggregate: &mut AggregateRoot<A>,
         events: &[EventOf<A>],
     ) -> Result<(), Self::Error> {
-        if events.is_empty() {
-            return Ok(());
-        }
-
-        let expected_version = aggregate.version();
-
-        // Compute the first event's version.
-        let mut next_version = match expected_version {
-            None => Version::INITIAL,
-            Some(v) => v.next().ok_or(StoreError::VersionOverflow)?,
-        };
-
-        let mut envelopes = Vec::with_capacity(events.len());
-
-        for event in events {
-            let payload = <C as Encode<EventOf<A>>>::encode(&self.codec, event)
-                .map_err(StoreError::Encode)?;
-
-            let event_name = event.name();
-            let schema_version = self
-                .upcaster
-                .current_version(event_name)
-                .unwrap_or(Version::INITIAL);
-            let schema_nz32 = version_to_nz32(schema_version).ok_or(StoreError::VersionOverflow)?;
-
-            let envelope = pending_envelope(next_version)
-                .event_type(event_name)
-                .payload(payload)
-                .schema_version(schema_nz32)
-                .build_without_metadata();
-
-            envelopes.push(envelope);
-
-            // Advance version for next event (if any).
-            if envelopes.len() < events.len() {
-                next_version = next_version.next().ok_or(StoreError::VersionOverflow)?;
-            }
-        }
-
-        // Append to store.
-        self.store
-            .raw()
-            .append(aggregate.id(), expected_version, &envelopes)
-            .await
-            .map_err(|err| match err {
-                AppendError::Conflict {
-                    stream_id,
-                    expected,
-                    actual,
-                } => StoreError::Conflict {
-                    stream_id,
-                    expected,
-                    actual,
-                },
-                AppendError::Store(e) => StoreError::Adapter(e),
-            })?;
-
-        #[allow(
-            clippy::expect_used,
-            reason = "envelopes is non-empty: checked events.is_empty() above"
-        )]
-        let last_version = envelopes.last().expect("envelopes is non-empty").version();
-
-        aggregate.advance_version(last_version);
-        for event in events {
-            aggregate.apply_event(event);
-        }
-        Ok(())
+        save_borrowing::<A, S, C, _>(&self.store, &self.codec, aggregate, events, |_| None).await
     }
+}
+
+impl<S, C> ZeroCopyEventStore<S, C> {
+    /// Load an aggregate via the zero-copy decode path, running `upcast`
+    /// over each persisted event before decoding.
+    ///
+    /// See [`EventStore::load_with`] for the function-pointer convention
+    /// and the bounds rationale.
+    ///
+    /// # Errors
+    ///
+    /// Same shape as [`EventStore::load_with`] — `LoadWithError::Store`
+    /// for non-upcast errors, `LoadWithError::Upcast` for the user's
+    /// upcast function's failure.
+    pub async fn load_with<A, F, E>(
+        &self,
+        id: A::Id,
+        upcast: F,
+    ) -> Result<
+        AggregateRoot<A>,
+        LoadWithError<
+            S::Error,
+            <C as Encode<EventOf<A>>>::Error,
+            <C as BorrowingDecode<EventOf<A>>>::Error,
+            E,
+        >,
+    >
+    where
+        A: Aggregate,
+        S: RawEventStore + 'static,
+        C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>> + 'static,
+        F: for<'a> Fn(EventMorsel<'a>) -> Result<EventMorsel<'a>, E> + Send + Sync + 'static,
+        E: std::error::Error + Send + Sync + 'static,
+        EventOf<A>: DomainEvent,
+        for<'a> S::Stream<'a>: Send + 'static,
+    {
+        let store = self.store.clone();
+        let codec = Arc::<C>::clone(&self.codec);
+        let root = AggregateRoot::<A>::new(id);
+
+        let raw_stream = store
+            .raw()
+            .read_stream(root.id(), Version::INITIAL)
+            .await
+            .map_err(|e| LoadWithError::Store(StoreError::Adapter(e)))?;
+
+        raw_stream
+            .map_err(|e| LoadWithError::Store(StoreError::Adapter(e)))
+            .try_fold(root, move |mut r, item| {
+                let env = <S::Stream<'_> as BaseEventStream<()>>::to_envelope(item);
+                let version = env.version();
+                let morsel = EventMorsel::borrowed(
+                    env.event_type(),
+                    env.schema_version_as_version(),
+                    env.payload(),
+                );
+                let transformed = upcast(morsel).map_err(LoadWithError::Upcast)?;
+                let event: &EventOf<A> = <C as BorrowingDecode<EventOf<A>>>::decode(
+                    &codec,
+                    transformed.event_type(),
+                    transformed.payload(),
+                )
+                .map_err(|e| LoadWithError::Store(StoreError::Decode(e)))?;
+                r.replay(version, event)
+                    .map_err(|e| LoadWithError::Store(StoreError::Kernel(e)))?;
+                Ok(r)
+            })
+            .await
+    }
+
+    /// Persist decided events, stamping the schema version on each via
+    /// `current_version`. See [`EventStore::save_with`] for details.
+    ///
+    /// # Errors
+    ///
+    /// Same shape as [`Repository::save`] — adapter, encode, conflict,
+    /// kernel, and version-overflow errors propagate through
+    /// [`StoreError`]. The `current_version` lookup itself is infallible.
+    pub async fn save_with<A, F>(
+        &self,
+        aggregate: &mut AggregateRoot<A>,
+        events: &[EventOf<A>],
+        current_version: F,
+    ) -> Result<
+        (),
+        StoreError<
+            S::Error,
+            <C as Encode<EventOf<A>>>::Error,
+            <C as BorrowingDecode<EventOf<A>>>::Error,
+        >,
+    >
+    where
+        A: Aggregate,
+        S: RawEventStore + 'static,
+        C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>> + 'static,
+        F: Fn(&str) -> Option<Version>,
+        EventOf<A>: DomainEvent,
+    {
+        save_borrowing::<A, S, C, _>(&self.store, &self.codec, aggregate, events, current_version)
+            .await
+    }
+}
+
+// Internal save path for the zero-copy facade. Same structure as
+// `save_owning` but with `BorrowingDecode` as the decode side of the
+// `StoreError` parameter pack — we only encode here, so the decode error
+// type is structurally present in the `StoreError` type but never
+// constructed.
+async fn save_borrowing<A, S, C, F>(
+    store: &Store<S>,
+    codec: &Arc<C>,
+    aggregate: &mut AggregateRoot<A>,
+    events: &[EventOf<A>],
+    current_version: F,
+) -> Result<
+    (),
+    StoreError<
+        S::Error,
+        <C as Encode<EventOf<A>>>::Error,
+        <C as BorrowingDecode<EventOf<A>>>::Error,
+    >,
+>
+where
+    A: Aggregate,
+    S: RawEventStore,
+    C: Encode<EventOf<A>> + BorrowingDecode<EventOf<A>>,
+    F: Fn(&str) -> Option<Version>,
+    EventOf<A>: DomainEvent,
+{
+    if events.is_empty() {
+        return Ok(());
+    }
+
+    let expected_version = aggregate.version();
+
+    let mut next_version = match expected_version {
+        None => Version::INITIAL,
+        Some(v) => v.next().ok_or(StoreError::VersionOverflow)?,
+    };
+
+    let mut envelopes = Vec::with_capacity(events.len());
+
+    for event in events {
+        let payload =
+            <C as Encode<EventOf<A>>>::encode(codec, event).map_err(StoreError::Encode)?;
+
+        let event_name = event.name();
+        let schema_version = current_version(event_name).unwrap_or(Version::INITIAL);
+        let schema_nz32 = version_to_nz32(schema_version).ok_or(StoreError::VersionOverflow)?;
+
+        let envelope = pending_envelope(next_version)
+            .event_type(event_name)
+            .payload(payload)
+            .schema_version(schema_nz32)
+            .build_without_metadata();
+
+        envelopes.push(envelope);
+
+        if envelopes.len() < events.len() {
+            next_version = next_version.next().ok_or(StoreError::VersionOverflow)?;
+        }
+    }
+
+    store
+        .raw()
+        .append(aggregate.id(), expected_version, &envelopes)
+        .await
+        .map_err(|err| match err {
+            AppendError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            } => StoreError::Conflict {
+                stream_id,
+                expected,
+                actual,
+            },
+            AppendError::Store(e) => StoreError::Adapter(e),
+        })?;
+
+    #[allow(
+        clippy::expect_used,
+        reason = "envelopes is non-empty: checked events.is_empty() above"
+    )]
+    let last_version = envelopes.last().expect("envelopes is non-empty").version();
+
+    aggregate.advance_version(last_version);
+    for event in events {
+        aggregate.apply_event(event);
+    }
+    Ok(())
 }

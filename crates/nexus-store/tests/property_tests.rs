@@ -24,12 +24,15 @@
     clippy::needless_pass_by_value,
     reason = "proptest macro generates code that triggers this lint"
 )]
+#![allow(
+    clippy::unnecessary_wraps,
+    reason = "plain-function upcasters keep Result<_, E> so they can be passed to load_with"
+)]
 
 use std::convert::Infallible;
 use std::fmt;
 
 use nexus::Version;
-use nexus_store::Upcaster;
 use nexus_store::envelope::PendingEnvelope;
 use nexus_store::pending_envelope;
 use nexus_store::store::RawEventStore;
@@ -254,35 +257,24 @@ proptest! {
         })?;
     }
 
-    /// Upcaster that walks V1->V2->V3 produces final version 3 with payload preserved.
+    /// Plain-function upcaster that walks V1->V2->V3 produces final version 3 with payload preserved.
     #[test]
     fn upcaster_composition(
         payload in prop::collection::vec(any::<u8>(), 0..256),
     ) {
-        struct V1ToV3Upcaster;
-        impl Upcaster for V1ToV3Upcaster {
-            type Error = Infallible;
-
-            fn upcast<'a>(&self, mut morsel: nexus_store::upcasting::EventMorsel<'a>) -> Result<nexus_store::upcasting::EventMorsel<'a>, Self::Error> {
-                loop {
-                    morsel = match (morsel.event_type(), morsel.schema_version()) {
-                        ("E", v) if v == Version::INITIAL => nexus_store::upcasting::EventMorsel::new("E", Version::new(2).unwrap(), morsel.payload().to_vec()),
-                        ("E", v) if v == Version::new(2).unwrap() => nexus_store::upcasting::EventMorsel::new("E", Version::new(3).unwrap(), morsel.payload().to_vec()),
-                        _ => break,
-                    };
-                }
-                Ok(morsel)
+        fn v1_to_v3_upcast(mut morsel: nexus_store::upcasting::EventMorsel<'_>) -> Result<nexus_store::upcasting::EventMorsel<'_>, Infallible> {
+            loop {
+                morsel = match (morsel.event_type(), morsel.schema_version()) {
+                    ("E", v) if v == Version::INITIAL => nexus_store::upcasting::EventMorsel::new("E", Version::new(2).unwrap(), morsel.payload().to_vec()),
+                    ("E", v) if v == Version::new(2).unwrap() => nexus_store::upcasting::EventMorsel::new("E", Version::new(3).unwrap(), morsel.payload().to_vec()),
+                    _ => break,
+                };
             }
-            fn current_version(&self, event_type: &str) -> Option<Version> {
-                match event_type {
-                    "E" => Some(Version::new(3).unwrap()),
-                    _ => None,
-                }
-            }
+            Ok(morsel)
         }
 
         let morsel = nexus_store::EventMorsel::borrowed("E", Version::INITIAL, &payload);
-        let result = V1ToV3Upcaster.upcast(morsel).unwrap();
+        let result = v1_to_v3_upcast(morsel).unwrap();
 
         prop_assert_eq!(result.schema_version(), Version::new(3).unwrap(), "final version should be 3");
         prop_assert_eq!(

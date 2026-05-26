@@ -24,6 +24,10 @@
     clippy::missing_panics_doc,
     reason = "benchmark functions do not need panic docs"
 )]
+#![allow(
+    clippy::unnecessary_wraps,
+    reason = "plain-function upcasters keep Result<_, E> so they can be passed to load_with"
+)]
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -33,7 +37,6 @@ use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::Version;
 use nexus_store::AppendError;
-use nexus_store::Upcaster;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
@@ -169,67 +172,53 @@ impl RawEventStore for InMemoryRawStore {
 }
 
 // =============================================================================
-// Noop upcaster for benchmarks — walks v1 through v6
+// Noop upcaster for benchmarks — plain-function form, walks v1 through v6
 // =============================================================================
 
-struct NoopV1ToV6;
-
-impl Upcaster for NoopV1ToV6 {
-    type Error = Infallible;
-
-    fn upcast<'a>(
-        &self,
-        mut morsel: nexus_store::upcasting::EventMorsel<'a>,
-    ) -> Result<nexus_store::upcasting::EventMorsel<'a>, Self::Error> {
-        loop {
-            morsel = match (morsel.event_type(), morsel.schema_version()) {
-                ("UserCreated", v) if v == Version::new(1).unwrap() => {
-                    nexus_store::upcasting::EventMorsel::new(
-                        "UserCreated",
-                        Version::new(2).unwrap(),
-                        morsel.payload().to_vec(),
-                    )
-                }
-                ("UserCreated", v) if v == Version::new(2).unwrap() => {
-                    nexus_store::upcasting::EventMorsel::new(
-                        "UserCreated",
-                        Version::new(3).unwrap(),
-                        morsel.payload().to_vec(),
-                    )
-                }
-                ("UserCreated", v) if v == Version::new(3).unwrap() => {
-                    nexus_store::upcasting::EventMorsel::new(
-                        "UserCreated",
-                        Version::new(4).unwrap(),
-                        morsel.payload().to_vec(),
-                    )
-                }
-                ("UserCreated", v) if v == Version::new(4).unwrap() => {
-                    nexus_store::upcasting::EventMorsel::new(
-                        "UserCreated",
-                        Version::new(5).unwrap(),
-                        morsel.payload().to_vec(),
-                    )
-                }
-                ("UserCreated", v) if v == Version::new(5).unwrap() => {
-                    nexus_store::upcasting::EventMorsel::new(
-                        "UserCreated",
-                        Version::new(6).unwrap(),
-                        morsel.payload().to_vec(),
-                    )
-                }
-                _ => break,
-            };
-        }
-        Ok(morsel)
+fn noop_v1_to_v6_upcast(
+    mut morsel: nexus_store::upcasting::EventMorsel<'_>,
+) -> Result<nexus_store::upcasting::EventMorsel<'_>, Infallible> {
+    loop {
+        morsel = match (morsel.event_type(), morsel.schema_version()) {
+            ("UserCreated", v) if v == Version::new(1).unwrap() => {
+                nexus_store::upcasting::EventMorsel::new(
+                    "UserCreated",
+                    Version::new(2).unwrap(),
+                    morsel.payload().to_vec(),
+                )
+            }
+            ("UserCreated", v) if v == Version::new(2).unwrap() => {
+                nexus_store::upcasting::EventMorsel::new(
+                    "UserCreated",
+                    Version::new(3).unwrap(),
+                    morsel.payload().to_vec(),
+                )
+            }
+            ("UserCreated", v) if v == Version::new(3).unwrap() => {
+                nexus_store::upcasting::EventMorsel::new(
+                    "UserCreated",
+                    Version::new(4).unwrap(),
+                    morsel.payload().to_vec(),
+                )
+            }
+            ("UserCreated", v) if v == Version::new(4).unwrap() => {
+                nexus_store::upcasting::EventMorsel::new(
+                    "UserCreated",
+                    Version::new(5).unwrap(),
+                    morsel.payload().to_vec(),
+                )
+            }
+            ("UserCreated", v) if v == Version::new(5).unwrap() => {
+                nexus_store::upcasting::EventMorsel::new(
+                    "UserCreated",
+                    Version::new(6).unwrap(),
+                    morsel.payload().to_vec(),
+                )
+            }
+            _ => break,
+        };
     }
-
-    fn current_version(&self, event_type: &str) -> Option<Version> {
-        match event_type {
-            "UserCreated" => Some(Version::new(6).unwrap()),
-            _ => None,
-        }
-    }
+    Ok(morsel)
 }
 
 // =============================================================================
@@ -337,7 +326,6 @@ fn bench_read_stream(c: &mut Criterion) {
 }
 
 fn bench_upcaster(c: &mut Criterion) {
-    let upcaster = NoopV1ToV6;
     let payload = vec![1u8, 2, 3, 4, 5, 6, 7, 8];
 
     c.bench_function("upcaster (5 noop steps)", |b| {
@@ -347,7 +335,7 @@ fn bench_upcaster(c: &mut Criterion) {
                 Version::new(1).unwrap(),
                 black_box(&payload),
             );
-            let result = upcaster.upcast(morsel).unwrap();
+            let result = noop_v1_to_v6_upcast(morsel).unwrap();
             black_box(result)
         });
     });

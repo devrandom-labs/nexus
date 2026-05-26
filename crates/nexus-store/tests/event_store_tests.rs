@@ -2,6 +2,10 @@
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 #![allow(clippy::expect_used, reason = "tests")]
+#![allow(
+    clippy::unnecessary_wraps,
+    reason = "plain-function upcasters keep Result<_, E> so they can be passed to load_with"
+)]
 
 use std::convert::Infallible;
 use std::fmt;
@@ -9,7 +13,6 @@ use std::fmt;
 use nexus::*;
 use nexus_store::Repository;
 use nexus_store::Store;
-use nexus_store::Upcaster;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 use nexus_store::{Decode, Encode};
@@ -190,29 +193,23 @@ async fn optimistic_concurrency_conflict() {
 // Transform integration tests
 // =============================================================================
 
-struct V1ToV2Upcaster;
-impl Upcaster for V1ToV2Upcaster {
-    type Error = Infallible;
-
-    fn upcast<'a>(&self, morsel: EventMorsel<'a>) -> Result<EventMorsel<'a>, Self::Error> {
-        match (morsel.event_type(), morsel.schema_version()) {
-            ("Created", v) if v == Version::INITIAL => {
-                // Passthrough — payload format unchanged, just bump version.
-                Ok(EventMorsel::new(
-                    "Created",
-                    Version::new(2).unwrap(),
-                    morsel.payload().to_vec(),
-                ))
-            }
-            _ => Ok(morsel),
-        }
+/// Plain-function upcaster that bumps `"Created"` from v1 to v2. Payload
+/// is unchanged; only the schema version advances.
+fn v1_to_v2_upcast(morsel: EventMorsel<'_>) -> Result<EventMorsel<'_>, Infallible> {
+    match (morsel.event_type(), morsel.schema_version()) {
+        ("Created", v) if v == Version::INITIAL => Ok(EventMorsel::new(
+            "Created",
+            Version::new(2).unwrap(),
+            morsel.payload().to_vec(),
+        )),
+        _ => Ok(morsel),
     }
+}
 
-    fn current_version(&self, event_type: &str) -> Option<Version> {
-        match event_type {
-            "Created" => Some(Version::new(2).unwrap()),
-            _ => None,
-        }
+fn v1_to_v2_current_version(event_type: &str) -> Option<Version> {
+    match event_type {
+        "Created" => Some(Version::new(2).unwrap()),
+        _ => None,
     }
 }
 
@@ -220,20 +217,25 @@ impl Upcaster for V1ToV2Upcaster {
 async fn load_with_transform_transforms_events() {
     // EventStore with upcaster — save then load through the same store
     let store = Store::new(InMemoryStore::new());
-    let es = store
-        .repository()
-        .codec(TestCodec)
-        .upcaster(V1ToV2Upcaster)
-        .build();
+    let es = store.repository().codec(TestCodec).build();
 
-    // Save — transforms are only applied on reads, not writes
+    // Save_with stamps the schema version per the version-lookup fn.
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
-    es.save(&mut agg, &[TodoEvent::Created("Task".into())])
+    es.save_with(
+        &mut agg,
+        &[TodoEvent::Created("Task".into())],
+        v1_to_v2_current_version,
+    )
+    .await
+    .unwrap();
+
+    // load_with runs the upcast fn over each persisted event before
+    // decoding. Payload format unchanged in this test, so the only
+    // observable effect is that the upcast ran successfully.
+    let loaded: AggregateRoot<TodoAggregate> = es
+        .load_with(TodoId("todo-1".into()), v1_to_v2_upcast)
         .await
         .unwrap();
-
-    // Load — transform bumps schema version but payload format is unchanged
-    let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     assert_eq!(loaded.state().title, "Task");
     assert_eq!(loaded.version(), Some(Version::new(1).unwrap()));
 }
