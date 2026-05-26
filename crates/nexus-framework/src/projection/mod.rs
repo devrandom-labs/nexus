@@ -265,10 +265,10 @@ where
             .try_fold_async_until(
                 status,
                 move |acc, item| {
-                    // Sync prelude: decode into owned values, drop the
-                    // envelope before the async move. The returned future
-                    // must not borrow from the envelope (HRTB requirement
-                    // for `try_fold_async_until`'s single concrete `Fut`).
+                    // Sync prelude: decode into owned values before the
+                    // async move. The returned future must not borrow from
+                    // `item` (HRTB requirement for `try_fold_async_until`'s
+                    // single concrete `Fut`).
                     let event_version = item.version();
                     let decoded = event_codec_ref.decode(item.event_type(), item.payload());
                     async move {
