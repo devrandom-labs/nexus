@@ -2,7 +2,7 @@
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::store::{GlobalSeq, RawEventStore, Subscription};
+use crate::store::{GlobalSeq, RawEventStore, SharedSubscription, Subscription};
 use crate::stream::EventStream;
 use nexus::Id;
 use nexus::Version;
@@ -469,7 +469,10 @@ impl SharedInMemorySubscriptionStream {
         self.pos = 0;
     }
 
-    /// Compute the next version to read from: `last_version` + 1, or `INITIAL`.
+    /// Compute the version to read from next: `last_version` + 1, or `INITIAL`.
+    ///
+    /// Returns an error on overflow instead of silently wrapping back
+    /// to `Version::INITIAL`.
     fn next_read_version(&self) -> Result<Version, InMemoryStoreError> {
         self.last_version.map_or_else(
             || Ok(Version::INITIAL),
@@ -546,7 +549,7 @@ impl EventStream for SharedInMemorySubscriptionStream {
     }
 }
 
-impl crate::store::SharedSubscription<()> for Arc<InMemoryStore> {
+impl SharedSubscription<()> for Arc<InMemoryStore> {
     type Stream = SharedInMemorySubscriptionStream;
     type Error = InMemoryStoreError;
 
