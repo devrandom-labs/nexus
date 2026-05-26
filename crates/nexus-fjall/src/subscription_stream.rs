@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::encoding::{decode_event_key, decode_event_value};
 use crate::error::FjallError;
 use crate::store::FjallStore;
@@ -194,6 +196,189 @@ impl EventStream for FjallSubscriptionStream<'_> {
             // notification BEFORE reading to avoid the race where an
             // append happens between our read and our wait.
             let notified = self.store.notify.notified();
+
+            let from = self.next_read_version()?;
+            self.refill(from).await?;
+
+            // If refill found new events, loop back to yield them.
+            if !self.inner.events.is_empty() {
+                continue;
+            }
+
+            // No new events — wait for notification, then retry.
+            notified.await;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SharedFjallSubscriptionStream — Arc-based cursor (PR1 of arc-subscription refactor)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Subscription cursor that owns an `Arc<FjallStore>` instead of borrowing.
+///
+/// `'static` (no lifetime parameter). Spawnable across async boundaries.
+/// PR3 of the arc-subscription refactor renames this to
+/// `FjallSubscriptionStream` and deletes the borrowed variant.
+///
+/// The per-record [`EventStream::Item<'a>`](nexus_store::stream::EventStream::Item)
+/// GAT is `PersistedEnvelope<'a>` — `next()` still lends each envelope
+/// from the inner [`FjallStream`]'s row buffer, exactly as the borrowed
+/// variant. Only the subscribe-time borrow from store is replaced by
+/// `Arc::clone`.
+// Constructor and helpers are called by the `impl SharedSubscription<()> for
+// Arc<FjallStore>` added in PR1 Task 6 (next commit on this branch).
+#[allow(
+    dead_code,
+    reason = "used by impl SharedSubscription<()> for Arc<FjallStore>, added in PR1 Task 6"
+)]
+pub struct SharedFjallSubscriptionStream {
+    store: Arc<FjallStore>,
+    /// Owned byte key for re-reading from the store on refill.
+    stream_key: OwnedStreamId,
+    /// Human-readable label for error messages.
+    label: ArrayString<64>,
+    /// Inner batch of eagerly-loaded events from the current read.
+    inner: FjallStream,
+    /// Last version yielded (tracks position for re-reads).
+    last_version: Option<Version>,
+}
+
+#[allow(
+    dead_code,
+    reason = "used by impl SharedSubscription<()> for Arc<FjallStore>, added in PR1 Task 6"
+)]
+impl SharedFjallSubscriptionStream {
+    /// Create a new subscription stream.
+    ///
+    /// `inner` should already contain the initial catch-up batch.
+    pub(crate) const fn new(
+        store: Arc<FjallStore>,
+        stream_key: OwnedStreamId,
+        label: ArrayString<64>,
+        inner: FjallStream,
+        last_version: Option<Version>,
+    ) -> Self {
+        Self {
+            store,
+            stream_key,
+            label,
+            inner,
+            last_version,
+        }
+    }
+
+    /// Compute the version to read from next: `last_version` + 1, or `INITIAL`.
+    ///
+    /// Returns an error on overflow instead of silently wrapping back
+    /// to `Version::INITIAL`.
+    fn next_read_version(&self) -> Result<Version, FjallError> {
+        self.last_version.map_or(Ok(Version::INITIAL), |v| {
+            v.next().ok_or(FjallError::VersionOverflow)
+        })
+    }
+
+    /// Replace the inner stream with a fresh read starting at `from`.
+    async fn refill(&mut self, from: Version) -> Result<(), FjallError> {
+        let fresh = self.store.read_stream(&self.stream_key, from).await?;
+        self.inner = fresh;
+        Ok(())
+    }
+}
+
+impl EventStream for SharedFjallSubscriptionStream {
+    type Item<'a>
+        = PersistedEnvelope<'a>
+    where
+        Self: 'a;
+    type Error = FjallError;
+
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+        loop {
+            // Yield from the current inner batch if available.
+            if self.inner.poisoned || self.inner.pos >= self.inner.events.len() {
+                // Either poisoned or exhausted — fall through to refill.
+            } else {
+                let (key, value) = &self.inner.events[self.inner.pos];
+                self.inner.pos += 1;
+
+                let Ok((_id_bytes, version_raw)) = decode_event_key(key) else {
+                    self.inner.poisoned = true;
+                    return Err(FjallError::CorruptValue {
+                        stream_id: self.label,
+                        version: None,
+                    });
+                };
+
+                #[cfg(debug_assertions)]
+                {
+                    if let Some(prev) = self.inner.prev_version {
+                        debug_assert!(
+                            version_raw > prev,
+                            "Subscription monotonicity violated: version {version_raw} \
+                             is not greater than previous {prev}",
+                        );
+                    }
+                    self.inner.prev_version = Some(version_raw);
+                }
+
+                let Ok((global_seq_raw, schema_version, event_type, payload)) =
+                    decode_event_value(value)
+                else {
+                    self.inner.poisoned = true;
+                    return Err(FjallError::CorruptValue {
+                        stream_id: self.label,
+                        version: Some(version_raw),
+                    });
+                };
+
+                let Some(version) = Version::new(version_raw) else {
+                    self.inner.poisoned = true;
+                    return Err(FjallError::CorruptValue {
+                        stream_id: self.label,
+                        version: Some(version_raw),
+                    });
+                };
+
+                let Some(global_seq) = GlobalSeq::new(global_seq_raw) else {
+                    self.inner.poisoned = true;
+                    return Err(FjallError::CorruptValue {
+                        stream_id: self.label,
+                        version: Some(version_raw),
+                    });
+                };
+
+                let Ok(envelope) = PersistedEnvelope::try_new(
+                    version,
+                    global_seq,
+                    event_type,
+                    schema_version,
+                    payload,
+                    (),
+                ) else {
+                    self.inner.poisoned = true;
+                    return Err(FjallError::CorruptValue {
+                        stream_id: self.label,
+                        version: Some(version_raw),
+                    });
+                };
+
+                self.last_version = Some(version);
+                return Ok(Some(envelope));
+            }
+
+            // Buffer exhausted (or recovering from poison). Register for
+            // notification BEFORE reading to avoid the race where an
+            // append happens between our read and our wait.
+            //
+            // Clone the `Arc<FjallStore>` so `notified` does not borrow
+            // `self`. The borrowed variant can take
+            // `self.store.notify.notified()` directly because
+            // `store: &'a FjallStore` is external; here
+            // `store: Arc<FjallStore>` lives inside `self`, so a `&mut self`
+            // call to `refill` would conflict with the borrow.
+            let store = Arc::clone(&self.store);
+            let notified = store.notify.notified();
 
             let from = self.next_read_version()?;
             self.refill(from).await?;
