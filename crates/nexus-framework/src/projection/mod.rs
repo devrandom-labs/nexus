@@ -6,10 +6,11 @@ use std::num::NonZeroU32;
 
 use nexus::{Id, Version};
 use nexus_store::Decode;
+use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::projection::Projector;
 use nexus_store::state::{PersistTrigger, SnapshotStore};
-use nexus_store::store::Subscription;
-use nexus_store::stream::{BaseEventStream, EventStreamExt};
+use nexus_store::store::SharedSubscription;
+use nexus_store::stream::{EventStream, EventStreamExt};
 
 pub use builder::ProjectionBuilder;
 pub use error::ProjectionError;
@@ -107,7 +108,7 @@ impl<I, Sub, SS, P, EC, Trig, Mode> Projection<I, Sub, SS, P, EC, Trig, Mode> {
 impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Configured>
 where
     I: Id + Clone,
-    Sub: Subscription<()>,
+    Sub: SharedSubscription<()>,
     SS: SnapshotStore<P::State, Version>,
     P: Projector,
     EC: Decode<P::Event>,
@@ -204,7 +205,8 @@ where
 impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Ready<P::State>>
 where
     I: Id + Clone + Send + Sync,
-    Sub: Subscription<()> + Send,
+    Sub: SharedSubscription<()> + Send,
+    Sub::Stream: for<'a> EventStream<(), Item<'a> = PersistedEnvelope<'a, ()>>,
     SS: SnapshotStore<P::State, Version> + Send + Sync,
     P: Projector + Send + Sync,
     P::State: Clone + Send,
@@ -263,13 +265,12 @@ where
             .try_fold_async_until(
                 status,
                 move |acc, item| {
-                    // Sync prelude: decode into owned values, drop the
-                    // envelope before the async move. The returned future
-                    // must not borrow from the envelope (HRTB requirement
-                    // for `try_fold_async_until`'s single concrete `Fut`).
-                    let envelope = <Sub::Stream<'_> as BaseEventStream>::to_envelope(item);
-                    let event_version = envelope.version();
-                    let decoded = event_codec_ref.decode(envelope.event_type(), envelope.payload());
+                    // Sync prelude: decode into owned values before the
+                    // async move. The returned future must not borrow from
+                    // `item` (HRTB requirement for `try_fold_async_until`'s
+                    // single concrete `Fut`).
+                    let event_version = item.version();
+                    let decoded = event_codec_ref.decode(item.event_type(), item.payload());
                     async move {
                         let event = decoded.map_err(ProjectionError::EventCodec)?;
                         let next =
