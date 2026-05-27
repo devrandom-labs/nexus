@@ -170,8 +170,7 @@ pub trait RawEventStore<M = ()>: Send + Sync {
 ///
 /// Implemented on `Arc<Store>` directly so the trait method `subscribe`
 /// takes `&self` and returns a cursor that outlives the call. Each
-/// subscription pays one `Arc::clone` at `subscribe()` time; per-event
-/// cost is identical to a borrowing design.
+/// subscription pays one `Arc::clone` at `subscribe()` time.
 ///
 /// # Shape
 ///

@@ -16,10 +16,9 @@ use std::time::Duration;
 
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
-use nexus_store::PendingEnvelope;
-use nexus_store::envelope::pending_envelope;
 use nexus_store::store::{RawEventStore, Subscription};
 use nexus_store::stream::EventStream;
+use nexus_store::{PendingEnvelope, pending_envelope};
 use tokio::time::timeout;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

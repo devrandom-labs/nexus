@@ -105,10 +105,9 @@ pub trait EventStream<M = ()> {
 /// Sub-trait for streams whose items *are* [`PersistedEnvelope`]s.
 ///
 /// Hand-implemented (no blanket) by every base cursor —
-/// [`InMemoryStream`](crate::testing::InMemoryStream),
-/// [`InMemorySubscriptionStream`](crate::testing::InMemorySubscriptionStream),
-/// `FjallStream`, `FjallSubscriptionStream`, and the test fixtures used
-/// by adapter conformance suites. Each implementation's
+/// [`InMemoryStream`](crate::testing::InMemoryStream) in `crate::testing`,
+/// `FjallStream` in `nexus-fjall`, and the test fixtures used by adapter
+/// conformance suites. Each implementation's
 /// [`to_envelope`](BaseEventStream::to_envelope) is identity since
 /// `Self::Item<'a>` already equals `PersistedEnvelope<'a, M>`.
 ///
@@ -125,8 +124,7 @@ pub trait EventStream<M = ()> {
 /// nested HRTB is rejected as not being "general enough" on stable Rust.
 /// Routing the conversion through a sub-trait method moves the per-`'a`
 /// lifetime constraint onto the method (`where Self: 'a`) instead of the
-/// trait bound, which the compiler resolves cleanly. See PR1 / PR3
-/// deviation log entries in the stream-refactor plan for the full story.
+/// trait bound, which the compiler resolves cleanly.
 pub trait BaseEventStream<M = ()>: EventStream<M> {
     /// Convert a yielded item to its underlying [`PersistedEnvelope`].
     ///
