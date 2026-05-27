@@ -15,6 +15,7 @@ snapshot = ["nexus-store/snapshot"]
 
 [dependencies]
 arrayvec = { workspace = true }
+bytes = { workspace = true }
 fjall = { workspace = true }
 nexus = { version = "0.1.0", path = "../nexus" }
 nexus-store = { version = "0.1.0", path = "../nexus-store" }

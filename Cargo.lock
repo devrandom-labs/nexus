@@ -585,6 +585,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e447ac67ff6aef4ec07fc19e507b219336cbba90a697c0dbeb1bf51b91536b67"
 dependencies = [
  "byteorder-lite",
+ "bytes",
  "byteview",
  "crossbeam-skiplist",
  "enum_dispatch",
@@ -689,6 +690,7 @@ name = "nexus-fjall"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
+ "bytes",
  "criterion",
  "fjall",
  "insta",
@@ -735,6 +737,7 @@ name = "nexus-store"
 version = "0.1.0"
 dependencies = [
  "arrayvec",
+ "bytes",
  "criterion",
  "futures",
  "futures-core",
