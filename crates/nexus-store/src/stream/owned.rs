@@ -5,14 +5,41 @@
 //! fixed (non-GAT) `Item` type, so any bridge between the two must
 //! materialize the item as an owned value per iteration.
 //!
+//! # Why the bridge exists
+//!
+//! The `futures` crate ships a large, well-tested combinator surface —
+//! `.take_while`, `.filter`, `.chain`, `.then`, `.buffer_unordered`,
+//! `try_collect`, and many more — that operates on
+//! [`futures_core::Stream`]. Re-implementing all of those on top of GAT
+//! lending iterators would duplicate years of upstream work. Instead,
+//! this module provides a small **on-ramp**: implement a handful of
+//! *owning* combinators in the lending-iterator world (the ones that
+//! materialize the borrowed `Item<'a>` into an owned `T`, or pass an
+//! already-owned item through unchanged), then call
+//! [`into_stream()`](super::cursor::EventStreamExt::into_stream) to
+//! cross into [`futures_core::Stream`] and ride the full futures
+//! ecosystem from there.
+//!
+//! The canonical pattern:
+//!
+//! ```ignore
+//! cursor
+//!     .try_map(decode)            // GAT world: borrow -> owned T
+//!     .map_err(into_app_error)    // GAT world: convert error type
+//!     .into_stream()              // bridge: requires OwnedEventStream
+//!     .take_while(|r| ...)        // futures::Stream world from here
+//!     .try_collect()
+//!     .await
+//! ```
+//!
 //! This module exposes two pieces:
 //!
 //! - [`OwnedEventStream`] — a sub-trait of [`EventStream`] that witnesses
 //!   "this stream's [`Item<'a>`](EventStream::Item) does not borrow from
 //!   the cursor" by declaring a concrete [`OwnedItem`](OwnedEventStream::OwnedItem)
-//!   associated type. Implemented for [`Map`] and [`TryMap`] — the
-//!   owning-output combinators — and not for the base cursors (whose
-//!   `Item<'a>` is a borrowing [`PersistedEnvelope`]).
+//!   associated type. Implemented for each owning combinator in this
+//!   module ([`Map`], [`TryMap`], [`MapErr`]); not implemented for the
+//!   base cursors (whose `Item<'a>` is a borrowing [`PersistedEnvelope`]).
 //! - [`IntoStream`] — the bridge type returned by
 //!   [`EventStreamExt::into_stream`](super::cursor::EventStreamExt::into_stream).
 //!   Implements [`futures_core::Stream`] by box-pinning the per-iteration
@@ -24,10 +51,24 @@
 //! `.try_map(...)` step that names the owned target type — making the
 //! per-event allocation cost a conscious choice.
 //!
+//! # Trait surface IS the contract
+//!
+//! Each impl of `OwnedEventStream` is one *lane* on the on-ramp. When
+//! a new owning combinator is added to this module (anything whose
+//! `Item<'a>` is an owned `T: 'static`, or which passes such an item
+//! through unchanged from an inner `OwnedEventStream`), it should also
+//! implement `OwnedEventStream` so the on-ramp surface stays complete
+//! and chainable. **An impl whose chain has no current in-tree consumer
+//! is still load-bearing API** — it defines what users *can* express
+//! via `.into_stream()`. The chain `.try_map(...).map_err(...).into_stream()`
+//! is reachable because [`MapErr`] implements `OwnedEventStream`, even
+//! when no in-tree caller exercises that specific shape today.
+//!
 //! [`EventStream`]: super::cursor::EventStream
 //! [`PersistedEnvelope`]: crate::envelope::PersistedEnvelope
 //! [`Map`]: super::combinators::Map
 //! [`TryMap`]: super::combinators::TryMap
+//! [`MapErr`]: super::combinators::MapErr
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -171,6 +212,10 @@ where
     S: OwnedEventStream<M> + Send + 'static,
 {
     state: BridgeState<S, M>,
+    /// `M` appears only in the `S: OwnedEventStream<M>` trait bound,
+    /// never in a field; `PhantomData<fn() -> M>` satisfies Rust's
+    /// unused-type-parameter check. The contravariant `fn() -> M`
+    /// form is the conventional "bound on this, don't store it" shape.
     _marker: PhantomData<fn() -> M>,
 }
 
