@@ -81,6 +81,31 @@ use nexus_store::upcasting::EventMorsel;
 
 use proptest::prelude::*;
 
+fn build_persisted(
+    version: nexus::Version,
+    global_seq: GlobalSeq,
+    event_type: &str,
+    schema_version: u32,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(payload);
+    let value = bytes::Bytes::from(buf);
+    let et_end = u32::try_from(event_type.len()).expect("event_type fits u32");
+    let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
+    PersistedEnvelope::try_new(
+        version,
+        global_seq,
+        value,
+        schema_version,
+        0..et_end,
+        et_end..pl_end,
+        None,
+    )
+    .expect("test fixture envelope")
+}
+
 /// Concrete `StoreError` for tests using `InMemoryStore` + `JsonCodec` + no upcaster.
 type TestStoreError = StoreError<InMemoryStoreError, JsonCodecError, JsonCodecError>;
 
@@ -233,7 +258,7 @@ fn leak(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
     payloads
         .iter()
         .enumerate()
@@ -241,12 +266,12 @@ fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
             pending_envelope(Version::new(u64::try_from(i).unwrap() + 1).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }
 
-fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
     payloads
         .iter()
         .enumerate()
@@ -254,7 +279,7 @@ fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<Pending
             pending_envelope(Version::new(start_version + u64::try_from(i).unwrap()).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }
@@ -334,37 +359,25 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn attack_persisted_envelope_schema_version_zero_panics(
-        version in 1..1000u64,
-        event_type in "[A-Z]{1,10}",
-        payload in prop::collection::vec(any::<u8>(), 0..100),
-    ) {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = PersistedEnvelope::<()>::new_unchecked(
-                Version::new(version).unwrap(),
-                GlobalSeq::INITIAL,
-                &event_type,
-                0, // ATTACK: schema_version = 0
-                &payload,
-                (),
-            );
-        }));
-        prop_assert!(result.is_err(), "schema_version=0 MUST panic in new()");
-    }
-
-    #[test]
     fn attack_persisted_envelope_try_new_rejects_zero(
         version in 1..1000u64,
         event_type in "[A-Z]{1,10}",
         payload in prop::collection::vec(any::<u8>(), 0..100),
     ) {
-        let result = PersistedEnvelope::<()>::try_new(
+        let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+        buf.extend_from_slice(event_type.as_bytes());
+        buf.extend_from_slice(&payload);
+        let value = bytes::Bytes::from(buf);
+        let et_end = u32::try_from(event_type.len()).unwrap();
+        let pl_end = u32::try_from(event_type.len() + payload.len()).unwrap();
+        let result = PersistedEnvelope::try_new(
             Version::new(version).unwrap(),
             GlobalSeq::INITIAL,
-            &event_type,
+            value,
             0, // ATTACK
-            &payload,
-            (),
+            0..et_end,
+            et_end..pl_end,
+            None,
         );
         prop_assert!(result.is_err(), "try_new with schema_version=0 must return Err");
     }
@@ -383,22 +396,20 @@ proptest! {
         event_type in "[A-Z][a-z]{0,20}",
         schema_version in 1..u32::MAX,
         payload in prop::collection::vec(any::<u8>(), 0..1000),
-        metadata in any::<u64>(),
     ) {
-        let env = PersistedEnvelope::new_unchecked(
+        let env = build_persisted(
             Version::new(version).unwrap(),
             GlobalSeq::INITIAL,
             &event_type,
             schema_version,
             &payload,
-            metadata,
         );
 
         prop_assert_eq!(env.version().as_u64(), version);
         prop_assert_eq!(env.event_type(), event_type.as_str());
         prop_assert_eq!(env.schema_version(), schema_version);
         prop_assert_eq!(env.payload(), payload.as_slice());
-        prop_assert_eq!(*env.metadata(), metadata);
+        prop_assert!(env.metadata().is_none());
     }
 }
 
@@ -413,19 +424,18 @@ proptest! {
     fn attack_pending_envelope_builder_preserves_all_fields(
         version in 1..u64::MAX,
         payload in prop::collection::vec(any::<u8>(), 0..2000),
-        metadata in any::<i32>(),
     ) {
         let ver = Version::new(version).unwrap();
 
         let env = pending_envelope(ver)
             .event_type(leak("AnyType"))
             .payload(payload.clone())
-            .build(metadata);
+            .build();
 
         prop_assert_eq!(env.version().as_u64(), version);
         prop_assert_eq!(env.event_type(), "AnyType");
         prop_assert_eq!(env.payload(), payload.as_slice());
-        prop_assert_eq!(*env.metadata(), metadata);
+        prop_assert!(env.metadata().is_none());
     }
 }
 
@@ -587,7 +597,7 @@ proptest! {
                 pending_envelope(Version::new(v).unwrap())
                     .event_type(leak("E"))
                     .payload(vec![v as u8])
-                    .build_without_metadata()
+                    .build()
             }).collect();
 
             let result = store.append(&stream_id, None, &envelopes).await;
@@ -617,7 +627,7 @@ proptest! {
                 pending_envelope(Version::INITIAL)
                     .event_type(leak("E"))
                     .payload(vec![1])
-                    .build_without_metadata()
+                    .build()
             }).collect();
 
             let result = store.append(&stream_id, None, &envelopes).await;
@@ -653,7 +663,7 @@ proptest! {
                 pending_envelope(Version::new(v).unwrap())
                     .event_type(leak("E"))
                     .payload(vec![v as u8])
-                    .build_without_metadata()
+                    .build()
             }).collect();
 
             let result = store.append(&stream_id, None, &envelopes).await;
@@ -1090,7 +1100,7 @@ async fn attack_event_store_transforms_applied_on_load() {
         pending_envelope(Version::INITIAL)
             .event_type(leak("Happened"))
             .payload(payload)
-            .build_without_metadata(),
+            .build(),
     ];
     raw_store
         .append(&sn("test-1"), None, &envelopes)
@@ -1275,7 +1285,7 @@ proptest! {
             let envelope = pending_envelope(Version::INITIAL)
                 .event_type(leak("E"))
                 .payload(vec![1, 2, 3])
-                .build_without_metadata();
+                .build();
 
             // Append should not panic (may succeed or fail with error)
             let result = store.append(&stream_id, None, &[envelope]).await;
@@ -1447,23 +1457,13 @@ proptest! {
         schema_version in schema_version_strategy(),
     ) {
         if schema_version == 0 {
-            // Must panic
-            let result = std::panic::catch_unwind(|| {
-                let _ = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", 0, &[], ());
-            });
-            prop_assert!(result.is_err(), "schema_version=0 must panic");
-
-            // try_new must return Err
-            let result = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", 0, &[], ());
+            // try_new must return Err for schema_version=0
+            let result = PersistedEnvelope::try_new(Version::new(1).unwrap(), GlobalSeq::INITIAL, bytes::Bytes::from_static(b"E"), 0, 0..1, 1..1, None);
             prop_assert!(result.is_err(), "try_new(schema_version=0) must error");
         } else {
             // Must succeed
-            let env = PersistedEnvelope::<()>::new_unchecked(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", schema_version, &[], ());
+            let env = build_persisted(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", schema_version, &[]);
             prop_assert_eq!(env.schema_version(), schema_version);
-
-            let env = PersistedEnvelope::<()>::try_new(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", schema_version, &[], ());
-            prop_assert!(env.is_ok());
-            prop_assert_eq!(env.unwrap().schema_version(), schema_version);
         }
     }
 }
@@ -1699,7 +1699,7 @@ async fn attack_concurrent_writers_exactly_one_wins() {
             let envelope = pending_envelope(Version::INITIAL)
                 .event_type(Box::leak(format!("Writer{writer_id}").into_boxed_str()))
                 .payload(vec![writer_id as u8])
-                .build_without_metadata();
+                .build();
 
             store.append(&sn("race-stream"), None, &[envelope]).await
         }));

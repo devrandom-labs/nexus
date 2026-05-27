@@ -71,7 +71,7 @@ fn leak_event_type(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
     payloads
         .iter()
         .enumerate()
@@ -80,7 +80,7 @@ fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
             pending_envelope(Version::new(version_num).unwrap())
                 .event_type(leak_event_type("TestEvent"))
                 .payload(p.clone())
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }

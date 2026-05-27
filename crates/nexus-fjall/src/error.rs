@@ -1,4 +1,5 @@
 use arrayvec::ArrayString;
+use nexus_store::envelope::EnvelopeError;
 use thiserror::Error;
 
 /// Errors produced by the fjall event store adapter.
@@ -16,6 +17,18 @@ pub enum FjallError {
     CorruptValue {
         stream_id: ArrayString<64>,
         version: Option<u64>,
+    },
+
+    /// Persisted envelope failed integrity validation on read.
+    ///
+    /// Distinguishes envelope-level corruption (UTF-8, ranges, `schema_version`)
+    /// from wire-format-level corruption (`CorruptValue`).
+    #[error("envelope integrity error in stream '{stream_id}' at version {version}")]
+    EnvelopeCorrupt {
+        stream_id: ArrayString<64>,
+        version: u64,
+        #[source]
+        source: EnvelopeError,
     },
 
     /// Stream metadata has wrong byte size.

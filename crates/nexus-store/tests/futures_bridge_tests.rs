@@ -24,6 +24,7 @@
 
 #![cfg(feature = "futures-bridge")]
 #![allow(clippy::unwrap_used, reason = "tests")]
+#![allow(clippy::expect_used, reason = "tests")]
 #![allow(clippy::missing_panics_doc, reason = "tests")]
 #![allow(clippy::missing_docs_in_private_items, reason = "tests")]
 #![allow(clippy::shadow_unrelated, reason = "tests")]
@@ -33,6 +34,10 @@
 #![allow(clippy::indexing_slicing, reason = "tests")]
 #![allow(clippy::cast_possible_truncation, reason = "tests")]
 #![allow(clippy::str_to_string, reason = "tests")]
+#![allow(
+    clippy::missing_const_for_fn,
+    reason = "tests: Vec args prevent const fn"
+)]
 
 use std::convert::Infallible;
 use std::fmt;
@@ -43,6 +48,30 @@ use nexus::Version;
 use nexus_store::PersistedEnvelope;
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{BaseEventStream, EventStream, EventStreamExt, IntoStream};
+
+fn build_persisted(
+    version: Version,
+    global_seq: GlobalSeq,
+    event_type: &str,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(payload);
+    let value = bytes::Bytes::from(buf);
+    let et_end = u32::try_from(event_type.len()).expect("event_type fits u32");
+    let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
+    PersistedEnvelope::try_new(
+        version,
+        global_seq,
+        value,
+        1,
+        0..et_end,
+        et_end..pl_end,
+        None,
+    )
+    .expect("test fixture envelope")
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Test fixtures
@@ -62,7 +91,7 @@ impl VecStream {
 }
 
 impl BaseEventStream for VecStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -71,22 +100,20 @@ impl BaseEventStream for VecStream {
 }
 
 impl EventStream for VecStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = Infallible;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.rows.len() {
             return Ok(None);
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(row.0).unwrap(),
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }
@@ -122,7 +149,7 @@ impl fmt::Display for BoomError {
 impl std::error::Error for BoomError {}
 
 impl BaseEventStream for FailingStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -131,22 +158,20 @@ impl BaseEventStream for FailingStream {
 }
 
 impl EventStream for FailingStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = BoomError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         self.seen += 1;
         if self.seen == self.fail_at {
             return Err(BoomError);
         }
         // Synthesise a placeholder envelope when not failing.
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(self.seen).unwrap(),
             GlobalSeq::INITIAL,
             "E",
-            1,
             &[0u8; 1],
-            (),
         )))
     }
 }
@@ -163,7 +188,7 @@ fn _assert_into_stream_send() {
         IntoStream<
             nexus_store::stream::TryMap<
                 VecStream,
-                fn(PersistedEnvelope<'_>) -> Result<u64, Infallible>,
+                fn(PersistedEnvelope) -> Result<u64, Infallible>,
                 Infallible,
             >,
             (),

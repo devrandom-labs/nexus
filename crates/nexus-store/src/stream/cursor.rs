@@ -45,7 +45,7 @@ pub enum Disposition {
 /// GAT.
 ///
 /// The base stream impls (`InMemoryStream`, `FjallStream`, the
-/// subscription cursors) set `Item<'a> = PersistedEnvelope<'a, M>`.
+/// subscription cursors) set `Item<'a> = PersistedEnvelope`.
 /// Combinators on [`EventStreamExt`] (e.g. [`map`](EventStreamExt::map),
 /// [`try_map`](EventStreamExt::try_map),
 /// [`try_scan`](EventStreamExt::try_scan)) project that to different
@@ -68,15 +68,15 @@ pub enum Disposition {
 /// monotonicity from the wrapped stream.
 pub trait EventStream<M = ()> {
     /// The item type yielded by `next()`. The base cursors set this to
-    /// `PersistedEnvelope<'a, M>`; combinators redefine it (e.g.
+    /// `PersistedEnvelope`; combinators redefine it (e.g.
     /// `Map<S, F>::Item<'a>` is the closure output).
     ///
     /// The `where Self: 'a` clause is the lending-iterator standard — the
     /// item may borrow from `&'a mut self`, so it must not outlive
     /// `self`. Code that needs HRTB constraints like
-    /// "`Item<'a>` *is* `PersistedEnvelope<'a, M>`" should phrase them as
+    /// "`Item<'a>` *is* `PersistedEnvelope`" should phrase them as
     /// trait bounds, not type equalities (e.g.
-    /// `for<'a> S::Item<'a>: IntoPersistedEnvelope<'a, M>`), because the
+    /// `for<'a> S::Item<'a>: IntoPersistedEnvelope`), because the
     /// type-equality form leaks the `Self: 'a` requirement into the HRTB
     /// and forces `Self: 'static`.
     type Item<'a>
@@ -109,7 +109,7 @@ pub trait EventStream<M = ()> {
 /// `FjallStream` in `nexus-fjall`, and the test fixtures used by adapter
 /// conformance suites. Each implementation's
 /// [`to_envelope`](BaseEventStream::to_envelope) is identity since
-/// `Self::Item<'a>` already equals `PersistedEnvelope<'a, M>`.
+/// `Self::Item<'a>` already equals `PersistedEnvelope`.
 ///
 /// Combinators ([`Map`](crate::stream::Map), [`TryMap`](crate::stream::TryMap),
 /// [`TryScan`](crate::stream::TryScan)) do **not** implement this trait —
@@ -118,7 +118,7 @@ pub trait EventStream<M = ()> {
 ///
 /// # Why a sub-trait instead of an HRTB type equality
 ///
-/// A bound like `for<'a> S: EventStream<M, Item<'a> = PersistedEnvelope<'a, M>>`
+/// A bound like `for<'a> S: EventStream<M, Item<'a> = PersistedEnvelope>`
 /// propagates `EventStream`'s `where Self: 'a` clause into the HRTB and
 /// forces `Self: 'static`. With `Sub::Stream<'_>` (a GAT itself), the
 /// nested HRTB is rejected as not being "general enough" on stable Rust.
@@ -132,7 +132,7 @@ pub trait BaseEventStream<M = ()>: EventStream<M> {
     /// so generic consumers — projection runners, conformance harnesses
     /// — can recover the envelope from `Self::Item<'a>` without an
     /// HRTB type equality.
-    fn to_envelope<'a>(item: Self::Item<'a>) -> PersistedEnvelope<'a, M>
+    fn to_envelope<'a>(item: Self::Item<'a>) -> PersistedEnvelope
     where
         Self: 'a;
 }

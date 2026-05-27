@@ -212,7 +212,7 @@ fn encode_decided(
     codec: &JsonCodec,
     decided: &Events<AccountEvent>,
     base_version: u64,
-) -> Vec<nexus_store::envelope::PendingEnvelope<()>> {
+) -> Vec<nexus_store::envelope::PendingEnvelope> {
     decided
         .iter()
         .enumerate()
@@ -222,7 +222,7 @@ fn encode_decided(
             pending_envelope(ver)
                 .event_type(event.name())
                 .payload(payload)
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }

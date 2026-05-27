@@ -1,12 +1,14 @@
 //! Test utilities for nexus-store. Gated behind the `testing` feature.
 
-use crate::envelope::{PendingEnvelope, PersistedEnvelope};
+use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::store::{GlobalSeq, RawEventStore, SubscriptionBackend};
 use crate::stream::EventStream;
+use bytes::Bytes;
 use nexus::Id;
 use nexus::Version;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -26,15 +28,39 @@ pub enum InMemoryStoreError {
     /// Global sequence overflow: cannot advance past `u64::MAX`.
     #[error("global sequence overflow: cannot advance past u64::MAX")]
     GlobalSeqOverflow,
+
+    /// Envelope payload + metadata + `event_type` exceeds `u32::MAX` bytes (offset overflow).
+    #[error("envelope value too large to address with Range<u32>")]
+    ValueTooLarge,
+
+    /// Persisted envelope failed integrity validation on read.
+    #[error("envelope integrity error in in-memory store at version {version}")]
+    EnvelopeCorrupt {
+        version: u64,
+        #[source]
+        source: EnvelopeError,
+    },
 }
 
 /// A row stored in the in-memory database.
+///
+/// Holds the event data in a single `Bytes` buffer (Arc-shared, cheap to clone)
+/// alongside pre-computed `Range<u32>` offsets. The buffer layout is:
+/// `[event_type bytes][metadata bytes (if any)][payload bytes]`.
+///
+/// Cloning a `StoredRow` is an Arc refcount increment plus three range copies —
+/// no heap allocation.
+#[derive(Clone)]
 struct StoredRow {
     version: u64,
     global_seq: GlobalSeq,
-    event_type: String,
     schema_version: u32,
-    payload: Vec<u8>,
+    /// Concatenated buffer: `[event_type bytes][metadata bytes (if Some)][payload bytes]`.
+    /// Cheap to clone — `Bytes` is Arc-shared.
+    value: Bytes,
+    event_type_range: Range<u32>,
+    payload_range: Range<u32>,
+    metadata_range: Option<Range<u32>>,
 }
 
 /// In-memory event store for testing. Implements [`RawEventStore`].
@@ -80,25 +106,16 @@ impl Default for InMemoryStore {
     }
 }
 
-/// Owned row for the stream cursor.
-struct ReadRow {
-    version: u64,
-    global_seq: GlobalSeq,
-    event_type: String,
-    schema_version: u32,
-    payload: Vec<u8>,
-}
-
 /// Lending cursor over in-memory events.
 pub struct InMemoryStream {
-    events: Vec<ReadRow>,
+    events: Vec<StoredRow>,
     pos: usize,
     #[cfg(debug_assertions)]
     prev_version: Option<u64>,
 }
 
 impl crate::stream::BaseEventStream for InMemoryStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -107,10 +124,10 @@ impl crate::stream::BaseEventStream for InMemoryStream {
 }
 
 impl EventStream for InMemoryStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = InMemoryStoreError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.events.len() {
             return Ok(None);
         }
@@ -131,15 +148,70 @@ impl EventStream for InMemoryStream {
         let Some(version) = Version::new(row.version) else {
             return Err(InMemoryStoreError::CorruptVersion);
         };
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        PersistedEnvelope::try_new(
             version,
             row.global_seq,
-            &row.event_type,
+            row.value.clone(),
             row.schema_version,
-            &row.payload,
-            (),
-        )))
+            row.event_type_range.clone(),
+            row.payload_range.clone(),
+            row.metadata_range.clone(),
+        )
+        .map(Some)
+        .map_err(|source| InMemoryStoreError::EnvelopeCorrupt {
+            version: row.version,
+            source,
+        })
     }
+}
+
+/// Encode a `PendingEnvelope` + its assigned `global_seq` into a `StoredRow`.
+///
+/// Lays out `[event_type][metadata?][payload]` in a single `Bytes` buffer,
+/// computes `Range<u32>` offsets, and validates them via `PersistedEnvelope::try_new`.
+fn encode_pending_to_row(
+    env: &PendingEnvelope,
+    global_seq: GlobalSeq,
+) -> Result<StoredRow, AppendError<InMemoryStoreError>> {
+    let event_type_bytes = env.event_type().as_bytes();
+    let metadata = env.metadata();
+    let payload = env.payload();
+
+    let et_len = event_type_bytes.len();
+    let meta_len = metadata.map_or(0, <[u8]>::len);
+    let payload_len = payload.len();
+
+    let total = et_len + meta_len + payload_len;
+    let mut buf = Vec::with_capacity(total);
+    buf.extend_from_slice(event_type_bytes);
+    if let Some(m) = metadata {
+        buf.extend_from_slice(m);
+    }
+    buf.extend_from_slice(payload);
+
+    let value = Bytes::from(buf);
+
+    let et_end =
+        u32::try_from(et_len).map_err(|_| AppendError::Store(InMemoryStoreError::ValueTooLarge))?;
+    let (metadata_range, payload_start) = if metadata.is_some() {
+        let m_end = u32::try_from(et_len + meta_len)
+            .map_err(|_| AppendError::Store(InMemoryStoreError::ValueTooLarge))?;
+        (Some(et_end..m_end), m_end)
+    } else {
+        (None, et_end)
+    };
+    let payload_end =
+        u32::try_from(total).map_err(|_| AppendError::Store(InMemoryStoreError::ValueTooLarge))?;
+
+    Ok(StoredRow {
+        version: env.version().as_u64(),
+        global_seq,
+        schema_version: env.schema_version(),
+        value,
+        event_type_range: 0..et_end,
+        payload_range: payload_start..payload_end,
+        metadata_range,
+    })
 }
 
 impl RawEventStore for InMemoryStore {
@@ -150,7 +222,7 @@ impl RawEventStore for InMemoryStore {
         &self,
         id: &impl Id,
         expected_version: Option<Version>,
-        envelopes: &[PendingEnvelope<()>],
+        envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
         let key = id.to_string();
@@ -197,13 +269,7 @@ impl RawEventStore for InMemoryStore {
         let mut seq = *counter;
         let mut rows = Vec::with_capacity(envelopes.len());
         for env in envelopes {
-            rows.push(StoredRow {
-                version: env.version().as_u64(),
-                global_seq: seq,
-                event_type: env.event_type().to_owned(),
-                schema_version: env.schema_version(),
-                payload: env.payload().to_vec(),
-            });
+            rows.push(encode_pending_to_row(env, seq)?);
             seq = seq
                 .next()
                 .ok_or(AppendError::Store(InMemoryStoreError::GlobalSeqOverflow))?;
@@ -241,13 +307,7 @@ impl RawEventStore for InMemoryStore {
             .map(|rows| {
                 rows.iter()
                     .filter(|r| r.version >= from.as_u64())
-                    .map(|r| ReadRow {
-                        version: r.version,
-                        global_seq: r.global_seq,
-                        event_type: r.event_type.clone(),
-                        schema_version: r.schema_version,
-                        payload: r.payload.clone(),
-                    })
+                    .cloned()
                     .collect()
             })
             .unwrap_or_default();
@@ -272,12 +332,12 @@ impl RawEventStore for InMemoryStore {
 /// stream **never returns `None`** — it blocks until new events arrive.
 ///
 /// The per-record [`EventStream::Item<'a>`](crate::stream::EventStream::Item)
-/// GAT is `PersistedEnvelope<'a>` — `next()` lends each envelope from the
+/// GAT is `PersistedEnvelope` — `next()` yields each envelope from the
 /// cursor's internal buffer.
 pub struct InMemorySubscriptionStream {
     store: Arc<InMemoryStore>,
     stream_id: String,
-    buffer: Vec<ReadRow>,
+    buffer: Vec<StoredRow>,
     pos: usize,
     last_version: Option<Version>,
     #[cfg(debug_assertions)]
@@ -294,13 +354,7 @@ impl InMemorySubscriptionStream {
                 .map(|rows| {
                     rows.iter()
                         .filter(|r| r.version >= from_version.as_u64())
-                        .map(|r| ReadRow {
-                            version: r.version,
-                            global_seq: r.global_seq,
-                            event_type: r.event_type.clone(),
-                            schema_version: r.schema_version,
-                            payload: r.payload.clone(),
-                        })
+                        .cloned()
                         .collect()
                 })
                 .unwrap_or_default()
@@ -323,12 +377,12 @@ impl InMemorySubscriptionStream {
 
 impl EventStream for InMemorySubscriptionStream {
     type Item<'a>
-        = PersistedEnvelope<'a>
+        = PersistedEnvelope
     where
         Self: 'a;
     type Error = InMemoryStoreError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         loop {
             // Yield from the current buffer if available.
             if self.pos < self.buffer.len() {
@@ -353,14 +407,20 @@ impl EventStream for InMemorySubscriptionStream {
                 };
                 self.last_version = Some(version);
 
-                return Ok(Some(PersistedEnvelope::new_unchecked(
+                return PersistedEnvelope::try_new(
                     version,
                     row.global_seq,
-                    &row.event_type,
+                    row.value.clone(),
                     row.schema_version,
-                    &row.payload,
-                    (),
-                )));
+                    row.event_type_range.clone(),
+                    row.payload_range.clone(),
+                    row.metadata_range.clone(),
+                )
+                .map(Some)
+                .map_err(|source| InMemoryStoreError::EnvelopeCorrupt {
+                    version: row.version,
+                    source,
+                });
             }
 
             // Buffer exhausted. Register for notification BEFORE checking

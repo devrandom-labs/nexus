@@ -44,7 +44,7 @@ async fn inmemory_event_stream_conforms() {
         let stream_id = StreamName("conformance");
 
         if !rows.is_empty() {
-            let envelopes: Vec<PendingEnvelope<()>> = rows
+            let envelopes: Vec<PendingEnvelope> = rows
                 .into_iter()
                 .map(|r| {
                     // `PendingEnvelope::event_type` is `&'static str`; the
@@ -55,11 +55,11 @@ async fn inmemory_event_stream_conforms() {
                         .event_type(event_type)
                         .payload(r.payload);
                     if r.schema_version == 1 {
-                        with_payload.build_without_metadata()
+                        with_payload.build()
                     } else {
                         with_payload
                             .schema_version(NonZeroU32::new(r.schema_version).unwrap())
-                            .build_without_metadata()
+                            .build()
                     }
                 })
                 .collect();

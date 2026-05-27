@@ -6,6 +6,7 @@
     reason = "criterion closure parameter shadowing is idiomatic"
 )]
 
+use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use nexus::Version;
 use nexus_fjall::FjallStore;
@@ -13,7 +14,6 @@ use nexus_fjall::encoding::{
     decode_event_key, decode_event_value, decode_stream_version, encode_event_key,
     encode_event_value, encode_stream_version,
 };
-use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::stream::EventStream;
@@ -44,14 +44,14 @@ fn bid(s: &str) -> BenchId {
     BenchId(s.to_owned())
 }
 
-fn make_envelope(version: u64, payload: &[u8]) -> PendingEnvelope<()> {
+fn make_envelope(version: u64, payload: &[u8]) -> nexus_store::PendingEnvelope {
     pending_envelope(Version::new(version).unwrap())
         .event_type("BenchEvent")
         .payload(payload.to_vec())
-        .build_without_metadata()
+        .build()
 }
 
-fn make_envelopes(count: u64, payload: &[u8]) -> Vec<PendingEnvelope<()>> {
+fn make_envelopes(count: u64, payload: &[u8]) -> Vec<nexus_store::PendingEnvelope> {
     (1..=count).map(|v| make_envelope(v, payload)).collect()
 }
 
@@ -103,7 +103,7 @@ fn encoding_benchmarks(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("encode_event_value", label), &p, |b, p| {
             let mut buf = Vec::with_capacity(size + 64);
             b.iter(|| {
-                encode_event_value(&mut buf, 1, 1, "BenchEvent", p).unwrap();
+                encode_event_value(&mut buf, 1, 1, "BenchEvent", None, p).unwrap();
             });
         });
     }
@@ -115,8 +115,8 @@ fn encoding_benchmarks(c: &mut Criterion) {
     ] {
         let p = payload(size);
         let mut buf = Vec::new();
-        encode_event_value(&mut buf, 1, 1, "BenchEvent", &p).unwrap();
-        let encoded = buf.clone();
+        encode_event_value(&mut buf, 1, 1, "BenchEvent", None, &p).unwrap();
+        let encoded = Bytes::from(buf);
         group.bench_with_input(
             BenchmarkId::new("decode_event_value", label),
             &encoded,
@@ -136,10 +136,11 @@ fn encoding_benchmarks(c: &mut Criterion) {
             BenchmarkId::new("encode_decode_roundtrip", label),
             &p,
             |b, p| {
-                let mut buf = Vec::with_capacity(size + 64);
+                let mut raw = Vec::with_capacity(size + 64);
                 b.iter(|| {
-                    encode_event_value(&mut buf, 1, 1, "BenchEvent", p).unwrap();
-                    decode_event_value(&buf).unwrap();
+                    encode_event_value(&mut raw, 1, 1, "BenchEvent", None, p).unwrap();
+                    let b_bytes = Bytes::copy_from_slice(&raw);
+                    decode_event_value(&b_bytes).unwrap();
                 });
             },
         );

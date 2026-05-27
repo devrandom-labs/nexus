@@ -69,7 +69,7 @@ fn c2_builder_accepts_empty_event_type() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("")
         .payload(vec![1])
-        .build_without_metadata();
+        .build();
     assert_eq!(envelope.event_type(), "");
 }
 
@@ -115,15 +115,15 @@ async fn h5_append_with_non_sequential_versions() {
         pending_envelope(Version::new(3).unwrap())
             .event_type("E")
             .payload(vec![])
-            .build_without_metadata(),
+            .build(),
         pending_envelope(Version::new(1).unwrap())
             .event_type("E")
             .payload(vec![])
-            .build_without_metadata(),
+            .build(),
         pending_envelope(Version::new(5).unwrap())
             .event_type("E")
             .payload(vec![])
-            .build_without_metadata(),
+            .build(),
     ];
 
     // This should fail — versions must be sequential
@@ -148,11 +148,11 @@ async fn h5_append_with_duplicate_versions() {
         pending_envelope(Version::INITIAL)
             .event_type("E")
             .payload(vec![])
-            .build_without_metadata(),
+            .build(),
         pending_envelope(Version::INITIAL)
             .event_type("E")
             .payload(vec![])
-            .build_without_metadata(), // dup!
+            .build(), // dup!
     ];
 
     let result = store.append(&TestId("s1"), None, &envelopes).await;
@@ -186,11 +186,11 @@ fn m2_pending_envelope_no_partial_eq() {
     let e1 = pending_envelope(Version::INITIAL)
         .event_type("E")
         .payload(vec![1])
-        .build_without_metadata();
+        .build();
     let e2 = pending_envelope(Version::INITIAL)
         .event_type("E")
         .payload(vec![1])
-        .build_without_metadata();
+        .build();
     // Can't do assert_eq!(e1, e2) — no PartialEq
     // So we compare field by field
     assert_eq!(e1.version(), e2.version());
@@ -227,13 +227,13 @@ async fn streams_are_isolated() {
         pending_envelope(Version::INITIAL)
             .event_type("EventA")
             .payload(vec![1])
-            .build_without_metadata(),
+            .build(),
     ];
     let e2 = vec![
         pending_envelope(Version::INITIAL)
             .event_type("EventB")
             .payload(vec![2])
-            .build_without_metadata(),
+            .build(),
     ];
 
     store.append(&TestId("stream-a"), None, &e1).await.unwrap();

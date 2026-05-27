@@ -59,7 +59,7 @@ async fn setup_stream(store: &FjallStore, id: &TestId, event_count: u64) {
             pending_envelope(Version::new(i).unwrap())
                 .event_type("TestEvent")
                 .payload(format!("payload-{i}").into_bytes())
-                .build_without_metadata(),
+                .build(),
         );
     }
     store.append(id, None, &envs).await.unwrap();

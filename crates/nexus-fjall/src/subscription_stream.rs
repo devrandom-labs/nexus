@@ -5,6 +5,7 @@ use crate::error::FjallError;
 use crate::store::FjallStore;
 use crate::stream::FjallStream;
 use arrayvec::ArrayString;
+use bytes::Bytes;
 use nexus::{Id, Version};
 use nexus_store::GlobalSeq;
 use nexus_store::PersistedEnvelope;
@@ -55,7 +56,7 @@ impl Id for OwnedStreamId {
 /// **never returns `None`** — it blocks until new events arrive.
 ///
 /// The per-record [`EventStream::Item<'a>`](nexus_store::stream::EventStream::Item)
-/// GAT is `PersistedEnvelope<'a>` — `next()` lends each envelope from
+/// GAT is `PersistedEnvelope` — `next()` yields each envelope from
 /// the inner [`FjallStream`]'s row buffer.
 pub struct FjallSubscriptionStream {
     store: Arc<FjallStore>,
@@ -109,12 +110,12 @@ impl FjallSubscriptionStream {
 
 impl EventStream for FjallSubscriptionStream {
     type Item<'a>
-        = PersistedEnvelope<'a>
+        = PersistedEnvelope
     where
         Self: 'a;
     type Error = FjallError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         loop {
             // Yield from the current inner batch if available.
             if self.inner.poisoned || self.inner.pos >= self.inner.events.len() {
@@ -143,9 +144,8 @@ impl EventStream for FjallSubscriptionStream {
                     self.inner.prev_version = Some(version_raw);
                 }
 
-                let Ok((global_seq_raw, schema_version, event_type, payload)) =
-                    decode_event_value(value)
-                else {
+                let bytes_value: Bytes = value.clone().into();
+                let Ok(decoded) = decode_event_value(&bytes_value) else {
                     self.inner.poisoned = true;
                     return Err(FjallError::CorruptValue {
                         stream_id: self.label,
@@ -161,7 +161,7 @@ impl EventStream for FjallSubscriptionStream {
                     });
                 };
 
-                let Some(global_seq) = GlobalSeq::new(global_seq_raw) else {
+                let Some(global_seq) = GlobalSeq::new(decoded.global_seq) else {
                     self.inner.poisoned = true;
                     return Err(FjallError::CorruptValue {
                         stream_id: self.label,
@@ -169,19 +169,24 @@ impl EventStream for FjallSubscriptionStream {
                     });
                 };
 
-                let Ok(envelope) = PersistedEnvelope::try_new(
+                let envelope = match PersistedEnvelope::try_new(
                     version,
                     global_seq,
-                    event_type,
-                    schema_version,
-                    payload,
-                    (),
-                ) else {
-                    self.inner.poisoned = true;
-                    return Err(FjallError::CorruptValue {
-                        stream_id: self.label,
-                        version: Some(version_raw),
-                    });
+                    bytes_value,
+                    decoded.schema_version,
+                    decoded.event_type_range,
+                    decoded.payload_range,
+                    decoded.metadata_range,
+                ) {
+                    Ok(env) => env,
+                    Err(source) => {
+                        self.inner.poisoned = true;
+                        return Err(FjallError::EnvelopeCorrupt {
+                            stream_id: self.label,
+                            version: version.as_u64(),
+                            source,
+                        });
+                    }
                 };
 
                 self.last_version = Some(version);

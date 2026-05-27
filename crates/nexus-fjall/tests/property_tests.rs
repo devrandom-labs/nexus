@@ -43,6 +43,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
+use bytes::Bytes;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{
@@ -84,17 +85,31 @@ fn leak(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
+/// Decode an event value from a `Vec<u8>` buffer and extract all fields as
+/// concrete values — for use in encoding-layer tests only.
+/// Returns `(global_seq, schema_version, event_type_string, payload_vec)`.
+fn decode_ev_slices(buf: &[u8]) -> (u64, u32, String, Vec<u8>) {
+    let b = Bytes::copy_from_slice(buf);
+    let d = decode_event_value(&b).unwrap();
+    let et =
+        std::str::from_utf8(&b[d.event_type_range.start as usize..d.event_type_range.end as usize])
+            .unwrap()
+            .to_owned();
+    let pl = b[d.payload_range.start as usize..d.payload_range.end as usize].to_vec();
+    (d.global_seq, d.schema_version, et, pl)
+}
+
 fn temp_store() -> (FjallStore, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
     (store, dir)
 }
 
-fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope<()> {
+fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
-        .build_without_metadata()
+        .build()
 }
 
 fn make_envelope_with_schema(
@@ -102,16 +117,16 @@ fn make_envelope_with_schema(
     event_type: &'static str,
     payload: &[u8],
     schema_version: u32,
-) -> PendingEnvelope<()> {
+) -> PendingEnvelope {
     let sv = NonZeroU32::new(schema_version).unwrap_or(NonZeroU32::MIN);
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
         .schema_version(sv)
-        .build_without_metadata()
+        .build()
 }
 
-fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
     payloads
         .iter()
         .enumerate()
@@ -119,12 +134,12 @@ fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
             pending_envelope(Version::new(u64::try_from(i).unwrap() + 1).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }
 
-fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope<()>> {
+fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
     payloads
         .iter()
         .enumerate()
@@ -132,7 +147,7 @@ fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<Pending
             pending_envelope(Version::new(start_version + u64::try_from(i).unwrap()).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }
@@ -276,11 +291,11 @@ proptest! {
         payload in prop::collection::vec(any::<u8>(), 0..1024),
     ) {
         let mut buf = Vec::new();
-        encode_event_value(&mut buf, global_seq, schema_ver, &event_type, &payload).unwrap();
-        let (dec_gs, dec_sv, dec_et, dec_payload) = decode_event_value(&buf).unwrap();
+        encode_event_value(&mut buf, global_seq, schema_ver, &event_type, None, &payload).unwrap();
+        let (dec_gs, dec_sv, dec_et, dec_payload) = decode_ev_slices(&buf);
         prop_assert_eq!(dec_gs, global_seq, "global_seq round-trip failed");
         prop_assert_eq!(dec_sv, schema_ver, "schema_version round-trip failed");
-        prop_assert_eq!(dec_et, &event_type, "event_type round-trip failed");
+        prop_assert_eq!(dec_et, event_type, "event_type round-trip failed");
         prop_assert_eq!(dec_payload, payload.as_slice(), "payload round-trip failed");
     }
 
@@ -330,10 +345,10 @@ fn attack_encoding_event_value_evil_event_types() {
 
     let mut buf = Vec::new();
     for (evil_type, description) in &evil_types {
-        let result = encode_event_value(&mut buf, 1, 1, evil_type, b"test");
+        let result = encode_event_value(&mut buf, 1, 1, evil_type, None, b"test");
         match result {
             Ok(()) => {
-                let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+                let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
                 assert_eq!(gs, 1, "global_seq corrupted for: {}", description);
                 assert_eq!(sv, 1, "schema_version corrupted for: {}", description);
                 assert_eq!(
@@ -355,17 +370,17 @@ fn attack_encoding_event_value_evil_event_types() {
 
     // Very long string near u16::MAX bytes
     let long_type = "a".repeat(usize::from(u16::MAX));
-    let result = encode_event_value(&mut buf, 1, 1, &long_type, b"x");
+    let result = encode_event_value(&mut buf, 1, 1, &long_type, None, b"x");
     assert!(
         result.is_ok(),
         "event_type at exactly u16::MAX bytes must be accepted"
     );
-    let (_, _, decoded, _) = decode_event_value(&buf).unwrap();
+    let (_, _, decoded, _) = decode_ev_slices(&buf);
     assert_eq!(decoded.len(), usize::from(u16::MAX));
 
     // One byte over u16::MAX must be rejected
     let too_long_type = "a".repeat(usize::from(u16::MAX) + 1);
-    let result = encode_event_value(&mut buf, 1, 1, &too_long_type, b"x");
+    let result = encode_event_value(&mut buf, 1, 1, &too_long_type, None, b"x");
     assert!(
         result.is_err(),
         "event_type exceeding u16::MAX bytes must be rejected"
@@ -1142,7 +1157,7 @@ async fn attack_schema_version_zero_clamped_by_builder() {
         .event_type("BadSchema")
         .payload(b"data".to_vec())
         .schema_version(NonZeroU32::MIN) // Minimum valid schema version
-        .build_without_metadata();
+        .build();
 
     // schema_version should be 1
     assert_eq!(

@@ -1,6 +1,7 @@
 use crate::encoding::{decode_event_key, decode_event_value};
 use crate::error::FjallError;
 use arrayvec::ArrayString;
+use bytes::Bytes;
 use fjall::Slice;
 use nexus::Version;
 use nexus_store::GlobalSeq;
@@ -25,7 +26,7 @@ pub struct FjallStream {
 }
 
 impl BaseEventStream for FjallStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -34,10 +35,10 @@ impl BaseEventStream for FjallStream {
 }
 
 impl EventStream for FjallStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = FjallError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.poisoned || self.pos >= self.events.len() {
             return Ok(None);
         }
@@ -65,8 +66,8 @@ impl EventStream for FjallStream {
             self.prev_version = Some(version);
         }
 
-        let Ok((global_seq_raw, schema_version, event_type, payload)) = decode_event_value(value)
-        else {
+        let bytes_value: Bytes = value.clone().into();
+        let Ok(decoded) = decode_event_value(&bytes_value) else {
             self.poisoned = true;
             return Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
@@ -82,7 +83,7 @@ impl EventStream for FjallStream {
             });
         };
 
-        let Some(global_seq) = GlobalSeq::new(global_seq_raw) else {
+        let Some(global_seq) = GlobalSeq::new(decoded.global_seq) else {
             self.poisoned = true;
             return Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
@@ -90,16 +91,24 @@ impl EventStream for FjallStream {
             });
         };
 
-        if let Ok(envelope) =
-            PersistedEnvelope::try_new(ver, global_seq, event_type, schema_version, payload, ())
-        {
-            Ok(Some(envelope))
-        } else {
-            self.poisoned = true;
-            Err(FjallError::CorruptValue {
-                stream_id: self.stream_id,
-                version: Some(version),
-            })
+        match PersistedEnvelope::try_new(
+            ver,
+            global_seq,
+            bytes_value,
+            decoded.schema_version,
+            decoded.event_type_range,
+            decoded.payload_range,
+            decoded.metadata_range,
+        ) {
+            Ok(envelope) => Ok(Some(envelope)),
+            Err(source) => {
+                self.poisoned = true;
+                Err(FjallError::EnvelopeCorrupt {
+                    stream_id: self.stream_id,
+                    version,
+                    source,
+                })
+            }
         }
     }
 }
@@ -122,7 +131,15 @@ mod tests {
     ) -> (Slice, Slice) {
         let key = encode_event_key(id, version).unwrap();
         let mut val_buf = Vec::new();
-        encode_event_value(&mut val_buf, global_seq, schema_ver, event_type, payload).unwrap();
+        encode_event_value(
+            &mut val_buf,
+            global_seq,
+            schema_ver,
+            event_type,
+            None,
+            payload,
+        )
+        .unwrap();
         (Slice::from(key), Slice::from(val_buf))
     }
 
@@ -161,7 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn corrupt_value_returns_error() {
-        // Valid key, but truncated value (only 3 bytes, header requires 14).
+        // Valid key, but truncated value (only 3 bytes, header requires 18).
         let key = encode_event_key(b"corrupt-stream", 1).unwrap();
         let truncated_value: &[u8] = &[0, 1, 2];
 

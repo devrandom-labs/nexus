@@ -1,109 +1,105 @@
 #![allow(clippy::unwrap_used, reason = "tests")]
+#![allow(clippy::expect_used, reason = "tests")]
 
+use bytes::Bytes;
 use nexus::Version;
-use nexus_store::envelope::PersistedEnvelope;
+use nexus_store::envelope::{EnvelopeError, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::store::GlobalSeq;
+
+fn make_persisted(
+    version: Version,
+    event_type: &str,
+    schema_version: u32,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(payload);
+    let value = Bytes::from(buf);
+    let et_end = u32::try_from(event_type.len()).expect("fits");
+    let pl_end = u32::try_from(event_type.len() + payload.len()).expect("fits");
+    PersistedEnvelope::try_new(
+        version,
+        GlobalSeq::INITIAL,
+        value,
+        schema_version,
+        0..et_end,
+        et_end..pl_end,
+        None,
+    )
+    .expect("valid test fixture")
+}
 
 #[test]
 fn pending_envelope_accessors() {
     let envelope = pending_envelope(Version::new(1).unwrap())
         .event_type("UserCreated")
         .payload(vec![1, 2, 3])
-        .build_without_metadata();
+        .build();
 
     assert_eq!(envelope.version(), Version::new(1).unwrap());
     assert_eq!(envelope.event_type(), "UserCreated");
     assert_eq!(envelope.payload(), &[1, 2, 3]);
+    assert!(envelope.metadata().is_none());
 }
 
 #[test]
 fn pending_envelope_with_metadata() {
-    #[derive(Debug, Clone, PartialEq)]
-    struct Meta {
-        correlation_id: String,
-    }
-
-    let meta = Meta {
-        correlation_id: "corr-1".into(),
-    };
+    let meta = b"corr-1".to_vec();
     let envelope = pending_envelope(Version::new(1).unwrap())
         .event_type("OrderPlaced")
         .payload(vec![4, 5, 6])
-        .build(meta.clone());
+        .with_metadata(meta.clone());
 
-    assert_eq!(envelope.metadata(), &meta);
+    assert_eq!(envelope.metadata(), Some(meta.as_slice()));
 }
 
 #[test]
-fn persisted_envelope_borrows_from_source() {
-    let event_type = String::from("UserActivated");
-    let payload = vec![10, 20, 30];
-
-    let envelope = PersistedEnvelope::<()>::new_unchecked(
-        Version::new(3).unwrap(),
-        GlobalSeq::INITIAL,
-        &event_type,
-        1,
-        &payload,
-        (),
-    );
+fn persisted_envelope_accessors() {
+    let payload = [10u8, 20, 30];
+    let envelope = make_persisted(Version::new(3).unwrap(), "UserActivated", 1, &payload);
 
     assert_eq!(envelope.version(), Version::new(3).unwrap());
     assert_eq!(envelope.global_seq(), GlobalSeq::INITIAL);
     assert_eq!(envelope.event_type(), "UserActivated");
     assert_eq!(envelope.payload(), &[10, 20, 30]);
+    assert!(envelope.metadata().is_none());
 }
 
 #[test]
-fn persisted_envelope_metadata_is_owned() {
-    #[derive(Debug, Clone, PartialEq)]
-    struct Meta {
-        tenant: String,
-    }
-
+fn persisted_envelope_metadata_bytes() {
     let event_type = "E";
     let payload = [1u8];
+    let meta = b"tenant:acme".to_vec();
 
-    let envelope = PersistedEnvelope::new_unchecked(
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len() + meta.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(&payload);
+    buf.extend_from_slice(&meta);
+    let value = Bytes::from(buf);
+    let et_end = 1u32;
+    let pl_end = 2u32;
+    let meta_end = 2u32 + u32::try_from(meta.len()).unwrap();
+    let envelope = PersistedEnvelope::try_new(
         Version::new(1).unwrap(),
         GlobalSeq::INITIAL,
-        event_type,
+        value,
         1,
-        &payload,
-        Meta {
-            tenant: "acme".into(),
-        },
-    );
+        0..et_end,
+        et_end..pl_end,
+        Some(pl_end..meta_end),
+    )
+    .expect("valid envelope");
 
-    assert_eq!(
-        envelope.metadata(),
-        &Meta {
-            tenant: "acme".into()
-        }
-    );
+    assert_eq!(envelope.metadata(), Some(b"tenant:acme".as_slice()));
 }
 
 #[test]
-fn persisted_envelope_zero_allocation_for_core_fields() {
-    let source_type = "MyEvent";
+fn persisted_envelope_payload_is_correct() {
     let source_payload = [1u8, 2, 3, 4, 5];
-
-    let envelope = PersistedEnvelope::<()>::new_unchecked(
-        Version::new(1).unwrap(),
-        GlobalSeq::INITIAL,
-        source_type,
-        1,
-        &source_payload,
-        (),
-    );
-
-    // Verify the envelope borrows from the source —
-    // the pointers should point into the same memory
-    assert!(std::ptr::eq(
-        envelope.payload().as_ptr(),
-        source_payload.as_ptr()
-    ));
+    let envelope = make_persisted(Version::new(1).unwrap(), "MyEvent", 1, &source_payload);
+    assert_eq!(envelope.payload(), &source_payload);
 }
 
 #[test]
@@ -111,7 +107,7 @@ fn pending_envelope_debug_output() {
     let envelope = pending_envelope(Version::new(7).unwrap())
         .event_type("UserCreated")
         .payload(vec![1, 2, 3])
-        .build_without_metadata();
+        .build();
     let debug = format!("{envelope:?}");
     assert!(
         debug.contains("PendingEnvelope"),
@@ -121,16 +117,7 @@ fn pending_envelope_debug_output() {
 
 #[test]
 fn persisted_envelope_debug_output() {
-    let event_type = "OrderPlaced";
-    let payload = [10u8, 20];
-    let envelope = PersistedEnvelope::<()>::new_unchecked(
-        Version::new(2).unwrap(),
-        GlobalSeq::INITIAL,
-        event_type,
-        1,
-        &payload,
-        (),
-    );
+    let envelope = make_persisted(Version::new(2).unwrap(), "OrderPlaced", 1, &[10u8, 20]);
     let debug = format!("{envelope:?}");
     assert!(
         debug.contains("PersistedEnvelope"),
@@ -139,21 +126,16 @@ fn persisted_envelope_debug_output() {
 }
 
 #[test]
-fn build_without_metadata_equals_build_unit() {
-    let without = pending_envelope(Version::new(5).unwrap())
+fn build_without_metadata_has_no_metadata() {
+    let env = pending_envelope(Version::new(5).unwrap())
         .event_type("Evt")
         .payload(vec![9, 8, 7])
-        .build_without_metadata();
+        .build();
 
-    let with_unit = pending_envelope(Version::new(5).unwrap())
-        .event_type("Evt")
-        .payload(vec![9, 8, 7])
-        .build(());
-
-    assert_eq!(without.version(), with_unit.version());
-    assert_eq!(without.event_type(), with_unit.event_type());
-    assert_eq!(without.payload(), with_unit.payload());
-    assert_eq!(without.metadata(), with_unit.metadata());
+    assert!(env.metadata().is_none());
+    assert_eq!(env.version(), Version::new(5).unwrap());
+    assert_eq!(env.event_type(), "Evt");
+    assert_eq!(env.payload(), &[9, 8, 7]);
 }
 
 // =============================================================================
@@ -162,44 +144,69 @@ fn build_without_metadata_equals_build_unit() {
 
 #[test]
 fn try_new_rejects_zero_schema_version() {
-    let result = PersistedEnvelope::<()>::try_new(
+    let result = PersistedEnvelope::try_new(
         Version::new(1).unwrap(),
         GlobalSeq::INITIAL,
-        "E",
+        Bytes::from_static(b"Epayload"),
         0,
-        &[],
-        (),
+        0..1,
+        1..8,
+        None,
     );
     assert!(result.is_err());
-    let msg = format!("{}", result.unwrap_err());
-    assert!(msg.contains("schema version"), "should describe the error");
+    assert!(matches!(
+        result.unwrap_err(),
+        EnvelopeError::InvalidSchemaVersion
+    ));
 }
 
 #[test]
 fn try_new_accepts_valid_schema_version() {
-    let result = PersistedEnvelope::<()>::try_new(
-        Version::new(1).unwrap(),
-        GlobalSeq::INITIAL,
-        "E",
-        1,
-        &[],
-        (),
-    );
-    assert!(result.is_ok());
-    let env = result.unwrap();
-    assert_eq!(env.schema_version(), 1);
+    let result = make_persisted(Version::new(1).unwrap(), "E", 1, &[]);
+    assert_eq!(result.schema_version(), 1);
 }
 
 #[test]
 fn try_new_accepts_max_schema_version() {
-    let result = PersistedEnvelope::<()>::try_new(
+    let result = make_persisted(Version::new(1).unwrap(), "E", u32::MAX, &[]);
+    assert_eq!(result.schema_version(), u32::MAX);
+}
+
+#[test]
+fn try_new_rejects_out_of_bounds_range() {
+    // event_type range goes past value length
+    let result = PersistedEnvelope::try_new(
         Version::new(1).unwrap(),
         GlobalSeq::INITIAL,
-        "E",
-        u32::MAX,
-        &[],
-        (),
+        Bytes::from_static(b"E"),
+        1,
+        0..100, // ATTACK: range beyond buffer
+        100..100,
+        None,
     );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().schema_version(), u32::MAX);
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        EnvelopeError::RangeOutOfBounds { .. }
+    ));
+}
+
+#[test]
+fn try_new_rejects_invalid_utf8_event_type() {
+    // 0xFF 0xFE is invalid UTF-8
+    let value = Bytes::from(vec![0xFF, 0xFE, b'x']);
+    let result = PersistedEnvelope::try_new(
+        Version::new(1).unwrap(),
+        GlobalSeq::INITIAL,
+        value,
+        1,
+        0..2, // invalid UTF-8 bytes as event_type
+        2..3,
+        None,
+    );
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        EnvelopeError::InvalidUtf8 { .. }
+    ));
 }

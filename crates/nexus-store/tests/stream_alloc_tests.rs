@@ -109,19 +109,57 @@ async fn measure_async<R>(fut: impl std::future::Future<Output = R>) -> (R, usiz
 // Fixtures
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Pre-built row: the `value: Bytes` buffer is allocated ONCE at fixture
+/// construction. Cloning a row clones a `Bytes` (one Arc refcount inc,
+/// zero memcpy, zero heap allocation), so `next()` allocates nothing
+/// per call — preserving the allocation-counting test's premise.
+#[derive(Clone)]
+struct PrebuiltRow {
+    version: u64,
+    value: bytes::Bytes,
+    event_type_range: std::ops::Range<u32>,
+    payload_range: std::ops::Range<u32>,
+}
+
 struct VecStream {
-    rows: Vec<(u64, String, Vec<u8>)>,
+    rows: Vec<PrebuiltRow>,
     pos: usize,
 }
 
 impl VecStream {
-    const fn new(rows: Vec<(u64, String, Vec<u8>)>) -> Self {
+    fn new(rows: Vec<(u64, String, Vec<u8>)>) -> Self {
+        let rows = rows
+            .into_iter()
+            .map(|(v, et, pl)| {
+                let mut buf = Vec::with_capacity(et.len() + pl.len());
+                buf.extend_from_slice(et.as_bytes());
+                buf.extend_from_slice(&pl);
+                // `Bytes::from(Vec)` produces a KIND_VEC Bytes that allocates a
+                // shared state on its first clone (vtable promotion). Force the
+                // promotion now, at fixture construction, by cloning once and
+                // dropping the clone. This swaps the original from KIND_VEC to
+                // KIND_ARC; per-row `next()` clones during the measured window
+                // are then pure atomic refcount increments with zero heap
+                // allocation.
+                let value = bytes::Bytes::from(buf);
+                let _force_promotion = value.clone();
+                drop(_force_promotion);
+                let et_end = u32::try_from(et.len()).expect("fits u32");
+                let pl_end = u32::try_from(et.len() + pl.len()).expect("fits u32");
+                PrebuiltRow {
+                    version: v,
+                    value,
+                    event_type_range: 0..et_end,
+                    payload_range: et_end..pl_end,
+                }
+            })
+            .collect();
         Self { rows, pos: 0 }
     }
 }
 
 impl BaseEventStream for VecStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -130,23 +168,30 @@ impl BaseEventStream for VecStream {
 }
 
 impl EventStream for VecStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a>
+        = PersistedEnvelope
+    where
+        Self: 'a;
     type Error = Infallible;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.rows.len() {
             return Ok(None);
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
-            Version::new(row.0).expect("non-zero"),
-            GlobalSeq::INITIAL,
-            &row.1,
-            1,
-            &row.2,
-            (),
-        )))
+        Ok(Some(
+            PersistedEnvelope::try_new(
+                Version::new(row.version).expect("non-zero"),
+                GlobalSeq::INITIAL,
+                row.value.clone(),
+                1,
+                row.event_type_range.clone(),
+                row.payload_range.clone(),
+                None,
+            )
+            .expect("test fixture"),
+        ))
     }
 }
 

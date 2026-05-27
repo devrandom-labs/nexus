@@ -224,11 +224,11 @@ fn tid(s: &str) -> TestId {
     TestId(s.to_owned())
 }
 
-fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope<()> {
+fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
-        .build_without_metadata()
+        .build()
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ impl StateMachineTest for FjallStateMachineTest {
                     Version::new(prior_version)
                 };
 
-                let envelopes: Vec<PendingEnvelope<()>> = new_events
+                let envelopes: Vec<PendingEnvelope> = new_events
                     .iter()
                     .map(|(v, et, pl)| make_envelope(*v, et, pl))
                     .collect();

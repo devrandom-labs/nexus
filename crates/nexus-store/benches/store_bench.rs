@@ -10,6 +10,7 @@
 //! Run: `cargo bench --bench store_bench -p nexus-store`
 //! Reports: `target/criterion/report/index.html`
 #![allow(clippy::unwrap_used, reason = "benchmarks use unwrap for brevity")]
+#![allow(clippy::expect_used, reason = "benchmarks use expect for brevity")]
 #![allow(
     clippy::as_conversions,
     reason = "benchmarks use as casts for index conversions"
@@ -34,6 +35,7 @@ use std::convert::Infallible;
 use std::fmt;
 use std::hint::black_box;
 
+use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use nexus::Version;
 use nexus_store::AppendError;
@@ -63,6 +65,30 @@ fn bid(s: &str) -> BenchId {
     BenchId(s.to_owned())
 }
 
+fn build_persisted(
+    version: u64,
+    global_seq: GlobalSeq,
+    event_type: &str,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(payload);
+    let value = Bytes::from(buf);
+    let et_end = u32::try_from(event_type.len()).expect("fits u32");
+    let pl_end = u32::try_from(event_type.len() + payload.len()).expect("fits u32");
+    PersistedEnvelope::try_new(
+        nexus::Version::new(version).expect("non-zero version"),
+        global_seq,
+        value,
+        1,
+        0..et_end,
+        et_end..pl_end,
+        None,
+    )
+    .expect("valid fixture")
+}
+
 // =============================================================================
 // In-memory adapter (same pattern as raw_store_tests.rs)
 // =============================================================================
@@ -87,7 +113,7 @@ struct InMemoryStream {
 }
 
 impl BaseEventStream for InMemoryStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -96,22 +122,20 @@ impl BaseEventStream for InMemoryStream {
 }
 
 impl EventStream for InMemoryStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = BenchError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.events.len() {
             return Ok(None);
         }
         let row = &self.events[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
-            Version::new(row.0).unwrap(),
+        Ok(Some(build_persisted(
+            row.0,
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }
@@ -130,7 +154,7 @@ impl RawEventStore for InMemoryRawStore {
         &self,
         id: &impl nexus::Id,
         expected_version: Option<Version>,
-        envelopes: &[PendingEnvelope<()>],
+        envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
         let stream = guard.entry(id.to_string()).or_default();
@@ -225,14 +249,14 @@ fn noop_v1_to_v6_upcast(
 // Helpers
 // =============================================================================
 
-fn make_envelopes(n: usize) -> Vec<PendingEnvelope<()>> {
+fn make_envelopes(n: usize) -> Vec<PendingEnvelope> {
     (0..n)
         .map(|i| {
             let version = u64::try_from(i + 1).unwrap_or(u64::MAX);
             pending_envelope(Version::new(version).unwrap())
                 .event_type("BenchEvent")
                 .payload(vec![1, 2, 3, 4])
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }
@@ -248,7 +272,7 @@ fn bench_builder_throughput(c: &mut Criterion) {
                 pending_envelope(black_box(Version::INITIAL))
                     .event_type("UserCreated")
                     .payload(vec![1, 2, 3, 4])
-                    .build_without_metadata(),
+                    .build(),
             )
         });
     });
@@ -257,15 +281,13 @@ fn bench_builder_throughput(c: &mut Criterion) {
 fn bench_persisted_envelope_construction(c: &mut Criterion) {
     let event_type = "UserCreated";
     let payload = [1u8, 2, 3, 4, 5, 6, 7, 8];
-    c.bench_function("PersistedEnvelope::new_unchecked (zero-alloc)", |b| {
+    c.bench_function("PersistedEnvelope::try_new", |b| {
         b.iter(|| {
-            black_box(PersistedEnvelope::<()>::new_unchecked(
-                Version::INITIAL,
+            black_box(build_persisted(
+                1,
                 GlobalSeq::INITIAL,
                 black_box(event_type),
-                1,
                 black_box(&payload),
-                (),
             ))
         });
     });

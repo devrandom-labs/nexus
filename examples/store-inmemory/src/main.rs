@@ -214,13 +214,13 @@ async fn main() {
 
     // --- Step 3: Build PendingEnvelopes ---
     println!("Step 3: Build PendingEnvelopes (typestate builder)");
-    let mut envelopes: Vec<nexus_store::envelope::PendingEnvelope<()>> = Vec::new();
+    let mut envelopes: Vec<nexus_store::envelope::PendingEnvelope> = Vec::new();
     for (i, (payload, event_type)) in encoded.iter().enumerate() {
         let version_num = u64::try_from(i + 1).expect("version should fit in u64");
         let envelope = pending_envelope(Version::new(version_num).expect("version > 0"))
             .event_type(event_type)
             .payload(payload.clone())
-            .build_without_metadata();
+            .build();
         println!(
             "  Envelope: version={}, type={}",
             envelope.version(),
@@ -264,7 +264,7 @@ async fn main() {
         let legacy_envelope = pending_envelope(Version::new(4).expect("version > 0"))
             .event_type("TaskCreated")
             .payload(old_json.into_bytes())
-            .build_without_metadata();
+            .build();
 
         store
             .append(&stream_id, Version::new(3), &[legacy_envelope])
@@ -351,7 +351,7 @@ async fn main() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("TodoCreated")
         .payload(payload)
-        .build_without_metadata();
+        .build();
     typed_store
         .raw()
         .append(&TodoId("todo-2".to_owned()), None, &[envelope])

@@ -148,7 +148,7 @@ pub trait RawEventStore<M = ()>: Send + Sync {
         &self,
         id: &impl Id,
         expected_version: Option<Version>,
-        envelopes: &[PendingEnvelope<M>],
+        envelopes: &[PendingEnvelope],
     ) -> impl std::future::Future<Output = Result<(), AppendError<Self::Error>>> + Send;
 
     /// Open a lending cursor to read events from a stream.
@@ -176,11 +176,11 @@ pub trait RawEventStore<M = ()>: Send + Sync {
 ///
 /// `type Stream: EventStream<M> + Send + 'static` is a concrete, non-GAT
 /// associated type. Consumers can name `Sub::Stream` directly and bound it
-/// with HRTBs (e.g. `for<'a> Sub::Stream::Item<'a> = PersistedEnvelope<'a>`)
+/// with HRTBs (e.g. `for<'a> Sub::Stream::Item<'a> = PersistedEnvelope`)
 /// without forcing `Self: 'static` via the `where Self: 'a` clause a GAT
 /// would require. The cursor's own per-record `Item<'a>` GAT on
 /// [`EventStream`](crate::stream::EventStream) is **preserved** — each
-/// `next()` still lends a `PersistedEnvelope<'_>` from the cursor's
+/// `next()` still lends a `PersistedEnvelope` from the cursor's
 /// internal buffer.
 ///
 /// # Contract

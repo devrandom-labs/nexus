@@ -167,9 +167,9 @@ mod tests {
 
         // Saved at Some(x), seen at Some(y) with y > x — pending events
         // since last save.
-        let mut p: Progress<u64, Version> = Progress::resume(v(3), 0);
-        p.seen = Some(v(7));
-        assert!(p.dirty());
+        let mut p2: Progress<u64, Version> = Progress::resume(v(3), 0);
+        p2.seen = Some(v(7));
+        assert!(p2.dirty());
     }
 
     // ── Progress::unsaved — returns the position to save at ───────────
@@ -179,8 +179,8 @@ mod tests {
         let p: Progress<u64, Version> = Progress::fresh(0);
         assert!(p.unsaved().is_none());
 
-        let p: Progress<u64, Version> = Progress::resume(v(3), 0);
-        assert!(p.unsaved().is_none());
+        let p2: Progress<u64, Version> = Progress::resume(v(3), 0);
+        assert!(p2.unsaved().is_none());
     }
 
     #[test]

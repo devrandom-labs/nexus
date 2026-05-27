@@ -2,4 +2,4 @@
 source: crates/nexus-fjall/tests/snapshot_wire_format.rs
 expression: hex_dump(&buf)
 ---
-01 00 00 00 00 00 00 00 01 00 00 00 00 00 64 61 74 61
+01 00 00 00 00 00 00 00 01 00 00 00 00 00 ff ff ff ff 64 61 74 61

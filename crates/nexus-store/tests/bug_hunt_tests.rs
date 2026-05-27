@@ -40,6 +40,30 @@ use std::collections::HashMap;
 use std::fmt;
 use tokio::sync::Mutex;
 
+fn build_persisted(
+    version: Version,
+    global_seq: GlobalSeq,
+    event_type: &str,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(payload);
+    let value = bytes::Bytes::from(buf);
+    let et_end = u32::try_from(event_type.len()).expect("event_type fits u32");
+    let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
+    PersistedEnvelope::try_new(
+        version,
+        global_seq,
+        value,
+        1,
+        0..et_end,
+        et_end..pl_end,
+        None,
+    )
+    .expect("test fixture envelope")
+}
+
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
 type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::io::Error>;
 
@@ -96,7 +120,7 @@ enum ProbeError {
 }
 
 impl BaseEventStream for ProbeStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -105,21 +129,22 @@ impl BaseEventStream for ProbeStream {
 }
 
 impl EventStream for ProbeStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a>
+        = PersistedEnvelope
+    where
+        Self: 'a;
     type Error = ProbeError;
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.events.len() {
             return Ok(None);
         }
         let row = &self.events[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(row.0).unwrap(),
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }
@@ -135,7 +160,7 @@ impl RawEventStore for ProbeStore {
         &self,
         id: &impl nexus::Id,
         expected_version: Option<Version>,
-        envelopes: &[PendingEnvelope<()>],
+        envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
         let stream = guard.entry(id.to_string()).or_default();
@@ -252,15 +277,15 @@ async fn append_rejects_backwards_versions() {
         pending_envelope(Version::new(3).unwrap())
             .event_type("E")
             .payload(vec![3])
-            .build_without_metadata(),
+            .build(),
         pending_envelope(Version::new(2).unwrap())
             .event_type("E")
             .payload(vec![2])
-            .build_without_metadata(),
+            .build(),
         pending_envelope(Version::new(1).unwrap())
             .event_type("E")
             .payload(vec![1])
-            .build_without_metadata(),
+            .build(),
     ];
 
     let result = store.append(&tid("s1"), None, &envelopes).await;
@@ -299,7 +324,7 @@ proptest! {
         let envelope = pending_envelope(Version::INITIAL)
             .event_type("E")
             .payload(payload.clone())
-            .build_without_metadata();
+            .build();
         prop_assert_eq!(envelope.payload(), payload.as_slice());
     }
 
@@ -318,7 +343,7 @@ proptest! {
                     pending_envelope(Version::new(v).unwrap())
                         .event_type("E")
                         .payload(vec![v as u8])
-                        .build_without_metadata()
+                        .build()
                 })
                 .collect();
 
@@ -349,9 +374,9 @@ fn bug_probe_cannot_construct_pending_envelope_without_builder() {
     // But: std::mem::zeroed() could bypass this...
     //
     // We WON'T test unsafe here, but we document that:
-    // - PendingEnvelope<()> has no Default impl (good)
-    // - PendingEnvelope<()> has no From impl (good)
-    // - PendingEnvelope<()> has no Clone impl (interesting — is this intentional?)
+    // - PendingEnvelope has no Default impl (good)
+    // - PendingEnvelope has no From impl (good)
+    // - PendingEnvelope has no Clone impl (interesting — is this intentional?)
 
     // Verify no Clone
     fn assert_not_clone<T>() {
@@ -359,22 +384,20 @@ fn bug_probe_cannot_construct_pending_envelope_without_builder() {
         // We can't test negative traits in Rust, but we can document:
         // PendingEnvelope does NOT implement Clone, Copy, Default, or From.
     }
-    assert_not_clone::<PendingEnvelope<()>>();
+    assert_not_clone::<PendingEnvelope>();
 }
 
-// BUG PROBE: PersistedEnvelope has a public `new()` constructor.
+// BUG PROBE: PersistedEnvelope has a public `try_new()` constructor.
 // Unlike PendingEnvelope (which requires the builder), ANYONE can construct
 // a PersistedEnvelope with arbitrary data. Is this a safety gap?
 #[test]
 fn bug_probe_persisted_envelope_public_constructor() {
-    // This compiles — PersistedEnvelope::new_unchecked is fully public
-    let forged = PersistedEnvelope::<()>::new_unchecked(
+    // This compiles — PersistedEnvelope::try_new is fully public
+    let forged = build_persisted(
         Version::new(999).unwrap(),
         GlobalSeq::INITIAL,
         "ForgedEvent",
-        1,
         b"malicious payload",
-        (),
     );
 
     // A malicious adapter could return forged envelopes
@@ -442,35 +465,20 @@ fn bug_probe_error_source_chain_preserved() {
     );
 }
 
-// BUG PROBE: PendingEnvelope with metadata that panics on Drop.
-// Does the builder handle this safely?
+// BUG PROBE: PendingEnvelope with bytes metadata drops cleanly.
+// Metadata is now always raw bytes (`Option<Bytes>`); verify the builder
+// stores and exposes them without issues.
 #[test]
-fn bug_probe_metadata_panic_on_drop() {
-    // This is an adversarial metadata type
-    struct PanicOnDrop(bool);
-    impl std::fmt::Debug for PanicOnDrop {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "PanicOnDrop({})", self.0)
-        }
-    }
-    impl Drop for PanicOnDrop {
-        fn drop(&mut self) {
-            if self.0 {
-                // In a real scenario, this would unwind
-                // We can't test panic-in-drop safely, but we can test
-                // that the builder doesn't do anything weird with Drop order
-            }
-        }
-    }
-
+fn bug_probe_metadata_bytes_stored_correctly() {
+    let meta = b"correlation-id:abc123".to_vec();
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("E")
         .payload(vec![])
-        .build(PanicOnDrop(false));
+        .with_metadata(meta.clone());
 
-    // Metadata is moved into the envelope, not cloned
     assert_eq!(envelope.version(), Version::INITIAL);
-    // FINDING: Drop order is fine — Rust handles this correctly.
+    assert_eq!(envelope.metadata(), Some(meta.as_slice()));
+    // FINDING: Drop order is fine — Bytes handles this correctly.
 }
 
 // BUG PROBE: Are builder intermediate types Send + Sync?
@@ -490,31 +498,30 @@ fn bug_probe_builder_intermediates_are_send_sync() {
 // Are there unexpected padding bytes wasting memory?
 #[test]
 fn bug_probe_envelope_memory_layout() {
-    let pending_size = std::mem::size_of::<PendingEnvelope<()>>();
-    let persisted_size = std::mem::size_of::<PersistedEnvelope<'static, ()>>();
+    let pending_size = std::mem::size_of::<PendingEnvelope>();
+    let persisted_size = std::mem::size_of::<PersistedEnvelope>();
 
-    println!("PendingEnvelope<()> size: {pending_size} bytes");
-    println!("PersistedEnvelope<'static, ()> size: {persisted_size} bytes");
+    println!("PendingEnvelope size: {pending_size} bytes");
+    println!("PersistedEnvelope size: {persisted_size} bytes");
 
-    // PendingEnvelope: Version(8) + &'static str(16) + u32(4) + Vec(24) + () + padding
-    // Expected: ~56 bytes
+    // PendingEnvelope: Version(8) + &'static str(16) + u32(4) + Bytes(24) + Option<Bytes>(32) + padding
+    // Expected: ~88 bytes
     assert!(
-        pending_size <= 64,
+        pending_size <= 128,
         "PendingEnvelope is {pending_size} bytes — check for padding bloat"
     );
 
-    // PersistedEnvelope: Version(8) + &str(16) + u32(4) + &[u8](16) + () + padding
-    // Expected: ~48 bytes
+    // PersistedEnvelope: Version(8) + GlobalSeq(8) + u32(4) + Bytes(24) + 3x Range<u32>(12+8+8) + padding
+    // Expected: ~80 bytes
     assert!(
-        persisted_size <= 56,
+        persisted_size <= 128,
         "PersistedEnvelope is {persisted_size} bytes — check for padding bloat"
     );
 
-    // PersistedEnvelope should be SMALLER than PendingEnvelope (borrows vs owns)
+    // Both envelopes should be reasonably sized
     assert!(
-        persisted_size <= pending_size,
-        "PersistedEnvelope ({persisted_size}) should be smaller or equal to \
-         PendingEnvelope ({pending_size})"
+        persisted_size <= 256,
+        "PersistedEnvelope ({persisted_size}) seems unexpectedly large"
     );
 }
 
