@@ -9,7 +9,7 @@ use nexus_store::Decode;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::projection::Projector;
 use nexus_store::state::{PersistTrigger, SnapshotStore};
-use nexus_store::store::SharedSubscription;
+use nexus_store::store::Subscription;
 use nexus_store::stream::{EventStream, EventStreamExt};
 
 pub use builder::ProjectionBuilder;
@@ -108,7 +108,7 @@ impl<I, Sub, SS, P, EC, Trig, Mode> Projection<I, Sub, SS, P, EC, Trig, Mode> {
 impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Configured>
 where
     I: Id + Clone,
-    Sub: SharedSubscription<()>,
+    Sub: Subscription<()>,
     SS: SnapshotStore<P::State, Version>,
     P: Projector,
     EC: Decode<P::Event>,
@@ -205,7 +205,7 @@ where
 impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Ready<P::State>>
 where
     I: Id + Clone + Send + Sync,
-    Sub: SharedSubscription<()> + Send,
+    Sub: Subscription<()> + Send,
     Sub::Stream: for<'a> EventStream<(), Item<'a> = PersistedEnvelope<'a, ()>>,
     SS: SnapshotStore<P::State, Version> + Send + Sync,
     P: Projector + Send + Sync,

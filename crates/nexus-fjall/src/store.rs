@@ -4,15 +4,13 @@ use crate::encoding::{
 };
 use crate::error::FjallError;
 use crate::stream::FjallStream;
-use crate::subscription_stream::{
-    FjallSubscriptionStream, OwnedStreamId, SharedFjallSubscriptionStream,
-};
+use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
 use arrayvec::ArrayString;
 use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
-use nexus_store::store::{RawEventStore, SharedSubscriptionBackend, Subscription};
+use nexus_store::store::{RawEventStore, SubscriptionBackend};
 use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -342,44 +340,18 @@ mod snapshot_impl {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Subscription implementation
+// SubscriptionBackend impl
 // ═══════════════════════════════════════════════════════════════════════════
 
-impl Subscription<()> for FjallStore {
-    type Stream<'a> = FjallSubscriptionStream<'a>;
-    type Error = FjallError;
-
-    async fn subscribe<'a>(
-        &'a self,
-        id: &'a impl Id,
-        from: Option<Version>,
-    ) -> Result<FjallSubscriptionStream<'a>, FjallError> {
-        let start = match from {
-            None => Version::INITIAL,
-            Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
-        };
-        let owned_id = OwnedStreamId::from_id(id);
-        let label = id.to_label();
-        let inner = self.read_stream(&owned_id, start).await?;
-        Ok(FjallSubscriptionStream::new(
-            self, owned_id, label, inner, from,
-        ))
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SharedSubscriptionBackend impl (PR1 of arc-subscription refactor)
-// ═══════════════════════════════════════════════════════════════════════════
-
-impl SharedSubscriptionBackend<()> for FjallStore {
-    type Stream = SharedFjallSubscriptionStream;
+impl SubscriptionBackend<()> for FjallStore {
+    type Stream = FjallSubscriptionStream;
     type Error = FjallError;
 
     async fn subscribe(
         arc: &Arc<Self>,
         id: &impl Id,
         from: Option<Version>,
-    ) -> Result<SharedFjallSubscriptionStream, FjallError> {
+    ) -> Result<FjallSubscriptionStream, FjallError> {
         let start = match from {
             None => Version::INITIAL,
             Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
@@ -387,7 +359,7 @@ impl SharedSubscriptionBackend<()> for FjallStore {
         let owned_id = OwnedStreamId::from_id(id);
         let label = id.to_label();
         let inner = arc.read_stream(&owned_id, start).await?;
-        Ok(SharedFjallSubscriptionStream::new(
+        Ok(FjallSubscriptionStream::new(
             Arc::clone(arc),
             owned_id,
             label,
