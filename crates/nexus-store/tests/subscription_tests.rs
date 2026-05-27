@@ -64,7 +64,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 
 #[tokio::test]
 async fn subscribe_catchup_then_live() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let id = TestId::new("stream-1");
 
     // Pre-populate 2 events.
@@ -107,7 +107,7 @@ async fn subscribe_catchup_then_live() {
 
 #[tokio::test]
 async fn subscribe_from_checkpoint() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let id = TestId::new("stream-1");
 
     // Pre-populate 3 events.
@@ -136,7 +136,7 @@ async fn subscribe_from_checkpoint() {
 
 #[tokio::test]
 async fn drop_and_resubscribe_from_position() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let id = TestId::new("stream-1");
 
     // Append event 1.
@@ -182,7 +182,7 @@ async fn drop_and_resubscribe_from_position() {
 
 #[tokio::test]
 async fn catchup_events_appended_before_subscribe() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let id = TestId::new("stream-1");
 
     // Append 2 events before any subscribe.
@@ -215,7 +215,7 @@ async fn catchup_events_appended_before_subscribe() {
 
 #[tokio::test]
 async fn subscribe_to_nonexistent_stream_waits() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let id = TestId::new("ghost-stream");
 
     let mut stream = store.subscribe(&id, None).await.unwrap();
@@ -240,7 +240,7 @@ async fn subscribe_to_nonexistent_stream_waits() {
 /// Subscribe with `from` version beyond current stream head.
 #[tokio::test]
 async fn subscribe_from_beyond_head() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let id = TestId::new("stream-1");
 
     // Append 2 events (head is at version 2).
@@ -360,7 +360,7 @@ async fn append_during_catchup_no_loss() {
 
 #[tokio::test]
 async fn multiple_subscribers_same_stream() {
-    let store = InMemoryStore::new();
+    let store = Arc::new(InMemoryStore::new());
     let id = TestId::new("shared-stream");
 
     // Two subscribers to the same stream.
@@ -386,4 +386,20 @@ async fn multiple_subscribers_same_stream() {
         .unwrap();
     assert_eq!(env2.event_type(), "SharedEvent");
     assert_eq!(env2.version(), Version::new(1).unwrap());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. Static-ness compile-time guarantee
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// The cursor returned by `subscribe` must be `'static` — the whole point
+/// of the Arc-based subscription shape. If this assertion compiles, the
+/// cursor outlives any caller scope and can be spawned across tasks.
+#[tokio::test]
+async fn subscription_cursor_is_static() {
+    fn assert_static<T: 'static>(_: &T) {}
+    let store = Arc::new(InMemoryStore::new());
+    let id = TestId::new("s-1");
+    let sub = store.subscribe(&id, None).await.unwrap();
+    assert_static(&sub);
 }

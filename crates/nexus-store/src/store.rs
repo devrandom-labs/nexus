@@ -163,78 +163,7 @@ pub trait RawEventStore<M = ()>: Send + Sync {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Subscription<M> — tailing stream that waits instead of terminating
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// A subscription to events in a single stream.
-///
-/// Returns an [`EventStream`] that never exhausts — it waits for new
-/// events when caught up, rather than returning `None`.
-///
-/// # Contract
-///
-/// - `from: None` → start from the beginning of the stream (version 1)
-/// - `from: Some(v)` → start from the event *after* version `v`
-/// - The returned stream **never returns `None`**. When all existing
-///   events have been yielded, it blocks until new events are appended.
-/// - Events are yielded with monotonically increasing versions, same
-///   as [`EventStream`].
-///
-/// # Difference from `RawEventStore::read_stream`
-///
-/// `read_stream` returns a fused stream that terminates when caught up.
-/// `subscribe` returns a stream that *waits* instead of terminating.
-pub trait Subscription<M: 'static> {
-    /// The subscription stream type — an [`EventStream`] that never exhausts.
-    ///
-    /// The stream's error type must be the same as the subscription's error type
-    /// to enable uniform error handling by consumers.
-    ///
-    /// The stream must be `Send` so consumers (e.g. projection runners) can
-    /// drive it from a multi-threaded async runtime. This is structural —
-    /// every implementor must produce a `Send` stream. Pushing it to the
-    /// trait level avoids HRTB bounds like `for<'a> Sub::Stream<'a>: Send`
-    /// at call sites, which conflict with non-`'static` subscription borrows
-    /// (the `where Self: 'a` bound on `Stream<'a>` would force the borrow's
-    /// lifetime to `'static`).
-    type Stream<'a>: BaseEventStream<M, Error = Self::Error> + Send + 'a
-    where
-        Self: 'a;
-
-    /// The error type for subscription operations.
-    type Error: core::error::Error + Send + Sync + 'static;
-
-    /// Subscribe to events in a single stream.
-    fn subscribe<'a>(
-        &'a self,
-        id: &'a impl Id,
-        from: Option<Version>,
-    ) -> impl Future<Output = Result<Self::Stream<'a>, Self::Error>> + Send + 'a;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Delegation implementation — share via reference
-// ═══════════════════════════════════════════════════════════════════════════
-
-impl<T: Subscription<M> + Sync, M: 'static> Subscription<M> for &T {
-    type Stream<'a>
-        = T::Stream<'a>
-    where
-        Self: 'a;
-
-    type Error = T::Error;
-
-    fn subscribe<'a>(
-        &'a self,
-        id: &'a impl Id,
-        from: Option<Version>,
-    ) -> impl Future<Output = Result<Self::Stream<'a>, Self::Error>> + Send + 'a {
-        (**self).subscribe(id, from)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SharedSubscription<M> — Arc-based 'static subscription shape
+// Subscription<M> — Arc-based 'static subscription shape
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// A subscription whose cursor owns an `Arc<Store>` and is therefore `'static`.
@@ -242,23 +171,18 @@ impl<T: Subscription<M> + Sync, M: 'static> Subscription<M> for &T {
 /// Implemented on `Arc<Store>` directly so the trait method `subscribe`
 /// takes `&self` and returns a cursor that outlives the call. Each
 /// subscription pays one `Arc::clone` at `subscribe()` time; per-event
-/// cost is identical to the borrowed shape.
+/// cost is identical to a borrowing design.
 ///
-/// # Why this is separate from [`Subscription`]
+/// # Shape
 ///
-/// The borrowed [`Subscription`] uses a GAT `type Stream<'a>: ... where Self: 'a`.
-/// HRTB type-equality on that GAT collapses to `Self: 'static` on stable
-/// Rust, so consumer sites cannot bound `for<'a> Stream<'a>::Item<'a>`
-/// without a witness sub-trait ([`BaseEventStream`](crate::stream::BaseEventStream)). This trait's
 /// `type Stream: EventStream<M> + Send + 'static` is a concrete, non-GAT
-/// associated type — the HRTB nesting goes away. The cursor's own per-record
-/// `Item<'a>` GAT on [`EventStream`](crate::stream::EventStream) is **preserved** — each `next()` still
-/// lends a `PersistedEnvelope<'_>` from the cursor's internal buffer.
-///
-/// PR3 of the arc-subscription refactor renames this to `Subscription` and
-/// deletes the borrowed shape entirely. The temporary `Shared` prefix is
-/// only there to let PR1 introduce the new shape alongside the existing
-/// one without breaking the workspace build.
+/// associated type. Consumers can name `Sub::Stream` directly and bound it
+/// with HRTBs (e.g. `for<'a> Sub::Stream::Item<'a> = PersistedEnvelope<'a>`)
+/// without forcing `Self: 'static` via the `where Self: 'a` clause a GAT
+/// would require. The cursor's own per-record `Item<'a>` GAT on
+/// [`EventStream`](crate::stream::EventStream) is **preserved** — each
+/// `next()` still lends a `PersistedEnvelope<'_>` from the cursor's
+/// internal buffer.
 ///
 /// # Contract
 ///
@@ -273,7 +197,7 @@ impl<T: Subscription<M> + Sync, M: 'static> Subscription<M> for &T {
 ///
 /// `read_stream` returns a fused stream that terminates when caught up.
 /// `subscribe` returns a stream that *waits* instead of terminating.
-pub trait SharedSubscription<M: 'static = ()> {
+pub trait Subscription<M: 'static = ()> {
     /// The subscription stream type — an [`EventStream`](crate::stream::EventStream) that never exhausts.
     ///
     /// Concrete (non-GAT) and `'static`. The cursor's own per-record
@@ -298,14 +222,14 @@ pub trait SharedSubscription<M: 'static = ()> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SharedSubscriptionBackend<M> — adapter-facing primitive
+// SubscriptionBackend<M> — adapter-facing primitive
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Adapter-facing primitive for the [`SharedSubscription`] blanket impl.
+/// Adapter-facing primitive for the [`Subscription`] blanket impl.
 ///
 /// Adapters implement this trait on the **bare** store type (e.g.
 /// `FjallStore`, [`InMemoryStore`](crate::testing::InMemoryStore)), not on
-/// `Arc<Store>`. The blanket impl below then provides [`SharedSubscription<M>`]
+/// `Arc<Store>`. The blanket impl below then provides [`Subscription<M>`]
 /// on `Arc<Store>` automatically — users never name this trait directly. They
 /// call `store.subscribe(&id, None)` on an `Arc<Store>` and the blanket
 /// dispatches here.
@@ -313,16 +237,12 @@ pub trait SharedSubscription<M: 'static = ()> {
 /// # Why this trait exists
 ///
 /// Rust's orphan rule (E0117) forbids
-/// `impl SharedSubscription<M> for Arc<Store>` in an adapter crate when
-/// both `SharedSubscription` and `Arc` are foreign — `Store` at a covered
+/// `impl Subscription<M> for Arc<Store>` in an adapter crate when
+/// both `Subscription` and `Arc` are foreign — `Store` at a covered
 /// position inside `Arc<Store>` does not satisfy coherence. The escape is
 /// this trait, whose `Self` is the bare store type (local to the adapter
 /// crate). The blanket in this crate translates to the user-facing shape.
-///
-/// PR3 of the arc-subscription refactor renames this alongside the
-/// `Shared` prefix on the user trait, or collapses the two if a cleaner
-/// design emerges.
-pub trait SharedSubscriptionBackend<M: 'static = ()>: Send + Sync + 'static {
+pub trait SubscriptionBackend<M: 'static = ()>: Send + Sync + 'static {
     /// The cursor type — concrete (no GAT) and `'static`. Per-record
     /// borrowing happens via [`EventStream::Item<'a>`](crate::stream::EventStream::Item).
     type Stream: EventStream<M, Error = Self::Error> + Send + 'static;
@@ -342,11 +262,11 @@ pub trait SharedSubscriptionBackend<M: 'static = ()>: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
 }
 
-// ─── Blanket: Arc<T> + SharedSubscriptionBackend → SharedSubscription ───────
+// ─── Blanket: Arc<T> + SubscriptionBackend → Subscription ───────────────────
 
-impl<T, M> SharedSubscription<M> for Arc<T>
+impl<T, M> Subscription<M> for Arc<T>
 where
-    T: SharedSubscriptionBackend<M>,
+    T: SubscriptionBackend<M>,
     M: 'static,
 {
     type Stream = T::Stream;

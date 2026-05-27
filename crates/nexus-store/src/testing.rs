@@ -2,7 +2,7 @@
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::store::{GlobalSeq, RawEventStore, SharedSubscriptionBackend, Subscription};
+use crate::store::{GlobalSeq, RawEventStore, SubscriptionBackend};
 use crate::stream::EventStream;
 use nexus::Id;
 use nexus::Version;
@@ -261,180 +261,20 @@ impl RawEventStore for InMemoryStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Subscription — live event streaming with catch-up
+// InMemorySubscriptionStream — Arc-owning subscription cursor
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Lending cursor for subscription streams.
-///
-/// Eagerly loads a batch of events into a local buffer (same pattern as
-/// [`InMemoryStream`]), yields from that buffer, then when exhausted
-/// waits on [`Notify`] and reloads. The stream **never returns `None`**.
-pub struct InMemorySubscriptionStream<'a> {
-    store: &'a InMemoryStore,
-    stream_id: String,
-    /// Eagerly-loaded batch of events from the last read.
-    buffer: Vec<ReadRow>,
-    pos: usize,
-    /// Last version yielded -- for re-reading from the right position.
-    last_version: Option<Version>,
-    #[cfg(debug_assertions)]
-    prev_version: Option<u64>,
-}
-
-impl InMemorySubscriptionStream<'_> {
-    /// Read events from the store starting at `from_version` into the buffer.
-    async fn refill(&mut self, from_version: Version) {
-        let buffer = {
-            let guard = self.store.streams.lock().await;
-            guard
-                .get(&self.stream_id)
-                .map(|rows| {
-                    rows.iter()
-                        .filter(|r| r.version >= from_version.as_u64())
-                        .map(|r| ReadRow {
-                            version: r.version,
-                            global_seq: r.global_seq,
-                            event_type: r.event_type.clone(),
-                            schema_version: r.schema_version,
-                            payload: r.payload.clone(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        self.buffer = buffer;
-        self.pos = 0;
-    }
-
-    /// Compute the version to read from next: `last_version` + 1, or `INITIAL`.
-    ///
-    /// Returns an error on overflow instead of silently wrapping back
-    /// to `Version::INITIAL`.
-    fn next_read_version(&self) -> Result<Version, InMemoryStoreError> {
-        self.last_version.map_or_else(
-            || Ok(Version::INITIAL),
-            |v| v.next().ok_or(InMemoryStoreError::VersionOverflow),
-        )
-    }
-}
-
-impl crate::stream::BaseEventStream for InMemorySubscriptionStream<'_> {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
-
-impl EventStream for InMemorySubscriptionStream<'_> {
-    type Item<'a>
-        = PersistedEnvelope<'a>
-    where
-        Self: 'a;
-    type Error = InMemoryStoreError;
-
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
-        loop {
-            // Yield from the current buffer if available.
-            if self.pos < self.buffer.len() {
-                let row = &self.buffer[self.pos];
-                self.pos += 1;
-
-                #[cfg(debug_assertions)]
-                {
-                    if let Some(prev) = self.prev_version {
-                        debug_assert!(
-                            row.version > prev,
-                            "Subscription monotonicity violated: version {} is not greater than previous {}",
-                            row.version,
-                            prev,
-                        );
-                    }
-                    self.prev_version = Some(row.version);
-                }
-
-                let Some(version) = Version::new(row.version) else {
-                    return Err(InMemoryStoreError::CorruptVersion);
-                };
-                self.last_version = Some(version);
-
-                return Ok(Some(PersistedEnvelope::new_unchecked(
-                    version,
-                    row.global_seq,
-                    &row.event_type,
-                    row.schema_version,
-                    &row.payload,
-                    (),
-                )));
-            }
-
-            // Buffer exhausted. Register for notification BEFORE checking
-            // for new events to avoid the race where an append happens
-            // between our read and our wait.
-            let notified = self.store.notify.notified();
-
-            let from = self.next_read_version()?;
-            self.refill(from).await;
-
-            // If refill found new events, loop back to yield them.
-            if !self.buffer.is_empty() {
-                continue;
-            }
-
-            // No new events — wait for notification, then retry.
-            notified.await;
-        }
-    }
-}
-
-impl Subscription<()> for InMemoryStore {
-    type Stream<'a> = InMemorySubscriptionStream<'a>;
-    type Error = InMemoryStoreError;
-
-    async fn subscribe<'a>(
-        &'a self,
-        id: &'a impl Id,
-        from: Option<Version>,
-    ) -> Result<InMemorySubscriptionStream<'a>, InMemoryStoreError> {
-        let stream_id = id.to_string();
-        let from_version = match from {
-            None => Version::INITIAL,
-            Some(v) => v.next().ok_or(InMemoryStoreError::VersionOverflow)?,
-        };
-
-        let mut sub = InMemorySubscriptionStream {
-            store: self,
-            stream_id,
-            buffer: Vec::new(),
-            pos: 0,
-            last_version: from,
-            #[cfg(debug_assertions)]
-            prev_version: from.map(Version::as_u64),
-        };
-
-        // Eagerly load catch-up events.
-        sub.refill(from_version).await;
-
-        Ok(sub)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SharedInMemorySubscriptionStream — Arc-based cursor (PR1 of arc-subscription refactor)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Subscription cursor that owns an `Arc<InMemoryStore>` instead of borrowing.
+/// Subscription cursor that owns an `Arc<InMemoryStore>`.
 ///
 /// `'static` (no lifetime parameter). Spawnable across async boundaries.
-/// PR3 of the arc-subscription refactor renames this to
-/// `InMemorySubscriptionStream` and deletes the borrowed variant.
+/// Eagerly loads a batch of events into a local buffer, yields from that
+/// buffer, then when exhausted waits on [`Notify`] and reloads. The
+/// stream **never returns `None`** — it blocks until new events arrive.
 ///
 /// The per-record [`EventStream::Item<'a>`](crate::stream::EventStream::Item)
-/// GAT is `PersistedEnvelope<'a>` — `next()` still lends each envelope
-/// from the cursor's internal buffer, exactly as the borrowed variant.
-/// Only the subscribe-time borrow from store is replaced by `Arc::clone`.
-pub struct SharedInMemorySubscriptionStream {
+/// GAT is `PersistedEnvelope<'a>` — `next()` lends each envelope from the
+/// cursor's internal buffer.
+pub struct InMemorySubscriptionStream {
     store: Arc<InMemoryStore>,
     stream_id: String,
     buffer: Vec<ReadRow>,
@@ -444,7 +284,7 @@ pub struct SharedInMemorySubscriptionStream {
     prev_version: Option<u64>,
 }
 
-impl SharedInMemorySubscriptionStream {
+impl InMemorySubscriptionStream {
     /// Read events from the store starting at `from_version` into the buffer.
     async fn refill(&mut self, from_version: Version) {
         let buffer = {
@@ -481,7 +321,7 @@ impl SharedInMemorySubscriptionStream {
     }
 }
 
-impl EventStream for SharedInMemorySubscriptionStream {
+impl EventStream for InMemorySubscriptionStream {
     type Item<'a>
         = PersistedEnvelope<'a>
     where
@@ -527,11 +367,10 @@ impl EventStream for SharedInMemorySubscriptionStream {
             // for new events to avoid the race where an append happens
             // between our read and our wait.
             //
-            // Clone the Arc<Notify> so `notified` does not borrow `self`.
-            // The borrowed variant can take `self.store.notify.notified()`
-            // directly because `store: &'a InMemoryStore` is external;
-            // here `store: Arc<InMemoryStore>` lives inside `self`, so a
-            // `&mut self` call to `refill` would conflict with the borrow.
+            // Clone the `Arc<Notify>` so `notified` does not borrow `self`.
+            // `store: Arc<InMemoryStore>` lives inside `self`, so a
+            // `&mut self` call to `refill` would otherwise conflict with
+            // the borrow held by `notified`.
             let notify = Arc::clone(&self.store.notify);
             let notified = notify.notified();
 
@@ -549,22 +388,22 @@ impl EventStream for SharedInMemorySubscriptionStream {
     }
 }
 
-impl SharedSubscriptionBackend<()> for InMemoryStore {
-    type Stream = SharedInMemorySubscriptionStream;
+impl SubscriptionBackend<()> for InMemoryStore {
+    type Stream = InMemorySubscriptionStream;
     type Error = InMemoryStoreError;
 
     async fn subscribe(
         arc: &Arc<Self>,
         id: &impl Id,
         from: Option<Version>,
-    ) -> Result<SharedInMemorySubscriptionStream, InMemoryStoreError> {
+    ) -> Result<InMemorySubscriptionStream, InMemoryStoreError> {
         let stream_id = id.to_string();
         let from_version = match from {
             None => Version::INITIAL,
             Some(v) => v.next().ok_or(InMemoryStoreError::VersionOverflow)?,
         };
 
-        let mut sub = SharedInMemorySubscriptionStream {
+        let mut sub = InMemorySubscriptionStream {
             store: Arc::clone(arc),
             stream_id,
             buffer: Vec::new(),

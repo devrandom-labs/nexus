@@ -212,7 +212,10 @@
       "Bash(sed -n '/\\\\[features\\\\]/,/^\\\\[/p' crates/nexus-fjall/Cargo.toml)",
       "Bash(sed -n '/\\\\[features\\\\]/,/^\\\\[/p' crates/nexus-store/Cargo.toml)",
       "Bash(tee /tmp/nexus-flake-check.log)",
-      "Bash(tee -a /tmp/nexus-flake-check.log)"
+      "Bash(tee -a /tmp/nexus-flake-check.log)",
+      "Skill(superpowers:writing-plans)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(rustc --explain E0117)"
     ]
   },
   "hooks": {
