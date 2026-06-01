@@ -4,11 +4,11 @@ use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::store::{GlobalSeq, RawEventStore, SubscriptionBackend};
 use crate::stream::EventStream;
+use crate::wire::{self, RowOffsets};
 use bytes::Bytes;
 use nexus::Id;
 use nexus::Version;
 use std::collections::HashMap;
-use std::ops::Range;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -21,6 +21,10 @@ pub enum InMemoryStoreError {
     #[error("stored event has version 0 — corrupt data")]
     CorruptVersion,
 
+    /// Stored event has `global_seq` 0 — corrupt data (`GlobalSeq` is `NonZero`).
+    #[error("stored event has global_seq 0 — corrupt data at version {version}")]
+    CorruptGlobalSeq { version: u64 },
+
     /// Version overflow: cannot advance past `u64::MAX`.
     #[error("version overflow: cannot advance past u64::MAX")]
     VersionOverflow,
@@ -29,9 +33,9 @@ pub enum InMemoryStoreError {
     #[error("global sequence overflow: cannot advance past u64::MAX")]
     GlobalSeqOverflow,
 
-    /// Envelope payload + metadata + `event_type` exceeds `u32::MAX` bytes (offset overflow).
-    #[error("envelope value too large to address with Range<u32>")]
-    ValueTooLarge,
+    /// Envelope failed wire-format validation when constructing the row.
+    #[error("wire-format build error in in-memory store")]
+    Wire(#[source] wire::WireError),
 
     /// Persisted envelope failed integrity validation on read.
     #[error("envelope integrity error in in-memory store at version {version}")]
@@ -44,23 +48,19 @@ pub enum InMemoryStoreError {
 
 /// A row stored in the in-memory database.
 ///
-/// Holds the event data in a single `Bytes` buffer (Arc-shared, cheap to clone)
-/// alongside pre-computed `Range<u32>` offsets. The buffer layout is:
-/// `[event_type bytes][metadata bytes (if any)][payload bytes]`.
+/// Holds the wire-format bytes ([`wire::build_row`]) in a single
+/// Arc-shared [`Bytes`] alongside pre-computed [`RowOffsets`]. The
+/// `version` is the stream-local position, kept out of the value
+/// (fjall stores it in the key; `InMemoryStore` caches it here).
 ///
-/// Cloning a `StoredRow` is an Arc refcount increment plus three range copies —
-/// no heap allocation.
+/// Cloning a `StoredRow` is an Arc refcount increment plus a few range
+/// copies — no heap allocation.
 #[derive(Clone)]
 struct StoredRow {
     version: u64,
-    global_seq: GlobalSeq,
-    schema_version: u32,
-    /// Concatenated buffer: `[event_type bytes][metadata bytes (if Some)][payload bytes]`.
-    /// Cheap to clone — `Bytes` is Arc-shared.
+    /// Wire-format row (see [`wire::build_row`]). Payload is 16-byte aligned.
     value: Bytes,
-    event_type_range: Range<u32>,
-    payload_range: Range<u32>,
-    metadata_range: Option<Range<u32>>,
+    offsets: RowOffsets,
 }
 
 /// In-memory event store for testing. Implements [`RawEventStore`].
@@ -145,72 +145,80 @@ impl EventStream for InMemoryStream {
             }
             self.prev_version = Some(row.version);
         }
-        let Some(version) = Version::new(row.version) else {
-            return Err(InMemoryStoreError::CorruptVersion);
-        };
-        PersistedEnvelope::try_new(
-            version,
-            row.global_seq,
-            row.value.clone(),
-            row.schema_version,
-            row.event_type_range.clone(),
-            row.payload_range.clone(),
-            row.metadata_range.clone(),
-        )
-        .map(Some)
-        .map_err(|source| InMemoryStoreError::EnvelopeCorrupt {
-            version: row.version,
-            source,
-        })
+        row_to_envelope(row).map(Some)
     }
 }
 
 /// Encode a `PendingEnvelope` + its assigned `global_seq` into a `StoredRow`.
 ///
-/// Lays out `[event_type][metadata?][payload]` in a single `Bytes` buffer,
-/// computes `Range<u32>` offsets, and validates them via `PersistedEnvelope::try_new`.
+/// Delegates to [`wire::build_row`], which produces a 16-byte-aligned
+/// payload inside the resulting [`Bytes`].
 fn encode_pending_to_row(
     env: &PendingEnvelope,
     global_seq: GlobalSeq,
 ) -> Result<StoredRow, AppendError<InMemoryStoreError>> {
-    let event_type_bytes = env.event_type().as_bytes();
-    let metadata = env.metadata();
-    let payload = env.payload();
-
-    let et_len = event_type_bytes.len();
-    let meta_len = metadata.map_or(0, <[u8]>::len);
-    let payload_len = payload.len();
-
-    let total = et_len + meta_len + payload_len;
-    let mut buf = Vec::with_capacity(total);
-    buf.extend_from_slice(event_type_bytes);
-    if let Some(m) = metadata {
-        buf.extend_from_slice(m);
-    }
-    buf.extend_from_slice(payload);
-
-    let value = Bytes::from(buf);
-
-    let et_end =
-        u32::try_from(et_len).map_err(|_| AppendError::Store(InMemoryStoreError::ValueTooLarge))?;
-    let (metadata_range, payload_start) = if metadata.is_some() {
-        let m_end = u32::try_from(et_len + meta_len)
-            .map_err(|_| AppendError::Store(InMemoryStoreError::ValueTooLarge))?;
-        (Some(et_end..m_end), m_end)
-    } else {
-        (None, et_end)
-    };
-    let payload_end =
-        u32::try_from(total).map_err(|_| AppendError::Store(InMemoryStoreError::ValueTooLarge))?;
+    let row = wire::build_row(
+        global_seq.as_u64(),
+        env.schema_version(),
+        env.event_type(),
+        env.metadata(),
+        env.payload(),
+    )
+    .map_err(|e| AppendError::Store(InMemoryStoreError::Wire(e)))?;
 
     Ok(StoredRow {
         version: env.version().as_u64(),
+        value: row.value,
+        offsets: row.offsets,
+    })
+}
+
+/// Construct a [`PersistedEnvelope`] from a [`StoredRow`].
+///
+/// Reads `global_seq` and `schema_version` from the wire-format header
+/// at the constant offsets defined by [`wire`].
+fn row_to_envelope(row: &StoredRow) -> Result<PersistedEnvelope, InMemoryStoreError> {
+    let Some(version) = Version::new(row.version) else {
+        return Err(InMemoryStoreError::CorruptVersion);
+    };
+    let value = &row.value;
+    // Bytes are read individually so no fallible try_into sits in the
+    // cursor hot path. The wire::build_row invariant guarantees these
+    // offsets are present in any non-empty StoredRow value.
+    let global_seq_raw = u64::from_le_bytes([
+        value[wire::GLOBAL_SEQ_OFFSET],
+        value[wire::GLOBAL_SEQ_OFFSET + 1],
+        value[wire::GLOBAL_SEQ_OFFSET + 2],
+        value[wire::GLOBAL_SEQ_OFFSET + 3],
+        value[wire::GLOBAL_SEQ_OFFSET + 4],
+        value[wire::GLOBAL_SEQ_OFFSET + 5],
+        value[wire::GLOBAL_SEQ_OFFSET + 6],
+        value[wire::GLOBAL_SEQ_OFFSET + 7],
+    ]);
+    let Some(global_seq) = GlobalSeq::new(global_seq_raw) else {
+        return Err(InMemoryStoreError::CorruptGlobalSeq {
+            version: row.version,
+        });
+    };
+    let schema_version = u32::from_le_bytes([
+        value[wire::SCHEMA_VERSION_OFFSET],
+        value[wire::SCHEMA_VERSION_OFFSET + 1],
+        value[wire::SCHEMA_VERSION_OFFSET + 2],
+        value[wire::SCHEMA_VERSION_OFFSET + 3],
+    ]);
+
+    PersistedEnvelope::try_new(
+        version,
         global_seq,
-        schema_version: env.schema_version(),
-        value,
-        event_type_range: 0..et_end,
-        payload_range: payload_start..payload_end,
-        metadata_range,
+        row.value.clone(),
+        schema_version,
+        row.offsets.event_type.clone(),
+        row.offsets.payload.clone(),
+        row.offsets.metadata.clone(),
+    )
+    .map_err(|source| InMemoryStoreError::EnvelopeCorrupt {
+        version: row.version,
+        source,
     })
 }
 
@@ -402,25 +410,9 @@ impl EventStream for InMemorySubscriptionStream {
                     self.prev_version = Some(row.version);
                 }
 
-                let Some(version) = Version::new(row.version) else {
-                    return Err(InMemoryStoreError::CorruptVersion);
-                };
-                self.last_version = Some(version);
-
-                return PersistedEnvelope::try_new(
-                    version,
-                    row.global_seq,
-                    row.value.clone(),
-                    row.schema_version,
-                    row.event_type_range.clone(),
-                    row.payload_range.clone(),
-                    row.metadata_range.clone(),
-                )
-                .map(Some)
-                .map_err(|source| InMemoryStoreError::EnvelopeCorrupt {
-                    version: row.version,
-                    source,
-                });
+                let envelope = row_to_envelope(row)?;
+                self.last_version = Some(envelope.version());
+                return Ok(Some(envelope));
             }
 
             // Buffer exhausted. Register for notification BEFORE checking

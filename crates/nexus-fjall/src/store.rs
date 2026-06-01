@@ -1,7 +1,5 @@
 use crate::builder::FjallStoreBuilder;
-use crate::encoding::{
-    decode_stream_version, encode_event_key, encode_event_value, encode_stream_version,
-};
+use crate::encoding::{decode_stream_version, encode_event_key, encode_stream_version};
 use crate::error::FjallError;
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
@@ -11,6 +9,7 @@ use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::{RawEventStore, SubscriptionBackend};
+use nexus_store::wire;
 use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -158,7 +157,6 @@ impl RawEventStore for FjallStore {
 
         // Write each envelope into the events partition, stamping each with
         // the next GlobalSeq. The sequence is monotonic; gaps are permitted.
-        let mut value_buf = Vec::new();
         for (i, env) in envelopes.iter().enumerate() {
             let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
             let global_seq = current_global
@@ -173,8 +171,7 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            encode_event_value(
-                &mut value_buf,
+            let row = wire::build_row(
                 global_seq,
                 env.schema_version(),
                 env.event_type(),
@@ -188,7 +185,7 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            tx.insert(&self.events, &key, Slice::from(&*value_buf));
+            tx.insert(&self.events, &key, Slice::from(row.value));
         }
 
         // Advance the global counter by the batch size, in the same

@@ -121,7 +121,6 @@ impl BorrowingDecode<CounterEvent> for CounterBorrowingCodec {
 // satisfied incidentally via the allocator) requires wire-format work and is
 // scoped to a follow-up. See deviation log
 // `2026-05-27-bytes-envelope-deviations.md`.
-#[ignore = "payload alignment regression — see PR1 deviation log"]
 #[tokio::test]
 async fn zero_copy_save_and_load_roundtrip() {
     let store = Store::new(InMemoryStore::new());
@@ -151,7 +150,6 @@ async fn zero_copy_load_empty_stream() {
     assert_eq!(loaded.version(), None);
 }
 
-#[ignore = "payload alignment regression — see PR1 deviation log"]
 #[tokio::test]
 async fn zero_copy_multi_save_load() {
     let store = Store::new(InMemoryStore::new());

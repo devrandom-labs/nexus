@@ -160,9 +160,11 @@ fn decoder_rejects_meta_len_exceeding_buffer() {
     assert!(
         matches!(
             err,
-            nexus_fjall::encoding::DecodeError::MetadataOutOfBounds { meta_len: 100, .. }
+            nexus_fjall::encoding::DecodeError::Wire(
+                nexus_store::wire::DecodeError::MetadataTruncated { meta_len: 100, .. }
+            )
         ),
-        "expected MetadataOutOfBounds {{ meta_len: 100, .. }}, got {err:?}",
+        "expected Wire(MetadataTruncated {{ meta_len: 100, .. }}), got {err:?}",
     );
 }
 
