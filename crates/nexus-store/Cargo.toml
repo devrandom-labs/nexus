@@ -18,13 +18,23 @@ snapshot = []
 snapshot-json = ["snapshot", "json"]
 projection = []
 projection-json = ["projection", "json"]
-futures-bridge = ["dep:futures-core"]
+bytemuck = ["dep:bytemuck"]
+rkyv = ["dep:rkyv"]
+# Retired feature, kept as no-op until Task 6 removes the lingering
+# #[cfg(feature = "futures-bridge")] gates in stream/*. Deleting the
+# feature now would emit `unexpected_cfgs` warnings that fail clippy
+# `--deny warnings`. See deviations doc.
+futures-bridge = []
 
 [dependencies]
+aligned-vec = { workspace = true }
 arrayvec = { workspace = true }
+bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true }
-futures-core = { workspace = true, optional = true }
+futures = { workspace = true }
+futures-core = { workspace = true }
 nexus = { version = "0.1.0", path = "../nexus" }
+rkyv = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true }
@@ -34,7 +44,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [dev-dependencies]
 criterion = { workspace = true }
 futures = { workspace = true }
-nexus-store = { path = ".", features = ["testing", "futures-bridge"] }
+nexus-store = { path = ".", features = ["testing"] }
 nexus-store-testing = { version = "0.1.0", path = "../nexus-store-testing" }
 proptest = { workspace = true }
 serde = { workspace = true }
