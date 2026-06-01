@@ -305,8 +305,8 @@ struct U64DecodeError(usize);
 impl Encode<u64> for U64Codec {
     type Error = U64DecodeError;
 
-    fn encode(&self, value: &u64) -> Result<Vec<u8>, Self::Error> {
-        Ok(value.to_le_bytes().to_vec())
+    fn encode(&self, value: &u64) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(&value.to_le_bytes()))
     }
 }
 
@@ -331,8 +331,8 @@ struct BytesBorrowError;
 impl Encode<[u8]> for BytesBorrowingCodec {
     type Error = BytesBorrowError;
 
-    fn encode(&self, value: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        Ok(value.to_vec())
+    fn encode(&self, value: &[u8]) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(value))
     }
 }
 
@@ -355,7 +355,7 @@ struct CodecHardFail(&'static str);
 impl Encode<u64> for AlwaysFailingOwningCodec {
     type Error = CodecHardFail;
 
-    fn encode(&self, _v: &u64) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, _v: &u64) -> Result<bytes::Bytes, Self::Error> {
         Err(CodecHardFail("encode"))
     }
 }
@@ -373,7 +373,7 @@ struct AlwaysFailingBorrowingCodec;
 impl Encode<[u8]> for AlwaysFailingBorrowingCodec {
     type Error = CodecHardFail;
 
-    fn encode(&self, _v: &[u8]) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, _v: &[u8]) -> Result<bytes::Bytes, Self::Error> {
         Err(CodecHardFail("encode"))
     }
 }
@@ -1773,8 +1773,8 @@ struct BytesOwningCodec;
 impl Encode<Vec<u8>> for BytesOwningCodec {
     type Error = Infallible;
 
-    fn encode(&self, value: &Vec<u8>) -> Result<Vec<u8>, Self::Error> {
-        Ok(value.clone())
+    fn encode(&self, value: &Vec<u8>) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::from(value.clone()))
     }
 }
 

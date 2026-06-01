@@ -16,10 +16,17 @@ pub trait Encode<E: ?Sized>: Send + Sync + 'static {
 
     /// Serialize a typed value to bytes.
     ///
+    /// Returns [`bytes::Bytes`] so the encoded payload can flow through
+    /// the store and wire layer without an intermediate `Vec<u8> → Bytes`
+    /// copy. Codecs that produce a `Vec<u8>` internally adapt via
+    /// `Bytes::from(vec)` (zero-copy ownership transfer of the backing
+    /// allocation); codecs that build incrementally may use
+    /// `BytesMut::freeze()`.
+    ///
     /// # Errors
     ///
     /// Returns `Self::Error` if the value cannot be serialized.
-    fn encode(&self, event: &E) -> Result<Vec<u8>, Self::Error>;
+    fn encode(&self, event: &E) -> Result<bytes::Bytes, Self::Error>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -170,8 +177,8 @@ pub mod serde {
     {
         type Error = F::Error;
 
-        fn encode(&self, event: &E) -> Result<Vec<u8>, Self::Error> {
-            self.format.serialize(event)
+        fn encode(&self, event: &E) -> Result<bytes::Bytes, Self::Error> {
+            self.format.serialize(event).map(bytes::Bytes::from)
         }
     }
 

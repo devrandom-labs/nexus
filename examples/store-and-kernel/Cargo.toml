@@ -5,6 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+bytes.workspace = true
 nexus = { path = "../../crates/nexus", features = ["derive"] }
 nexus-store = { path = "../../crates/nexus-store", features = ["testing"] }
 serde = { workspace = true }

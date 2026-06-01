@@ -205,8 +205,8 @@ struct StringOwningCodec;
 impl Encode<String> for StringOwningCodec {
     type Error = Utf8Err;
 
-    fn encode(&self, value: &String) -> Result<Vec<u8>, Self::Error> {
-        Ok(value.as_bytes().to_vec())
+    fn encode(&self, value: &String) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(value.as_bytes()))
     }
 }
 
@@ -226,8 +226,8 @@ struct StrBorrowingCodec;
 impl Encode<str> for StrBorrowingCodec {
     type Error = Utf8Err;
 
-    fn encode(&self, value: &str) -> Result<Vec<u8>, Self::Error> {
-        Ok(value.as_bytes().to_vec())
+    fn encode(&self, value: &str) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(value.as_bytes()))
     }
 }
 

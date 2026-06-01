@@ -110,17 +110,17 @@ struct TestEventCodec;
 impl Encode<TestEvent> for TestEventCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &TestEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &TestEvent) -> Result<bytes::Bytes, Self::Error> {
         match event {
             TestEvent::Added(n) => {
                 let mut buf = vec![0u8]; // tag
                 buf.extend_from_slice(&n.to_le_bytes());
-                Ok(buf)
+                Ok(bytes::Bytes::from(buf))
             }
             TestEvent::Removed(n) => {
                 let mut buf = vec![1u8]; // tag
                 buf.extend_from_slice(&n.to_le_bytes());
-                Ok(buf)
+                Ok(bytes::Bytes::from(buf))
             }
         }
     }

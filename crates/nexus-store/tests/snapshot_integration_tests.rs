@@ -593,8 +593,8 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
     struct FailCodec;
     impl nexus_store::Encode<CounterState> for FailCodec {
         type Error = std::io::Error;
-        fn encode(&self, _state: &CounterState) -> Result<Vec<u8>, Self::Error> {
-            Ok(vec![1, 2, 3])
+        fn encode(&self, _state: &CounterState) -> Result<bytes::Bytes, Self::Error> {
+            Ok(bytes::Bytes::from_static(&[1, 2, 3]))
         }
     }
     impl nexus_store::Decode<CounterState> for FailCodec {

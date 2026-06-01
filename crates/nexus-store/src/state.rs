@@ -223,8 +223,12 @@ where
         let bytes = <C as Encode<S>>::encode(&self.codec, state)
             .map_err(CodecSnapshotStoreError::Encode)?;
 
+        // SnapshotStore<Vec<u8>, P> requires &Vec<u8>; adapt by copying.
+        // Snapshot writes are rare relative to the read path, so the
+        // extra allocation here is acceptable.
+        let bytes_vec = bytes.to_vec();
         self.store
-            .commit(id, schema_version, position, &bytes)
+            .commit(id, schema_version, position, &bytes_vec)
             .await
             .map_err(CodecSnapshotStoreError::Store)
     }

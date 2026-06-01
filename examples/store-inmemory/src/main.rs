@@ -116,8 +116,10 @@ enum CodecError {
 impl Encode<TodoEvent> for JsonCodec {
     type Error = CodecError;
 
-    fn encode(&self, event: &TodoEvent) -> Result<Vec<u8>, Self::Error> {
-        serde_json::to_vec(event).map_err(CodecError::Serialize)
+    fn encode(&self, event: &TodoEvent) -> Result<bytes::Bytes, Self::Error> {
+        serde_json::to_vec(event)
+            .map(bytes::Bytes::from)
+            .map_err(CodecError::Serialize)
     }
 }
 
@@ -199,7 +201,7 @@ async fn main() {
 
     // --- Step 2: Encode events with the codec ---
     println!("Step 2: Encode events with JsonCodec");
-    let mut encoded: Vec<(Vec<u8>, &'static str)> = Vec::new();
+    let mut encoded: Vec<(bytes::Bytes, &'static str)> = Vec::new();
     for event in &events {
         let bytes = codec.encode(event).expect("encode should succeed");
         let event_type = event.event_type();

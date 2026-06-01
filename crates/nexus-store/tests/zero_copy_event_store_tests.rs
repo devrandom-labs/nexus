@@ -79,8 +79,8 @@ struct CounterBorrowingCodec;
 impl Encode<CounterEvent> for CounterBorrowingCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
-        Ok(event.delta.to_le_bytes().to_vec())
+    fn encode(&self, event: &CounterEvent) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(&event.delta.to_le_bytes()))
     }
 }
 

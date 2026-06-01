@@ -87,10 +87,10 @@ struct TestCodec;
 impl Encode<TodoEvent> for TestCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &TodoEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &TodoEvent) -> Result<bytes::Bytes, Self::Error> {
         match event {
-            TodoEvent::Created(t) => Ok(format!("created:{t}").into_bytes()),
-            TodoEvent::Done => Ok(b"done".to_vec()),
+            TodoEvent::Created(t) => Ok(bytes::Bytes::from(format!("created:{t}").into_bytes())),
+            TodoEvent::Done => Ok(bytes::Bytes::from_static(b"done")),
         }
     }
 }

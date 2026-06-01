@@ -10,8 +10,9 @@ struct U32Codec;
 impl Encode<[u32]> for U32Codec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &[u32]) -> Result<Vec<u8>, Self::Error> {
-        Ok(event.iter().flat_map(|n| n.to_le_bytes()).collect())
+    fn encode(&self, event: &[u32]) -> Result<bytes::Bytes, Self::Error> {
+        let buf: Vec<u8> = event.iter().flat_map(|n| n.to_le_bytes()).collect();
+        Ok(bytes::Bytes::from(buf))
     }
 }
 

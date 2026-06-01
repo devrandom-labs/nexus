@@ -205,11 +205,11 @@ struct SimpleCodec;
 impl Encode<CounterEvent> for SimpleCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &CounterEvent) -> Result<bytes::Bytes, Self::Error> {
         match event {
-            CounterEvent::Incremented => Ok(b"inc".to_vec()),
-            CounterEvent::Decremented => Ok(b"dec".to_vec()),
-            CounterEvent::Set(v) => Ok(format!("set:{v}").into_bytes()),
+            CounterEvent::Incremented => Ok(bytes::Bytes::from_static(b"inc")),
+            CounterEvent::Decremented => Ok(bytes::Bytes::from_static(b"dec")),
+            CounterEvent::Set(v) => Ok(bytes::Bytes::from(format!("set:{v}").into_bytes())),
         }
     }
 }
@@ -256,7 +256,7 @@ impl FailAfterNEncodesCodec {
 impl Encode<CounterEvent> for FailAfterNEncodesCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &CounterEvent) -> Result<bytes::Bytes, Self::Error> {
         let count = self.encode_count.fetch_add(1, Ordering::SeqCst);
         if count >= self.max_encodes {
             return Err(std::io::Error::other(format!(
@@ -295,7 +295,7 @@ impl FailAfterNDecodesCodec {
 impl Encode<CounterEvent> for FailAfterNDecodesCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &CounterEvent) -> Result<bytes::Bytes, Self::Error> {
         self.inner.encode(event)
     }
 }
@@ -323,7 +323,7 @@ struct ToggleableCodec {
 impl Encode<CounterEvent> for ToggleableCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &CounterEvent) -> Result<bytes::Bytes, Self::Error> {
         if self.fail_flag.load(Ordering::SeqCst) {
             return Err(std::io::Error::other("toggled to fail"));
         }
@@ -348,8 +348,8 @@ struct DeltaBorrowingCodec;
 impl Encode<DeltaEvent> for DeltaBorrowingCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &DeltaEvent) -> Result<Vec<u8>, Self::Error> {
-        Ok(event.delta.to_le_bytes().to_vec())
+    fn encode(&self, event: &DeltaEvent) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(&event.delta.to_le_bytes()))
     }
 }
 

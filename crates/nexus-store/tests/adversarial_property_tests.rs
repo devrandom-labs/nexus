@@ -213,12 +213,12 @@ struct JsonCodecError(String);
 
 impl Encode<TestEvent> for JsonCodec {
     type Error = JsonCodecError;
-    fn encode(&self, event: &TestEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &TestEvent) -> Result<bytes::Bytes, Self::Error> {
         let json = match event {
             TestEvent::Happened(s) => format!(r#"{{"Happened":"{}"}}"#, s),
             TestEvent::ValueSet(v) => format!(r#"{{"ValueSet":{}}}"#, v),
         };
-        Ok(json.into_bytes())
+        Ok(bytes::Bytes::from(json.into_bytes()))
     }
 }
 

@@ -190,8 +190,8 @@ struct JsonCodec;
 impl Encode<AccountEvent> for JsonCodec {
     type Error = serde_json::Error;
 
-    fn encode(&self, event: &AccountEvent) -> Result<Vec<u8>, Self::Error> {
-        serde_json::to_vec(event)
+    fn encode(&self, event: &AccountEvent) -> Result<bytes::Bytes, Self::Error> {
+        serde_json::to_vec(event).map(bytes::Bytes::from)
     }
 }
 
