@@ -73,7 +73,7 @@ impl RawEventStore for FjallStore {
         &self,
         id: &impl Id,
         expected_version: Option<Version>,
-        envelopes: &[PendingEnvelope<()>],
+        envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
         let id_bytes = id.as_ref();
         let expected_raw = expected_version.map_or(0, Version::as_u64);
@@ -178,6 +178,7 @@ impl RawEventStore for FjallStore {
                 global_seq,
                 env.schema_version(),
                 env.event_type(),
+                env.metadata(),
                 env.payload(),
             )
             .map_err(|e| {
@@ -400,15 +401,11 @@ mod tests {
         TestId(s.to_owned())
     }
 
-    fn make_envelope(
-        version: u64,
-        event_type: &'static str,
-        payload: &[u8],
-    ) -> PendingEnvelope<()> {
+    fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
         pending_envelope(Version::new(version).expect("test version must be > 0"))
             .event_type(event_type)
             .payload(payload.to_vec())
-            .build_without_metadata()
+            .build()
     }
 
     fn temp_store() -> (FjallStore, tempfile::TempDir) {

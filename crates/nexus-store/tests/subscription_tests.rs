@@ -36,11 +36,11 @@ impl Id for TestId {
 }
 
 /// Helper: build a pending envelope with a given version and event type.
-fn make_envelope(version: u64, event_type: &'static str) -> nexus_store::PendingEnvelope<()> {
+fn make_envelope(version: u64, event_type: &'static str) -> nexus_store::PendingEnvelope {
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(format!("payload-{version}").into_bytes())
-        .build_without_metadata()
+        .build()
 }
 
 /// Helper: append a single event to a stream, with expected version.

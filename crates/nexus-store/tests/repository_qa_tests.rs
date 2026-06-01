@@ -368,6 +368,11 @@ impl BorrowingDecode<DeltaEvent> for DeltaBorrowingCodec {
             ));
         }
         // SAFETY: DeltaEvent is repr(C) with a single i32 field.
+        // align_to requires the slice to start on a 4-byte boundary.
+        // This holds when the payload is the only allocation (its own
+        // Vec), but NOT when it lives at an arbitrary offset within a
+        // shared Bytes buffer. Callers that cannot guarantee alignment
+        // must use `Decode` (owning) instead.
         let (prefix, events, _suffix) = unsafe { payload.align_to::<DeltaEvent>() };
         if !prefix.is_empty() || events.is_empty() {
             return Err(std::io::Error::new(
@@ -376,6 +381,27 @@ impl BorrowingDecode<DeltaEvent> for DeltaBorrowingCodec {
             ));
         }
         Ok(&events[0])
+    }
+}
+
+/// Owning decode for `DeltaEvent` — safe for any byte offset in a shared buffer.
+///
+/// Used by tests that write events through the store (payload lands at an
+/// unaligned offset inside a shared `Bytes` buffer) rather than directly
+/// crafting aligned byte slices.
+impl Decode<DeltaEvent> for DeltaBorrowingCodec {
+    type Error = std::io::Error;
+
+    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<DeltaEvent, Self::Error> {
+        let bytes: [u8; 4] = payload.try_into().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "wrong payload size for DeltaEvent",
+            )
+        })?;
+        Ok(DeltaEvent {
+            delta: i32::from_le_bytes(bytes),
+        })
     }
 }
 
@@ -812,7 +838,7 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
     let legacy = pending_envelope(Version::INITIAL)
         .event_type("Delta")
         .payload(5_i32.to_le_bytes().to_vec())
-        .build_without_metadata(); // schema_version defaults to 1
+        .build(); // schema_version defaults to 1
     raw_store
         .append(&CounterId("counter-1".into()), None, &[legacy])
         .await
@@ -848,17 +874,18 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
     let legacy = pending_envelope(Version::INITIAL)
         .event_type("Delta")
         .payload(5_i32.to_le_bytes().to_vec())
-        .build_without_metadata(); // schema_version defaults to 1
+        .build(); // schema_version defaults to 1
     raw_store
         .append(&CounterId("counter-1".into()), None, &[legacy])
         .await
         .unwrap();
 
     let store = Store::new(raw_store);
-    let es = store
-        .repository()
-        .codec(DeltaBorrowingCodec)
-        .build_zero_copy();
+    // Use the owning EventStore (not ZeroCopyEventStore) because the payload
+    // lives at an unaligned offset inside a shared Bytes buffer — the
+    // `align_to`-based BorrowingDecode requires its own aligned allocation.
+    // The upcaster-double-apply invariant is independent of owning vs zero-copy.
+    let es = store.repository().codec(DeltaBorrowingCodec).build();
 
     // load_with: legacy delta=5 upcasted to 10. State total=10.
     let mut loaded: AggregateRoot<DeltaAggregate> = es
@@ -1417,11 +1444,11 @@ async fn d11_schema_version_always_one() {
         pending_envelope(Version::INITIAL)
             .event_type("Incremented")
             .payload(b"inc".to_vec())
-            .build_without_metadata(),
+            .build(),
         pending_envelope(Version::new(2).unwrap())
             .event_type("Set")
             .payload(b"set:42".to_vec())
-            .build_without_metadata(),
+            .build(),
     ];
     store
         .append(&CounterId("counter-1".into()), None, &envelopes)

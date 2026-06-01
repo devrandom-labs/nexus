@@ -107,8 +107,3 @@ pub enum AppendError<E> {
     #[error("store error: {0}")]
     Store(#[source] E),
 }
-
-/// Schema version 0 is invalid — schema versions start at 1.
-#[derive(Debug, Error)]
-#[error("invalid schema version: 0 (schema versions start at 1)")]
-pub struct InvalidSchemaVersion;

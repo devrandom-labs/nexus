@@ -1,10 +1,10 @@
-error[E0599]: no method named `build_without_metadata` found for struct `WithEventType` in the current scope
+error[E0599]: no method named `build` found for struct `WithEventType` in the current scope
  --> tests/compile_fail/builder_incomplete.rs:7:10
   |
 5 |       let _ = pending_envelope(Version::new(1).unwrap())
   |  _____________-
 6 | |         .event_type("E")
-7 | |         .build_without_metadata();
-  | |         -^^^^^^^^^^^^^^^^^^^^^^ method not found in `WithEventType`
+7 | |         .build();
+  | |         -^^^^^ method not found in `WithEventType`
   | |_________|
   |

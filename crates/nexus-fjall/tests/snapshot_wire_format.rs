@@ -99,41 +99,41 @@ fn stream_version_max() {
 #[test]
 fn event_value_typical() {
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 1, "UserCreated", b"payload").unwrap();
+    encode_event_value(&mut buf, 1, 1, "UserCreated", None, b"payload").unwrap();
     insta::assert_snapshot!("event_value_typical", hex_dump(&buf));
 }
 
 #[test]
 fn event_value_schema_zero_empty_payload() {
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 0, "Empty", b"").unwrap();
+    encode_event_value(&mut buf, 1, 0, "Empty", None, b"").unwrap();
     insta::assert_snapshot!("event_value_schema_zero_empty_payload", hex_dump(&buf));
 }
 
 #[test]
 fn event_value_max_schema_binary_payload() {
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, u64::MAX, u32::MAX, "X", b"\x00\xff").unwrap();
+    encode_event_value(&mut buf, u64::MAX, u32::MAX, "X", None, b"\x00\xff").unwrap();
     insta::assert_snapshot!("event_value_max_schema_binary_payload", hex_dump(&buf));
 }
 
 #[test]
 fn event_value_empty_event_type() {
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 1, "", b"data").unwrap();
+    encode_event_value(&mut buf, 1, 1, "", None, b"data").unwrap();
     insta::assert_snapshot!("event_value_empty_event_type", hex_dump(&buf));
 }
 
 #[test]
 fn event_value_single_char_type_empty_payload() {
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 1, "A", b"").unwrap();
+    encode_event_value(&mut buf, 1, 1, "A", None, b"").unwrap();
     insta::assert_snapshot!("event_value_single_char_type_empty_payload", hex_dump(&buf));
 }
 
 #[test]
 fn event_value_larger_payload() {
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 42, 42, "OrderPlaced", &[0u8; 1024]).unwrap();
+    encode_event_value(&mut buf, 42, 42, "OrderPlaced", None, &[0u8; 1024]).unwrap();
     insta::assert_snapshot!("event_value_larger_payload", hex_dump(&buf));
 }

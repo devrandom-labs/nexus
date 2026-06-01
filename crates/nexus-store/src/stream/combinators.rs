@@ -4,7 +4,7 @@
 //! Each combinator is itself an `EventStream`, so chains compose: e.g.
 //! `stream.try_map(f).try_fold(init, g)`. The base
 //! [`Item<'a>`](EventStream::Item) of the cursors is
-//! `PersistedEnvelope<'a, M>`; combinators rewrite it according to what
+//! `PersistedEnvelope`; combinators rewrite it according to what
 //! their closure produces.
 //!
 //! # Owning vs. borrowing output

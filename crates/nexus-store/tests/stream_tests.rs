@@ -51,6 +51,14 @@
 #![allow(clippy::str_to_string, reason = "tests")]
 #![allow(clippy::shadow_reuse, reason = "tests")]
 #![allow(clippy::shadow_unrelated, reason = "tests")]
+#![allow(
+    clippy::shadow_same,
+    reason = "tests: let mut x = x is the rebind-as-mutable pattern"
+)]
+#![allow(
+    clippy::significant_drop_tightening,
+    reason = "tests: MutexGuard held across assertions is intentional"
+)]
 #![allow(clippy::as_conversions, reason = "tests")]
 #![allow(clippy::cast_possible_truncation, reason = "tests")]
 #![allow(clippy::cast_possible_wrap, reason = "tests")]
@@ -95,26 +103,41 @@ use static_assertions::assert_impl_all;
 use thiserror::Error;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Drop tracking — fresh counter per test via `DropProbe` instances inside
-// envelope metadata. Used by Section 14 to prove lending discipline at
-// runtime (each envelope drops exactly once at the closure boundary).
-//
-// Note: the *allocation-counting* tests (proving `BorrowedDecodedStream` is
-// genuinely zero-copy) live in `tests/stream_alloc_tests.rs` — they require
-// a `#[global_allocator]` and must run in a separate test binary so the
-// counter isn't polluted by concurrent tests in the same process.
+// Test helpers — build PersistedEnvelope from plain &str + &[u8]
 // ═══════════════════════════════════════════════════════════════════════════
 
-static DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
-static DROP_TEST_LOCK: Mutex<()> = Mutex::new(());
+fn build_persisted(
+    version: Version,
+    global_seq: GlobalSeq,
+    event_type: &str,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    build_persisted_with_schema(version, global_seq, event_type, 1, payload)
+}
 
-#[derive(Debug)]
-struct DropProbe;
-
-impl Drop for DropProbe {
-    fn drop(&mut self) {
-        DROP_COUNT.fetch_add(1, Ordering::SeqCst);
-    }
+fn build_persisted_with_schema(
+    version: Version,
+    global_seq: GlobalSeq,
+    event_type: &str,
+    schema_version: u32,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(payload);
+    let value = bytes::Bytes::from(buf);
+    let et_end = u32::try_from(event_type.len()).expect("event_type fits u32");
+    let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
+    PersistedEnvelope::try_new(
+        version,
+        global_seq,
+        value,
+        schema_version,
+        0..et_end,
+        et_end..pl_end,
+        None,
+    )
+    .expect("test fixture envelope")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -136,7 +159,7 @@ impl VecStream {
 }
 
 impl BaseEventStream for VecStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -145,22 +168,23 @@ impl BaseEventStream for VecStream {
 }
 
 impl EventStream for VecStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a>
+        = PersistedEnvelope
+    where
+        Self: 'a;
     type Error = Infallible;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.rows.len() {
             return Ok(None);
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(row.0).expect("test version must be non-zero"),
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }
@@ -178,7 +202,7 @@ impl SchemaStream {
 }
 
 impl BaseEventStream for SchemaStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -187,64 +211,24 @@ impl BaseEventStream for SchemaStream {
 }
 
 impl EventStream for SchemaStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a>
+        = PersistedEnvelope
+    where
+        Self: 'a;
     type Error = Infallible;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.rows.len() {
             return Ok(None);
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted_with_schema(
             Version::new(row.0).expect("test version must be non-zero"),
             GlobalSeq::INITIAL,
             &row.1,
             row.2,
             &row.3,
-            (),
-        )))
-    }
-}
-
-/// Stream with `String` metadata to exercise the `M` parameter.
-struct MetadataStream {
-    rows: Vec<(u64, String, Vec<u8>, String)>,
-    pos: usize,
-}
-
-impl MetadataStream {
-    const fn new(rows: Vec<(u64, String, Vec<u8>, String)>) -> Self {
-        Self { rows, pos: 0 }
-    }
-}
-
-impl BaseEventStream<String> for MetadataStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a, String>) -> PersistedEnvelope<'a, String>
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
-
-impl EventStream<String> for MetadataStream {
-    type Item<'a> = PersistedEnvelope<'a, String>;
-    type Error = Infallible;
-
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_, String>>, Self::Error> {
-        if self.pos >= self.rows.len() {
-            return Ok(None);
-        }
-        let row = &self.rows[self.pos];
-        self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
-            Version::new(row.0).expect("test version must be non-zero"),
-            GlobalSeq::INITIAL,
-            &row.1,
-            1,
-            &row.2,
-            row.3.clone(),
         )))
     }
 }
@@ -274,7 +258,7 @@ impl FailingStream {
 }
 
 impl BaseEventStream for FailingStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -283,10 +267,13 @@ impl BaseEventStream for FailingStream {
 }
 
 impl EventStream for FailingStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a>
+        = PersistedEnvelope
+    where
+        Self: 'a;
     type Error = StreamIoError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos == self.fail_at {
             return Err(StreamIoError("forced failure"));
         }
@@ -295,13 +282,11 @@ impl EventStream for FailingStream {
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(row.0).expect("test version must be non-zero"),
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }
@@ -556,19 +541,6 @@ async fn event_stream_threads_custom_schema_version() {
     let sv3 = stream.next().await.unwrap().unwrap().schema_version();
 
     assert_eq!((sv1, sv2, sv3), (1, 3, 42));
-}
-
-#[tokio::test]
-async fn event_stream_carries_metadata_to_envelope() {
-    let mut stream = MetadataStream::new(vec![
-        (1, "E".into(), vec![], "alice".into()),
-        (2, "E".into(), vec![], "bob".into()),
-    ]);
-
-    let m1 = stream.next().await.unwrap().unwrap().metadata().clone();
-    let m2 = stream.next().await.unwrap().unwrap().metadata().clone();
-    assert_eq!(m1, "alice");
-    assert_eq!(m2, "bob");
 }
 
 #[tokio::test]
@@ -1788,132 +1760,6 @@ proptest! {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Section 14 — Drop tracking (lending discipline at runtime)
-//
-// `EventStream::next()` returns a `PersistedEnvelope<'_, M>` that owns its
-// metadata `M`. The combinators move the envelope into the closure; when
-// the closure returns, the envelope (and its M) drop. This section places
-// a `DropProbe` in M, then asserts:
-//
-// (a) `DROP_COUNT` after fold equals the number of envelopes yielded.
-// (b) Inside the i-th closure call, `DROP_COUNT == i - 1` — the current
-//     envelope's metadata has not dropped yet.
-//
-// Together these prove the lending iterator contract at runtime, beyond the
-// compile-fail test's static guarantee.
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Stream that yields N envelopes, each carrying a fresh [`DropProbe`].
-struct DropProbeStream {
-    n: usize,
-    pos: usize,
-    et: String,
-    payload: Vec<u8>,
-}
-
-impl DropProbeStream {
-    fn new(n: usize) -> Self {
-        Self {
-            n,
-            pos: 0,
-            et: "E".into(),
-            payload: vec![0],
-        }
-    }
-}
-
-impl BaseEventStream<DropProbe> for DropProbeStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a, DropProbe>) -> PersistedEnvelope<'a, DropProbe>
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
-
-impl EventStream<DropProbe> for DropProbeStream {
-    type Item<'a> = PersistedEnvelope<'a, DropProbe>;
-    type Error = Infallible;
-
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_, DropProbe>>, Self::Error> {
-        if self.pos >= self.n {
-            return Ok(None);
-        }
-        self.pos += 1;
-        let v = Version::new(self.pos as u64).expect("pos >= 1");
-        Ok(Some(PersistedEnvelope::new_unchecked(
-            v,
-            GlobalSeq::INITIAL,
-            &self.et,
-            1,
-            &self.payload,
-            DropProbe,
-        )))
-    }
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn drop_envelope_metadata_drops_exactly_once_per_event() {
-    let _guard = DROP_TEST_LOCK.lock().expect("drop lock");
-    DROP_COUNT.store(0, Ordering::SeqCst);
-
-    let mut stream = DropProbeStream::new(50);
-    let count = stream.try_count().await.expect("count ok");
-
-    assert_eq!(count, 50);
-    assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 50);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn drop_count_inside_closure_equals_iteration_index() {
-    let _guard = DROP_TEST_LOCK.lock().expect("drop lock");
-    DROP_COUNT.store(0, Ordering::SeqCst);
-
-    let mut stream = DropProbeStream::new(10);
-    let observed: Vec<usize> = stream
-        .try_collect_map(|env| -> Result<usize, Infallible> {
-            // env is alive in this scope. Prior envelopes have dropped.
-            let observed = DROP_COUNT.load(Ordering::SeqCst);
-            let _ = env.version();
-            Ok(observed)
-            // env drops here as the closure returns.
-        })
-        .await
-        .expect("collect ok");
-
-    assert_eq!(observed, (0..10).collect::<Vec<_>>());
-    assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 10);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn drop_envelope_drops_even_when_closure_errors() {
-    #[derive(Debug, Error)]
-    #[error("stop")]
-    struct Stop;
-    impl From<Infallible> for Stop {
-        fn from(value: Infallible) -> Self {
-            match value {}
-        }
-    }
-
-    let _guard = DROP_TEST_LOCK.lock().expect("drop lock");
-    DROP_COUNT.store(0, Ordering::SeqCst);
-
-    let mut stream = DropProbeStream::new(10);
-    let result: Result<(), Stop> = stream
-        .try_for_each(|env| {
-            let pos = env.version().as_u64();
-            if pos == 4 { Err(Stop) } else { Ok(()) }
-        })
-        .await;
-
-    assert!(matches!(result, Err(Stop)));
-    // The closure consumed 4 envelopes (positions 1, 2, 3, 4), all dropped.
-    // No envelope leaks even on the error path.
-    assert_eq!(DROP_COUNT.load(Ordering::SeqCst), 4);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Section 15 — Differential testing (DecodedStream vs BorrowedDecodedStream)
 //
 // Both arms must observe the exact same (version, event_type, payload-bytes)
@@ -2174,7 +2020,6 @@ proptest! {
 
 assert_impl_all!(VecStream: Send);
 assert_impl_all!(SchemaStream: Send);
-assert_impl_all!(MetadataStream: Send);
 assert_impl_all!(FailingStream: Send);
 assert_impl_all!(U64Codec: Send, Sync);
 assert_impl_all!(BytesBorrowingCodec: Send, Sync);
@@ -2485,7 +2330,7 @@ impl SlowStream {
 }
 
 impl BaseEventStream for SlowStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -2494,23 +2339,24 @@ impl BaseEventStream for SlowStream {
 }
 
 impl EventStream for SlowStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a>
+        = PersistedEnvelope
+    where
+        Self: 'a;
     type Error = Infallible;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.rows.len() {
             return Ok(None);
         }
         tokio::time::sleep(self.per_event_delay).await;
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(row.0).expect("nz"),
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }

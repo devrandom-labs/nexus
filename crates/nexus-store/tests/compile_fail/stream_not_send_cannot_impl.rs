@@ -15,10 +15,10 @@ use nexus_store::stream::EventStream;
 struct NotSendStream(Rc<()>);
 
 impl EventStream for NotSendStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = Infallible;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         let _ = &self.0;
         Ok(None)
     }

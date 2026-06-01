@@ -372,7 +372,7 @@ where
     // call (a re-call to env.version() returns the same value, etc.).
     let row = ConformanceRow::new(1, "E", vec![1, 2, 3]).with_schema_version(7);
     let mut stream = make(vec![row]).await;
-    let env: PersistedEnvelope<'_, _> = S::to_envelope(
+    let env: PersistedEnvelope = S::to_envelope(
         stream
             .next()
             .await

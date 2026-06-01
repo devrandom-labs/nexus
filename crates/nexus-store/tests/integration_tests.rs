@@ -43,13 +43,13 @@ impl Id for TestId {
 // Helpers
 // =============================================================================
 
-fn make_envelopes(start: u64, count: u64) -> Vec<nexus_store::envelope::PendingEnvelope<()>> {
+fn make_envelopes(start: u64, count: u64) -> Vec<nexus_store::envelope::PendingEnvelope> {
     (start..start + count)
         .map(|v| {
             pending_envelope(Version::new(v).unwrap())
                 .event_type("Event")
                 .payload(v.to_le_bytes().to_vec())
-                .build_without_metadata()
+                .build()
         })
         .collect()
 }

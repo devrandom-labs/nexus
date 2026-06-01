@@ -30,6 +30,12 @@
 #![allow(clippy::indexing_slicing, reason = "tests")]
 #![allow(clippy::cast_possible_truncation, reason = "tests")]
 #![allow(clippy::str_to_string, reason = "tests")]
+#![allow(clippy::expect_used, reason = "tests")]
+#![allow(
+    clippy::missing_const_for_fn,
+    reason = "tests: Vec args prevent const fn"
+)]
+#![allow(clippy::cast_lossless, reason = "tests use small int to u64 casts")]
 
 use std::convert::Infallible;
 
@@ -37,6 +43,30 @@ use nexus::Version;
 use nexus_store::PersistedEnvelope;
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{BaseEventStream, EventStream, EventStreamExt};
+
+fn build_persisted(
+    version: Version,
+    global_seq: GlobalSeq,
+    event_type: &str,
+    payload: &[u8],
+) -> PersistedEnvelope {
+    let mut buf = Vec::with_capacity(event_type.len() + payload.len());
+    buf.extend_from_slice(event_type.as_bytes());
+    buf.extend_from_slice(payload);
+    let value = bytes::Bytes::from(buf);
+    let et_end = u32::try_from(event_type.len()).expect("event_type fits u32");
+    let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
+    PersistedEnvelope::try_new(
+        version,
+        global_seq,
+        value,
+        1,
+        0..et_end,
+        et_end..pl_end,
+        None,
+    )
+    .expect("test fixture envelope")
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Test fixture — minimal in-memory lending stream
@@ -56,7 +86,7 @@ impl VecStream {
 }
 
 impl BaseEventStream for VecStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -65,22 +95,20 @@ impl BaseEventStream for VecStream {
 }
 
 impl EventStream for VecStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = Infallible;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos >= self.rows.len() {
             return Ok(None);
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(row.0).unwrap(),
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }
@@ -299,7 +327,7 @@ async fn try_scan_state_accumulates_across_iterations() {
 // 5. map_err — error-type conversion combinator
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Fixture stream that fails on the Nth next() call. Used to exercise the
+/// Fixture stream that fails on the `N`th `next()` call. Used to exercise the
 /// error path of `map_err` without needing a real adapter.
 struct FailingStream {
     rows: Vec<(u64, String, Vec<u8>)>,
@@ -312,7 +340,7 @@ struct FailingStream {
 struct UpstreamError(usize);
 
 impl BaseEventStream for FailingStream {
-    fn to_envelope<'a>(item: PersistedEnvelope<'a>) -> PersistedEnvelope<'a>
+    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
     where
         Self: 'a,
     {
@@ -321,10 +349,10 @@ impl BaseEventStream for FailingStream {
 }
 
 impl EventStream for FailingStream {
-    type Item<'a> = PersistedEnvelope<'a>;
+    type Item<'a> = PersistedEnvelope;
     type Error = UpstreamError;
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope<'_>>, Self::Error> {
+    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
         if self.pos == self.fail_at {
             return Err(UpstreamError(self.pos));
         }
@@ -333,13 +361,11 @@ impl EventStream for FailingStream {
         }
         let row = &self.rows[self.pos];
         self.pos += 1;
-        Ok(Some(PersistedEnvelope::new_unchecked(
+        Ok(Some(build_persisted(
             Version::new(row.0).unwrap(),
             GlobalSeq::INITIAL,
             &row.1,
-            1,
             &row.2,
-            (),
         )))
     }
 }
@@ -449,15 +475,15 @@ async fn map_err_then_try_map_unblocks_coherence_wall() {
 
 #[tokio::test]
 async fn map_count_matches_collected_length() {
-    let n = 7;
-    let count: Result<usize, Infallible> = VecStream::new(rows(n as u64))
+    let n: u64 = 7;
+    let count: Result<usize, Infallible> = VecStream::new(rows(n))
         .map(|env| env.version().as_u64())
         .try_count()
         .await
         .map_err(|i| match i {});
-    let collected: Result<Vec<u64>, Infallible> = VecStream::new(rows(n as u64))
+    let collected: Result<Vec<u64>, Infallible> = VecStream::new(rows(n))
         .map(|env| env.version().as_u64())
-        .try_collect_map(|v| Ok::<u64, Infallible>(v))
+        .try_collect_map(Ok)
         .await;
     assert_eq!(count.unwrap(), collected.unwrap().len());
 }

@@ -38,6 +38,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{decode_event_value, encode_event_value};
@@ -73,15 +74,28 @@ fn tid(s: &str) -> TestId {
     TestId(s.to_owned())
 }
 
+/// Decode an event value from a byte slice and return concrete `(gs, sv, event_type, payload)`.
+/// For use in encoding-layer tests only.
+fn decode_ev_slices(buf: &[u8]) -> (u64, u32, String, Vec<u8>) {
+    let b = Bytes::copy_from_slice(buf);
+    let d = decode_event_value(&b).unwrap();
+    let et =
+        std::str::from_utf8(&b[d.event_type_range.start as usize..d.event_type_range.end as usize])
+            .unwrap()
+            .to_owned();
+    let pl = b[d.payload_range.start as usize..d.payload_range.end as usize].to_vec();
+    (d.global_seq, d.schema_version, et, pl)
+}
+
 fn leak(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
-fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope<()> {
+fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
-        .build_without_metadata()
+        .build()
 }
 
 fn temp_store() -> (FjallStore, tempfile::TempDir) {
@@ -323,7 +337,7 @@ proptest! {
                                 pending_envelope(Version::new(ver).unwrap())
                                     .event_type(leak(&format!("Tick_{stream}_{}", existing + i)))
                                     .payload(payload.clone())
-                                    .build_without_metadata(),
+                                    .build(),
                             );
                         }
 
@@ -581,7 +595,7 @@ async fn attack_concurrent_append_storm_50_tasks() {
             let env = pending_envelope(Version::INITIAL)
                 .event_type(leak(&format!("Created_{i}")))
                 .payload(i.to_le_bytes().to_vec())
-                .build_without_metadata();
+                .build();
             store_clone.append(&sid_val, None, &[env]).await
         });
         handles.push(handle);
@@ -632,7 +646,7 @@ async fn attack_concurrent_append_same_stream_conflict() {
             let env = pending_envelope(Version::INITIAL)
                 .event_type(leak(&format!("Contested_{i}")))
                 .payload(i.to_le_bytes().to_vec())
-                .build_without_metadata();
+                .build();
             store_clone.append(&sid_val, None, &[env]).await
         });
         handles.push(handle);
@@ -673,13 +687,13 @@ async fn attack_concurrent_append_same_stream_conflict() {
 fn attack_encoding_event_type_exactly_u16_max_bytes() {
     let event_type = "a".repeat(usize::from(u16::MAX));
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 7, 1, &event_type, b"payload");
+    let result = encode_event_value(&mut buf, 7, 1, &event_type, None, b"payload");
     assert!(
         result.is_ok(),
         "event type at exactly u16::MAX bytes should succeed"
     );
 
-    let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
     assert_eq!(gs, 7);
     assert_eq!(sv, 1);
     assert_eq!(decoded_type.len(), usize::from(u16::MAX));
@@ -690,7 +704,7 @@ fn attack_encoding_event_type_exactly_u16_max_bytes() {
 fn attack_encoding_event_type_one_over_u16_max() {
     let event_type = "a".repeat(usize::from(u16::MAX) + 1);
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 1, 1, &event_type, b"payload");
+    let result = encode_event_value(&mut buf, 1, 1, &event_type, None, b"payload");
     assert!(
         result.is_err(),
         "event type over u16::MAX must fail with EncodeError"
@@ -700,13 +714,13 @@ fn attack_encoding_event_type_one_over_u16_max() {
 #[test]
 fn attack_encoding_empty_event_type() {
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 3, 1, "", b"payload");
+    let result = encode_event_value(&mut buf, 3, 1, "", None, b"payload");
     assert!(
         result.is_ok(),
         "empty event type should encode successfully"
     );
 
-    let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
     assert_eq!(gs, 3);
     assert_eq!(sv, 1);
     assert_eq!(decoded_type, "");
@@ -716,10 +730,10 @@ fn attack_encoding_empty_event_type() {
 #[test]
 fn attack_encoding_empty_payload() {
     let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 5, 1, "Test", b"");
+    let result = encode_event_value(&mut buf, 5, 1, "Test", None, b"");
     assert!(result.is_ok(), "empty payload should encode successfully");
 
-    let (gs, sv, decoded_type, payload) = decode_event_value(&buf).unwrap();
+    let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
     assert_eq!(gs, 5);
     assert_eq!(sv, 1);
     assert_eq!(decoded_type, "Test");
@@ -730,8 +744,8 @@ fn attack_encoding_empty_payload() {
 fn attack_encoding_null_bytes_in_payload() {
     let evil_payload = b"\x00\x00\x00\x00\x00";
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 1, "Test", evil_payload).unwrap();
-    let (_, _, _, payload) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, 1, "Test", None, evil_payload).unwrap();
+    let (_, _, _, payload) = decode_ev_slices(&buf);
     assert_eq!(payload, evil_payload, "null bytes in payload must survive");
 }
 
@@ -739,8 +753,8 @@ fn attack_encoding_null_bytes_in_payload() {
 fn attack_encoding_schema_version_boundaries() {
     // Test schema_version = 0 (should encode fine, but PersistedEnvelope::try_new rejects it)
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 0, "Test", b"data").unwrap();
-    let (_, sv, _, _) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, 0, "Test", None, b"data").unwrap();
+    let (_, sv, _, _) = decode_ev_slices(&buf);
     assert_eq!(
         sv, 0,
         "schema_version=0 should round-trip in encoding layer"
@@ -748,8 +762,8 @@ fn attack_encoding_schema_version_boundaries() {
 
     // Test schema_version = u32::MAX
     buf.clear();
-    encode_event_value(&mut buf, 1, u32::MAX, "Test", b"data").unwrap();
-    let (_, sv, _, _) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, u32::MAX, "Test", None, b"data").unwrap();
+    let (_, sv, _, _) = decode_ev_slices(&buf);
     assert_eq!(
         sv,
         u32::MAX,
@@ -762,8 +776,8 @@ fn attack_encoding_large_payload() {
     // 1MB payload
     let large = vec![0xABu8; 1_048_576];
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 1, "Big", &large).unwrap();
-    let (_, _, _, payload) = decode_event_value(&buf).unwrap();
+    encode_event_value(&mut buf, 1, 1, "Big", None, &large).unwrap();
+    let (_, _, _, payload) = decode_ev_slices(&buf);
     assert_eq!(
         payload.len(),
         1_048_576,
@@ -1082,10 +1096,11 @@ fn attack_schema_version_zero_rejected_by_type_system() {
     let result = nexus_store::PersistedEnvelope::try_new(
         Version::INITIAL,
         GlobalSeq::INITIAL,
-        "E",
+        Bytes::from_static(b"E"),
         0,
-        b"",
-        (),
+        0..1,
+        1..1,
+        None,
     );
     assert!(
         result.is_err(),

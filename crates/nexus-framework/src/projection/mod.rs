@@ -206,7 +206,7 @@ impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Ready<P::State
 where
     I: Id + Clone + Send + Sync,
     Sub: Subscription<()> + Send,
-    Sub::Stream: for<'a> EventStream<(), Item<'a> = PersistedEnvelope<'a, ()>>,
+    Sub::Stream: for<'a> EventStream<(), Item<'a> = PersistedEnvelope>,
     SS: SnapshotStore<P::State, Version> + Send + Sync,
     P: Projector + Send + Sync,
     P::State: Clone + Send,

@@ -417,7 +417,7 @@ where
             .event_type(event_name)
             .payload(payload)
             .schema_version(schema_nz32)
-            .build_without_metadata();
+            .build();
 
         envelopes.push(envelope);
 
@@ -718,7 +718,7 @@ where
             .event_type(event_name)
             .payload(payload)
             .schema_version(schema_nz32)
-            .build_without_metadata();
+            .build();
 
         envelopes.push(envelope);
 

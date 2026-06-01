@@ -46,11 +46,11 @@ impl Id for TestId {
     const BYTE_LEN: usize = 0;
 }
 
-fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope<()> {
+fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
     pending_envelope(Version::new(version).expect("test version must be > 0"))
         .event_type(event_type)
         .payload(payload.to_vec())
-        .build_without_metadata()
+        .build()
 }
 
 fn temp_store() -> (FjallStore, tempfile::TempDir) {

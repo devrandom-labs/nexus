@@ -67,11 +67,12 @@
             cargoAuditExtraArgs = "--ignore RUSTSEC-2026-0009";
           };
           nexus-deny = craneLib.cargoDeny { inherit src; };
-          # Run tests with cargo-nextest
-          # Consider setting `doCheck = false` on other crate derivations
-          # if you do not want the tests to run twice
+          # Run tests with cargo-nextest, fused with cargo-llvm-cov for coverage.
+          # withLlvmCov collapses the previous separate tarpaulin step into one
+          # instrumented test run — LLVM source-based coverage, no ptrace.
           nexus-nextest = craneLib.cargoNextest (commonArgs // {
             inherit cargoArtifacts;
+            withLlvmCov = true;
             partitions = 1;
             partitionType = "count";
             # Exclude trybuild tests — .stderr snapshots contain absolute paths
@@ -93,13 +94,6 @@
             '';
             nativeBuildInputs = [ cargo-hakari ];
           };
-        } // lib.optionalAttrs isLinux {
-          # cargo-tarpaulin uses ptrace, which is Linux-only
-          nexus-coverage =
-            craneLib.cargoTarpaulin (commonArgs // {
-              inherit cargoArtifacts;
-              cargoTarpaulinExtraArgs = "--exclude-files 'tests/compile_fail/*' -- --skip compile_fail";
-            });
         };
 
         packages = {

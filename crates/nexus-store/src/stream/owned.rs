@@ -106,7 +106,7 @@ use super::cursor::EventStream;
 /// the GAT's `where Self: 'a` clause propagates into the HRTB and breaks
 /// type equality (`for<'a> Item<'a> = T`). PR1 hit the same wall when
 /// trying to bound the decoder facade on
-/// `for<'a> Item<'a> = PersistedEnvelope<'a, M>` and resolved it with the
+/// `for<'a> Item<'a> = PersistedEnvelope` and resolved it with the
 /// `BaseEventStream` sub-trait. This trait is the symmetrical move for
 /// the owning case.
 pub trait OwnedEventStream<M = ()>: EventStream<M> {
