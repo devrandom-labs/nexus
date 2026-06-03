@@ -404,14 +404,21 @@ pub fn decode_row(value: &[u8]) -> Result<DecodedRow, DecodeError> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::as_conversions,
+    clippy::redundant_clone,
+    clippy::single_match_else,
+    reason = "test code: index arithmetic and prop_assert_eq macro expansions"
+)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
 
     fn payload_ptr_aligned(row: &RowBuilt) -> bool {
-        let payload_slice =
-            &row.value[row.offsets.payload.start as usize..row.offsets.payload.end as usize];
-        payload_slice.as_ptr().addr() % PAYLOAD_ALIGN == 0
+        let start = usize::try_from(row.offsets.payload.start).expect("u32 fits usize");
+        let end = usize::try_from(row.offsets.payload.end).expect("u32 fits usize");
+        let payload_slice = &row.value[start..end];
+        payload_slice.as_ptr().addr().is_multiple_of(PAYLOAD_ALIGN)
     }
 
     proptest! {

@@ -127,9 +127,14 @@ impl Encode<TestEvent> for TestEventCodec {
 }
 
 impl Decode<TestEvent> for TestEventCodec {
+    type Output<'a> = TestEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, _name: &str, payload: &[u8]) -> Result<TestEvent, Self::Error> {
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<TestEvent, Self::Error> {
+        let payload = env.payload();
         if payload.len() != 9 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

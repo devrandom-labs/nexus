@@ -196,10 +196,14 @@ impl Encode<AccountEvent> for JsonCodec {
 }
 
 impl Decode<AccountEvent> for JsonCodec {
+    type Output<'a> = AccountEvent;
     type Error = serde_json::Error;
 
-    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<AccountEvent, Self::Error> {
-        serde_json::from_slice(payload)
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<AccountEvent, Self::Error> {
+        serde_json::from_slice(env.payload())
     }
 }
 
@@ -243,9 +247,7 @@ async fn load_events(
         match stream.next().await.expect("stream read should succeed") {
             None => break,
             Some(env) => {
-                let event: AccountEvent = codec
-                    .decode(env.event_type(), env.payload())
-                    .expect("decode should succeed");
+                let event: AccountEvent = codec.decode(&env).expect("decode should succeed");
                 versioned.push(VersionedEvent::new(env.version(), event));
             }
         }

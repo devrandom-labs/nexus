@@ -96,10 +96,14 @@ impl Encode<TodoEvent> for TestCodec {
 }
 
 impl Decode<TodoEvent> for TestCodec {
+    type Output<'a> = TodoEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<TodoEvent, Self::Error> {
-        let s = std::str::from_utf8(payload)
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<TodoEvent, Self::Error> {
+        let s = std::str::from_utf8(env.payload())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         s.strip_prefix("created:").map_or_else(
             || {

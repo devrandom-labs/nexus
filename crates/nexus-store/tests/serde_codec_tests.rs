@@ -122,7 +122,8 @@ fn json_codec_encode_decode_roundtrip() {
     };
 
     let bytes = codec.encode(&event).unwrap();
-    let decoded: TodoEvent = codec.decode("Created", &bytes).unwrap();
+    let env = nexus_store::PersistedEnvelope::for_decode("Created", &bytes).unwrap();
+    let decoded: TodoEvent = codec.decode(&env).unwrap();
 
     assert_eq!(decoded, event);
 }
@@ -137,8 +138,9 @@ fn json_codec_ignores_event_type_parameter() {
     let bytes = codec.encode(&event).unwrap();
 
     // Pass a completely wrong event_type — serde JSON dispatches via the
-    // internally-tagged `"type"` field, so the event_type parameter is unused.
-    let decoded: TodoEvent = codec.decode("TotallyWrongType", &bytes).unwrap();
+    // internally-tagged `"type"` field, so the env's event_type is unused.
+    let env = nexus_store::PersistedEnvelope::for_decode("TotallyWrongType", &bytes).unwrap();
+    let decoded: TodoEvent = codec.decode(&env).unwrap();
 
     assert_eq!(decoded, event);
 }
@@ -148,7 +150,8 @@ fn json_codec_invalid_payload_returns_error() {
     let codec = JsonCodec::default();
     let garbage: &[u8] = b"\xff\xfe not json at all";
 
-    let result: Result<TodoEvent, _> = codec.decode("Created", garbage);
+    let env = nexus_store::PersistedEnvelope::for_decode("Created", garbage).unwrap();
+    let result: Result<TodoEvent, _> = codec.decode(&env);
 
     assert!(result.is_err(), "decoding garbage bytes must fail");
 }

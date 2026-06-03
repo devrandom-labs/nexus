@@ -90,7 +90,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nexus::Version;
-use nexus_store::codec::{BorrowingDecode, Decode, Encode};
+use nexus_store::codec::{Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{
@@ -311,9 +311,11 @@ impl Encode<u64> for U64Codec {
 }
 
 impl Decode<u64> for U64Codec {
+    type Output<'a> = u64;
     type Error = U64DecodeError;
 
-    fn decode(&self, _name: &str, payload: &[u8]) -> Result<u64, Self::Error> {
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<u64, Self::Error> {
+        let payload = env.payload();
         let bytes: [u8; 8] = payload
             .try_into()
             .map_err(|_| U64DecodeError(payload.len()))?;
@@ -336,11 +338,12 @@ impl Encode<[u8]> for BytesBorrowingCodec {
     }
 }
 
-impl BorrowingDecode<[u8]> for BytesBorrowingCodec {
+impl Decode<[u8]> for BytesBorrowingCodec {
+    type Output<'a> = &'a [u8];
     type Error = BytesBorrowError;
 
-    fn decode<'a>(&self, _name: &str, payload: &'a [u8]) -> Result<&'a [u8], Self::Error> {
-        Ok(payload)
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<&'a [u8], Self::Error> {
+        Ok(env.payload())
     }
 }
 
@@ -361,9 +364,10 @@ impl Encode<u64> for AlwaysFailingOwningCodec {
 }
 
 impl Decode<u64> for AlwaysFailingOwningCodec {
+    type Output<'a> = u64;
     type Error = CodecHardFail;
 
-    fn decode(&self, _n: &str, _p: &[u8]) -> Result<u64, Self::Error> {
+    fn decode<'a>(&'a self, _env: &'a PersistedEnvelope) -> Result<u64, Self::Error> {
         Err(CodecHardFail("decode"))
     }
 }
@@ -378,10 +382,11 @@ impl Encode<[u8]> for AlwaysFailingBorrowingCodec {
     }
 }
 
-impl BorrowingDecode<[u8]> for AlwaysFailingBorrowingCodec {
+impl Decode<[u8]> for AlwaysFailingBorrowingCodec {
+    type Output<'a> = &'a [u8];
     type Error = CodecHardFail;
 
-    fn decode<'a>(&self, _n: &str, _p: &'a [u8]) -> Result<&'a [u8], Self::Error> {
+    fn decode<'a>(&'a self, _env: &'a PersistedEnvelope) -> Result<&'a [u8], Self::Error> {
         Err(CodecHardFail("decode"))
     }
 }
@@ -993,7 +998,7 @@ async fn inline_decode_owning_no_upcaster_collects_events() {
     let v: Result<Vec<u64>, PipelineErr> = s
         .try_fold(Vec::new(), |mut acc, env| {
             let e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             acc.push(e);
             Ok(acc)
@@ -1017,7 +1022,10 @@ async fn inline_decode_owning_with_upcaster_runs_upcast_before_codec() {
             );
             let transformed = upcaster.record(morsel);
             let _e: u64 = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(
+                    &PersistedEnvelope::for_decode(transformed.event_type(), transformed.payload())
+                        .expect("wire build_row ok in test"),
+                )
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(c + 1)
         })
@@ -1034,7 +1042,7 @@ async fn inline_decode_borrowing_no_upcaster_observes_payload_bytes() {
     let len: Result<usize, PipelineErr> = s
         .try_fold(0usize, |acc, env| {
             let bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(acc + bytes.len())
         })
@@ -1056,8 +1064,11 @@ async fn inline_decode_borrowing_with_upcaster_runs_upcast_before_codec() {
                 env.payload(),
             );
             let transformed = upcaster.record(morsel);
+            let synth =
+                PersistedEnvelope::for_decode(transformed.event_type(), transformed.payload())
+                    .expect("wire build_row ok in test");
             let bytes: &[u8] = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(&synth)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(acc + bytes.len())
         })
@@ -1083,7 +1094,7 @@ async fn inline_decode_owning_folds_to_sum() {
         .try_fold(0u64, |sum, env| {
             assert!(env.version().as_u64() >= 1);
             let e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok::<_, PipelineErr>(sum + e)
         })
@@ -1105,7 +1116,7 @@ async fn inline_decode_owning_threads_versions() {
         .try_fold(Vec::<u64>::new(), |mut v, env| {
             let version = env.version();
             let _e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             v.push(version.as_u64());
             Ok::<_, PipelineErr>(v)
@@ -1133,7 +1144,10 @@ async fn inline_decode_owning_upcaster_runs_before_codec() {
             let transformed =
                 prepend_one_upcast(morsel).map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let e: u64 = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(
+                    &PersistedEnvelope::for_decode(transformed.event_type(), transformed.payload())
+                        .expect("wire build_row ok in test"),
+                )
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(sum + e)
         })
@@ -1151,7 +1165,7 @@ async fn inline_decode_owning_empty_returns_initial() {
     let total = s
         .try_fold(99u64, |sum, env| {
             let e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok::<_, PipelineErr>(sum + e)
         })
@@ -1182,7 +1196,7 @@ async fn inline_decode_owning_closure_error_short_circuits() {
     let result: Result<u64, CustomErr> = s
         .try_fold(0u64, |sum, env| {
             let e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .expect("u64 decode for closure-error test");
             if e == 99 {
                 Err(CustomErr(e))
@@ -1203,7 +1217,7 @@ async fn inline_decode_owning_stream_error_propagates() {
     let result: Result<(), PipelineErr> = s
         .try_fold((), |(), env| {
             let _e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(())
         })
@@ -1226,7 +1240,10 @@ async fn inline_decode_owning_upcaster_error_propagates() {
             let transformed =
                 failing_upcast(morsel).map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _e: u64 = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(
+                    &PersistedEnvelope::for_decode(transformed.event_type(), transformed.payload())
+                        .expect("wire build_row ok in test"),
+                )
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(())
         })
@@ -1242,7 +1259,7 @@ async fn inline_decode_owning_codec_error_propagates() {
     let result: Result<(), PipelineErr> = s
         .try_fold((), |(), env| {
             let _e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(())
         })
@@ -1269,7 +1286,10 @@ async fn inline_decode_schema_version_visible_to_upcaster() {
             );
             let transformed = upcaster.record(morsel);
             let _e: u64 = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(
+                    &PersistedEnvelope::for_decode(transformed.event_type(), transformed.payload())
+                        .expect("wire build_row ok in test"),
+                )
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(())
         })
@@ -1296,7 +1316,10 @@ async fn inline_decode_owning_noop_upcaster_passthrough() {
             );
             // No-op: just decode from the morsel directly.
             let e: u64 = codec
-                .decode(morsel.event_type(), morsel.payload())
+                .decode(
+                    &PersistedEnvelope::for_decode(morsel.event_type(), morsel.payload())
+                        .expect("wire build_row ok in test"),
+                )
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok::<_, PipelineErr>(e)
         })
@@ -1321,7 +1344,7 @@ async fn inline_decode_borrowing_folds_payload_size() {
     let total = s
         .try_fold(0usize, |sum, env| {
             let bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok::<_, PipelineErr>(sum + bytes.len())
         })
@@ -1343,7 +1366,7 @@ async fn inline_decode_borrowing_threads_versions() {
         .try_fold(Vec::<u64>::new(), |mut v, env| {
             let ver = env.version();
             let _bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             v.push(ver.as_u64());
             Ok::<_, PipelineErr>(v)
@@ -1361,7 +1384,7 @@ async fn inline_decode_borrowing_empty_returns_initial() {
     let total: usize = s
         .try_fold(7usize, |sum, env| {
             let _bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok::<_, PipelineErr>(sum)
         })
@@ -1394,7 +1417,7 @@ async fn inline_decode_borrowing_closure_error_short_circuits() {
     let result: Result<(), Stop> = s
         .try_fold((), move |(), env| {
             let bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .expect("bytes decode for closure-error test");
             *calls_clone.lock().unwrap() += 1;
             if bytes[0] == 2 { Err(Stop) } else { Ok(()) }
@@ -1412,7 +1435,7 @@ async fn inline_decode_borrowing_stream_error_propagates() {
     let result: Result<(), PipelineErr> = s
         .try_fold((), |(), env| {
             let _bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(())
         })
@@ -1435,7 +1458,10 @@ async fn inline_decode_borrowing_upcaster_error_propagates() {
             let transformed =
                 failing_upcast(morsel).map_err(|e| PipelineErr::Upcast(e.to_string()))?;
             let _bytes: &[u8] = codec
-                .decode(transformed.event_type(), transformed.payload())
+                .decode(
+                    &PersistedEnvelope::for_decode(transformed.event_type(), transformed.payload())
+                        .expect("wire build_row ok in test"),
+                )
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(())
         })
@@ -1451,7 +1477,7 @@ async fn inline_decode_borrowing_codec_error_propagates() {
     let result: Result<(), PipelineErr> = s
         .try_fold((), |(), env| {
             let _bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok(())
         })
@@ -1468,7 +1494,7 @@ async fn inline_decode_borrowing_noop_upcaster_passthrough() {
         .try_fold(Vec::<u8>::new(), |mut acc, env| {
             // No-op upcaster: skip the transform step entirely.
             let bytes: &[u8] = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             acc.extend_from_slice(bytes);
             Ok::<_, PipelineErr>(acc)
@@ -1536,7 +1562,7 @@ async fn inline_decode_relays_non_monotonic_versions_to_closure() {
         .try_fold(Vec::new(), |mut acc, env| {
             let v = env.version();
             let e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             acc.push((v.as_u64(), e));
             Ok::<_, PipelineErr>(acc)
@@ -1599,7 +1625,7 @@ async fn inline_decode_pipeline_usable_across_tokio_spawn() {
         let mut s = stream;
         s.try_fold(0u64, move |sum, env| {
             let e: u64 = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| PipelineErr::Decode(e.to_string()))?;
             Ok::<_, PipelineErr>(sum + e)
         })
@@ -1708,7 +1734,7 @@ proptest! {
             let count = s
                 .try_fold(0usize, |c, env| {
                     let _bytes: &[u8] = codec
-                        .decode(env.event_type(), env.payload())
+                        .decode(&env)
                         .map_err(|e| PipelineErr::Decode(e.to_string()))?;
                     Ok::<_, PipelineErr>(c + 1)
                 })
@@ -1736,7 +1762,7 @@ proptest! {
                 .try_fold(Vec::<u64>::new(), |mut acc, env| {
                     let ver = env.version();
                     let _bytes: &[u8] = codec
-                        .decode(env.event_type(), env.payload())
+                        .decode(&env)
                         .map_err(|e| PipelineErr::Decode(e.to_string()))?;
                     acc.push(ver.as_u64());
                     Ok::<_, PipelineErr>(acc)
@@ -1779,10 +1805,11 @@ impl Encode<Vec<u8>> for BytesOwningCodec {
 }
 
 impl Decode<Vec<u8>> for BytesOwningCodec {
+    type Output<'a> = Vec<u8>;
     type Error = Infallible;
 
-    fn decode(&self, _n: &str, payload: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        Ok(payload.to_vec())
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<Vec<u8>, Self::Error> {
+        Ok(env.payload().to_vec())
     }
 }
 
@@ -1793,7 +1820,7 @@ async fn observe_owning(rows: Vec<(u64, String, Vec<u8>)>) -> Vec<(u64, String, 
     s.try_fold(Vec::new(), |mut acc, env| {
         let v = env.version();
         let e: Vec<u8> = codec
-            .decode(env.event_type(), env.payload())
+            .decode(&env)
             .map_err(|e| PipelineErr::Decode(e.to_string()))?;
         acc.push((v.as_u64(), "E".to_owned(), e));
         Ok::<_, PipelineErr>(acc)
@@ -1809,7 +1836,7 @@ async fn observe_borrowing(rows: Vec<(u64, String, Vec<u8>)>) -> Vec<(u64, Strin
     s.try_fold(Vec::new(), |mut acc, env| {
         let v = env.version();
         let e: &[u8] = codec
-            .decode(env.event_type(), env.payload())
+            .decode(&env)
             .map_err(|e| PipelineErr::Decode(e.to_string()))?;
         acc.push((v.as_u64(), "E".to_owned(), e.to_vec()));
         Ok::<_, PipelineErr>(acc)
@@ -2093,7 +2120,7 @@ async fn try_fold_async_until_no_shutdown_returns_completed() {
         .try_fold_async_until(
             0u64,
             move |acc, env| {
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     Ok::<_, TestErr>(acc + e)
@@ -2120,7 +2147,7 @@ async fn try_fold_async_until_threads_versions_in_order() {
             Vec::<(u64, u64)>::new(),
             move |mut acc, env| {
                 let v = env.version().as_u64();
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     acc.push((v, e));
@@ -2149,7 +2176,7 @@ async fn try_fold_async_until_awaits_per_event_side_effect() {
             0u64,
             move |acc, env| {
                 let inv = Arc::clone(&inv);
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                     inv.fetch_add(1, Ordering::SeqCst);
@@ -2175,7 +2202,7 @@ async fn try_fold_async_until_empty_stream_completes_with_init() {
         .try_fold_async_until(
             42u64,
             move |acc, env| {
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     Ok::<_, TestErr>(acc + e)
@@ -2203,7 +2230,7 @@ async fn try_fold_async_until_shutdown_already_fired_returns_init() {
         .try_fold_async_until(
             999u64,
             move |acc, env| {
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     Ok::<_, TestErr>(acc + e)
@@ -2231,7 +2258,7 @@ async fn try_fold_async_until_shutdown_after_stream_completes_yields_completed()
         .try_fold_async_until(
             0u64,
             move |acc, env| {
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     Ok::<_, TestErr>(acc + e)
@@ -2262,7 +2289,7 @@ async fn try_fold_async_until_closure_error_short_circuits_no_disposition() {
             0u64,
             move |acc, env| {
                 let calls = Arc::clone(&calls_clone);
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     let e = decoded?;
@@ -2297,7 +2324,7 @@ async fn try_fold_async_until_stream_error_short_circuits_no_disposition() {
         .try_fold_async_until(
             0u64,
             move |acc, env| {
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     Ok::<_, TestErr>(acc + e)
@@ -2393,7 +2420,7 @@ async fn try_fold_async_until_concurrent_shutdown_preserves_partial_accumulator(
         .try_fold_async_until(
             0u64,
             move |acc, env| {
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     Ok::<_, TestErr>(acc + e)
@@ -2439,7 +2466,7 @@ async fn try_fold_async_until_event_processed_before_shutdown_is_in_accumulator(
         .try_fold_async_until(
             Vec::<u64>::new(),
             move |mut acc, env| {
-                let decoded = codec.decode(env.event_type(), env.payload());
+                let decoded = codec.decode(&env);
                 async move {
                     let e = decoded?;
                     acc.push(e);

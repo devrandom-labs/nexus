@@ -210,7 +210,7 @@ where
     SS: SnapshotStore<P::State, Version> + Send + Sync,
     P: Projector + Send + Sync,
     P::State: Clone + Send,
-    EC: Decode<P::Event> + Send + Sync,
+    for<'a> EC: Decode<P::Event, Output<'a> = P::Event> + Send + Sync,
     Trig: PersistTrigger + Send + Sync,
 {
     /// Run the event loop until shutdown or error.
@@ -270,7 +270,7 @@ where
                     // `item` (HRTB requirement for `try_fold_async_until`'s
                     // single concrete `Fut`).
                     let event_version = item.version();
-                    let decoded = event_codec_ref.decode(item.event_type(), item.payload());
+                    let decoded = event_codec_ref.decode(&item);
                     async move {
                         let event = decoded.map_err(ProjectionError::EventCodec)?;
                         let next =

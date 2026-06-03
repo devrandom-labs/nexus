@@ -223,10 +223,14 @@ impl Encode<TestEvent> for JsonCodec {
 }
 
 impl Decode<TestEvent> for JsonCodec {
+    type Output<'a> = TestEvent;
     type Error = JsonCodecError;
-    fn decode(&self, event_type: &str, payload: &[u8]) -> Result<TestEvent, Self::Error> {
-        let s = std::str::from_utf8(payload).map_err(|e| JsonCodecError(e.to_string()))?;
-        match event_type {
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<TestEvent, Self::Error> {
+        let s = std::str::from_utf8(env.payload()).map_err(|e| JsonCodecError(e.to_string()))?;
+        match env.event_type() {
             "Happened" => {
                 // Parse {"Happened":"value"}
                 let value = s
@@ -897,7 +901,8 @@ proptest! {
         let codec = JsonCodec;
         let event = TestEvent::Happened(s.clone());
         let encoded = codec.encode(&event).unwrap();
-        let decoded = codec.decode("Happened", &encoded).unwrap();
+        let env = nexus_store::PersistedEnvelope::for_decode("Happened", &encoded).unwrap();
+        let decoded = codec.decode(&env).unwrap();
         prop_assert_eq!(decoded, event, "Happened roundtrip failed for: {:?}", s);
     }
 
@@ -906,7 +911,8 @@ proptest! {
         let codec = JsonCodec;
         let event = TestEvent::ValueSet(v);
         let encoded = codec.encode(&event).unwrap();
-        let decoded = codec.decode("ValueSet", &encoded).unwrap();
+        let env = nexus_store::PersistedEnvelope::for_decode("ValueSet", &encoded).unwrap();
+        let decoded = codec.decode(&env).unwrap();
         prop_assert_eq!(decoded, event, "ValueSet roundtrip failed for: {}", v);
     }
 
@@ -917,7 +923,8 @@ proptest! {
     ) {
         prop_assume!(event_type != "Happened" && event_type != "ValueSet");
         let codec = JsonCodec;
-        let result = codec.decode(&event_type, &payload);
+        let env = nexus_store::PersistedEnvelope::for_decode(&event_type, &payload).unwrap();
+        let result = codec.decode(&env);
         prop_assert!(result.is_err(), "codec must reject unknown event type: {}", event_type);
     }
 }

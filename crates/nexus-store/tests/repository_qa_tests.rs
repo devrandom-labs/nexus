@@ -47,7 +47,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use nexus::*;
 use nexus_store::Repository;
 use nexus_store::Store;
-use nexus_store::codec::{BorrowingDecode, Decode, Encode};
+use nexus_store::codec::{Decode, Encode};
+use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::StoreError;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
@@ -215,10 +216,11 @@ impl Encode<CounterEvent> for SimpleCodec {
 }
 
 impl Decode<CounterEvent> for SimpleCodec {
+    type Output<'a> = CounterEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
-        let s = std::str::from_utf8(payload)
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<CounterEvent, Self::Error> {
+        let s = std::str::from_utf8(env.payload())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if s == "inc" {
             Ok(CounterEvent::Incremented)
@@ -268,10 +270,11 @@ impl Encode<CounterEvent> for FailAfterNEncodesCodec {
 }
 
 impl Decode<CounterEvent> for FailAfterNEncodesCodec {
+    type Output<'a> = CounterEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
-        SimpleCodec.decode(event_type, payload)
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<CounterEvent, Self::Error> {
+        SimpleCodec.decode(env)
     }
 }
 
@@ -301,16 +304,17 @@ impl Encode<CounterEvent> for FailAfterNDecodesCodec {
 }
 
 impl Decode<CounterEvent> for FailAfterNDecodesCodec {
+    type Output<'a> = CounterEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<CounterEvent, Self::Error> {
         let count = self.decode_count.fetch_add(1, Ordering::SeqCst);
         if count >= self.max_decodes {
             return Err(std::io::Error::other(format!(
                 "decode limit reached (call #{count})"
             )));
         }
-        self.inner.decode(event_type, payload)
+        self.inner.decode(env)
     }
 }
 
@@ -332,13 +336,14 @@ impl Encode<CounterEvent> for ToggleableCodec {
 }
 
 impl Decode<CounterEvent> for ToggleableCodec {
+    type Output<'a> = CounterEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, event_type: &str, payload: &[u8]) -> Result<CounterEvent, Self::Error> {
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<CounterEvent, Self::Error> {
         if self.fail_flag.load(Ordering::SeqCst) {
             return Err(std::io::Error::other("toggled to fail"));
         }
-        SimpleCodec.decode(event_type, payload)
+        SimpleCodec.decode(env)
     }
 }
 
@@ -353,26 +358,22 @@ impl Encode<DeltaEvent> for DeltaBorrowingCodec {
     }
 }
 
-impl BorrowingDecode<DeltaEvent> for DeltaBorrowingCodec {
+impl Decode<DeltaEvent> for DeltaBorrowingCodec {
+    type Output<'a> = &'a DeltaEvent;
     type Error = std::io::Error;
 
-    fn decode<'a>(
-        &self,
-        _event_type: &str,
-        payload: &'a [u8],
-    ) -> Result<&'a DeltaEvent, Self::Error> {
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<&'a DeltaEvent, Self::Error> {
+        let payload = env.payload();
         if payload.len() != std::mem::size_of::<DeltaEvent>() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "wrong payload size for DeltaEvent",
             ));
         }
-        // SAFETY: DeltaEvent is repr(C) with a single i32 field.
-        // align_to requires the slice to start on a 4-byte boundary.
-        // This holds when the payload is the only allocation (its own
-        // Vec), but NOT when it lives at an arbitrary offset within a
-        // shared Bytes buffer. Callers that cannot guarantee alignment
-        // must use `Decode` (owning) instead.
+        // SAFETY: DeltaEvent is repr(C) with a single i32 field. With PR2's
+        // wire-format alignment, `env.payload()` always lands on a 16-byte
+        // boundary inside the row buffer — sufficient for any T whose align
+        // ≤ 16, including this 4-byte i32 newtype.
         let (prefix, events, _suffix) = unsafe { payload.align_to::<DeltaEvent>() };
         if !prefix.is_empty() || events.is_empty() {
             return Err(std::io::Error::new(
@@ -384,16 +385,24 @@ impl BorrowingDecode<DeltaEvent> for DeltaBorrowingCodec {
     }
 }
 
-/// Owning decode for `DeltaEvent` — safe for any byte offset in a shared buffer.
-///
-/// Used by tests that write events through the store (payload lands at an
-/// unaligned offset inside a shared `Bytes` buffer) rather than directly
-/// crafting aligned byte slices.
-impl Decode<DeltaEvent> for DeltaBorrowingCodec {
+/// Owning decode for `DeltaEvent` — used by tests that exercise the owning
+/// `EventStore` facade rather than `ZeroCopyEventStore`.
+struct DeltaOwningCodec;
+
+impl Encode<DeltaEvent> for DeltaOwningCodec {
     type Error = std::io::Error;
 
-    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<DeltaEvent, Self::Error> {
-        let bytes: [u8; 4] = payload.try_into().map_err(|_| {
+    fn encode(&self, event: &DeltaEvent) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(&event.delta.to_le_bytes()))
+    }
+}
+
+impl Decode<DeltaEvent> for DeltaOwningCodec {
+    type Output<'a> = DeltaEvent;
+    type Error = std::io::Error;
+
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<DeltaEvent, Self::Error> {
+        let bytes: [u8; 4] = env.payload().try_into().map_err(|_| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "wrong payload size for DeltaEvent",
@@ -881,11 +890,9 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
         .unwrap();
 
     let store = Store::new(raw_store);
-    // Use the owning EventStore (not ZeroCopyEventStore) because the payload
-    // lives at an unaligned offset inside a shared Bytes buffer — the
-    // `align_to`-based BorrowingDecode requires its own aligned allocation.
-    // The upcaster-double-apply invariant is independent of owning vs zero-copy.
-    let es = store.repository().codec(DeltaBorrowingCodec).build();
+    // Use the owning EventStore via DeltaOwningCodec. The upcaster-double-apply
+    // invariant is independent of owning vs zero-copy.
+    let es = store.repository().codec(DeltaOwningCodec).build();
 
     // load_with: legacy delta=5 upcasted to 10. State total=10.
     let mut loaded: AggregateRoot<DeltaAggregate> = es

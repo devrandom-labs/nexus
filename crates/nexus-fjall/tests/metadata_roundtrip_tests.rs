@@ -126,16 +126,16 @@ async fn none_metadata_roundtrips_as_none() {
     let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
     let id = StreamName("none-meta");
 
-    let env = pending_envelope(Version::INITIAL)
+    let pending = pending_envelope(Version::INITIAL)
         .event_type("X")
         .payload(Bytes::from_static(b"payload"))
         .build(); // no metadata
-    store.append(&id, None, &[env]).await.unwrap();
+    store.append(&id, None, &[pending]).await.unwrap();
 
     let mut cursor = store.read_stream(&id, Version::INITIAL).await.unwrap();
-    let env = cursor.next().await.unwrap().unwrap();
-    assert_eq!(env.metadata(), None);
-    assert!(env.metadata_bytes().is_none());
+    let read = cursor.next().await.unwrap().unwrap();
+    assert_eq!(read.metadata(), None);
+    assert!(read.metadata_bytes().is_none());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

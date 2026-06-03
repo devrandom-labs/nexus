@@ -23,7 +23,7 @@ pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
 pub use codec::serde::json::{Json, JsonCodec};
 #[cfg(feature = "serde")]
 pub use codec::serde::{SerdeCodec, SerdeFormat};
-pub use codec::{BorrowingDecode, Decode, Encode};
+pub use codec::{Decode, Encode};
 pub use envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::LoadWithError;
 pub use error::{AppendError, StoreError};

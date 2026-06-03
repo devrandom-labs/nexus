@@ -13,7 +13,7 @@ use nexus::*;
 use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{BorrowingDecode, Encode};
+use nexus_store::{Decode, Encode, PersistedEnvelope};
 
 // -- Domain where Event is a fixed-layout type decodable from bytes --
 
@@ -84,14 +84,12 @@ impl Encode<CounterEvent> for CounterBorrowingCodec {
     }
 }
 
-impl BorrowingDecode<CounterEvent> for CounterBorrowingCodec {
+impl Decode<CounterEvent> for CounterBorrowingCodec {
+    type Output<'a> = &'a CounterEvent;
     type Error = std::io::Error;
 
-    fn decode<'a>(
-        &self,
-        _event_type: &str,
-        payload: &'a [u8],
-    ) -> Result<&'a CounterEvent, Self::Error> {
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<&'a CounterEvent, Self::Error> {
+        let payload = env.payload();
         if payload.len() != std::mem::size_of::<CounterEvent>() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

@@ -357,6 +357,52 @@ impl PersistedEnvelope {
             .expect("PersistedEnvelope invariant: schema_version >= 1")
     }
 
+    /// Wrap raw bytes in a synthetic envelope suitable for [`Decode`].
+    ///
+    /// Builds a fresh wire-format row via [`crate::wire::build_row`] so the
+    /// payload pointer lands on a 16-byte boundary. Use this when calling a
+    /// [`Decode`](crate::codec::Decode) impl outside the cursor's normal row
+    /// buffer — snapshot decoding, upcaster post-transform decoding, codec
+    /// round-trip tests.
+    ///
+    /// Reports `Version::INITIAL`, `GlobalSeq::INITIAL`, and `schema_version=1`.
+    /// Most codecs ignore those fields; when they don't (or you're bridging
+    /// an upcast back to a decode and need to preserve the original
+    /// envelope's version triple), construct the envelope manually via
+    /// [`try_new`](Self::try_new).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WireError`](crate::wire::WireError) if `event_type` exceeds
+    /// 65,535 bytes or `payload` exceeds `u32::MAX` bytes.
+    ///
+    /// # Panics
+    ///
+    /// Never under normal use. The post-`build_row` [`try_new`](Self::try_new)
+    /// is `expect`'d because its inputs are controlled here: ranges come from
+    /// the just-built row, `event_type` is a valid `&str`, and
+    /// `schema_version = 1` is nonzero — none of `try_new`'s failure
+    /// conditions can fire.
+    pub fn for_decode(event_type: &str, payload: &[u8]) -> Result<Self, crate::wire::WireError> {
+        let row =
+            crate::wire::build_row(GlobalSeq::INITIAL.as_u64(), 1, event_type, None, payload)?;
+        #[allow(
+            clippy::expect_used,
+            reason = "ranges come from wire::build_row which validated them, \
+                      event_type is a valid &str, schema_version=1 is nonzero"
+        )]
+        Ok(Self::try_new(
+            Version::INITIAL,
+            GlobalSeq::INITIAL,
+            row.value,
+            1,
+            row.offsets.event_type,
+            row.offsets.payload,
+            None,
+        )
+        .expect("try_new is infallible given build_row outputs and valid &str"))
+    }
+
     fn slice_range(&self, range: &Range<u32>) -> Bytes {
         self.value.slice(idx(range.start)..idx(range.end))
     }

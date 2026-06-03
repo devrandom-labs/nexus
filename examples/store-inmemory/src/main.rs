@@ -124,15 +124,19 @@ impl Encode<TodoEvent> for JsonCodec {
 }
 
 impl Decode<TodoEvent> for JsonCodec {
+    type Output<'a> = TodoEvent;
     type Error = CodecError;
 
-    fn decode(&self, event_type: &str, payload: &[u8]) -> Result<TodoEvent, Self::Error> {
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<TodoEvent, Self::Error> {
         // In a real system you might dispatch on `event_type` to pick
         // different structs. Here our enum is self-describing via serde,
         // but we still validate the type name.
-        match event_type {
+        match env.event_type() {
             "TodoCreated" | "TodoCompleted" | "TodoDeleted" => {
-                serde_json::from_slice(payload).map_err(CodecError::Deserialize)
+                serde_json::from_slice(env.payload()).map_err(CodecError::Deserialize)
             }
             other => Err(CodecError::UnknownType(other.to_owned())),
         }
@@ -324,9 +328,10 @@ async fn main() {
             );
         }
 
-        let decoded = codec
-            .decode(upcasted.event_type(), upcasted.payload())
-            .expect("decode should succeed");
+        let upcast_env =
+            nexus_store::PersistedEnvelope::for_decode(upcasted.event_type(), upcasted.payload())
+                .expect("wire build_row ok");
+        let decoded = codec.decode(&upcast_env).expect("decode should succeed");
         println!("  version={version}: {decoded:?}");
     }
     println!();
@@ -379,7 +384,7 @@ async fn main() {
         .map_err(|e| SubstrateErr::Stream(e.to_string()))
         .try_fold((0usize, None::<String>), |(c, _last), env| {
             let event = codec
-                .decode(env.event_type(), env.payload())
+                .decode(&env)
                 .map_err(|e| SubstrateErr::Decode(e.to_string()))?;
             let title = match event {
                 TodoEvent::Created { title, .. } => Some(title),

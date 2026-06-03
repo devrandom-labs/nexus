@@ -598,8 +598,12 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
         }
     }
     impl nexus_store::Decode<CounterState> for FailCodec {
+        type Output<'a> = CounterState;
         type Error = std::io::Error;
-        fn decode(&self, _event_type: &str, _payload: &[u8]) -> Result<CounterState, Self::Error> {
+        fn decode<'a>(
+            &'a self,
+            _env: &'a nexus_store::PersistedEnvelope,
+        ) -> Result<CounterState, Self::Error> {
             Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "always fails",

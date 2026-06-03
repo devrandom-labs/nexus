@@ -2,12 +2,13 @@
 // Encode<E> — serialize a typed value to bytes
 // ═══════════════════════════════════════════════════════════════════════════
 
+use crate::envelope::PersistedEnvelope;
+
 /// Serialize a typed value to bytes.
 ///
-/// The write half of the codec story. Independent from [`Decode`] and
-/// [`BorrowingDecode`] so write-only adapters need not implement decoding,
-/// and so the encode path can be bounded without forcing a decode strategy
-/// on the caller.
+/// The write half of the codec story. Independent from [`Decode`] so
+/// write-only adapters need not implement decoding, and so the encode path
+/// can be bounded without forcing a decode strategy on the caller.
 ///
 /// `E: ?Sized` allows unsized event types (e.g. `Archived<MyEvent>`).
 pub trait Encode<E: ?Sized>: Send + Sync + 'static {
@@ -30,64 +31,60 @@ pub trait Encode<E: ?Sized>: Send + Sync + 'static {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Decode<E> — owning deserialize from bytes
+// Decode<E> — deserialize a persisted envelope to a typed value (or borrow into it)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Deserialize bytes to an owned typed value.
+/// Decode a persisted envelope to a typed value (or borrow into it).
 ///
-/// The owning read half. For serde-based formats (JSON, bincode, postcard)
-/// where deserialization produces an owned value.
+/// One trait covers both owning and borrowing codecs via the
+/// [`Output<'a>`](Self::Output) GAT:
 ///
-/// Independent from [`Encode`] and [`BorrowingDecode`]: a codec may
-/// implement only `Decode` (read-only replica), only `Encode` (write-only
-/// shipper), or any combination.
-pub trait Decode<E>: Send + Sync + 'static {
+/// - **Owning codecs** (serde JSON/bincode/postcard): `type Output<'a> = E`.
+///   `decode` returns an owned `E` that lives past the envelope.
+/// - **Borrowing codecs** (rkyv): `type Output<'a> = &'a <E as Archive>::Archived`.
+///   `decode` returns a reference into the envelope's payload bytes — no
+///   allocation, no copy.
+/// - **Plain-old-data codecs** (bytemuck): `type Output<'a> = &'a E`.
+///   Reinterprets the payload as `&E` directly. Relies on the wire-format
+///   16-byte payload-alignment invariant for safety.
+///
+/// The two-trait split (previously `Decode` + `BorrowingDecode`) was a
+/// workaround for the borrowed-cursor lifetime cliff: when the envelope
+/// was borrowed from a cursor row that died on `.next()`, the same
+/// operation needed two trait shapes. The owned-`Bytes` envelope removes
+/// the cliff — `'a` now ties to the envelope itself, which is cheap-to-
+/// clone and lifetime-independent.
+///
+/// `E: ?Sized` allows unsized event types: `Decode<[u8]>`, `Decode<str>`,
+/// `Decode<<E as Archive>::Archived>`.
+///
+/// Independent from [`Encode`]: a codec may implement only `Decode`
+/// (read-only replica), only `Encode` (write-only shipper), or both.
+pub trait Decode<E: ?Sized>: Send + Sync + 'static {
+    /// What [`decode`](Self::decode) returns.
+    ///
+    /// `E` for owning codecs, `&'a E` (or `&'a Archived<E>`) for
+    /// zero-copy codecs. The `where Self: 'a` bound is the standard GAT
+    /// shape and adds no real constraint for `'static` codecs.
+    type Output<'a>
+    where
+        Self: 'a;
+
     /// The error type for deserialization failures.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Deserialize bytes back to a typed value.
+    /// Decode the envelope's payload to [`Output<'a>`](Self::Output).
     ///
-    /// `name` identifies the type being decoded — for events this is the
-    /// variant name (from `DomainEvent::name()`), for snapshots this is
-    /// the aggregate identifier. Provided so the codec can discriminate
-    /// which variant to construct.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Self::Error` if the payload cannot be deserialized.
-    fn decode(&self, name: &str, payload: &[u8]) -> Result<E, Self::Error>;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// BorrowingDecode<E> — zero-copy deserialize (returns &E)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Decode bytes by borrowing directly from the payload buffer.
-///
-/// Unlike [`Decode`] which returns an owned `E`, `BorrowingDecode` returns
-/// `&'a E` borrowing directly from the payload buffer. This enables
-/// zero-allocation event streaming for codecs like rkyv and flatbuffers
-/// where the serialized bytes ARE the data.
-///
-/// `E: ?Sized` allows unsized event types (e.g. `Archived<MyEvent>`).
-///
-/// Independent from [`Encode`] and [`Decode`].
-pub trait BorrowingDecode<E: ?Sized>: Send + Sync + 'static {
-    /// The error type for deserialization failures.
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Decode bytes by borrowing directly from the payload buffer.
-    ///
-    /// `name` identifies the type being decoded.
-    ///
-    /// The returned reference has lifetime `'a` tied to `payload` —
-    /// it borrows from the cursor's row buffer. No allocation occurs.
+    /// The envelope is the input: its [`event_type()`](PersistedEnvelope::event_type)
+    /// is the variant discriminant, [`payload()`](PersistedEnvelope::payload)
+    /// is the serialized bytes. Codecs reach into the envelope for whatever
+    /// they need — no pre-extracted arguments.
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` if the payload is invalid (e.g. failed
-    /// archive validation for rkyv).
-    fn decode<'a>(&self, name: &str, payload: &'a [u8]) -> Result<&'a E, Self::Error>;
+    /// Returns `Self::Error` if the payload is invalid (e.g. failed archive
+    /// validation for rkyv) or does not match the type discriminant.
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<Self::Output<'a>, Self::Error>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -99,6 +96,7 @@ pub mod serde {
     use ::serde::{Serialize, de::DeserializeOwned};
 
     use super::{Decode, Encode};
+    use crate::envelope::PersistedEnvelope;
 
     /// Format-agnostic serialization strategy for serde-compatible events.
     ///
@@ -138,9 +136,10 @@ pub mod serde {
     ///
     /// # Variant dispatch
     ///
-    /// `SerdeCodec` ignores the `name` argument on `decode`. Serde formats
-    /// embed variant discriminants in the payload (e.g. `{"Credited": {...}}`
-    /// in JSON), so the codec delegates dispatch to serde itself.
+    /// `SerdeCodec` ignores [`env.event_type()`](PersistedEnvelope::event_type)
+    /// on `decode`. Serde formats embed variant discriminants in the payload
+    /// (e.g. `{"Credited": {...}}` in JSON), so the codec delegates dispatch
+    /// to serde itself.
     ///
     /// # Examples
     ///
@@ -187,10 +186,17 @@ pub mod serde {
         E: DeserializeOwned + Send + Sync + 'static,
         F: SerdeFormat,
     {
+        type Output<'a>
+            = E
+        where
+            Self: 'a;
         type Error = F::Error;
 
-        fn decode(&self, _name: &str, payload: &[u8]) -> Result<E, Self::Error> {
-            self.format.deserialize(payload)
+        fn decode<'a>(
+            &'a self,
+            env: &'a PersistedEnvelope,
+        ) -> Result<Self::Output<'a>, Self::Error> {
+            self.format.deserialize(env.payload())
         }
     }
 

@@ -33,6 +33,15 @@
 #![allow(clippy::uninlined_format_args, reason = "tests")]
 #![allow(clippy::arithmetic_side_effects, reason = "tests")]
 #![allow(
+    clippy::shadow_unrelated,
+    clippy::shadow_reuse,
+    reason = "test readability: `rows` reshadowed after construction"
+)]
+#![allow(
+    clippy::used_underscore_binding,
+    reason = "_force_promotion is deliberately named to signal intent"
+)]
+#![allow(
     clippy::disallowed_types,
     reason = "tests need std Mutex for global allocator gate"
 )]
@@ -43,7 +52,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nexus::Version;
-use nexus_store::codec::{BorrowingDecode, Decode, Encode};
+use nexus_store::codec::{Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::store::GlobalSeq;
 use nexus_store::stream::{BaseEventStream, EventStream, EventStreamExt};
@@ -211,10 +220,11 @@ impl Encode<String> for StringOwningCodec {
 }
 
 impl Decode<String> for StringOwningCodec {
+    type Output<'a> = String;
     type Error = Utf8Err;
 
-    fn decode(&self, _n: &str, payload: &[u8]) -> Result<String, Self::Error> {
-        std::str::from_utf8(payload)
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<String, Self::Error> {
+        std::str::from_utf8(env.payload())
             .map(std::borrow::ToOwned::to_owned)
             .map_err(|_| Utf8Err)
     }
@@ -231,11 +241,12 @@ impl Encode<str> for StrBorrowingCodec {
     }
 }
 
-impl BorrowingDecode<str> for StrBorrowingCodec {
+impl Decode<str> for StrBorrowingCodec {
+    type Output<'a> = &'a str;
     type Error = Utf8Err;
 
-    fn decode<'a>(&self, _n: &str, payload: &'a [u8]) -> Result<&'a str, Self::Error> {
-        std::str::from_utf8(payload).map_err(|_| Utf8Err)
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<&'a str, Self::Error> {
+        std::str::from_utf8(env.payload()).map_err(|_| Utf8Err)
     }
 }
 
@@ -260,7 +271,7 @@ fn borrowed_fold_is_constant_regardless_of_stream_length() {
         rt.block_on(async {
             let mut s = stream;
             let fut = s.try_fold(0usize, |acc, env| {
-                let bytes: &str = codec.decode(env.event_type(), env.payload())?;
+                let bytes: &str = codec.decode(&env)?;
                 Ok::<_, FoldErr>(acc + bytes.len())
             });
             let (r, c, b) = measure_async(fut).await;
@@ -307,7 +318,7 @@ fn owning_string_codec_scales_linearly_with_stream_length() {
         rt.block_on(async {
             let mut s = stream;
             let fut = s.try_fold(0usize, |acc, env| {
-                let decoded: String = codec.decode(env.event_type(), env.payload())?;
+                let decoded: String = codec.decode(&env)?;
                 Ok::<_, FoldErr>(acc + decoded.len())
             });
             let (r, c, b) = measure_async(fut).await;
