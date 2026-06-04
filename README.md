@@ -52,7 +52,7 @@ impl Handle<Deposit> for BankAccount {
 
 **`no_std` / `no_alloc` kernel.** The core crate has zero dependencies on `std` allocation. `Events<E, N>` uses `ArrayVec` with const generics — `N = 0` (the default) means a single event with no heap allocation at all. The kernel compiles for embedded and WASM targets.
 
-**Zero-copy read path.** `BorrowingCodec` decodes events directly from database buffers via GAT lending iterators. No deserialization into owned structs on the read path — rkyv and flatbuffers plug in directly.
+**Zero-copy read path.** One `Decode<E>` trait with an `Output<'a>` GAT covers both owning codecs (serde JSON/bincode/postcard return `E`) and borrowing codecs (rkyv returns `&'a Archived<E>`, bytemuck returns `&'a E`). Event streams are `futures::Stream<Item = Result<PersistedEnvelope, _>>`, so the entire `futures::StreamExt` / `TryStreamExt` combinator surface is free. The on-disk row format aligns every event payload to a 16-byte boundary, so zero-copy decoders (rkyv, flatbuffers, `#[repr(C)]` POD) get sound `&T` references without a copy or a realignment step.
 
 ## Crates
 
@@ -62,6 +62,7 @@ impl Handle<Deposit> for BankAccount {
 | [`nexus-macros`](crates/nexus-macros) | Derive macros — `DomainEvent`, `#[aggregate]`, `#[transforms]` |
 | [`nexus-store`](crates/nexus-store) | Persistence edge — codecs, event streams, upcasters, repositories |
 | [`nexus-fjall`](crates/nexus-fjall) | Embedded LSM-tree event store adapter (fjall) |
+| [`nexus-framework`](crates/nexus-framework) | Runtime layer — projection runner over `Subscription` + `SnapshotStore` (tokio) |
 
 ## Features
 
@@ -69,6 +70,9 @@ impl Handle<Deposit> for BankAccount {
 - Optimistic concurrency with version-checked appends
 - Allocation-free errors (`ArrayString`-based, no heap on error paths)
 - Aggregate snapshots with `AggregateRoot::restore`
+- Pluggable codecs via cargo features on `nexus-store`: `serde` + `json`, `bytemuck` (`#[repr(C)]` POD), `rkyv` (archived zero-copy)
+- 16-byte payload alignment as a wire-format invariant — sound zero-copy decode for rkyv, flatbuffers, and `#[repr(C)]` types out of the box
+- Owned `bytes::Bytes` envelopes — event streams are plain `futures::Stream`, so every `futures::StreamExt` / `TryStreamExt` combinator works
 - Verified with proptest, miri, mutation testing, trybuild, and criterion
 
 ## Getting Started
