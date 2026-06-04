@@ -32,11 +32,11 @@
 use std::convert::Infallible;
 use std::fmt;
 
+use futures::StreamExt;
 use nexus::Version;
 use nexus_store::envelope::PendingEnvelope;
 use nexus_store::pending_envelope;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 
 use proptest::prelude::*;
@@ -125,7 +125,7 @@ proptest! {
                 .unwrap();
 
             let mut read_payloads: Vec<Vec<u8>> = Vec::new();
-            while let Some(env) = stream.next().await.unwrap() {
+            while let Some(__item) = stream.next().await { let env = __item.unwrap();
                 read_payloads.push(env.payload().to_vec());
             }
 
@@ -161,7 +161,7 @@ proptest! {
                 .unwrap();
 
             let mut prev_version: u64 = 0;
-            while let Some(env) = stream.next().await.unwrap() {
+            while let Some(__item) = stream.next().await { let env = __item.unwrap();
                 let current = env.version().as_u64();
                 prop_assert!(
                     current > prev_version,
@@ -207,7 +207,7 @@ proptest! {
             {
                 let mut stream = store.read_stream(&id_a, Version::INITIAL).await.unwrap();
                 let mut count = 0usize;
-                while let Some(env) = stream.next().await.unwrap() {
+                while let Some(__item) = stream.next().await { let env = __item.unwrap();
                     let idx = count;
                     prop_assert!(
                         idx < payloads_a.len(),
@@ -232,7 +232,7 @@ proptest! {
             {
                 let mut stream = store.read_stream(&id_b, Version::INITIAL).await.unwrap();
                 let mut count = 0usize;
-                while let Some(env) = stream.next().await.unwrap() {
+                while let Some(__item) = stream.next().await { let env = __item.unwrap();
                     let idx = count;
                     prop_assert!(
                         idx < payloads_b.len(),

@@ -51,11 +51,11 @@ use std::convert::Infallible;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures::TryStreamExt;
 use nexus::Version;
 use nexus_store::codec::{Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::store::GlobalSeq;
-use nexus_store::stream::{BaseEventStream, EventStream, EventStreamExt};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -167,40 +167,29 @@ impl VecStream {
     }
 }
 
-impl BaseEventStream for VecStream {
-    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
+impl futures::Stream for VecStream {
+    type Item = Result<PersistedEnvelope, Infallible>;
 
-impl EventStream for VecStream {
-    type Item<'a>
-        = PersistedEnvelope
-    where
-        Self: 'a;
-    type Error = Infallible;
-
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
         if self.pos >= self.rows.len() {
-            return Ok(None);
+            return core::task::Poll::Ready(None);
         }
-        let row = &self.rows[self.pos];
+        let row = self.rows[self.pos].clone();
         self.pos += 1;
-        Ok(Some(
-            PersistedEnvelope::try_new(
-                Version::new(row.version).expect("non-zero"),
-                GlobalSeq::INITIAL,
-                row.value.clone(),
-                1,
-                row.event_type_range.clone(),
-                row.payload_range.clone(),
-                None,
-            )
-            .expect("test fixture"),
-        ))
+        let env = PersistedEnvelope::try_new(
+            Version::new(row.version).expect("non-zero"),
+            GlobalSeq::INITIAL,
+            row.value,
+            1,
+            row.event_type_range,
+            row.payload_range,
+            None,
+        )
+        .expect("test fixture");
+        core::task::Poll::Ready(Some(Ok(env)))
     }
 }
 
@@ -264,16 +253,19 @@ fn borrowed_fold_is_constant_regardless_of_stream_length() {
 
     let payload = b"hello".to_vec();
     let codec = StrBorrowingCodec;
+    let codec_ref = &codec;
 
     let run = |n: u64| {
         let rows: Vec<_> = (1..=n).map(|v| (v, "E".into(), payload.clone())).collect();
         let stream = VecStream::new(rows);
         rt.block_on(async {
-            let mut s = stream;
-            let fut = s.try_fold(0usize, |acc, env| {
-                let bytes: &str = codec.decode(&env)?;
-                Ok::<_, FoldErr>(acc + bytes.len())
-            });
+            let s = stream;
+            let fut = s
+                .map_err(FoldErr::from)
+                .try_fold(0usize, |acc, env| async move {
+                    let bytes: &str = codec_ref.decode(&env)?;
+                    Ok::<_, FoldErr>(acc + bytes.len())
+                });
             let (r, c, b) = measure_async(fut).await;
             (r.expect("fold ok"), c, b)
         })
@@ -311,16 +303,19 @@ fn owning_string_codec_scales_linearly_with_stream_length() {
 
     let payload = b"some text payload longer than sso".to_vec();
     let codec = StringOwningCodec;
+    let codec_ref = &codec;
 
     let run = |n: u64| {
         let rows: Vec<_> = (1..=n).map(|v| (v, "E".into(), payload.clone())).collect();
         let stream = VecStream::new(rows);
         rt.block_on(async {
-            let mut s = stream;
-            let fut = s.try_fold(0usize, |acc, env| {
-                let decoded: String = codec.decode(&env)?;
-                Ok::<_, FoldErr>(acc + decoded.len())
-            });
+            let s = stream;
+            let fut = s
+                .map_err(FoldErr::from)
+                .try_fold(0usize, |acc, env| async move {
+                    let decoded: String = codec_ref.decode(&env)?;
+                    Ok::<_, FoldErr>(acc + decoded.len())
+                });
             let (r, c, b) = measure_async(fut).await;
             (r.expect("fold ok"), c, b)
         })

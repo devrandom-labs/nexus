@@ -1,10 +1,10 @@
 #![cfg(feature = "testing")]
 #![allow(clippy::unwrap_used, reason = "tests")]
 
+use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -44,7 +44,7 @@ async fn append_and_read_back() {
     assert_eq!(env.payload(), b"hello");
     assert_eq!(env.version(), Version::INITIAL);
     assert_eq!(env.schema_version(), 1);
-    assert!(stream.next().await.unwrap().is_none());
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]
@@ -81,7 +81,7 @@ async fn read_from_version_filters_correctly() {
     assert_eq!(e2.event_type(), "E3");
     assert_eq!(e2.version(), Version::new(3).unwrap());
 
-    assert!(stream.next().await.unwrap().is_none());
+    assert!(stream.next().await.is_none());
 }
 
 /// `InMemoryStore::append` assigns a store-global sequence to every event,
@@ -125,7 +125,7 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
     let a2 = stream_a.next().await.unwrap().unwrap();
     assert_eq!(a2.event_type(), "A2");
     assert_eq!(a2.global_seq(), GlobalSeq::new(2).unwrap());
-    assert!(stream_a.next().await.unwrap().is_none());
+    assert!(stream_a.next().await.is_none());
 
     // Read stream "b" back: seq 3, proving the counter is store-global and
     // does not reset per stream.
@@ -136,5 +136,5 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
     let b1 = stream_b.next().await.unwrap().unwrap();
     assert_eq!(b1.event_type(), "B1");
     assert_eq!(b1.global_seq(), GlobalSeq::new(3).unwrap());
-    assert!(stream_b.next().await.unwrap().is_none());
+    assert!(stream_b.next().await.is_none());
 }

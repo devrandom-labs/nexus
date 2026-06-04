@@ -37,12 +37,12 @@ use std::hint::black_box;
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use futures::StreamExt;
 use nexus::Version;
 use nexus_store::AppendError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::stream::{BaseEventStream, EventStream};
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -112,31 +112,23 @@ struct InMemoryStream {
     pos: usize,
 }
 
-impl BaseEventStream for InMemoryStream {
-    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
-
-impl EventStream for InMemoryStream {
-    type Item<'a> = PersistedEnvelope;
-    type Error = BenchError;
-
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
+impl futures::Stream for InMemoryStream {
+    type Item = Result<PersistedEnvelope, BenchError>;
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
         if self.pos >= self.events.len() {
-            return Ok(None);
+            return core::task::Poll::Ready(None);
         }
-        let row = &self.events[self.pos];
+        let row = self.events[self.pos].clone();
         self.pos += 1;
-        Ok(Some(build_persisted(
+        core::task::Poll::Ready(Some(Ok(build_persisted(
             row.0,
             GlobalSeq::INITIAL,
             &row.1,
             &row.2,
-        )))
+        ))))
     }
 }
 
@@ -148,7 +140,7 @@ enum BenchError {
 
 impl RawEventStore for InMemoryRawStore {
     type Error = BenchError;
-    type Stream<'a> = InMemoryStream;
+    type Stream = InMemoryStream;
 
     async fn append(
         &self,
@@ -178,7 +170,7 @@ impl RawEventStore for InMemoryRawStore {
         &self,
         id: &impl nexus::Id,
         from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
+    ) -> Result<Self::Stream, Self::Error> {
         let events = self
             .streams
             .lock()
@@ -337,7 +329,8 @@ fn bench_read_stream(c: &mut Criterion) {
                         .read_stream(&bid("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
-                    while let Some(env) = stream.next().await.unwrap() {
+                    while let Some(__item) = stream.next().await {
+                        let env = __item.unwrap();
                         black_box(env);
                     }
                 });

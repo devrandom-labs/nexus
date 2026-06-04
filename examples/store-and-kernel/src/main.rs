@@ -20,9 +20,9 @@
 #![allow(clippy::shadow_reuse, reason = "example shadows for readability")]
 #![allow(clippy::shadow_unrelated, reason = "example shadows for readability")]
 
+use futures::StreamExt;
 use nexus::*;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{Decode, Encode, pending_envelope};
 use serde::{Deserialize, Serialize};
@@ -243,14 +243,10 @@ async fn load_events(
         .expect("read_stream should succeed");
 
     let mut versioned = Vec::new();
-    loop {
-        match stream.next().await.expect("stream read should succeed") {
-            None => break,
-            Some(env) => {
-                let event: AccountEvent = codec.decode(&env).expect("decode should succeed");
-                versioned.push(VersionedEvent::new(env.version(), event));
-            }
-        }
+    while let Some(item) = stream.next().await {
+        let env = item.expect("stream read should succeed");
+        let event: AccountEvent = codec.decode(&env).expect("decode should succeed");
+        versioned.push(VersionedEvent::new(env.version(), event));
     }
     versioned
 }

@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 bytes.workspace = true
+futures.workspace = true
 nexus = { path = "../../crates/nexus", features = ["derive"] }
 nexus-store = { path = "../../crates/nexus-store", features = ["testing"] }
 serde = { workspace = true }

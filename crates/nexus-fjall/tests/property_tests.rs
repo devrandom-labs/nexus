@@ -44,6 +44,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 use bytes::Bytes;
+use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{
@@ -54,7 +55,6 @@ use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 
 use proptest::prelude::*;
 
@@ -158,7 +158,8 @@ async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -170,7 +171,8 @@ async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         versions.push(env.version().as_u64());
     }
     versions
@@ -182,7 +184,8 @@ async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<Str
         .await
         .unwrap();
     let mut types = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         types.push(env.event_type().to_owned());
     }
     types
@@ -194,7 +197,8 @@ async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
         .await
         .unwrap();
     let mut count = 0u64;
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         let _ = env;
         count += 1;
     }
@@ -925,7 +929,7 @@ async fn attack_stream_recovery_across_reopen() {
             assert_eq!(env.event_type(), expected_type, "stream {} type wrong", id);
             assert_eq!(env.payload(), expected_payload, "stream {} data wrong", id);
             assert!(
-                stream.next().await.unwrap().is_none(),
+                stream.next().await.is_none(),
                 "stream {} has extra events",
                 id
             );
@@ -1052,7 +1056,8 @@ async fn attack_large_event_stream() {
         .unwrap();
     let mut count = 0u64;
     let mut prev_version = 0u64;
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         count += 1;
         let v = env.version().as_u64();
         assert!(v > prev_version, "versions not monotonic at {}", v);
@@ -1313,7 +1318,8 @@ async fn attack_read_from_initial_version() {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         versions.push(env.version().as_u64());
     }
     // The range scan starts from encode_event_key(id_bytes, 0), so it should
@@ -1344,18 +1350,9 @@ async fn attack_stream_fused_after_exhaustion() {
     let _ = stream.next().await.unwrap().unwrap();
 
     // All subsequent calls must return None (fused)
-    assert!(
-        stream.next().await.unwrap().is_none(),
-        "fused: call 1 after None"
-    );
-    assert!(
-        stream.next().await.unwrap().is_none(),
-        "fused: call 2 after None"
-    );
-    assert!(
-        stream.next().await.unwrap().is_none(),
-        "fused: call 3 after None"
-    );
+    assert!(stream.next().await.is_none(), "fused: call 1 after None");
+    assert!(stream.next().await.is_none(), "fused: call 2 after None");
+    assert!(stream.next().await.is_none(), "fused: call 3 after None");
 }
 
 /// Empty stream ID must return an error, not panic.
@@ -1421,7 +1418,8 @@ async fn attack_read_with_from_version_filters() {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         versions.push(env.version().as_u64());
     }
     assert_eq!(

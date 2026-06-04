@@ -17,12 +17,12 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
+use futures::StreamExt;
 use nexus::{DomainEvent, Message, Version};
 use nexus_framework::projection::{Projection, ProjectionError, ProjectionStatus, StartupDecision};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{
-    Decode, Encode, EventStreamExt, InMemorySnapshotStore, RawEventStore, SnapshotStore,
-    pending_envelope,
+    Decode, Encode, InMemorySnapshotStore, RawEventStore, SnapshotStore, pending_envelope,
 };
 use nexus_store::{EveryNEvents, Projector};
 
@@ -166,7 +166,7 @@ async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[Test
             .read_stream(stream_id, Version::INITIAL)
             .await
             .unwrap();
-        stream.try_count().await.unwrap()
+        stream.count().await
     };
     let base_version = u64::try_from(current_len).unwrap();
 

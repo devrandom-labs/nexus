@@ -16,12 +16,12 @@
 #![allow(clippy::missing_panics_doc, reason = "tests")]
 
 use bytes::Bytes;
+use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{META_LEN_ABSENT, decode_event_value};
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct StreamName(&'static str);
@@ -69,7 +69,8 @@ async fn metadata_roundtrips_across_multiple_events() {
         .expect("read_stream");
 
     let mut seen = 0u64;
-    while let Some(env) = cursor.next().await.expect("cursor next") {
+    while let Some(item) = cursor.next().await {
+        let env = item.expect("cursor next");
         seen += 1;
         assert_eq!(env.version().as_u64(), seen);
         assert_eq!(env.event_type(), "Test");

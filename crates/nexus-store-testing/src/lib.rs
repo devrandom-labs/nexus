@@ -68,9 +68,10 @@
 
 use std::future::Future;
 
+use futures::StreamExt;
 use nexus::Version;
+use nexus_store::EventStream;
 use nexus_store::envelope::PersistedEnvelope;
-use nexus_store::stream::BaseEventStream;
 
 /// One row of test data fed into an adapter for the conformance suite to
 /// observe back out.
@@ -109,11 +110,11 @@ impl ConformanceRow {
 /// before the next iteration starts.
 async fn drain<S>(stream: &mut S) -> Result<Vec<ConformanceRow>, S::Error>
 where
-    S: BaseEventStream,
+    S: EventStream + Unpin + ?Sized,
 {
     let mut out = Vec::new();
-    while let Some(item) = stream.next().await? {
-        let env = S::to_envelope(item);
+    while let Some(item) = stream.next().await {
+        let env = item?;
         out.push(ConformanceRow {
             version: env.version().as_u64(),
             event_type: env.event_type().to_owned(),
@@ -128,18 +129,18 @@ where
 /// proving the fused-after-`None` contract.
 async fn assert_remains_none<S>(stream: &mut S, repeats: usize)
 where
-    S: BaseEventStream,
+    S: EventStream + Unpin + ?Sized,
 {
     for i in 0..repeats {
         let next = stream.next().await;
         assert!(
-            matches!(next, Ok(None)),
+            next.is_none(),
             "fused-after-None violated on repeat #{} — adapter yielded {:?}",
             i,
             match next {
-                Ok(Some(_)) => "Ok(Some(_))",
-                Ok(None) => "Ok(None)",
-                Err(_) => "Err(_)",
+                Some(Ok(_)) => "Some(Ok(_))",
+                Some(Err(_)) => "Some(Err(_))",
+                None => "None",
             },
         );
     }
@@ -151,13 +152,13 @@ where
 
 async fn check_empty_stream_yields_none<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
     let mut stream = make(vec![]).await;
     assert!(
-        matches!(stream.next().await, Ok(None)),
+        stream.next().await.is_none(),
         "empty stream must yield Ok(None) on first call",
     );
     assert_remains_none(&mut stream, 8).await;
@@ -165,7 +166,7 @@ where
 
 async fn check_single_event<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -173,21 +174,18 @@ where
     let mut stream = make(vec![row.clone()]).await;
 
     {
-        let first = S::to_envelope(
-            stream
-                .next()
-                .await
-                .ok()
-                .flatten()
-                .expect("first call must yield Some"),
-        );
+        let first = stream
+            .next()
+            .await
+            .expect("first call must yield Some")
+            .expect("first call must be Ok");
         assert_eq!(first.version(), Version::new(1).unwrap());
         assert_eq!(first.event_type(), "Only");
         assert_eq!(first.payload(), &[42][..]);
     }
 
     assert!(
-        matches!(stream.next().await, Ok(None)),
+        stream.next().await.is_none(),
         "after the only event the stream must yield Ok(None)",
     );
     assert_remains_none(&mut stream, 4).await;
@@ -195,7 +193,7 @@ where
 
 async fn check_n_events_then_fused<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -219,7 +217,7 @@ where
 
 async fn check_versions_strictly_monotonic<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -240,7 +238,7 @@ where
 
 async fn check_event_type_round_trips<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -264,7 +262,7 @@ where
 
 async fn check_schema_version_round_trips<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -287,7 +285,7 @@ where
 
 async fn check_payload_round_trips_byte_for_byte<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -324,7 +322,7 @@ where
 
 async fn check_insertion_order_preserved<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -344,7 +342,7 @@ where
 
 async fn check_large_sequence_completes<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -364,7 +362,7 @@ where
 
 async fn check_envelope_accessors_consistent<S, F, Fut>(make: &F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {
@@ -372,14 +370,11 @@ where
     // call (a re-call to env.version() returns the same value, etc.).
     let row = ConformanceRow::new(1, "E", vec![1, 2, 3]).with_schema_version(7);
     let mut stream = make(vec![row]).await;
-    let env: PersistedEnvelope = S::to_envelope(
-        stream
-            .next()
-            .await
-            .ok()
-            .flatten()
-            .expect("first call yields Some"),
-    );
+    let env: PersistedEnvelope = stream
+        .next()
+        .await
+        .expect("first call yields Some")
+        .expect("first call must be Ok");
     let v1 = env.version();
     let v2 = env.version();
     assert_eq!(v1, v2, "version() not idempotent");
@@ -418,7 +413,7 @@ where
 /// 10. Envelope accessors are idempotent within a single iteration.
 pub async fn assert_event_stream_conformance<S, F, Fut>(make: F)
 where
-    S: BaseEventStream + Send,
+    S: EventStream + Unpin + Send,
     F: Fn(Vec<ConformanceRow>) -> Fut + Send + Sync,
     Fut: Future<Output = S> + Send,
 {

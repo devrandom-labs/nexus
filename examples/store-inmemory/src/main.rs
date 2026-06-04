@@ -23,11 +23,11 @@
     reason = "example code shadows for readability"
 )]
 
+use futures::{StreamExt, TryStreamExt};
 use nexus::Id;
 use nexus::Version;
 use nexus_store::Store;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::{EventStream, EventStreamExt};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 use nexus_store::{Decode, Encode, pending_envelope};
@@ -288,28 +288,23 @@ async fn main() {
         .expect("read should succeed");
 
     let mut read_events: Vec<(String, u32, Vec<u8>, u64)> = Vec::new();
-    loop {
-        match event_stream.next().await {
+    while let Some(item) = event_stream.next().await {
+        let env = match item {
+            Ok(env) => env,
             Err(e) => {
                 println!("  Error reading event: {e}");
                 break;
             }
-            Ok(None) => break,
-            Ok(Some(env)) => {
-                let event_type = env.event_type().to_owned();
-                let payload = env.payload().to_vec();
-                let version = env.version().as_u64();
-                let schema_version = env.schema_version();
-                // The envelope borrows from the stream — we copy what we
-                // need and let it drop before the next iteration.
-                println!(
-                    "  Read: version={version}, type={event_type}, payload={}",
-                    String::from_utf8_lossy(&payload)
-                );
-
-                read_events.push((event_type, schema_version, payload, version));
-            }
-        }
+        };
+        let event_type = env.event_type().to_owned();
+        let payload = env.payload().to_vec();
+        let version = env.version().as_u64();
+        let schema_version = env.schema_version();
+        println!(
+            "  Read: version={version}, type={event_type}, payload={}",
+            String::from_utf8_lossy(&payload)
+        );
+        read_events.push((event_type, schema_version, payload, version));
     }
     println!("  Total events read: {}", read_events.len());
     println!();
@@ -380,10 +375,11 @@ async fn main() {
         .read_stream(&TodoId("todo-2".to_owned()), Version::INITIAL)
         .await
         .expect("read_stream should succeed");
+    let codec_ref = &codec;
     let (count, last_title): (usize, Option<String>) = raw_stream
         .map_err(|e| SubstrateErr::Stream(e.to_string()))
-        .try_fold((0usize, None::<String>), |(c, _last), env| {
-            let event = codec
+        .try_fold((0usize, None::<String>), |(c, _last), env| async move {
+            let event = codec_ref
                 .decode(&env)
                 .map_err(|e| SubstrateErr::Decode(e.to_string()))?;
             let title = match event {

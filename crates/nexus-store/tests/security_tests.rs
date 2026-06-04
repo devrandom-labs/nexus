@@ -27,12 +27,12 @@
 #![allow(clippy::str_to_string, reason = "tests use to_string/to_owned freely")]
 
 use arrayvec::ArrayString;
+use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_store::InMemoryStoreError;
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
@@ -91,7 +91,7 @@ async fn h1_append_empty_envelopes_is_noop_or_error() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.unwrap().is_none(),
+        stream.next().await.is_none(),
         "Empty append should not create any events"
     );
 }
@@ -210,7 +210,7 @@ async fn read_nonexistent_stream_returns_empty() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.unwrap().is_none(),
+        stream.next().await.is_none(),
         "Reading a nonexistent stream should return empty, not error"
     );
 }
@@ -248,7 +248,7 @@ async fn streams_are_isolated() {
     assert_eq!(envelope.event_type(), "EventA");
     assert_eq!(envelope.payload(), &[1]);
     drop(envelope);
-    assert!(stream.next().await.unwrap().is_none());
+    assert!(stream.next().await.is_none());
 
     // Read stream-b — should only see EventB
     let mut stream = store
@@ -259,7 +259,7 @@ async fn streams_are_isolated() {
     assert_eq!(envelope.event_type(), "EventB");
     assert_eq!(envelope.payload(), &[2]);
     drop(envelope);
-    assert!(stream.next().await.unwrap().is_none());
+    assert!(stream.next().await.is_none());
 }
 
 // =============================================================================

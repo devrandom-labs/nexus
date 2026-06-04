@@ -215,7 +215,16 @@
       "Bash(tee -a /tmp/nexus-flake-check.log)",
       "Skill(superpowers:writing-plans)",
       "Skill(superpowers:subagent-driven-development)",
-      "Bash(rustc --explain E0117)"
+      "Bash(rustc --explain E0117)",
+      "Skill(superpowers:dispatching-parallel-agents)",
+      "WebFetch(domain:docs.nats.io)",
+      "WebFetch(domain:cwiki.apache.org)",
+      "mcp__plugin_serena_serena__read_memory",
+      "Skill(superpowers:using-git-worktrees)",
+      "Bash(date *)",
+      "Skill(claude-mem:mem-search)",
+      "mcp__plugin_claude-mem_mcp-search__timeline",
+      "Skill(superpowers:executing-plans)"
     ]
   },
   "hooks": {

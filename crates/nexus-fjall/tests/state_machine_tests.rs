@@ -21,13 +21,13 @@
 
 use std::collections::HashMap;
 
+use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 use proptest::prelude::*;
 use proptest::strategy::BoxedStrategy;
 use proptest_state_machine::{ReferenceStateMachine, StateMachineTest, prop_state_machine};
@@ -282,7 +282,8 @@ impl StateMachineTest for FjallStateMachineTest {
                     .block_on(sut.store.read_stream(&stream_id, Version::INITIAL));
                 let mut stream = result.unwrap();
                 let mut count = 0usize;
-                while let Some(item) = sut.rt.block_on(stream.next()).unwrap() {
+                while let Some(__i) = sut.rt.block_on(stream.next()) {
+                    let item = __i.unwrap();
                     let _ = item;
                     count += 1;
                 }
@@ -378,7 +379,7 @@ impl StateMachineTest for FjallStateMachineTest {
                         .block_on(sut.store.read_stream(&stream_id, Version::INITIAL));
                     let mut stream = result.unwrap();
                     assert!(
-                        sut.rt.block_on(stream.next()).unwrap().is_none(),
+                        sut.rt.block_on(stream.next()).is_none(),
                         "ReadFromVersion: empty stream should yield no events"
                     );
                 } else {
@@ -399,12 +400,15 @@ impl StateMachineTest for FjallStateMachineTest {
 
                     for entry in &expected {
                         let (v, et, pl) = *entry;
-                        let item = sut.rt.block_on(stream.next()).unwrap().unwrap_or_else(|| {
-                            panic!(
-                                "ReadFromVersion '{stream_name}' from {from_version}: \
+                        let item = sut.rt.block_on(stream.next()).map_or_else(
+                            || {
+                                panic!(
+                                    "ReadFromVersion '{stream_name}' from {from_version}: \
                                      expected event at version {v} but stream ended"
-                            )
-                        });
+                                )
+                            },
+                            Result::unwrap,
+                        );
                         assert_eq!(
                             item.version(),
                             Version::new(*v).unwrap(),
@@ -422,7 +426,7 @@ impl StateMachineTest for FjallStateMachineTest {
                         );
                     }
                     assert!(
-                        sut.rt.block_on(stream.next()).unwrap().is_none(),
+                        sut.rt.block_on(stream.next()).is_none(),
                         "ReadFromVersion: unexpected trailing events"
                     );
                 }
@@ -458,12 +462,15 @@ fn verify_stream(sut: &FjallSut, stream_name: &str, model_events: &[ModelEvent])
     let mut stream = result.unwrap();
 
     for (v, et, pl) in model_events {
-        let item = sut.rt.block_on(stream.next()).unwrap().unwrap_or_else(|| {
-            panic!(
-                "verify_stream '{stream_name}': expected event at version {v} \
+        let item = sut.rt.block_on(stream.next()).map_or_else(
+            || {
+                panic!(
+                    "verify_stream '{stream_name}': expected event at version {v} \
                      but stream ended early"
-            )
-        });
+                )
+            },
+            Result::unwrap,
+        );
         assert_eq!(
             item.version(),
             Version::new(*v).unwrap(),
@@ -481,7 +488,7 @@ fn verify_stream(sut: &FjallSut, stream_name: &str, model_events: &[ModelEvent])
         );
     }
     assert!(
-        sut.rt.block_on(stream.next()).unwrap().is_none(),
+        sut.rt.block_on(stream.next()).is_none(),
         "verify_stream '{stream_name}': unexpected trailing events \
          (model has {} events)",
         model_events.len()

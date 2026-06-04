@@ -40,12 +40,7 @@ pub use state::{
     SnapshotStore,
 };
 pub use store::{GlobalSeq, RawEventStore, Store, Subscription, SubscriptionBackend};
-pub use stream::{
-    BaseEventStream, Disposition, EventStream, EventStreamExt, Map, MapErr, Progress, Step, TryMap,
-    TryScan,
-};
-#[cfg(feature = "futures-bridge")]
-pub use stream::{IntoStream, OwnedEventStream};
+pub use stream::EventStream;
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::EventMorsel;

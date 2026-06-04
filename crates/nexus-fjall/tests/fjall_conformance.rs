@@ -17,7 +17,6 @@
 #![allow(clippy::expect_used, reason = "tests")]
 #![allow(clippy::missing_panics_doc, reason = "tests")]
 
-use std::future::Future;
 use std::num::NonZeroU32;
 
 use nexus::{Id, Version};
@@ -25,7 +24,6 @@ use nexus_fjall::{FjallError, FjallStore, FjallStream};
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::{PersistedEnvelope, pending_envelope};
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::{BaseEventStream, EventStream};
 use nexus_store_testing::{ConformanceRow, assert_event_stream_conformance};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -57,23 +55,14 @@ struct OwnedFjallStream {
     _tempdir: tempfile::TempDir,
 }
 
-impl BaseEventStream for OwnedFjallStream {
-    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
+impl futures::Stream for OwnedFjallStream {
+    type Item = Result<PersistedEnvelope, FjallError>;
 
-impl EventStream for OwnedFjallStream {
-    type Item<'a> = PersistedEnvelope;
-    type Error = FjallError;
-
-    fn next(
-        &mut self,
-    ) -> impl Future<Output = Result<Option<PersistedEnvelope>, Self::Error>> + Send {
-        self.inner.next()
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        core::pin::Pin::new(&mut self.inner).poll_next(cx)
     }
 }
 

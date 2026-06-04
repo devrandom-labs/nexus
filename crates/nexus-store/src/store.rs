@@ -7,7 +7,7 @@ use nexus::{Id, Version};
 
 use crate::envelope::PendingEnvelope;
 use crate::error::AppendError;
-use crate::stream::{BaseEventStream, EventStream};
+use crate::stream::EventStream;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Store<S> — Arc-wrapped handle to a RawEventStore backend
@@ -102,19 +102,17 @@ impl<S> Clone for Store<S> {
 ///
 /// Knows nothing about typed events or codecs. The `EventStore` facade
 /// calls this trait after encoding events into `PendingEnvelope`.
-pub trait RawEventStore<M = ()>: Send + Sync {
+pub trait RawEventStore: Send + Sync {
     /// The error type for store operations.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// The lending cursor type for reading events.
+    /// The stream type for reading events.
     ///
-    /// The [`BaseEventStream`] sub-trait bound lets facades like the
-    /// decoder recover the underlying [`PersistedEnvelope`](crate::envelope::PersistedEnvelope)
-    /// from `Self::Item<'_>` without an HRTB type equality (which would
-    /// force `Self: 'static`).
-    type Stream<'a>: BaseEventStream<M, Error = Self::Error> + 'a
-    where
-        Self: 'a;
+    /// Owned, non-GAT, `'static` — a `futures::Stream` of
+    /// `Result<PersistedEnvelope, Self::Error>`. The owned-`Bytes`
+    /// envelope means cursors don't need to lend per-record; the
+    /// stream's `Item` is the envelope by value.
+    type Stream: EventStream<Error = Self::Error> + 'static;
 
     /// Append events to a stream with optimistic concurrency.
     ///
@@ -151,15 +149,15 @@ pub trait RawEventStore<M = ()>: Send + Sync {
         envelopes: &[PendingEnvelope],
     ) -> impl std::future::Future<Output = Result<(), AppendError<Self::Error>>> + Send;
 
-    /// Open a lending cursor to read events from a stream.
+    /// Open a stream of events.
     ///
-    /// Events are yielded one at a time via the `EventStream` trait.
-    /// Each envelope borrows from the cursor — zero allocation per event.
+    /// Events are yielded one at a time as a `futures::Stream` of
+    /// owned [`PersistedEnvelope`](crate::envelope::PersistedEnvelope)s.
     fn read_stream(
         &self,
         id: &impl Id,
         from: Version,
-    ) -> impl std::future::Future<Output = Result<Self::Stream<'_>, Self::Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<Self::Stream, Self::Error>> + Send;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -196,13 +194,9 @@ pub trait RawEventStore<M = ()>: Send + Sync {
 ///
 /// `read_stream` returns a fused stream that terminates when caught up.
 /// `subscribe` returns a stream that *waits* instead of terminating.
-pub trait Subscription<M: 'static = ()> {
+pub trait Subscription {
     /// The subscription stream type — an [`EventStream`](crate::stream::EventStream) that never exhausts.
-    ///
-    /// Concrete (non-GAT) and `'static`. The cursor's own per-record
-    /// `Item<'a>` GAT on [`EventStream`](crate::stream::EventStream) is preserved — borrowing happens
-    /// at the per-record level, not at the subscribe-time level.
-    type Stream: EventStream<M, Error = Self::Error> + Send + 'static;
+    type Stream: EventStream<Error = Self::Error> + 'static;
 
     /// The error type for subscription operations.
     type Error: core::error::Error + Send + Sync + 'static;
@@ -241,10 +235,9 @@ pub trait Subscription<M: 'static = ()> {
 /// position inside `Arc<Store>` does not satisfy coherence. The escape is
 /// this trait, whose `Self` is the bare store type (local to the adapter
 /// crate). The blanket in this crate translates to the user-facing shape.
-pub trait SubscriptionBackend<M: 'static = ()>: Send + Sync + 'static {
-    /// The cursor type — concrete (no GAT) and `'static`. Per-record
-    /// borrowing happens via [`EventStream::Item<'a>`](crate::stream::EventStream::Item).
-    type Stream: EventStream<M, Error = Self::Error> + Send + 'static;
+pub trait SubscriptionBackend: Send + Sync + 'static {
+    /// The cursor type — a `futures::Stream` of envelopes, `'static`.
+    type Stream: EventStream<Error = Self::Error> + 'static;
 
     /// The error type for subscription operations.
     type Error: core::error::Error + Send + Sync + 'static;
@@ -263,10 +256,9 @@ pub trait SubscriptionBackend<M: 'static = ()>: Send + Sync + 'static {
 
 // ─── Blanket: Arc<T> + SubscriptionBackend → Subscription ───────────────────
 
-impl<T, M> Subscription<M> for Arc<T>
+impl<T> Subscription for Arc<T>
 where
-    T: SubscriptionBackend<M>,
-    M: 'static,
+    T: SubscriptionBackend,
 {
     type Stream = T::Stream;
     type Error = T::Error;

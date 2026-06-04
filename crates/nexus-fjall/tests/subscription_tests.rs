@@ -14,10 +14,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
 use nexus_store::store::{RawEventStore, Subscription};
-use nexus_store::stream::EventStream;
 use nexus_store::{PendingEnvelope, pending_envelope};
 use tokio::time::timeout;
 

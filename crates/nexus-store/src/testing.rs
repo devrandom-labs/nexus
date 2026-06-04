@@ -3,7 +3,6 @@
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::store::{GlobalSeq, RawEventStore, SubscriptionBackend};
-use crate::stream::EventStream;
 use crate::wire::{self, RowOffsets};
 use bytes::Bytes;
 use nexus::Id;
@@ -106,33 +105,27 @@ impl Default for InMemoryStore {
     }
 }
 
-/// Lending cursor over in-memory events.
+/// `futures::Stream` of envelopes over an in-memory snapshot.
+///
+/// Yields each row from a pre-loaded `VecDeque<StoredRow>` in sequence.
+/// `poll_next` is pure sync (no IO) — the events were materialized at
+/// `read_stream()` time.
 pub struct InMemoryStream {
-    events: Vec<StoredRow>,
-    pos: usize,
+    events: std::collections::VecDeque<StoredRow>,
     #[cfg(debug_assertions)]
     prev_version: Option<u64>,
 }
 
-impl crate::stream::BaseEventStream for InMemoryStream {
-    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
+impl futures::Stream for InMemoryStream {
+    type Item = Result<PersistedEnvelope, InMemoryStoreError>;
 
-impl EventStream for InMemoryStream {
-    type Item<'a> = PersistedEnvelope;
-    type Error = InMemoryStoreError;
-
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
-        if self.pos >= self.events.len() {
-            return Ok(None);
-        }
-        let row = &self.events[self.pos];
-        self.pos += 1;
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        let Some(row) = self.events.pop_front() else {
+            return core::task::Poll::Ready(None);
+        };
         #[cfg(debug_assertions)]
         {
             if let Some(prev) = self.prev_version {
@@ -145,7 +138,7 @@ impl EventStream for InMemoryStream {
             }
             self.prev_version = Some(row.version);
         }
-        row_to_envelope(row).map(Some)
+        core::task::Poll::Ready(Some(row_to_envelope(&row)))
     }
 }
 
@@ -224,7 +217,7 @@ fn row_to_envelope(row: &StoredRow) -> Result<PersistedEnvelope, InMemoryStoreEr
 
 impl RawEventStore for InMemoryStore {
     type Error = InMemoryStoreError;
-    type Stream<'a> = InMemoryStream;
+    type Stream = InMemoryStream;
 
     async fn append(
         &self,
@@ -301,13 +294,9 @@ impl RawEventStore for InMemoryStore {
         Ok(())
     }
 
-    async fn read_stream(
-        &self,
-        id: &impl Id,
-        from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
+    async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
         let key = id.to_string();
-        let events = self
+        let events: std::collections::VecDeque<StoredRow> = self
             .streams
             .lock()
             .await
@@ -321,7 +310,6 @@ impl RawEventStore for InMemoryStore {
             .unwrap_or_default();
         Ok(InMemoryStream {
             events,
-            pos: 0,
             #[cfg(debug_assertions)]
             prev_version: None,
         })
@@ -332,28 +320,26 @@ impl RawEventStore for InMemoryStore {
 // InMemorySubscriptionStream — Arc-owning subscription cursor
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Subscription cursor that owns an `Arc<InMemoryStore>`.
+/// Inner state for the subscription's async generator.
 ///
-/// `'static` (no lifetime parameter). Spawnable across async boundaries.
-/// Eagerly loads a batch of events into a local buffer, yields from that
-/// buffer, then when exhausted waits on [`Notify`] and reloads. The
-/// stream **never returns `None`** — it blocks until new events arrive.
+/// Owns an `Arc<InMemoryStore>`, so `'static`. Drives an `unfold`-based
+/// `futures::Stream` whose `poll_next` cycles through:
+/// 1. yield from the local buffer,
+/// 2. refill from the store,
+/// 3. wait on [`Notify`] when caught up.
 ///
-/// The per-record [`EventStream::Item<'a>`](crate::stream::EventStream::Item)
-/// GAT is `PersistedEnvelope` — `next()` yields each envelope from the
-/// cursor's internal buffer.
-pub struct InMemorySubscriptionStream {
+/// The resulting stream **never returns `None`** — it blocks until new
+/// events arrive.
+struct SubState {
     store: Arc<InMemoryStore>,
     stream_id: String,
-    buffer: Vec<StoredRow>,
-    pos: usize,
+    buffer: std::collections::VecDeque<StoredRow>,
     last_version: Option<Version>,
     #[cfg(debug_assertions)]
     prev_version: Option<u64>,
 }
 
-impl InMemorySubscriptionStream {
-    /// Read events from the store starting at `from_version` into the buffer.
+impl SubState {
     async fn refill(&mut self, from_version: Version) {
         let buffer = {
             let guard = self.store.streams.lock().await;
@@ -368,13 +354,8 @@ impl InMemorySubscriptionStream {
                 .unwrap_or_default()
         };
         self.buffer = buffer;
-        self.pos = 0;
     }
 
-    /// Compute the version to read from next: `last_version` + 1, or `INITIAL`.
-    ///
-    /// Returns an error on overflow instead of silently wrapping back
-    /// to `Version::INITIAL`.
     fn next_read_version(&self) -> Result<Version, InMemoryStoreError> {
         self.last_version.map_or_else(
             || Ok(Version::INITIAL),
@@ -383,64 +364,29 @@ impl InMemorySubscriptionStream {
     }
 }
 
-impl EventStream for InMemorySubscriptionStream {
-    type Item<'a>
-        = PersistedEnvelope
-    where
-        Self: 'a;
-    type Error = InMemoryStoreError;
+/// `futures::Stream` of subscription events.
+///
+/// Boxes an inner `unfold`-driven stream so the type can be named (the
+/// inner closure type is opaque). Owns `Arc<InMemoryStore>` and is
+/// `'static` — spawnable across async boundaries.
+pub struct InMemorySubscriptionStream {
+    inner: core::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<PersistedEnvelope, InMemoryStoreError>> + Send>,
+    >,
+}
 
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
-        loop {
-            // Yield from the current buffer if available.
-            if self.pos < self.buffer.len() {
-                let row = &self.buffer[self.pos];
-                self.pos += 1;
+impl futures::Stream for InMemorySubscriptionStream {
+    type Item = Result<PersistedEnvelope, InMemoryStoreError>;
 
-                #[cfg(debug_assertions)]
-                {
-                    if let Some(prev) = self.prev_version {
-                        debug_assert!(
-                            row.version > prev,
-                            "Subscription monotonicity violated: version {} is not greater than previous {}",
-                            row.version,
-                            prev,
-                        );
-                    }
-                    self.prev_version = Some(row.version);
-                }
-
-                let envelope = row_to_envelope(row)?;
-                self.last_version = Some(envelope.version());
-                return Ok(Some(envelope));
-            }
-
-            // Buffer exhausted. Register for notification BEFORE checking
-            // for new events to avoid the race where an append happens
-            // between our read and our wait.
-            //
-            // Clone the `Arc<Notify>` so `notified` does not borrow `self`.
-            // `store: Arc<InMemoryStore>` lives inside `self`, so a
-            // `&mut self` call to `refill` would otherwise conflict with
-            // the borrow held by `notified`.
-            let notify = Arc::clone(&self.store.notify);
-            let notified = notify.notified();
-
-            let from = self.next_read_version()?;
-            self.refill(from).await;
-
-            // If refill found new events, loop back to yield them.
-            if !self.buffer.is_empty() {
-                continue;
-            }
-
-            // No new events — wait for notification, then retry.
-            notified.await;
-        }
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
     }
 }
 
-impl SubscriptionBackend<()> for InMemoryStore {
+impl SubscriptionBackend for InMemoryStore {
     type Stream = InMemorySubscriptionStream;
     type Error = InMemoryStoreError;
 
@@ -455,19 +401,60 @@ impl SubscriptionBackend<()> for InMemoryStore {
             Some(v) => v.next().ok_or(InMemoryStoreError::VersionOverflow)?,
         };
 
-        let mut sub = InMemorySubscriptionStream {
+        let mut state = SubState {
             store: Arc::clone(arc),
             stream_id,
-            buffer: Vec::new(),
-            pos: 0,
+            buffer: std::collections::VecDeque::new(),
             last_version: from,
             #[cfg(debug_assertions)]
             prev_version: from.map(Version::as_u64),
         };
 
-        // Eagerly load catch-up events.
-        sub.refill(from_version).await;
+        // Eagerly load catch-up events so the first poll yields without IO.
+        state.refill(from_version).await;
 
-        Ok(sub)
+        let unfolded = futures::stream::unfold(state, |mut s| async move {
+            loop {
+                // Yield from buffer if available.
+                if let Some(row) = s.buffer.pop_front() {
+                    #[cfg(debug_assertions)]
+                    {
+                        if let Some(prev) = s.prev_version {
+                            debug_assert!(
+                                row.version > prev,
+                                "Subscription monotonicity violated: version {} not > previous {}",
+                                row.version,
+                                prev,
+                            );
+                        }
+                        s.prev_version = Some(row.version);
+                    }
+                    return match row_to_envelope(&row) {
+                        Ok(env) => {
+                            s.last_version = Some(env.version());
+                            Some((Ok(env), s))
+                        }
+                        Err(e) => Some((Err(e), s)),
+                    };
+                }
+
+                // Buffer empty. Register notify BEFORE refilling to avoid
+                // missing a concurrent append.
+                let notify = Arc::clone(&s.store.notify);
+                let notified = notify.notified();
+                let next_from = match s.next_read_version() {
+                    Ok(v) => v,
+                    Err(e) => return Some((Err(e), s)),
+                };
+                s.refill(next_from).await;
+                if s.buffer.is_empty() {
+                    notified.await;
+                }
+            }
+        });
+
+        Ok(InMemorySubscriptionStream {
+            inner: Box::pin(unfolded),
+        })
     }
 }

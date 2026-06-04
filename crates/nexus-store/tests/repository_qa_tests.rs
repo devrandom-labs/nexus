@@ -1442,8 +1442,8 @@ async fn d10_max_rehydration_events_boundary() {
 
 #[tokio::test]
 async fn d11_schema_version_always_one() {
+    use futures::StreamExt;
     use nexus_store::pending_envelope;
-    use nexus_store::stream::EventStream;
 
     let store = InMemoryStore::new();
 
@@ -1478,7 +1478,7 @@ async fn d11_schema_version_always_one() {
         1,
         "default schema_version should be 1"
     );
-    assert!(stream.next().await.unwrap().is_none());
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]
