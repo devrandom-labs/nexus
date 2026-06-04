@@ -17,12 +17,12 @@ use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
+use futures::StreamExt;
 use nexus::{DomainEvent, Message, Version};
 use nexus_framework::projection::{Projection, ProjectionError, ProjectionStatus, StartupDecision};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{
-    Decode, Encode, EventStreamExt, InMemorySnapshotStore, RawEventStore, SnapshotStore,
-    pending_envelope,
+    Decode, Encode, InMemorySnapshotStore, RawEventStore, SnapshotStore, pending_envelope,
 };
 use nexus_store::{EveryNEvents, Projector};
 
@@ -110,26 +110,31 @@ struct TestEventCodec;
 impl Encode<TestEvent> for TestEventCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &TestEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &TestEvent) -> Result<bytes::Bytes, Self::Error> {
         match event {
             TestEvent::Added(n) => {
                 let mut buf = vec![0u8]; // tag
                 buf.extend_from_slice(&n.to_le_bytes());
-                Ok(buf)
+                Ok(bytes::Bytes::from(buf))
             }
             TestEvent::Removed(n) => {
                 let mut buf = vec![1u8]; // tag
                 buf.extend_from_slice(&n.to_le_bytes());
-                Ok(buf)
+                Ok(bytes::Bytes::from(buf))
             }
         }
     }
 }
 
 impl Decode<TestEvent> for TestEventCodec {
+    type Output<'a> = TestEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, _name: &str, payload: &[u8]) -> Result<TestEvent, Self::Error> {
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<TestEvent, Self::Error> {
+        let payload = env.payload();
         if payload.len() != 9 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -161,7 +166,7 @@ async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[Test
             .read_stream(stream_id, Version::INITIAL)
             .await
             .unwrap();
-        stream.try_count().await.unwrap()
+        stream.count().await
     };
     let base_version = u64::try_from(current_len).unwrap();
 

@@ -13,6 +13,7 @@ pub mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod upcasting;
+pub mod wire;
 
 pub use arrayvec::ArrayString;
 #[cfg(feature = "snapshot")]
@@ -22,7 +23,7 @@ pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
 pub use codec::serde::json::{Json, JsonCodec};
 #[cfg(feature = "serde")]
 pub use codec::serde::{SerdeCodec, SerdeFormat};
-pub use codec::{BorrowingDecode, Decode, Encode};
+pub use codec::{Decode, Encode};
 pub use envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope, pending_envelope};
 pub use error::LoadWithError;
 pub use error::{AppendError, StoreError};
@@ -39,12 +40,7 @@ pub use state::{
     SnapshotStore,
 };
 pub use store::{GlobalSeq, RawEventStore, Store, Subscription, SubscriptionBackend};
-pub use stream::{
-    BaseEventStream, Disposition, EventStream, EventStreamExt, Map, MapErr, Progress, Step, TryMap,
-    TryScan,
-};
-#[cfg(feature = "futures-bridge")]
-pub use stream::{IntoStream, OwnedEventStream};
+pub use stream::EventStream;
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::EventMorsel;

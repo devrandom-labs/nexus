@@ -35,7 +35,6 @@ use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::stream::{BaseEventStream, EventStream};
 use std::collections::HashMap;
 use std::fmt;
 use tokio::sync::Mutex;
@@ -119,42 +118,30 @@ enum ProbeError {
     Conflict,
 }
 
-impl BaseEventStream for ProbeStream {
-    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
-
-impl EventStream for ProbeStream {
-    type Item<'a>
-        = PersistedEnvelope
-    where
-        Self: 'a;
-    type Error = ProbeError;
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
+impl futures::Stream for ProbeStream {
+    type Item = Result<PersistedEnvelope, ProbeError>;
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
         if self.pos >= self.events.len() {
-            return Ok(None);
+            return core::task::Poll::Ready(None);
         }
-        let row = &self.events[self.pos];
+        let row = self.events[self.pos].clone();
         self.pos += 1;
-        Ok(Some(build_persisted(
+        let env = build_persisted(
             Version::new(row.0).unwrap(),
             GlobalSeq::INITIAL,
             &row.1,
             &row.2,
-        )))
+        );
+        core::task::Poll::Ready(Some(Ok(env)))
     }
 }
 
 impl RawEventStore for ProbeStore {
     type Error = ProbeError;
-    type Stream<'a>
-        = ProbeStream
-    where
-        Self: 'a;
+    type Stream = ProbeStream;
 
     async fn append(
         &self,
@@ -190,7 +177,7 @@ impl RawEventStore for ProbeStore {
         &self,
         id: &impl nexus::Id,
         from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
+    ) -> Result<Self::Stream, Self::Error> {
         let events = self
             .streams
             .lock()

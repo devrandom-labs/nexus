@@ -13,7 +13,7 @@ use nexus::*;
 use nexus_store::Repository;
 use nexus_store::Store;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{BorrowingDecode, Encode};
+use nexus_store::{Decode, Encode, PersistedEnvelope};
 
 // -- Domain where Event is a fixed-layout type decodable from bytes --
 
@@ -79,19 +79,17 @@ struct CounterBorrowingCodec;
 impl Encode<CounterEvent> for CounterBorrowingCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &CounterEvent) -> Result<Vec<u8>, Self::Error> {
-        Ok(event.delta.to_le_bytes().to_vec())
+    fn encode(&self, event: &CounterEvent) -> Result<bytes::Bytes, Self::Error> {
+        Ok(bytes::Bytes::copy_from_slice(&event.delta.to_le_bytes()))
     }
 }
 
-impl BorrowingDecode<CounterEvent> for CounterBorrowingCodec {
+impl Decode<CounterEvent> for CounterBorrowingCodec {
+    type Output<'a> = &'a CounterEvent;
     type Error = std::io::Error;
 
-    fn decode<'a>(
-        &self,
-        _event_type: &str,
-        payload: &'a [u8],
-    ) -> Result<&'a CounterEvent, Self::Error> {
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<&'a CounterEvent, Self::Error> {
+        let payload = env.payload();
         if payload.len() != std::mem::size_of::<CounterEvent>() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -121,7 +119,6 @@ impl BorrowingDecode<CounterEvent> for CounterBorrowingCodec {
 // satisfied incidentally via the allocator) requires wire-format work and is
 // scoped to a follow-up. See deviation log
 // `2026-05-27-bytes-envelope-deviations.md`.
-#[ignore = "payload alignment regression — see PR1 deviation log"]
 #[tokio::test]
 async fn zero_copy_save_and_load_roundtrip() {
     let store = Store::new(InMemoryStore::new());
@@ -151,7 +148,6 @@ async fn zero_copy_load_empty_stream() {
     assert_eq!(loaded.version(), None);
 }
 
-#[ignore = "payload alignment regression — see PR1 deviation log"]
 #[tokio::test]
 async fn zero_copy_multi_save_load() {
     let store = Store::new(InMemoryStore::new());

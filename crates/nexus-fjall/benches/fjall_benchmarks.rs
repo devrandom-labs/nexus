@@ -8,6 +8,7 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{
@@ -16,7 +17,6 @@ use nexus_fjall::encoding::{
 };
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 use std::fmt;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -240,8 +240,8 @@ fn read_throughput(c: &mut Criterion) {
                         .read_stream(&bid("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
-                    while let Some(env) = stream.next().await.unwrap() {
-                        let _ = env;
+                    while let Some(item) = stream.next().await {
+                        let _ = item.unwrap();
                     }
                 });
             });

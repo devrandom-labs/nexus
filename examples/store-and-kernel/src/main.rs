@@ -20,9 +20,9 @@
 #![allow(clippy::shadow_reuse, reason = "example shadows for readability")]
 #![allow(clippy::shadow_unrelated, reason = "example shadows for readability")]
 
+use futures::StreamExt;
 use nexus::*;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{Decode, Encode, pending_envelope};
 use serde::{Deserialize, Serialize};
@@ -190,16 +190,20 @@ struct JsonCodec;
 impl Encode<AccountEvent> for JsonCodec {
     type Error = serde_json::Error;
 
-    fn encode(&self, event: &AccountEvent) -> Result<Vec<u8>, Self::Error> {
-        serde_json::to_vec(event)
+    fn encode(&self, event: &AccountEvent) -> Result<bytes::Bytes, Self::Error> {
+        serde_json::to_vec(event).map(bytes::Bytes::from)
     }
 }
 
 impl Decode<AccountEvent> for JsonCodec {
+    type Output<'a> = AccountEvent;
     type Error = serde_json::Error;
 
-    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<AccountEvent, Self::Error> {
-        serde_json::from_slice(payload)
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<AccountEvent, Self::Error> {
+        serde_json::from_slice(env.payload())
     }
 }
 
@@ -239,16 +243,10 @@ async fn load_events(
         .expect("read_stream should succeed");
 
     let mut versioned = Vec::new();
-    loop {
-        match stream.next().await.expect("stream read should succeed") {
-            None => break,
-            Some(env) => {
-                let event: AccountEvent = codec
-                    .decode(env.event_type(), env.payload())
-                    .expect("decode should succeed");
-                versioned.push(VersionedEvent::new(env.version(), event));
-            }
-        }
+    while let Some(item) = stream.next().await {
+        let env = item.expect("stream read should succeed");
+        let event: AccountEvent = codec.decode(&env).expect("decode should succeed");
+        versioned.push(VersionedEvent::new(env.version(), event));
     }
     versioned
 }

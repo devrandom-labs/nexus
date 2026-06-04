@@ -39,6 +39,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{decode_event_value, encode_event_value};
@@ -47,7 +48,6 @@ use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 
 use proptest::prelude::*;
 
@@ -110,7 +110,8 @@ async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -122,7 +123,8 @@ async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         versions.push(env.version().as_u64());
     }
     versions
@@ -134,7 +136,8 @@ async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<Str
         .await
         .unwrap();
     let mut types = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         types.push(env.event_type().to_owned());
     }
     types
@@ -146,7 +149,8 @@ async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
         .await
         .unwrap();
     let mut count: u64 = 0;
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         let _ = env;
         count += 1;
     }
@@ -478,7 +482,7 @@ async fn attack_version_u64_max_read() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.unwrap().is_none(),
+        stream.next().await.is_none(),
         "reading from u64::MAX should return empty"
     );
 }
@@ -504,7 +508,7 @@ async fn attack_read_nonexistent_stream() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.unwrap().is_none(),
+        stream.next().await.is_none(),
         "nonexistent stream should return empty"
     );
 }
@@ -525,7 +529,7 @@ async fn attack_read_past_end_of_stream() {
         .await
         .unwrap();
     assert!(
-        stream.next().await.unwrap().is_none(),
+        stream.next().await.is_none(),
         "reading past end of stream should return empty"
     );
 }
@@ -886,7 +890,8 @@ async fn append_assigns_monotonic_global_seq_across_streams() {
             .await
             .unwrap();
         let mut seqs = Vec::new();
-        while let Some(env) = stream.next().await.unwrap() {
+        while let Some(__i) = stream.next().await {
+            let env = __i.unwrap();
             seqs.push(env.global_seq().as_u64());
         }
         seqs

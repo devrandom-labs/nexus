@@ -187,7 +187,7 @@ where
     S: Send + Sync + 'static,
     P: Send,
     SS: SnapshotStore<Vec<u8>, P>,
-    C: Encode<S> + Decode<S>,
+    for<'a> C: Encode<S> + Decode<S, Output<'a> = S>,
 {
     type Error =
         CodecSnapshotStoreError<SS::Error, <C as Encode<S>>::Error, <C as Decode<S>>::Error>;
@@ -207,8 +207,14 @@ where
         };
 
         let label = id.to_label();
-        let state = <C as Decode<S>>::decode(&self.codec, &label, &bytes)
-            .map_err(CodecSnapshotStoreError::Decode)?;
+        // Wrap the snapshot's raw bytes in a synthetic envelope so the
+        // codec's envelope-based decode trait can be called. The
+        // snapshot wire format is *not* the event wire format; this
+        // synthesis only carries the bytes through to `decode()`.
+        let env = crate::envelope::PersistedEnvelope::for_decode(label.as_str(), &bytes)
+            .map_err(CodecSnapshotStoreError::Wire)?;
+        let state =
+            <C as Decode<S>>::decode(&self.codec, &env).map_err(CodecSnapshotStoreError::Decode)?;
 
         Ok(Some((position, state)))
     }
@@ -223,14 +229,19 @@ where
         let bytes = <C as Encode<S>>::encode(&self.codec, state)
             .map_err(CodecSnapshotStoreError::Encode)?;
 
+        // SnapshotStore<Vec<u8>, P> requires &Vec<u8>; adapt by copying.
+        // Snapshot writes are rare relative to the read path, so the
+        // extra allocation here is acceptable.
+        let bytes_vec = bytes.to_vec();
         self.store
-            .commit(id, schema_version, position, &bytes)
+            .commit(id, schema_version, position, &bytes_vec)
             .await
             .map_err(CodecSnapshotStoreError::Store)
     }
 }
 
-/// Error from [`CodecSnapshotStore`] — the underlying store, the encoder, or the decoder.
+/// Error from [`CodecSnapshotStore`] — the underlying store, the encoder, the decoder,
+/// or the wire-format synthesis used to call the envelope-based decode trait.
 #[derive(Debug, thiserror::Error)]
 pub enum CodecSnapshotStoreError<S, EncErr, DecErr> {
     /// The underlying byte-level store failed.
@@ -242,6 +253,11 @@ pub enum CodecSnapshotStoreError<S, EncErr, DecErr> {
     /// Decoding failed.
     #[error(transparent)]
     Decode(DecErr),
+    /// Wire-format synthesis failed while wrapping the snapshot bytes in
+    /// an envelope for the codec. Practically unreachable for in-budget
+    /// labels (≤64 bytes via `Id::to_label`) and snapshot bytes ≤ 4 GiB.
+    #[error("wire-format error: {0}")]
+    Wire(#[source] crate::wire::WireError),
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

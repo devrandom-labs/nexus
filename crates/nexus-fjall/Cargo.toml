@@ -17,6 +17,7 @@ snapshot = ["nexus-store/snapshot"]
 arrayvec = { workspace = true }
 bytes = { workspace = true }
 fjall = { workspace = true }
+futures.workspace = true
 nexus = { version = "0.1.0", path = "../nexus" }
 nexus-store = { version = "0.1.0", path = "../nexus-store" }
 thiserror = { workspace = true }

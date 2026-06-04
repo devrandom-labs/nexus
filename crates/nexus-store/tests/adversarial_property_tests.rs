@@ -66,6 +66,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrayvec::ArrayString;
+use futures::StreamExt;
 use nexus::Version;
 use nexus_store::InMemoryStoreError;
 use nexus_store::Repository;
@@ -75,7 +76,6 @@ use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::stream::EventStream;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 
@@ -213,20 +213,24 @@ struct JsonCodecError(String);
 
 impl Encode<TestEvent> for JsonCodec {
     type Error = JsonCodecError;
-    fn encode(&self, event: &TestEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &TestEvent) -> Result<bytes::Bytes, Self::Error> {
         let json = match event {
             TestEvent::Happened(s) => format!(r#"{{"Happened":"{}"}}"#, s),
             TestEvent::ValueSet(v) => format!(r#"{{"ValueSet":{}}}"#, v),
         };
-        Ok(json.into_bytes())
+        Ok(bytes::Bytes::from(json.into_bytes()))
     }
 }
 
 impl Decode<TestEvent> for JsonCodec {
+    type Output<'a> = TestEvent;
     type Error = JsonCodecError;
-    fn decode(&self, event_type: &str, payload: &[u8]) -> Result<TestEvent, Self::Error> {
-        let s = std::str::from_utf8(payload).map_err(|e| JsonCodecError(e.to_string()))?;
-        match event_type {
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<TestEvent, Self::Error> {
+        let s = std::str::from_utf8(env.payload()).map_err(|e| JsonCodecError(e.to_string()))?;
+        match env.event_type() {
             "Happened" => {
                 // Parse {"Happened":"value"}
                 let value = s
@@ -290,7 +294,8 @@ async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamName) -> Vec
         .await
         .unwrap();
     let mut payloads = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         payloads.push(env.payload().to_vec());
     }
     payloads
@@ -302,7 +307,8 @@ async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamName) -> Vec
         .await
         .unwrap();
     let mut versions = Vec::new();
-    while let Some(env) = stream.next().await.unwrap() {
+    while let Some(__i) = stream.next().await {
+        let env = __i.unwrap();
         versions.push(env.version().as_u64());
     }
     versions
@@ -731,14 +737,14 @@ proptest! {
 
             // Drain all events
             let mut count = 0;
-            while let Some(_env) = stream.next().await.unwrap() {
+            while let Some(__i) = stream.next().await { let _env = __i.unwrap();
                 count += 1;
             }
             prop_assert_eq!(count, n, "wrong event count");
 
             // After None, all subsequent calls must also return None (fused)
             for _ in 0..10 {
-                let next = stream.next().await.unwrap();
+                let next = stream.next().await;
                 prop_assert!(next.is_none(), "stream must be fused: returned Some after None");
             }
             Ok(())
@@ -818,7 +824,7 @@ proptest! {
                 .unwrap();
 
             let mut read_versions = Vec::new();
-            while let Some(env) = stream.next().await.unwrap() {
+            while let Some(__i) = stream.next().await { let env = __i.unwrap();
                 read_versions.push(env.version().as_u64());
             }
 
@@ -897,7 +903,8 @@ proptest! {
         let codec = JsonCodec;
         let event = TestEvent::Happened(s.clone());
         let encoded = codec.encode(&event).unwrap();
-        let decoded = codec.decode("Happened", &encoded).unwrap();
+        let env = nexus_store::PersistedEnvelope::for_decode("Happened", &encoded).unwrap();
+        let decoded = codec.decode(&env).unwrap();
         prop_assert_eq!(decoded, event, "Happened roundtrip failed for: {:?}", s);
     }
 
@@ -906,7 +913,8 @@ proptest! {
         let codec = JsonCodec;
         let event = TestEvent::ValueSet(v);
         let encoded = codec.encode(&event).unwrap();
-        let decoded = codec.decode("ValueSet", &encoded).unwrap();
+        let env = nexus_store::PersistedEnvelope::for_decode("ValueSet", &encoded).unwrap();
+        let decoded = codec.decode(&env).unwrap();
         prop_assert_eq!(decoded, event, "ValueSet roundtrip failed for: {}", v);
     }
 
@@ -917,7 +925,8 @@ proptest! {
     ) {
         prop_assume!(event_type != "Happened" && event_type != "ValueSet");
         let codec = JsonCodec;
-        let result = codec.decode(&event_type, &payload);
+        let env = nexus_store::PersistedEnvelope::for_decode(&event_type, &payload).unwrap();
+        let result = codec.decode(&env);
         prop_assert!(result.is_err(), "codec must reject unknown event type: {}", event_type);
     }
 }
@@ -1430,7 +1439,7 @@ proptest! {
                 handles.push(tokio::spawn(async move {
                     let mut stream = store.read_stream(&sid, Version::INITIAL).await.unwrap();
                     let mut read = Vec::new();
-                    while let Some(env) = stream.next().await.unwrap() {
+                    while let Some(__i) = stream.next().await { let env = __i.unwrap();
                         read.push(env.payload().to_vec());
                     }
                     assert_eq!(read, expected, "reader got wrong payloads");

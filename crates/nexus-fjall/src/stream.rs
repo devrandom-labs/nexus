@@ -1,57 +1,45 @@
-use crate::encoding::{decode_event_key, decode_event_value};
-use crate::error::FjallError;
+use std::collections::VecDeque;
+
 use arrayvec::ArrayString;
 use bytes::Bytes;
 use fjall::Slice;
 use nexus::Version;
 use nexus_store::GlobalSeq;
 use nexus_store::PersistedEnvelope;
-use nexus_store::stream::{BaseEventStream, EventStream};
 
-/// Lending cursor over fjall event rows.
+use crate::encoding::{decode_event_key, decode_event_value};
+use crate::error::FjallError;
+
+/// `futures::Stream` of fjall event rows.
 ///
-/// Created by `FjallStore::read_stream`. The events are eagerly loaded into
-/// a `Vec` (range scan over the events partition) so the cursor can lend
-/// references into the buffer without holding an LSM-tree iterator open.
+/// Created by `FjallStore::read_stream`. Events are eagerly loaded into a
+/// `VecDeque` (range scan over the events partition) at construction so
+/// `poll_next` is pure sync over the queue — no LSM-tree iterator stays
+/// open while the stream is held.
 pub struct FjallStream {
-    pub(crate) events: Vec<(Slice, Slice)>,
-    pub(crate) pos: usize,
+    pub(crate) events: VecDeque<(Slice, Slice)>,
     pub(crate) stream_id: ArrayString<64>,
-    /// Once an error is returned, the stream is poisoned — all subsequent
-    /// calls to `next()` return `None`. This prevents silently skipping
+    /// Once an error is yielded, the stream is poisoned — all subsequent
+    /// `poll_next` calls return `None`. This prevents silently skipping
     /// corrupt entries on retry.
     pub(crate) poisoned: bool,
     #[cfg(debug_assertions)]
     pub(crate) prev_version: Option<u64>,
 }
 
-impl BaseEventStream for FjallStream {
-    fn to_envelope<'a>(item: PersistedEnvelope) -> PersistedEnvelope
-    where
-        Self: 'a,
-    {
-        item
-    }
-}
-
-impl EventStream for FjallStream {
-    type Item<'a> = PersistedEnvelope;
-    type Error = FjallError;
-
-    async fn next(&mut self) -> Result<Option<PersistedEnvelope>, Self::Error> {
-        if self.poisoned || self.pos >= self.events.len() {
-            return Ok(None);
+impl FjallStream {
+    pub(crate) fn poll_one(&mut self) -> Option<Result<PersistedEnvelope, FjallError>> {
+        if self.poisoned {
+            return None;
         }
+        let (key, value) = self.events.pop_front()?;
 
-        let (key, value) = &self.events[self.pos];
-        self.pos += 1;
-
-        let Ok((_id_bytes, version)) = decode_event_key(key) else {
+        let Ok((_id_bytes, version)) = decode_event_key(&key) else {
             self.poisoned = true;
-            return Err(FjallError::CorruptValue {
+            return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: None,
-            });
+            }));
         };
 
         #[cfg(debug_assertions)]
@@ -66,29 +54,29 @@ impl EventStream for FjallStream {
             self.prev_version = Some(version);
         }
 
-        let bytes_value: Bytes = value.clone().into();
+        let bytes_value: Bytes = value.into();
         let Ok(decoded) = decode_event_value(&bytes_value) else {
             self.poisoned = true;
-            return Err(FjallError::CorruptValue {
+            return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: Some(version),
-            });
+            }));
         };
 
         let Some(ver) = Version::new(version) else {
             self.poisoned = true;
-            return Err(FjallError::CorruptValue {
+            return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: Some(version),
-            });
+            }));
         };
 
         let Some(global_seq) = GlobalSeq::new(decoded.global_seq) else {
             self.poisoned = true;
-            return Err(FjallError::CorruptValue {
+            return Some(Err(FjallError::CorruptValue {
                 stream_id: self.stream_id,
                 version: Some(version),
-            });
+            }));
         };
 
         match PersistedEnvelope::try_new(
@@ -100,16 +88,27 @@ impl EventStream for FjallStream {
             decoded.payload_range,
             decoded.metadata_range,
         ) {
-            Ok(envelope) => Ok(Some(envelope)),
+            Ok(envelope) => Some(Ok(envelope)),
             Err(source) => {
                 self.poisoned = true;
-                Err(FjallError::EnvelopeCorrupt {
+                Some(Err(FjallError::EnvelopeCorrupt {
                     stream_id: self.stream_id,
                     version,
                     source,
-                })
+                }))
             }
         }
+    }
+}
+
+impl futures::Stream for FjallStream {
+    type Item = Result<PersistedEnvelope, FjallError>;
+
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        core::task::Poll::Ready(self.poll_one())
     }
 }
 
@@ -120,6 +119,7 @@ impl EventStream for FjallStream {
 mod tests {
     use super::*;
     use crate::encoding::{encode_event_key, encode_event_value};
+    use futures::StreamExt;
 
     fn make_row(
         id: &[u8],
@@ -149,8 +149,7 @@ mod tests {
         let row2 = make_row(b"user-123", 2, 11, 1, "UserUpdated", b"payload-2");
 
         let mut stream = FjallStream {
-            events: vec![row1, row2],
-            pos: 0,
+            events: VecDeque::from(vec![row1, row2]),
             stream_id: ArrayString::try_from("user-123").unwrap(),
             poisoned: false,
             #[cfg(debug_assertions)]
@@ -183,15 +182,14 @@ mod tests {
         let truncated_value: &[u8] = &[0, 1, 2];
 
         let mut stream = FjallStream {
-            events: vec![(Slice::from(key), Slice::from(truncated_value))],
-            pos: 0,
+            events: VecDeque::from(vec![(Slice::from(key), Slice::from(truncated_value))]),
             stream_id: ArrayString::try_from("corrupt-stream").unwrap(),
             poisoned: false,
             #[cfg(debug_assertions)]
             prev_version: None,
         };
 
-        let err = stream.next().await.unwrap_err();
+        let err = stream.next().await.unwrap().unwrap_err();
         match err {
             FjallError::CorruptValue { stream_id, version } => {
                 assert_eq!(stream_id.as_str(), "corrupt-stream");

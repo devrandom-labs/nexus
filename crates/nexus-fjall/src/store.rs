@@ -1,7 +1,5 @@
 use crate::builder::FjallStoreBuilder;
-use crate::encoding::{
-    decode_stream_version, encode_event_key, encode_event_value, encode_stream_version,
-};
+use crate::encoding::{decode_stream_version, encode_event_key, encode_stream_version};
 use crate::error::FjallError;
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
@@ -11,6 +9,7 @@ use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::{RawEventStore, SubscriptionBackend};
+use nexus_store::wire;
 use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -59,7 +58,7 @@ impl FjallStore {
 
 impl RawEventStore for FjallStore {
     type Error = FjallError;
-    type Stream<'a> = FjallStream;
+    type Stream = FjallStream;
 
     #[allow(
         clippy::significant_drop_tightening,
@@ -158,7 +157,6 @@ impl RawEventStore for FjallStore {
 
         // Write each envelope into the events partition, stamping each with
         // the next GlobalSeq. The sequence is monotonic; gaps are permitted.
-        let mut value_buf = Vec::new();
         for (i, env) in envelopes.iter().enumerate() {
             let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
             let global_seq = current_global
@@ -173,8 +171,7 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            encode_event_value(
-                &mut value_buf,
+            let row = wire::build_row(
                 global_seq,
                 env.schema_version(),
                 env.event_type(),
@@ -188,7 +185,7 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            tx.insert(&self.events, &key, Slice::from(&*value_buf));
+            tx.insert(&self.events, &key, Slice::from(row.value));
         }
 
         // Advance the global counter by the batch size, in the same
@@ -215,18 +212,13 @@ impl RawEventStore for FjallStore {
         Ok(())
     }
 
-    async fn read_stream(
-        &self,
-        id: &impl Id,
-        from: Version,
-    ) -> Result<Self::Stream<'_>, Self::Error> {
+    async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
         let id_bytes = id.as_ref();
 
         // Check if the stream exists. If not, return an empty stream.
         if self.streams.get(id_bytes)?.is_none() {
             return Ok(FjallStream {
-                events: vec![],
-                pos: 0,
+                events: std::collections::VecDeque::new(),
                 stream_id: id.to_label(),
                 poisoned: false,
                 #[cfg(debug_assertions)]
@@ -253,7 +245,7 @@ impl RawEventStore for FjallStore {
             "read_stream precondition: start key must sort <= end key"
         );
 
-        let events: Vec<_> = self
+        let events_vec: Vec<_> = self
             .events
             .inner()
             .range(start..=end)
@@ -263,7 +255,7 @@ impl RawEventStore for FjallStore {
         // Postcondition: events must be sorted by key (fjall guarantees this,
         // but we verify in debug mode).
         #[cfg(debug_assertions)]
-        for window in events.windows(2) {
+        for window in events_vec.windows(2) {
             debug_assert!(
                 window[0].0 < window[1].0,
                 "read_stream postcondition: events must be strictly sorted by key"
@@ -271,8 +263,7 @@ impl RawEventStore for FjallStore {
         }
 
         Ok(FjallStream {
-            events,
-            pos: 0,
+            events: events_vec.into(),
             stream_id: id.to_label(),
             poisoned: false,
             #[cfg(debug_assertions)]
@@ -344,7 +335,7 @@ mod snapshot_impl {
 // SubscriptionBackend impl
 // ═══════════════════════════════════════════════════════════════════════════
 
-impl SubscriptionBackend<()> for FjallStore {
+impl SubscriptionBackend for FjallStore {
     type Stream = FjallSubscriptionStream;
     type Error = FjallError;
 
@@ -375,8 +366,8 @@ impl SubscriptionBackend<()> for FjallStore {
 #[allow(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use nexus_store::envelope::pending_envelope;
-    use nexus_store::stream::EventStream;
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     struct TestId(String);
@@ -509,7 +500,7 @@ mod tests {
             assert_eq!(env.payload(), b"p2");
         }
 
-        assert!(stream.next().await.unwrap().is_none());
+        assert!(stream.next().await.is_none());
     }
 
     // ---- version tracking tests ----
@@ -538,6 +529,6 @@ mod tests {
             let e2 = stream.next().await.unwrap().unwrap();
             assert_eq!(e2.version().as_u64(), 2);
         }
-        assert!(stream.next().await.unwrap().is_none());
+        assert!(stream.next().await.is_none());
     }
 }

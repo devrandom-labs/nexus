@@ -17,10 +17,10 @@
 )]
 #![allow(clippy::panic, reason = "tests use panic for error propagation")]
 
+use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_store::pending_envelope;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 use nexus_store::testing::{InMemoryStore, InMemoryStream};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -60,11 +60,11 @@ async fn collect_stream(stream: &mut InMemoryStream) -> Vec<(u64, Vec<u8>)> {
     loop {
         let item = stream.next().await;
         match item {
-            Ok(None) => break,
-            Ok(Some(env)) => {
+            None => break,
+            Some(Ok(env)) => {
                 result.push((env.version().as_u64(), env.payload().to_vec()));
             }
-            Err(e) => panic!("unexpected stream error: {e}"),
+            Some(Err(e)) => panic!("unexpected stream error: {e}"),
         }
     }
     result
@@ -231,7 +231,7 @@ async fn read_from_future_version_returns_empty() {
         .await
         .unwrap();
     assert!(
-        cursor.next().await.unwrap().is_none(),
+        cursor.next().await.is_none(),
         "should return empty for future version"
     );
 }

@@ -14,12 +14,15 @@ categories = ["asynchronous"]
 testing = ["nexus-store/testing"]
 
 [dependencies]
+futures.workspace = true
 nexus = { version = "0.1.0", path = "../nexus" }
 nexus-store = { version = "0.1.0", path = "../nexus-store", features = ["projection"] }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+bytes.workspace = true
 nexus-framework = { path = ".", features = ["testing"] }
 nexus-store = { path = "../nexus-store", features = ["projection", "testing"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

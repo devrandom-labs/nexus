@@ -1,8 +1,8 @@
-//! Tests for `BorrowingCodec` trait.
+//! Tests for the borrowing shape of the unified [`Decode`] trait.
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 
-use nexus_store::{BorrowingDecode, Encode};
+use nexus_store::{Decode, Encode, PersistedEnvelope};
 
 /// A test codec that "decodes" by reinterpreting bytes as a u32 slice.
 struct U32Codec;
@@ -10,15 +10,18 @@ struct U32Codec;
 impl Encode<[u32]> for U32Codec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &[u32]) -> Result<Vec<u8>, Self::Error> {
-        Ok(event.iter().flat_map(|n| n.to_le_bytes()).collect())
+    fn encode(&self, event: &[u32]) -> Result<bytes::Bytes, Self::Error> {
+        let buf: Vec<u8> = event.iter().flat_map(|n| n.to_le_bytes()).collect();
+        Ok(bytes::Bytes::from(buf))
     }
 }
 
-impl BorrowingDecode<[u32]> for U32Codec {
+impl Decode<[u32]> for U32Codec {
+    type Output<'a> = &'a [u32];
     type Error = std::io::Error;
 
-    fn decode<'a>(&self, _event_type: &str, payload: &'a [u8]) -> Result<&'a [u32], Self::Error> {
+    fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<&'a [u32], Self::Error> {
+        let payload = env.payload();
         if !payload.len().is_multiple_of(4) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -41,7 +44,8 @@ fn borrowing_codec_decode_borrows_from_payload() {
     let codec = U32Codec;
     let original: Vec<u32> = vec![1, 2, 3];
     let encoded = codec.encode(&original).unwrap();
-    let decoded = codec.decode("event", &encoded).unwrap();
+    let env = PersistedEnvelope::for_decode("event", &encoded).unwrap();
+    let decoded = codec.decode(&env).unwrap();
     assert_eq!(decoded, &[1, 2, 3]);
 }
 
@@ -49,7 +53,8 @@ fn borrowing_codec_decode_borrows_from_payload() {
 fn borrowing_codec_decode_rejects_bad_payload() {
     let codec = U32Codec;
     let bad = vec![1, 2, 3];
-    assert!(codec.decode("event", &bad).is_err());
+    let env = PersistedEnvelope::for_decode("event", &bad).unwrap();
+    assert!(codec.decode(&env).is_err());
 }
 
 #[test]

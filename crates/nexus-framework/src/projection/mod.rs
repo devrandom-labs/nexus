@@ -4,13 +4,12 @@ mod status;
 
 use std::num::NonZeroU32;
 
+use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_store::Decode;
-use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::projection::Projector;
 use nexus_store::state::{PersistTrigger, SnapshotStore};
 use nexus_store::store::Subscription;
-use nexus_store::stream::{EventStream, EventStreamExt};
 
 pub use builder::ProjectionBuilder;
 pub use error::ProjectionError;
@@ -108,7 +107,7 @@ impl<I, Sub, SS, P, EC, Trig, Mode> Projection<I, Sub, SS, P, EC, Trig, Mode> {
 impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Configured>
 where
     I: Id + Clone,
-    Sub: Subscription<()>,
+    Sub: Subscription,
     SS: SnapshotStore<P::State, Version>,
     P: Projector,
     EC: Decode<P::Event>,
@@ -205,12 +204,12 @@ where
 impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Ready<P::State>>
 where
     I: Id + Clone + Send + Sync,
-    Sub: Subscription<()> + Send,
-    Sub::Stream: for<'a> EventStream<(), Item<'a> = PersistedEnvelope>,
+    Sub: Subscription + Send,
+    Sub::Stream: Send + Unpin,
     SS: SnapshotStore<P::State, Version> + Send + Sync,
     P: Projector + Send + Sync,
     P::State: Clone + Send,
-    EC: Decode<P::Event> + Send + Sync,
+    for<'a> EC: Decode<P::Event, Output<'a> = P::Event> + Send + Sync,
     Trig: PersistTrigger + Send + Sync,
 {
     /// Run the event loop until shutdown or error.
@@ -253,48 +252,43 @@ where
             .await
             .map_err(ProjectionError::Subscription)?;
 
-        // Borrow the ingredients so the closure captures references
-        // (ownership stays out here for the flush tail).
-        let projector_ref = &projector;
-        let trigger_ref = &trigger;
-        let event_codec_ref = &event_codec;
-        let snapshot_store_ref = &snapshot_store;
-        let id_ref = &id;
-
-        let (final_status, _disposition) = stream
-            .try_fold_async_until(
-                status,
-                move |acc, item| {
-                    // Sync prelude: decode into owned values before the
-                    // async move. The returned future must not borrow from
-                    // `item` (HRTB requirement for `try_fold_async_until`'s
-                    // single concrete `Fut`).
-                    let event_version = item.version();
-                    let decoded = event_codec_ref.decode(item.event_type(), item.payload());
-                    async move {
-                        let event = decoded.map_err(ProjectionError::EventCodec)?;
-                        let next =
-                            apply_event(projector_ref, trigger_ref, acc, &event, event_version)
-                                .map_err(ProjectionError::Projector)?;
-                        if let ProjectionStatus::Committed {
-                            state: committed_state,
-                            version: committed_version,
-                        } = &next
-                        {
-                            snapshot_store_ref
-                                .commit(id_ref, schema_version, *committed_version, committed_state)
-                                .await
-                                .map_err(ProjectionError::Snapshot)?;
-                        }
-                        Ok::<
-                            ProjectionStatus<P::State>,
-                            ProjectionError<P::Error, EC::Error, SS::Error, Sub::Error>,
-                        >(next)
+        // Drive the subscription stream until either the stream ends or
+        // shutdown fires. `tokio::select!` between the two futures gives a
+        // shutdown-bias-by-default loop; if both are ready we still
+        // process the event (shutdown only takes effect at the next poll).
+        let mut final_status = status;
+        tokio::pin!(shutdown);
+        loop {
+            tokio::select! {
+                () = &mut shutdown => break,
+                next = stream.next() => {
+                    let Some(item) = next else { break };
+                    let env = item.map_err(ProjectionError::Subscription)?;
+                    let event_version = env.version();
+                    let event = event_codec
+                        .decode(&env)
+                        .map_err(ProjectionError::EventCodec)?;
+                    final_status = apply_event(
+                        &projector,
+                        &trigger,
+                        final_status,
+                        &event,
+                        event_version,
+                    )
+                    .map_err(ProjectionError::Projector)?;
+                    if let ProjectionStatus::Committed {
+                        state: committed_state,
+                        version: committed_version,
+                    } = &final_status
+                    {
+                        snapshot_store
+                            .commit(&id, schema_version, *committed_version, committed_state)
+                            .await
+                            .map_err(ProjectionError::Snapshot)?;
                     }
-                },
-                shutdown,
-            )
-            .await?;
+                }
+            }
+        }
 
         // Flush tail: if the fold exited with pending work, commit it once
         // before returning.

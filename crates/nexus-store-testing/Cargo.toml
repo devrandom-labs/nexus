@@ -11,6 +11,7 @@ keywords = ["event-sourcing", "testing", "conformance"]
 categories = ["data-structures", "development-tools::testing"]
 
 [dependencies]
+futures.workspace = true
 nexus = { version = "0.1.0", path = "../nexus" }
 nexus-store = { version = "0.1.0", path = "../nexus-store" }
 tokio = { workspace = true, features = ["macros", "rt"] }

@@ -87,19 +87,23 @@ struct TestCodec;
 impl Encode<TodoEvent> for TestCodec {
     type Error = std::io::Error;
 
-    fn encode(&self, event: &TodoEvent) -> Result<Vec<u8>, Self::Error> {
+    fn encode(&self, event: &TodoEvent) -> Result<bytes::Bytes, Self::Error> {
         match event {
-            TodoEvent::Created(t) => Ok(format!("created:{t}").into_bytes()),
-            TodoEvent::Done => Ok(b"done".to_vec()),
+            TodoEvent::Created(t) => Ok(bytes::Bytes::from(format!("created:{t}").into_bytes())),
+            TodoEvent::Done => Ok(bytes::Bytes::from_static(b"done")),
         }
     }
 }
 
 impl Decode<TodoEvent> for TestCodec {
+    type Output<'a> = TodoEvent;
     type Error = std::io::Error;
 
-    fn decode(&self, _event_type: &str, payload: &[u8]) -> Result<TodoEvent, Self::Error> {
-        let s = std::str::from_utf8(payload)
+    fn decode<'a>(
+        &'a self,
+        env: &'a nexus_store::PersistedEnvelope,
+    ) -> Result<TodoEvent, Self::Error> {
+        let s = std::str::from_utf8(env.payload())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         s.strip_prefix("created:").map_or_else(
             || {

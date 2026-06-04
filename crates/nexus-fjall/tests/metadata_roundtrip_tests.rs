@@ -16,12 +16,12 @@
 #![allow(clippy::missing_panics_doc, reason = "tests")]
 
 use bytes::Bytes;
+use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{META_LEN_ABSENT, decode_event_value};
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
-use nexus_store::stream::EventStream;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct StreamName(&'static str);
@@ -69,7 +69,8 @@ async fn metadata_roundtrips_across_multiple_events() {
         .expect("read_stream");
 
     let mut seen = 0u64;
-    while let Some(env) = cursor.next().await.expect("cursor next") {
+    while let Some(item) = cursor.next().await {
+        let env = item.expect("cursor next");
         seen += 1;
         assert_eq!(env.version().as_u64(), seen);
         assert_eq!(env.event_type(), "Test");
@@ -126,16 +127,16 @@ async fn none_metadata_roundtrips_as_none() {
     let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
     let id = StreamName("none-meta");
 
-    let env = pending_envelope(Version::INITIAL)
+    let pending = pending_envelope(Version::INITIAL)
         .event_type("X")
         .payload(Bytes::from_static(b"payload"))
         .build(); // no metadata
-    store.append(&id, None, &[env]).await.unwrap();
+    store.append(&id, None, &[pending]).await.unwrap();
 
     let mut cursor = store.read_stream(&id, Version::INITIAL).await.unwrap();
-    let env = cursor.next().await.unwrap().unwrap();
-    assert_eq!(env.metadata(), None);
-    assert!(env.metadata_bytes().is_none());
+    let read = cursor.next().await.unwrap().unwrap();
+    assert_eq!(read.metadata(), None);
+    assert!(read.metadata_bytes().is_none());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,9 +161,11 @@ fn decoder_rejects_meta_len_exceeding_buffer() {
     assert!(
         matches!(
             err,
-            nexus_fjall::encoding::DecodeError::MetadataOutOfBounds { meta_len: 100, .. }
+            nexus_fjall::encoding::DecodeError::Wire(
+                nexus_store::wire::DecodeError::MetadataTruncated { meta_len: 100, .. }
+            )
         ),
-        "expected MetadataOutOfBounds {{ meta_len: 100, .. }}, got {err:?}",
+        "expected Wire(MetadataTruncated {{ meta_len: 100, .. }}), got {err:?}",
     );
 }
 
