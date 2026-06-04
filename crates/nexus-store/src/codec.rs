@@ -1,8 +1,48 @@
+//! Serialization traits — [`Encode<E>`] and [`Decode<E>`].
+//!
+//! Two traits, not three. The previous shape carried a third trait
+//! (`BorrowingDecode`) as a workaround for a lifetime cliff in the old
+//! borrowed-cursor read path: when the envelope was borrowed from a
+//! cursor row that died on the next `.next()`, the same logical
+//! operation needed two different trait shapes (one returning `E`, one
+//! returning `&'a E`).
+//!
+//! The owned-[`bytes::Bytes`] envelope from the 2026-05-27 refactor
+//! removed that cliff. `PersistedEnvelope` is now cheap-to-clone
+//! (`Bytes` is Arc-counted; range copies are 8 bytes each) and has no
+//! lifetime parameter, so `'a` ties cleanly to the envelope itself.
+//! Both shapes — owning and borrowing — collapse into a single trait
+//! with a generic associated type:
+//!
+//! ```ignore
+//! pub trait Decode<E: ?Sized>: Send + Sync + 'static {
+//!     type Output<'a> where Self: 'a;
+//!     type Error: std::error::Error + Send + Sync + 'static;
+//!     fn decode<'a>(&'a self, env: &'a PersistedEnvelope)
+//!         -> Result<Self::Output<'a>, Self::Error>;
+//! }
+//! ```
+//!
+//! - Owning codec (`SerdeCodec<Json>`): `type Output<'a> = E`.
+//! - Archived zero-copy (`rkyv::RkyvCodec`): `type Output<'a> = &'a E::Archived`.
+//! - POD zero-copy (`bytemuck::BytemuckCodec`): `type Output<'a> = &'a E`.
+//!
+//! [`Encode<E>`] stays separate from [`Decode<E>`] so write-only
+//! adapters (shippers) and read-only adapters (replicas) need not
+//! implement the other half. [`Encode::encode`] returns
+//! [`bytes::Bytes`] (not `Vec<u8>`) so the encoded payload flows
+//! end-to-end through the store and wire layer without an intermediate
+//! `Vec<u8> → Bytes` copy.
+//!
+//! Both `Encode` and `Decode` take their event type with `E: ?Sized` so
+//! the unsized archived types (`Archived<MyEvent>`, `[u8]`, `str`) are
+//! representable.
+
+use crate::envelope::PersistedEnvelope;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Encode<E> — serialize a typed value to bytes
 // ═══════════════════════════════════════════════════════════════════════════
-
-use crate::envelope::PersistedEnvelope;
 
 /// Serialize a typed value to bytes.
 ///

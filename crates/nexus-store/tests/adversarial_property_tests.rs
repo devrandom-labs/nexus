@@ -1500,26 +1500,42 @@ proptest! {
 
     #[test]
     fn attack_store_error_conflict_preserves_info(
-        expected in 0..10000u64,
-        actual in 0..10000u64,
+        expected in prop_oneof![
+            Just(None),
+            Just(Version::new(1)),
+            Just(Version::new(u64::MAX)),
+            (2u64..u64::MAX).prop_map(Version::new),
+        ],
+        actual in prop_oneof![
+            Just(None),
+            Just(Version::new(1)),
+            Just(Version::new(u64::MAX)),
+            (2u64..u64::MAX).prop_map(Version::new),
+        ],
     ) {
         prop_assume!(expected != actual);
 
         let err: TestStoreError = StoreError::Conflict {
             stream_id: label("test-stream"),
-            expected: Version::new(expected),
-            actual: Version::new(actual),
+            expected,
+            actual,
         };
 
+        // The error formats `expected` and `actual` with `{:?}`, so the
+        // rendered message must contain each side's Debug representation
+        // verbatim. This covers both `None` (formats as "None") and
+        // `Some(Version(N))` (formats as "Some(Version(N))") symmetrically.
         let msg = err.to_string();
+        let expected_repr = format!("{expected:?}");
+        let actual_repr = format!("{actual:?}");
         prop_assert!(
-            msg.contains(&expected.to_string()),
-            "expected version {} missing from error: {}",
+            msg.contains(&expected_repr),
+            "expected {:?} not preserved in error: {}",
             expected, msg,
         );
         prop_assert!(
-            msg.contains(&actual.to_string()),
-            "actual version {} missing from error: {}",
+            msg.contains(&actual_repr),
+            "actual {:?} not preserved in error: {}",
             actual, msg,
         );
     }

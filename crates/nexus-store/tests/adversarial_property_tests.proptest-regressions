@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 2c4c3d78334433c7b688d825ae06eaecc6c17bab2306fb6c049eba3d45d4c4b5 # shrinks to stream_id = StreamName("a")
+cc 68f46ab6d1f5c02089d7ea836a228abe5c690f6cfd9da07fd05e29c4c2228403 # shrinks to expected = 1131, actual = 0
