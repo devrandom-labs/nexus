@@ -158,3 +158,30 @@ Per [feedback_clippy_compliance_not_a_deviation](#) — clippy lint-driven micro
   - The `futures-bridge` no-op feature (kept in PR2 Task 1 per the existing deviation log) is now finally removed from `crates/nexus-store/Cargo.toml`. Done as part of this bundle.
   - Pinned-test-fixture-driven `clippy::shadow_reuse` allow added to `crates/nexus-store/src/repository.rs` for the per-iteration Arc clones in the four `try_fold` closures; renaming those would harm readability vastly more than the lint helps.
 - **Date / PR link**: 2026-06-04, PR TBD
+
+## [PR 2 | Task 12] — `BytemuckError` wrapper around `PodCastError`
+
+- **Type**: deviation
+- **Plan said**: `BytemuckCodec`'s `Decode::Error = PodCastError`.
+- **Actually did**: `Decode::Error = BytemuckError`, a local thiserror wrapper that captures the upstream error's `Debug` output into a stack-allocated `ArrayString<64>`. `From<PodCastError> for BytemuckError` for `?` ergonomics.
+- **Reason**: upstream `bytemuck::PodCastError` is `no_std` and does not implement `std::error::Error` — `Decode::Error`'s required bound. Two options: enable a hypothetical `std` feature on `bytemuck` (does not exist as a separate feature; not surfaced), or wrap. Wrapping keeps the dep surface clean.
+- **Impact**: trivial; user-facing `Decode::Error` is now a typed wrapper instead of the raw upstream enum.
+- **Date / PR link**: 2026-06-04, PR TBD
+
+## [PR 2 | Task 13] — `RkyvCodec` uses `to_bytes_in(value, AlignedVec::new())` not the planned shape
+
+- **Type**: deviation
+- **Plan said**: `to_bytes::<rancor::Error>(event)` per the plan's pseudocode.
+- **Actually did**: `to_bytes_in::<_, rancor::Error>(event, AlignedVec::new())` per the actual rkyv 0.8.16 API. The bound on `E` is `for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rancor::Error>>` (derived by reading rkyv's `to_bytes_in` signature on docs.rs); `Decode` uses `access::<E::Archived, rancor::Error>(env.payload())` with bound `E::Archived: for<'a> CheckBytes<HighValidator<'a, rancor::Error>>`.
+- **Reason**: rkyv 0.8's `to_bytes` returns `AlignedVec` but `to_bytes_in` (the version that writes into a user-provided allocator) is the only convenient way to take ownership of the buffer afterward.
+- **Impact**: none on consumers. Pinned `rkyv = "0.8"` per the original plan; the bound chain just matches what rkyv 0.8 emits.
+- **Date / PR link**: 2026-06-04, PR TBD
+
+## [PR 2 | Task 14] — Examples migration absorbed into the Task 6-11 bundle
+
+- **Type**: deviation (process)
+- **Plan said**: separate task / commit.
+- **Actually did**: examples (`store-inmemory`, `store-and-kernel`) migrated to `futures::StreamExt` as part of the Task 6-11 bundle commit (e27d42f). No separate Task 14 commit.
+- **Reason**: same "intermediate states would not compile" rationale that bundled 6-11. The examples reference `nexus_store::stream::EventStreamExt` which disappeared in Task 6; they had to migrate at the same commit boundary.
+- **Impact**: none on substance. Task 14 is structurally complete; just no dedicated commit.
+- **Date / PR link**: 2026-06-04, e27d42f

@@ -237,3 +237,301 @@ pub mod serde {
         pub type JsonCodec = SerdeCodec<Json>;
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bytemuck — plain-old-data zero-copy codec
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "bytemuck")]
+pub mod bytemuck {
+    use ::bytemuck::{AnyBitPattern, NoUninit, PodCastError};
+    use bytes::Bytes;
+    use thiserror::Error;
+
+    use super::{Decode, Encode};
+    use crate::envelope::PersistedEnvelope;
+
+    /// Wrapper around [`PodCastError`] that satisfies the `std::error::Error` bound.
+    ///
+    /// Upstream `PodCastError` does not implement `std::error::Error`
+    /// (`bytemuck` is `no_std` by default and skips the impl), so
+    /// `Decode::Error` requires a wrapper.
+    ///
+    /// Captures the upstream error's `Debug` representation as a
+    /// stack-allocated [`ArrayString`](arrayvec::ArrayString) — no heap
+    /// allocation on the error path.
+    #[derive(Debug, Error)]
+    #[error("bytemuck cast error: {0}")]
+    pub struct BytemuckError(arrayvec::ArrayString<64>);
+
+    impl From<PodCastError> for BytemuckError {
+        fn from(value: PodCastError) -> Self {
+            use core::fmt::Write;
+            let mut buf = arrayvec::ArrayString::<64>::new();
+            let _ = write!(buf, "{value:?}");
+            Self(buf)
+        }
+    }
+
+    /// Codec for plain-old-data types.
+    ///
+    /// Zero-copy on the read path: [`Decode::Output<'a>`] is `&'a E`,
+    /// pointing directly into the envelope's payload bytes (which are
+    /// 16-byte aligned by the wire-format invariant — see
+    /// [`crate::wire`]).
+    ///
+    /// `E` must implement [`AnyBitPattern`] (every bit pattern is a valid
+    /// value of `E`) and [`NoUninit`] (no padding/uninitialized bytes).
+    /// In practice this means `#[repr(C)]` POD types with no padding.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// #[repr(C)]
+    /// #[derive(Clone, Copy, bytemuck::AnyBitPattern, bytemuck::NoUninit)]
+    /// struct Pos { x: f32, y: f32, z: f32, _pad: f32 }
+    ///
+    /// let codec = BytemuckCodec;
+    /// let bytes = codec.encode(&Pos { x: 1.0, y: 2.0, z: 3.0, _pad: 0.0 })?;
+    /// // ... persist to store, read back ...
+    /// let pos: &Pos = codec.decode(&env)?;  // borrowed, no allocation
+    /// ```
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct BytemuckCodec;
+
+    impl<E> Encode<E> for BytemuckCodec
+    where
+        E: NoUninit + Send + Sync + 'static,
+    {
+        type Error = core::convert::Infallible;
+
+        fn encode(&self, event: &E) -> Result<Bytes, Self::Error> {
+            Ok(Bytes::copy_from_slice(::bytemuck::bytes_of(event)))
+        }
+    }
+
+    impl<E> Decode<E> for BytemuckCodec
+    where
+        E: AnyBitPattern + NoUninit + Send + Sync + 'static,
+    {
+        type Output<'a>
+            = &'a E
+        where
+            Self: 'a;
+        type Error = BytemuckError;
+
+        fn decode<'a>(&'a self, env: &'a PersistedEnvelope) -> Result<&'a E, Self::Error> {
+            ::bytemuck::try_from_bytes(env.payload()).map_err(BytemuckError::from)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::wire;
+
+        #[repr(C)]
+        #[derive(
+            Clone, Copy, Debug, PartialEq, ::bytemuck::AnyBitPattern, ::bytemuck::NoUninit,
+        )]
+        struct Pos {
+            x: f32,
+            y: f32,
+            z: f32,
+            _pad: f32,
+        }
+
+        fn build_test_envelope(payload: &[u8]) -> PersistedEnvelope {
+            let row = wire::build_row(
+                crate::store::GlobalSeq::INITIAL.as_u64(),
+                1,
+                "Pos",
+                None,
+                payload,
+            )
+            .expect("wire build_row ok");
+            PersistedEnvelope::try_new(
+                nexus::Version::INITIAL,
+                crate::store::GlobalSeq::INITIAL,
+                row.value,
+                1,
+                row.offsets.event_type,
+                row.offsets.payload,
+                None,
+            )
+            .expect("envelope construction ok")
+        }
+
+        #[test]
+        fn round_trip_yields_equal_value() {
+            let codec = BytemuckCodec;
+            let original = Pos {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+                _pad: 0.0,
+            };
+
+            let bytes = codec.encode(&original).unwrap();
+            let env = build_test_envelope(&bytes);
+            let decoded: &Pos = codec.decode(&env).unwrap();
+
+            assert_eq!(decoded, &original);
+        }
+
+        #[test]
+        fn decode_borrows_from_envelope_payload() {
+            // Zero-copy assertion: the decoded &Pos points to the same
+            // bytes the envelope owns. The pointer equality proves there
+            // was no copy.
+            let codec = BytemuckCodec;
+            let original = Pos {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+                _pad: 0.0,
+            };
+
+            let bytes = codec.encode(&original).unwrap();
+            let env = build_test_envelope(&bytes);
+            let decoded: &Pos = codec.decode(&env).unwrap();
+
+            let env_payload_ptr = env.payload().as_ptr();
+            let decoded_ptr: *const u8 = std::ptr::from_ref::<Pos>(decoded).cast();
+            assert_eq!(
+                env_payload_ptr, decoded_ptr,
+                "BytemuckCodec must borrow from envelope payload, not copy"
+            );
+        }
+
+        #[test]
+        fn decode_rejects_wrong_size() {
+            let codec = BytemuckCodec;
+            // 8 bytes instead of 16 (size_of::<Pos>())
+            let env = build_test_envelope(&[0u8; 8]);
+            let result: Result<&Pos, _> = codec.decode(&env);
+            assert!(result.is_err(), "wrong-size payload must be rejected");
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Rkyv — archived-data zero-copy codec
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "rkyv")]
+pub mod rkyv {
+    use ::rkyv::{
+        Archive, Serialize,
+        api::high::{HighSerializer, HighValidator, to_bytes_in},
+        bytecheck::CheckBytes,
+        rancor,
+        ser::allocator::ArenaHandle,
+        util::AlignedVec,
+    };
+    use bytes::Bytes;
+
+    use super::{Decode, Encode};
+    use crate::envelope::PersistedEnvelope;
+
+    /// Zero-copy codec backed by rkyv 0.8.
+    ///
+    /// - **Encode**: serializes `E` to its archived bytes via
+    ///   [`rkyv::to_bytes`]. Adapts `AlignedVec` → `Bytes` via
+    ///   `Bytes::from(vec.into_vec())`. (`AlignedVec`'s alignment doesn't
+    ///   survive the conversion, but the wire-format aligns the payload
+    ///   when the row is built, so the envelope's payload regains
+    ///   alignment.)
+    /// - **Decode**: validates + accesses the envelope payload as
+    ///   `&Archived<E>` via [`rkyv::access`]. Zero-copy on the read
+    ///   path; the returned reference borrows directly from
+    ///   `env.payload()`.
+    ///
+    /// `Output<'a> = &'a <E as Archive>::Archived`.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct RkyvCodec;
+
+    impl<E> Encode<E> for RkyvCodec
+    where
+        E: for<'a> Serialize<HighSerializer<AlignedVec, ArenaHandle<'a>, rancor::Error>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        type Error = rancor::Error;
+
+        fn encode(&self, event: &E) -> Result<Bytes, Self::Error> {
+            let aligned = to_bytes_in::<_, rancor::Error>(event, AlignedVec::new())?;
+            // AlignedVec::into_vec → Vec<u8> → Bytes. Alignment is lost
+            // here, but wire::build_row re-aligns the payload on its way
+            // into the envelope.
+            Ok(Bytes::from(aligned.into_vec()))
+        }
+    }
+
+    impl<E> Decode<E> for RkyvCodec
+    where
+        E: Archive + Send + Sync + 'static,
+        E::Archived: for<'a> CheckBytes<HighValidator<'a, rancor::Error>>,
+    {
+        type Output<'a>
+            = &'a E::Archived
+        where
+            Self: 'a;
+        type Error = rancor::Error;
+
+        fn decode<'a>(
+            &'a self,
+            env: &'a PersistedEnvelope,
+        ) -> Result<&'a E::Archived, Self::Error> {
+            ::rkyv::access::<E::Archived, rancor::Error>(env.payload())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::wire;
+
+        #[derive(::rkyv::Archive, ::rkyv::Serialize, ::rkyv::Deserialize, Debug, PartialEq, Eq)]
+        struct Move {
+            steps: u32,
+            dir: u8,
+        }
+
+        fn build_test_envelope(payload: &[u8]) -> PersistedEnvelope {
+            let row = wire::build_row(
+                crate::store::GlobalSeq::INITIAL.as_u64(),
+                1,
+                "Move",
+                None,
+                payload,
+            )
+            .expect("wire build_row ok");
+            PersistedEnvelope::try_new(
+                nexus::Version::INITIAL,
+                crate::store::GlobalSeq::INITIAL,
+                row.value,
+                1,
+                row.offsets.event_type,
+                row.offsets.payload,
+                None,
+            )
+            .expect("envelope construction ok")
+        }
+
+        #[test]
+        fn round_trip_yields_equal_archived_fields() {
+            let codec = RkyvCodec;
+            let original = Move { steps: 42, dir: 3 };
+
+            let bytes = codec.encode(&original).unwrap();
+            let env = build_test_envelope(&bytes);
+            let archived: &ArchivedMove =
+                <RkyvCodec as Decode<Move>>::decode(&codec, &env).unwrap();
+
+            assert_eq!(archived.steps, 42);
+            assert_eq!(archived.dir, 3);
+        }
+    }
+}
