@@ -382,21 +382,21 @@ pub mod bytemuck {
         }
 
         fn build_test_envelope(payload: &[u8]) -> PersistedEnvelope {
-            let row = wire::build_row(
+            let frame = wire::encode_frame(
                 crate::store::GlobalSeq::INITIAL.as_u64(),
                 1,
                 "Pos",
                 None,
                 payload,
             )
-            .expect("wire build_row ok");
+            .expect("wire encode_frame ok");
             PersistedEnvelope::try_new(
                 nexus::Version::INITIAL,
                 crate::store::GlobalSeq::INITIAL,
-                row.value,
+                frame.value,
                 1,
-                row.offsets.event_type,
-                row.offsets.payload,
+                frame.offsets.event_type,
+                frame.offsets.payload,
                 None,
             )
             .expect("envelope construction ok")
@@ -503,7 +503,7 @@ pub mod rkyv {
         fn encode(&self, event: &E) -> Result<Bytes, Self::Error> {
             let aligned = to_bytes_in::<_, rancor::Error>(event, AlignedVec::new())?;
             // AlignedVec::into_vec → Vec<u8> → Bytes. Alignment is lost
-            // here, but wire::build_row re-aligns the payload on its way
+            // here, but wire::encode_frame re-aligns the payload on its way
             // into the envelope.
             Ok(Bytes::from(aligned.into_vec()))
         }
@@ -540,21 +540,21 @@ pub mod rkyv {
         }
 
         fn build_test_envelope(payload: &[u8]) -> PersistedEnvelope {
-            let row = wire::build_row(
+            let frame = wire::encode_frame(
                 crate::store::GlobalSeq::INITIAL.as_u64(),
                 1,
                 "Move",
                 None,
                 payload,
             )
-            .expect("wire build_row ok");
+            .expect("wire encode_frame ok");
             PersistedEnvelope::try_new(
                 nexus::Version::INITIAL,
                 crate::store::GlobalSeq::INITIAL,
-                row.value,
+                frame.value,
                 1,
-                row.offsets.event_type,
-                row.offsets.payload,
+                frame.offsets.event_type,
+                frame.offsets.payload,
                 None,
             )
             .expect("envelope construction ok")

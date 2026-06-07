@@ -3,7 +3,7 @@
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::store::{GlobalSeq, RawEventStore, SubscriptionBackend};
-use crate::wire::{self, RowOffsets};
+use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
 use nexus::Id;
 use nexus::Version;
@@ -45,26 +45,26 @@ pub enum InMemoryStoreError {
     },
 }
 
-/// A row stored in the in-memory database.
+/// A frame stored in the in-memory database.
 ///
-/// Holds the wire-format bytes ([`wire::build_row`]) in a single
-/// Arc-shared [`Bytes`] alongside pre-computed [`RowOffsets`]. The
+/// Holds the wire-format bytes ([`wire::encode_frame`]) in a single
+/// Arc-shared [`Bytes`] alongside pre-computed [`FrameOffsets`]. The
 /// `version` is the stream-local position, kept out of the value
 /// (fjall stores it in the key; `InMemoryStore` caches it here).
 ///
-/// Cloning a `StoredRow` is an Arc refcount increment plus a few range
+/// Cloning a `StoredFrame` is an Arc refcount increment plus a few range
 /// copies — no heap allocation.
 #[derive(Clone)]
-struct StoredRow {
+struct StoredFrame {
     version: u64,
-    /// Wire-format row (see [`wire::build_row`]). Payload is 16-byte aligned.
+    /// Wire-format frame (see [`wire::encode_frame`]). Payload is 16-byte aligned.
     value: Bytes,
-    offsets: RowOffsets,
+    offsets: FrameOffsets,
 }
 
 /// In-memory event store for testing. Implements [`RawEventStore`].
 ///
-/// Backed by `tokio::sync::Mutex<HashMap<String, Vec<StoredRow>>>`.
+/// Backed by `tokio::sync::Mutex<HashMap<String, Vec<StoredFrame>>>`.
 /// Includes optimistic concurrency and sequential version validation.
 ///
 /// # Limitations vs real adapters
@@ -82,7 +82,7 @@ struct StoredRow {
 /// - **Distributed concurrency**: Single-process only. Cannot simulate
 ///   multiple writers on different machines racing on the same stream.
 pub struct InMemoryStore {
-    streams: Mutex<HashMap<String, Vec<StoredRow>>>,
+    streams: Mutex<HashMap<String, Vec<StoredFrame>>>,
     notify: Arc<Notify>,
     next_global_seq: Mutex<GlobalSeq>,
 }
@@ -107,11 +107,11 @@ impl Default for InMemoryStore {
 
 /// `futures::Stream` of envelopes over an in-memory snapshot.
 ///
-/// Yields each row from a pre-loaded `VecDeque<StoredRow>` in sequence.
+/// Yields each row from a pre-loaded `VecDeque<StoredFrame>` in sequence.
 /// `poll_next` is pure sync (no IO) — the events were materialized at
 /// `read_stream()` time.
 pub struct InMemoryStream {
-    events: std::collections::VecDeque<StoredRow>,
+    events: std::collections::VecDeque<StoredFrame>,
     #[cfg(debug_assertions)]
     prev_version: Option<u64>,
 }
@@ -138,19 +138,19 @@ impl futures::Stream for InMemoryStream {
             }
             self.prev_version = Some(row.version);
         }
-        core::task::Poll::Ready(Some(row_to_envelope(&row)))
+        core::task::Poll::Ready(Some(frame_to_envelope(&row)))
     }
 }
 
-/// Encode a `PendingEnvelope` + its assigned `global_seq` into a `StoredRow`.
+/// Encode a `PendingEnvelope` + its assigned `global_seq` into a `StoredFrame`.
 ///
-/// Delegates to [`wire::build_row`], which produces a 16-byte-aligned
+/// Delegates to [`wire::encode_frame`], which produces a 16-byte-aligned
 /// payload inside the resulting [`Bytes`].
-fn encode_pending_to_row(
+fn encode_pending_to_frame(
     env: &PendingEnvelope,
     global_seq: GlobalSeq,
-) -> Result<StoredRow, AppendError<InMemoryStoreError>> {
-    let row = wire::build_row(
+) -> Result<StoredFrame, AppendError<InMemoryStoreError>> {
+    let frame = wire::encode_frame(
         global_seq.as_u64(),
         env.schema_version(),
         env.event_type(),
@@ -159,25 +159,25 @@ fn encode_pending_to_row(
     )
     .map_err(|e| AppendError::Store(InMemoryStoreError::Wire(e)))?;
 
-    Ok(StoredRow {
+    Ok(StoredFrame {
         version: env.version().as_u64(),
-        value: row.value,
-        offsets: row.offsets,
+        value: frame.value,
+        offsets: frame.offsets,
     })
 }
 
-/// Construct a [`PersistedEnvelope`] from a [`StoredRow`].
+/// Construct a [`PersistedEnvelope`] from a [`StoredFrame`].
 ///
 /// Reads `global_seq` and `schema_version` from the wire-format header
 /// at the constant offsets defined by [`wire`].
-fn row_to_envelope(row: &StoredRow) -> Result<PersistedEnvelope, InMemoryStoreError> {
-    let Some(version) = Version::new(row.version) else {
+fn frame_to_envelope(frame: &StoredFrame) -> Result<PersistedEnvelope, InMemoryStoreError> {
+    let Some(version) = Version::new(frame.version) else {
         return Err(InMemoryStoreError::CorruptVersion);
     };
-    let value = &row.value;
+    let value = &frame.value;
     // Bytes are read individually so no fallible try_into sits in the
-    // cursor hot path. The wire::build_row invariant guarantees these
-    // offsets are present in any non-empty StoredRow value.
+    // cursor hot path. The wire::encode_frame invariant guarantees these
+    // offsets are present in any non-empty StoredFrame value.
     let global_seq_raw = u64::from_le_bytes([
         value[wire::GLOBAL_SEQ_OFFSET],
         value[wire::GLOBAL_SEQ_OFFSET + 1],
@@ -190,7 +190,7 @@ fn row_to_envelope(row: &StoredRow) -> Result<PersistedEnvelope, InMemoryStoreEr
     ]);
     let Some(global_seq) = GlobalSeq::new(global_seq_raw) else {
         return Err(InMemoryStoreError::CorruptGlobalSeq {
-            version: row.version,
+            version: frame.version,
         });
     };
     let schema_version = u32::from_le_bytes([
@@ -203,14 +203,14 @@ fn row_to_envelope(row: &StoredRow) -> Result<PersistedEnvelope, InMemoryStoreEr
     PersistedEnvelope::try_new(
         version,
         global_seq,
-        row.value.clone(),
+        frame.value.clone(),
         schema_version,
-        row.offsets.event_type.clone(),
-        row.offsets.payload.clone(),
-        row.offsets.metadata.clone(),
+        frame.offsets.event_type.clone(),
+        frame.offsets.payload.clone(),
+        frame.offsets.metadata.clone(),
     )
     .map_err(|source| InMemoryStoreError::EnvelopeCorrupt {
-        version: row.version,
+        version: frame.version,
         source,
     })
 }
@@ -270,7 +270,7 @@ impl RawEventStore for InMemoryStore {
         let mut seq = *counter;
         let mut rows = Vec::with_capacity(envelopes.len());
         for env in envelopes {
-            rows.push(encode_pending_to_row(env, seq)?);
+            rows.push(encode_pending_to_frame(env, seq)?);
             seq = seq
                 .next()
                 .ok_or(AppendError::Store(InMemoryStoreError::GlobalSeqOverflow))?;
@@ -296,7 +296,7 @@ impl RawEventStore for InMemoryStore {
 
     async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
         let key = id.to_string();
-        let events: std::collections::VecDeque<StoredRow> = self
+        let events: std::collections::VecDeque<StoredFrame> = self
             .streams
             .lock()
             .await
@@ -333,7 +333,7 @@ impl RawEventStore for InMemoryStore {
 struct SubState {
     store: Arc<InMemoryStore>,
     stream_id: String,
-    buffer: std::collections::VecDeque<StoredRow>,
+    buffer: std::collections::VecDeque<StoredFrame>,
     last_version: Option<Version>,
     #[cfg(debug_assertions)]
     prev_version: Option<u64>,
@@ -429,7 +429,7 @@ impl SubscriptionBackend for InMemoryStore {
                         }
                         s.prev_version = Some(row.version);
                     }
-                    return match row_to_envelope(&row) {
+                    return match frame_to_envelope(&row) {
                         Ok(env) => {
                             s.last_version = Some(env.version());
                             Some((Ok(env), s))

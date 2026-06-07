@@ -44,7 +44,7 @@
 //!
 //! # Wire format
 //!
-//! Every row is built by [`nexus_store::wire::build_row`]. That helper
+//! Every frame is built by [`nexus_store::wire::encode_frame`]. That helper
 //! guarantees the payload bytes land on a 16-byte boundary inside the
 //! `Bytes` buffer the cursor hands out — the wire-format invariant that
 //! zero-copy decoders (rkyv, flatbuffers, `#[repr(C)]` POD) rely on for

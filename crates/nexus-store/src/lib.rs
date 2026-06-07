@@ -30,8 +30,8 @@
 //!   carries no methods of its own — every combinator comes from
 //!   [`futures::StreamExt`](https://docs.rs/futures/latest/futures/stream/trait.StreamExt.html)
 //!   and [`TryStreamExt`](https://docs.rs/futures/latest/futures/stream/trait.TryStreamExt.html).
-//! - [`wire`] — single canonical row builder
-//!   ([`build_row`](crate::wire::build_row)) that every adapter must use.
+//! - [`wire`] — single canonical frame builder
+//!   ([`encode_frame`](crate::wire::encode_frame)) that every adapter must use.
 //!   Guarantees 16-byte payload alignment as a wire-format invariant —
 //!   the precondition zero-copy decoders (rkyv, flatbuffers, `#[repr(C)]`
 //!   POD) rely on for sound `&T` reads.
