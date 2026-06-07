@@ -359,9 +359,9 @@ impl PersistedEnvelope {
 
     /// Wrap raw bytes in a synthetic envelope suitable for [`Decode`].
     ///
-    /// Builds a fresh wire-format row via [`crate::wire::build_row`] so the
+    /// Builds a fresh wire-format frame via [`crate::wire::encode_frame`] so the
     /// payload pointer lands on a 16-byte boundary. Use this when calling a
-    /// [`Decode`](crate::codec::Decode) impl outside the cursor's normal row
+    /// [`Decode`](crate::codec::Decode) impl outside the cursor's normal frame
     /// buffer — snapshot decoding, upcaster post-transform decoding, codec
     /// round-trip tests.
     ///
@@ -378,29 +378,29 @@ impl PersistedEnvelope {
     ///
     /// # Panics
     ///
-    /// Never under normal use. The post-`build_row` [`try_new`](Self::try_new)
+    /// Never under normal use. The post-`encode_frame` [`try_new`](Self::try_new)
     /// is `expect`'d because its inputs are controlled here: ranges come from
-    /// the just-built row, `event_type` is a valid `&str`, and
+    /// the just-built frame, `event_type` is a valid `&str`, and
     /// `schema_version = 1` is nonzero — none of `try_new`'s failure
     /// conditions can fire.
     pub fn for_decode(event_type: &str, payload: &[u8]) -> Result<Self, crate::wire::WireError> {
-        let row =
-            crate::wire::build_row(GlobalSeq::INITIAL.as_u64(), 1, event_type, None, payload)?;
+        let frame =
+            crate::wire::encode_frame(GlobalSeq::INITIAL.as_u64(), 1, event_type, None, payload)?;
         #[allow(
             clippy::expect_used,
-            reason = "ranges come from wire::build_row which validated them, \
+            reason = "ranges come from wire::encode_frame which validated them, \
                       event_type is a valid &str, schema_version=1 is nonzero"
         )]
         Ok(Self::try_new(
             Version::INITIAL,
             GlobalSeq::INITIAL,
-            row.value,
+            frame.value,
             1,
-            row.offsets.event_type,
-            row.offsets.payload,
+            frame.offsets.event_type,
+            frame.offsets.payload,
             None,
         )
-        .expect("try_new is infallible given build_row outputs and valid &str"))
+        .expect("try_new is infallible given encode_frame outputs and valid &str"))
     }
 
     fn slice_range(&self, range: &Range<u32>) -> Bytes {

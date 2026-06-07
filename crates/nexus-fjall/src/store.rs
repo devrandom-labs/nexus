@@ -171,7 +171,7 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            let row = wire::build_row(
+            let frame = wire::encode_frame(
                 global_seq,
                 env.schema_version(),
                 env.event_type(),
@@ -185,7 +185,7 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            tx.insert(&self.events, &key, Slice::from(row.value));
+            tx.insert(&self.events, &key, Slice::from(frame.value));
         }
 
         // Advance the global counter by the batch size, in the same

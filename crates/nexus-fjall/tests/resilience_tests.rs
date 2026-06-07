@@ -42,7 +42,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
-use nexus_fjall::encoding::{decode_event_value, encode_event_value};
+use nexus_fjall::encoding::{EncodeError, decode_event_value, encode_event_value};
 use nexus_store::GlobalSeq;
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
@@ -755,23 +755,30 @@ fn attack_encoding_null_bytes_in_payload() {
 
 #[test]
 fn attack_encoding_schema_version_boundaries() {
-    // Test schema_version = 0 (should encode fine, but PersistedEnvelope::try_new rejects it)
+    // schema_version = 0 must be rejected at the encoding layer — the
+    // wire builder ([`wire::encode_frame`]) and `PersistedEnvelope::try_new`
+    // both reject 0, restoring write/read symmetry (CLAUDE.md §3, §4).
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 0, "Test", None, b"data").unwrap();
-    let (_, sv, _, _) = decode_ev_slices(&buf);
-    assert_eq!(
-        sv, 0,
-        "schema_version=0 should round-trip in encoding layer"
-    );
+    let result = encode_event_value(&mut buf, 1, 0, "Test", None, b"data");
+    match result {
+        Err(EncodeError::InvalidSchemaVersion) => {}
+        other => panic!("expected InvalidSchemaVersion at encoding layer, got {other:?}"),
+    }
 
-    // Test schema_version = u32::MAX
+    // schema_version = 1 is the minimum valid value and must round-trip.
+    buf.clear();
+    encode_event_value(&mut buf, 1, 1, "Test", None, b"data").unwrap();
+    let (_, sv, _, _) = decode_ev_slices(&buf);
+    assert_eq!(sv, 1, "schema_version=1 must round-trip");
+
+    // schema_version = u32::MAX is the upper boundary and must round-trip.
     buf.clear();
     encode_event_value(&mut buf, 1, u32::MAX, "Test", None, b"data").unwrap();
     let (_, sv, _, _) = decode_ev_slices(&buf);
     assert_eq!(
         sv,
         u32::MAX,
-        "schema_version=u32::MAX should round-trip in encoding layer"
+        "schema_version=u32::MAX must round-trip in encoding layer"
     );
 }
 

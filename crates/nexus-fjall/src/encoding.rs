@@ -35,8 +35,11 @@ pub enum EncodeError {
     #[error("payload too long: {len} bytes (max {})", u32::MAX)]
     PayloadTooLong { len: usize },
 
-    #[error("row length overflow")]
-    RowLengthOverflow,
+    #[error("frame length overflow")]
+    FrameLengthOverflow,
+
+    #[error("schema_version must be > 0 (got 0)")]
+    InvalidSchemaVersion,
 }
 
 impl From<wire::WireError> for EncodeError {
@@ -49,7 +52,8 @@ impl From<wire::WireError> for EncodeError {
                 Self::MetadataTooLong { len: actual }
             }
             wire::WireError::PayloadTooLong { actual, .. } => Self::PayloadTooLong { len: actual },
-            wire::WireError::RowLengthOverflow { .. } => Self::RowLengthOverflow,
+            wire::WireError::FrameLengthOverflow { .. } => Self::FrameLengthOverflow,
+            wire::WireError::InvalidSchemaVersion => Self::InvalidSchemaVersion,
         }
     }
 }
@@ -186,12 +190,12 @@ pub struct DecodedEvent {
     pub metadata_range: Option<std::ops::Range<u32>>,
 }
 
-/// Encode an event value via [`wire::build_row`] into the supplied buffer.
+/// Encode an event value via [`wire::encode_frame`] into the supplied buffer.
 ///
 /// The buffer is cleared and overwritten with the wire-format bytes,
 /// which honor the 16-byte payload alignment invariant. This wrapper
 /// preserves the historical `Vec<u8>`-based API for adapter-local tests
-/// and benches; the canonical builder is [`wire::build_row`].
+/// and benches; the canonical builder is [`wire::encode_frame`].
 ///
 /// # Errors
 ///
@@ -208,25 +212,25 @@ pub fn encode_event_value(
     metadata: Option<&[u8]>,
     payload: &[u8],
 ) -> Result<(), EncodeError> {
-    let row = wire::build_row(global_seq, schema_version, event_type, metadata, payload)?;
+    let frame = wire::encode_frame(global_seq, schema_version, event_type, metadata, payload)?;
     buf.clear();
-    buf.extend_from_slice(&row.value);
+    buf.extend_from_slice(&frame.value);
     Ok(())
 }
 
-/// Decode an event value via [`wire::decode_row`].
+/// Decode an event value via [`wire::decode_frame`].
 ///
 /// Returns the existing [`DecodedEvent`] shape used by fjall's cursor code,
 /// populated from the wire-format header fields and offsets. Validates that
 /// the `event_type` bytes are UTF-8 (an additional check beyond
-/// `wire::decode_row`).
+/// `wire::decode_frame`).
 ///
 /// # Errors
 ///
 /// - [`DecodeError::Wire`] if the wire-format decoder rejects the value.
 /// - [`DecodeError::InvalidUtf8`] if `event_type` bytes are not valid UTF-8.
 pub fn decode_event_value(value: &bytes::Bytes) -> Result<DecodedEvent, DecodeError> {
-    let decoded = wire::decode_row(value.as_ref()).map_err(DecodeError::Wire)?;
+    let decoded = wire::decode_frame(value.as_ref()).map_err(DecodeError::Wire)?;
 
     // UTF-8 validation of event_type at decode (PersistedEnvelope::try_new
     // also validates; this gives early error before envelope construction).

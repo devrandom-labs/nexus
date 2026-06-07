@@ -1,7 +1,9 @@
 #![allow(clippy::unwrap_used, reason = "test code")]
 #![allow(clippy::expect_used, reason = "test code")]
 
-use nexus_fjall::encoding::{encode_event_key, encode_event_value, encode_stream_version};
+use nexus_fjall::encoding::{
+    EncodeError, encode_event_key, encode_event_value, encode_stream_version,
+};
 
 fn hex_dump(bytes: &[u8]) -> String {
     bytes
@@ -104,10 +106,32 @@ fn event_value_typical() {
 }
 
 #[test]
-fn event_value_schema_zero_empty_payload() {
+fn event_value_schema_zero_rejected() {
+    // schema_version=0 is now rejected at the encoding layer to stay
+    // symmetric with `PersistedEnvelope::try_new` (CLAUDE.md §3, §4).
+    // This test pins the new rejection in the snapshot-suite file
+    // alongside the byte-snapshot tests for valid frames.
     let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 0, "Empty", None, b"").unwrap();
-    insta::assert_snapshot!("event_value_schema_zero_empty_payload", hex_dump(&buf));
+    let result = encode_event_value(&mut buf, 1, 0, "Empty", None, b"");
+    assert!(
+        matches!(result, Err(EncodeError::InvalidSchemaVersion)),
+        "encode_event_value must reject schema_version=0, got {result:?}",
+    );
+    assert!(
+        buf.is_empty(),
+        "buffer must remain empty when encoding is rejected",
+    );
+}
+
+#[test]
+fn event_value_schema_min_empty_payload() {
+    // Replacement for the former `event_value_schema_zero_empty_payload`
+    // snapshot. The pair we want to cover is "minimum valid
+    // schema_version + empty payload" — the boundary still exists, but
+    // schema_version=1 is the minimum now that 0 is rejected.
+    let mut buf = Vec::new();
+    encode_event_value(&mut buf, 1, 1, "Empty", None, b"").unwrap();
+    insta::assert_snapshot!("event_value_schema_min_empty_payload", hex_dump(&buf));
 }
 
 #[test]

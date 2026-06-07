@@ -62,7 +62,7 @@ pub enum StoreError<A, EncErr, DecErr> {
     /// [`ZeroCopyEventStore::load_with`](crate::ZeroCopyEventStore::load_with)):
     /// after the user's upcast transforms the event, a fresh aligned
     /// envelope is built from the transformed `event_type` + payload via
-    /// [`wire::build_row`](crate::wire::build_row), and that build can fail
+    /// [`wire::encode_frame`](crate::wire::encode_frame), and that build can fail
     /// if the transform produced a `event_type` longer than 65,535 bytes or
     /// a `payload` longer than `u32::MAX` bytes.
     #[error("wire-format error: {0}")]
