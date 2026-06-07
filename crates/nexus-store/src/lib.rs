@@ -89,6 +89,7 @@ pub mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod upcasting;
+pub mod value;
 pub mod wire;
 
 pub use arrayvec::ArrayString;
