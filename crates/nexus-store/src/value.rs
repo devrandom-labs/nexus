@@ -126,7 +126,7 @@ impl EventType {
     /// behavior in release builds. The `debug_assert!`s below are
     /// diagnostic-only and compiled out in release.
     ///
-    /// The read path ([`crate::envelope::PersistedEnvelope::event_type_owned`])
+    /// The read path ([`crate::envelope::PersistedEnvelope::event_type_value`])
     /// uses this after `try_new` has already validated.
     pub(crate) unsafe fn from_validated_bytes(bytes: Bytes) -> Self {
         debug_assert!(
@@ -208,7 +208,7 @@ impl Payload {
     /// this module and to make the invariant obligation visible at call
     /// sites.
     ///
-    /// The read path ([`crate::envelope::PersistedEnvelope::payload_owned`])
+    /// The read path ([`crate::envelope::PersistedEnvelope::payload_value`])
     /// uses this after the buffer's length has been implicitly capped by
     /// the wire format's `u32` length field.
     pub(crate) unsafe fn from_validated_bytes(bytes: Bytes) -> Self {
@@ -286,7 +286,7 @@ impl Metadata {
     /// `from_validated_bytes` constructors and to make the invariant
     /// obligation visible at call sites.
     ///
-    /// The read path ([`crate::envelope::PersistedEnvelope::metadata_owned`])
+    /// The read path ([`crate::envelope::PersistedEnvelope::metadata_value`])
     /// uses this after the wire decoder has rejected the absent sentinel
     /// into `Option::None`.
     pub(crate) unsafe fn from_validated_bytes(bytes: Bytes) -> Self {
