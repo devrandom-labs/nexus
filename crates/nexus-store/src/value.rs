@@ -10,6 +10,8 @@
 //! `Bytes::from_static` path makes literal event-type names
 //! allocation-free, matching the previous `&'static str` ergonomics.
 
+use std::num::NonZeroU32;
+
 use bytes::Bytes;
 use thiserror::Error;
 
@@ -52,6 +54,8 @@ pub enum ValueError {
     MetadataEmpty,
     #[error("payload length {actual} exceeds maximum {MAX_PAYLOAD_LEN}")]
     PayloadTooLong { actual: usize },
+    #[error("schema_version must be > 0 (got 0)")]
+    SchemaVersionZero,
 }
 
 /// A validated event type name.
@@ -322,6 +326,59 @@ impl Metadata {
     }
 }
 
+/// Validated schema version — the wire-format-sized sibling of the kernel's
+/// [`nexus::Version`].
+///
+/// Invariant: nonzero, fits in `u32` (the wire format's schema-version field).
+///
+/// The kernel's `Version` is `NonZeroU64` because aggregate streams can
+/// in principle be unboundedly long; `SchemaVersion` is `NonZeroU32`
+/// because the wire format chose that width. Same invariant, different
+/// width — explicit total conversion to `Version` is provided for the
+/// upcaster path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SchemaVersion(NonZeroU32);
+
+impl SchemaVersion {
+    /// The initial schema version (`1`).
+    pub const INITIAL: Self = Self(NonZeroU32::MIN);
+
+    /// Construct from a `NonZeroU32`. Infallible.
+    #[must_use]
+    pub const fn new(value: NonZeroU32) -> Self {
+        Self(value)
+    }
+
+    /// Construct from a raw `u32`, validating the nonzero invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValueError::SchemaVersionZero`] if `value == 0`.
+    pub fn from_u32(value: u32) -> Result<Self, ValueError> {
+        NonZeroU32::new(value)
+            .map(Self)
+            .ok_or(ValueError::SchemaVersionZero)
+    }
+
+    /// The inner `u32` value (always > 0).
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl From<SchemaVersion> for nexus::Version {
+    /// Widen to the kernel's `Version` (`NonZeroU64`). Total — `NonZeroU32`
+    /// always fits in `NonZeroU64`.
+    #[allow(
+        clippy::expect_used,
+        reason = "NonZeroU32 widened to u64 is structurally nonzero; the None arm of Version::new is unreachable"
+    )]
+    fn from(sv: SchemaVersion) -> Self {
+        Self::new(u64::from(sv.get())).expect("NonZeroU32 widened to u64 is nonzero")
+    }
+}
+
 #[cfg(test)]
 mod event_type_tests {
     use super::*;
@@ -434,5 +491,42 @@ mod metadata_tests {
         let m = Metadata::from_bytes(Bytes::from_static(b"m")).expect("valid");
         let bytes = m.into_bytes();
         assert_eq!(bytes.as_ref(), b"m");
+    }
+}
+
+#[cfg(test)]
+mod schema_version_tests {
+    use super::*;
+    use std::num::NonZeroU32;
+
+    #[test]
+    fn new_accepts_nonzero() {
+        let nz = NonZeroU32::new(1).expect("nonzero");
+        let sv = SchemaVersion::new(nz);
+        assert_eq!(sv.get(), 1);
+    }
+
+    #[test]
+    fn initial_is_one() {
+        assert_eq!(SchemaVersion::INITIAL.get(), 1);
+    }
+
+    #[test]
+    fn from_u32_accepts_nonzero() {
+        let sv = SchemaVersion::from_u32(42).expect("nonzero");
+        assert_eq!(sv.get(), 42);
+    }
+
+    #[test]
+    fn from_u32_rejects_zero() {
+        let err = SchemaVersion::from_u32(0).expect_err("zero rejected");
+        assert!(matches!(err, ValueError::SchemaVersionZero));
+    }
+
+    #[test]
+    fn into_version_widens_to_nonzero_u64() {
+        let sv = SchemaVersion::from_u32(7).expect("nonzero");
+        let v: nexus::Version = sv.into();
+        assert_eq!(v.as_u64(), 7);
     }
 }
