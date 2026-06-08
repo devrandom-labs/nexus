@@ -20,6 +20,7 @@ use crate::envelope::{PersistedEnvelope, pending_envelope};
 use crate::error::{AppendError, LoadWithError, StoreError};
 use crate::store::{RawEventStore, Store};
 use crate::upcasting::EventMorsel;
+use crate::value::SchemaVersion;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Repository<A> — high-level aggregate facade (load + save)
@@ -433,8 +434,8 @@ where
 
         let envelope = pending_envelope(next_version)
             .event_type(event_name)
-            .payload(payload)
-            .schema_version(schema_nz32)
+            .payload(payload)?
+            .schema_version(SchemaVersion::new(schema_nz32))
             .build();
 
         envelopes.push(envelope);
@@ -725,8 +726,8 @@ where
 
         let envelope = pending_envelope(next_version)
             .event_type(event_name)
-            .payload(payload)
-            .schema_version(schema_nz32)
+            .payload(payload)?
+            .schema_version(SchemaVersion::new(schema_nz32))
             .build();
 
         envelopes.push(envelope);

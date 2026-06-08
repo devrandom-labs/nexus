@@ -264,14 +264,17 @@ async fn append_rejects_backwards_versions() {
         pending_envelope(Version::new(3).unwrap())
             .event_type("E")
             .payload(vec![3])
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(2).unwrap())
             .event_type("E")
             .payload(vec![2])
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(1).unwrap())
             .event_type("E")
             .payload(vec![1])
+            .expect("valid payload")
             .build(),
     ];
 
@@ -311,6 +314,7 @@ proptest! {
         let envelope = pending_envelope(Version::INITIAL)
             .event_type("E")
             .payload(payload.clone())
+            .expect("valid payload")
             .build();
         prop_assert_eq!(envelope.payload(), payload.as_slice());
     }
@@ -330,6 +334,7 @@ proptest! {
                     pending_envelope(Version::new(v).unwrap())
                         .event_type("E")
                         .payload(vec![v as u8])
+                        .expect("valid payload")
                         .build()
                 })
                 .collect();
@@ -461,7 +466,9 @@ fn bug_probe_metadata_bytes_stored_correctly() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("E")
         .payload(vec![])
-        .with_metadata(meta.clone());
+        .expect("valid payload")
+        .with_metadata(meta.clone())
+        .expect("valid metadata");
 
     assert_eq!(envelope.version(), Version::INITIAL);
     assert_eq!(envelope.metadata(), Some(meta.as_slice()));

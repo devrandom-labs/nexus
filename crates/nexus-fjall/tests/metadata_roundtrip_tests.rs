@@ -57,7 +57,9 @@ async fn metadata_roundtrips_across_multiple_events() {
             pending_envelope(Version::new(i).unwrap())
                 .event_type("Test")
                 .payload(Bytes::from(format!("payload-{i}")))
+                .expect("valid payload")
                 .with_metadata(Bytes::from(format!("meta-{i}")))
+                .expect("valid metadata")
         })
         .collect();
 
@@ -98,7 +100,9 @@ async fn metadata_survives_store_reopen() {
         let env = pending_envelope(Version::INITIAL)
             .event_type("X")
             .payload(Bytes::from_static(b"payload"))
-            .with_metadata(Bytes::from_static(b"important-meta"));
+            .expect("valid payload")
+            .with_metadata(Bytes::from_static(b"important-meta"))
+            .expect("valid metadata");
         store
             .append(&StreamName("reopen-stream"), None, &[env])
             .await
@@ -130,6 +134,7 @@ async fn none_metadata_roundtrips_as_none() {
     let pending = pending_envelope(Version::INITIAL)
         .event_type("X")
         .payload(Bytes::from_static(b"payload"))
+        .expect("valid payload")
         .build(); // no metadata
     store.append(&id, None, &[pending]).await.unwrap();
 

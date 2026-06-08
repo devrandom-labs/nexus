@@ -396,6 +396,7 @@ mod tests {
         pending_envelope(Version::new(version).expect("test version must be > 0"))
             .event_type(event_type)
             .payload(payload.to_vec())
+            .expect("valid payload")
             .build()
     }
 

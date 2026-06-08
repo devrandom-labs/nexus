@@ -80,6 +80,7 @@ fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
             pending_envelope(Version::new(version_num).unwrap())
                 .event_type(leak_event_type("TestEvent"))
                 .payload(p.clone())
+                .expect("valid payload")
                 .build()
         })
         .collect()

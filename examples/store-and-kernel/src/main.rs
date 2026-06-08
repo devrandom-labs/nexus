@@ -226,6 +226,7 @@ fn encode_decided(
             pending_envelope(ver)
                 .event_type(event.name())
                 .payload(payload)
+                .expect("valid payload")
                 .build()
         })
         .collect()

@@ -1,5 +1,6 @@
 #![cfg(feature = "testing")]
 #![allow(clippy::unwrap_used, reason = "tests")]
+#![allow(clippy::expect_used, reason = "tests")]
 #![allow(clippy::panic, reason = "tests")]
 
 use std::sync::Arc;
@@ -40,6 +41,7 @@ fn make_envelope(version: u64, event_type: &'static str) -> nexus_store::Pending
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(format!("payload-{version}").into_bytes())
+        .expect("valid payload")
         .build()
 }
 

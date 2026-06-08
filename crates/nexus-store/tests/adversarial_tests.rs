@@ -63,6 +63,7 @@ fn max_version_envelope() {
     let envelope = pending_envelope(Version::new(u64::MAX).unwrap())
         .event_type("Event")
         .payload(vec![])
+        .expect("valid payload")
         .build();
 
     assert_eq!(envelope.version().as_u64(), u64::MAX);
@@ -86,6 +87,7 @@ fn empty_payload() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("EmptyEvent")
         .payload(vec![])
+        .expect("valid payload")
         .build();
 
     assert!(envelope.payload().is_empty());
@@ -103,6 +105,7 @@ fn large_payload() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("LargeEvent")
         .payload(payload)
+        .expect("valid payload")
         .build();
 
     assert_eq!(envelope.payload().len(), size);

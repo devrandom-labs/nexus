@@ -69,6 +69,7 @@ fn c2_builder_accepts_empty_event_type() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("")
         .payload(vec![1])
+        .expect("valid payload")
         .build();
     assert_eq!(envelope.event_type(), "");
 }
@@ -115,14 +116,17 @@ async fn h5_append_with_non_sequential_versions() {
         pending_envelope(Version::new(3).unwrap())
             .event_type("E")
             .payload(vec![])
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(1).unwrap())
             .event_type("E")
             .payload(vec![])
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(5).unwrap())
             .event_type("E")
             .payload(vec![])
+            .expect("valid payload")
             .build(),
     ];
 
@@ -148,10 +152,12 @@ async fn h5_append_with_duplicate_versions() {
         pending_envelope(Version::INITIAL)
             .event_type("E")
             .payload(vec![])
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::INITIAL)
             .event_type("E")
             .payload(vec![])
+            .expect("valid payload")
             .build(), // dup!
     ];
 
@@ -186,10 +192,12 @@ fn m2_pending_envelope_no_partial_eq() {
     let e1 = pending_envelope(Version::INITIAL)
         .event_type("E")
         .payload(vec![1])
+        .expect("valid payload")
         .build();
     let e2 = pending_envelope(Version::INITIAL)
         .event_type("E")
         .payload(vec![1])
+        .expect("valid payload")
         .build();
     // Can't do assert_eq!(e1, e2) — no PartialEq
     // So we compare field by field
@@ -227,12 +235,14 @@ async fn streams_are_isolated() {
         pending_envelope(Version::INITIAL)
             .event_type("EventA")
             .payload(vec![1])
+            .expect("valid payload")
             .build(),
     ];
     let e2 = vec![
         pending_envelope(Version::INITIAL)
             .event_type("EventB")
             .payload(vec![2])
+            .expect("valid payload")
             .build(),
     ];
 
@@ -280,5 +290,6 @@ fn store_error_variants_are_known() {
         StoreError::Kernel(_) => {}
         StoreError::VersionOverflow => {} // If you add a variant, add it here
         StoreError::Wire(_) => {}
+        StoreError::Envelope(_) => {}
     }
 }

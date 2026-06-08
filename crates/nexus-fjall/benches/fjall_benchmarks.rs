@@ -48,6 +48,7 @@ fn make_envelope(version: u64, payload: &[u8]) -> nexus_store::PendingEnvelope {
     pending_envelope(Version::new(version).unwrap())
         .event_type("BenchEvent")
         .payload(payload.to_vec())
+        .expect("valid payload")
         .build()
 }
 

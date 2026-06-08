@@ -162,7 +162,7 @@ fn snapshot_store() -> InMemorySnapshotStore<CountState, Version> {
 async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[TestEvent]) {
     let codec = TestEventCodec;
     let current_len = {
-        let mut stream = store
+        let stream = store
             .read_stream(stream_id, Version::INITIAL)
             .await
             .unwrap();
@@ -179,6 +179,7 @@ async fn append_events(store: &InMemoryStore, stream_id: &TestId, events: &[Test
             pending_envelope(ver)
                 .event_type(event.name())
                 .payload(payload)
+                .expect("valid payload")
                 .build()
         })
         .collect();
@@ -900,6 +901,7 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
     let bad_envelope = pending_envelope(Version::new(1).unwrap())
         .event_type("Added")
         .payload(vec![0xFF]) // invalid: too short
+        .expect("valid payload")
         .build();
     store
         .append(&stream_id, None, &[bad_envelope])

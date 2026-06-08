@@ -49,6 +49,7 @@ fn make_envelopes(start: u64, count: u64) -> Vec<nexus_store::envelope::PendingE
             pending_envelope(Version::new(v).unwrap())
                 .event_type("Event")
                 .payload(v.to_le_bytes().to_vec())
+                .expect("valid payload")
                 .build()
         })
         .collect()

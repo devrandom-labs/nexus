@@ -67,6 +67,17 @@ pub enum StoreError<A, EncErr, DecErr> {
     /// a `payload` longer than `u32::MAX` bytes.
     #[error("wire-format error: {0}")]
     Wire(#[source] crate::wire::WireError),
+
+    /// Envelope construction rejected user-supplied bytes
+    /// (payload exceeded its size cap, or another value-newtype invariant).
+    ///
+    /// Raised on the save path when an encoded payload violates the
+    /// invariants enforced by the [`PendingEnvelope`](crate::PendingEnvelope)
+    /// builder. The schema-version-zero case is not reachable from the
+    /// typed-repository save path because `SchemaVersion` is constructed
+    /// from `NonZeroU32`.
+    #[error("envelope error: {0}")]
+    Envelope(#[from] crate::envelope::EnvelopeError),
 }
 
 /// Errors from the with-upcaster load path.

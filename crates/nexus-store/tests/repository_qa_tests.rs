@@ -847,6 +847,7 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
     let legacy = pending_envelope(Version::INITIAL)
         .event_type("Delta")
         .payload(5_i32.to_le_bytes().to_vec())
+        .expect("valid payload")
         .build(); // schema_version defaults to 1
     raw_store
         .append(&CounterId("counter-1".into()), None, &[legacy])
@@ -883,6 +884,7 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
     let legacy = pending_envelope(Version::INITIAL)
         .event_type("Delta")
         .payload(5_i32.to_le_bytes().to_vec())
+        .expect("valid payload")
         .build(); // schema_version defaults to 1
     raw_store
         .append(&CounterId("counter-1".into()), None, &[legacy])
@@ -1451,10 +1453,12 @@ async fn d11_schema_version_always_one() {
         pending_envelope(Version::INITIAL)
             .event_type("Incremented")
             .payload(b"inc".to_vec())
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(2).unwrap())
             .event_type("Set")
             .payload(b"set:42".to_vec())
+            .expect("valid payload")
             .build(),
     ];
     store
