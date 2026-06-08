@@ -48,12 +48,12 @@ pub enum ValueError {
         #[source]
         source: std::str::Utf8Error,
     },
+    #[error("payload length {actual} exceeds maximum {MAX_PAYLOAD_LEN}")]
+    PayloadTooLong { actual: usize },
     #[error("metadata length {actual} exceeds maximum {MAX_METADATA_LEN}")]
     MetadataTooLong { actual: usize },
     #[error("metadata is empty; use Option::None to represent absent metadata")]
     MetadataEmpty,
-    #[error("payload length {actual} exceeds maximum {MAX_PAYLOAD_LEN}")]
-    PayloadTooLong { actual: usize },
     #[error("schema_version must be > 0 (got 0)")]
     SchemaVersionZero,
 }
@@ -438,6 +438,19 @@ mod event_type_tests {
             "Debug should be tight (no padding/extra fields): got {} chars: {dbg}",
             dbg.len(),
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds MAX_EVENT_TYPE_LEN")]
+    fn from_static_str_panics_on_leaked_oversize_string() {
+        // Box::leak of a runtime-built String over MAX_EVENT_TYPE_LEN is the
+        // pathological case the runtime assert! catches. A future refactor
+        // that turns the assert! into debug_assert! (compiled out in release)
+        // would regress this guard silently — this test makes that regression
+        // a hard error.
+        let big = "a".repeat(MAX_EVENT_TYPE_LEN + 1);
+        let leaked: &'static str = Box::leak(big.into_boxed_str());
+        let _ = EventType::from_static_str(leaked);
     }
 }
 
