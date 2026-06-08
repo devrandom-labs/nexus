@@ -165,6 +165,75 @@ impl EventType {
     }
 }
 
+/// A validated event payload.
+///
+/// Invariant: length ≤ [`MAX_PAYLOAD_LEN`].
+///
+/// Backed by [`Bytes`] for Arc-shared ownership. Empty payloads are
+/// accepted — unlike [`Metadata`], an empty payload is a legal event
+/// shape (e.g., a marker event with no data).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Payload {
+    inner: Bytes,
+}
+
+impl Payload {
+    /// Construct from arbitrary bytes, validating the size cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValueError::PayloadTooLong`] if `bytes.len() > MAX_PAYLOAD_LEN`.
+    pub fn from_bytes(bytes: Bytes) -> Result<Self, ValueError> {
+        if bytes.len() > MAX_PAYLOAD_LEN {
+            return Err(ValueError::PayloadTooLong {
+                actual: bytes.len(),
+            });
+        }
+        Ok(Self { inner: bytes })
+    }
+
+    /// Construct from already-validated bytes — crate-internal fast path.
+    ///
+    /// # Safety
+    ///
+    /// The caller MUST guarantee `bytes.len() <= MAX_PAYLOAD_LEN`.
+    ///
+    /// Violating the invariant does not produce undefined behavior in this
+    /// type's own methods (no `unsafe` consumers), but it will corrupt the
+    /// wire encoding downstream when [`crate::wire::encode_frame`] tries
+    /// to fit the length into a `u32` field. Marked `unsafe` for
+    /// consistency with the other `from_validated_bytes` constructors in
+    /// this module and to make the invariant obligation visible at call
+    /// sites.
+    ///
+    /// The read path ([`crate::envelope::PersistedEnvelope::payload_owned`],
+    /// added in a later PR) uses this after the buffer's length has been
+    /// implicitly capped by the wire format's `u32` length field.
+    #[expect(
+        dead_code,
+        reason = "wired up by the PersistedEnvelope read-path task later in this PR series"
+    )]
+    pub(crate) unsafe fn from_validated_bytes(bytes: Bytes) -> Self {
+        debug_assert!(
+            bytes.len() <= MAX_PAYLOAD_LEN,
+            "from_validated_bytes invariant: length ≤ MAX_PAYLOAD_LEN"
+        );
+        Self { inner: bytes }
+    }
+
+    /// Borrow as `&[u8]`. Zero-cost.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.inner
+    }
+
+    /// Take ownership of the inner [`Bytes`] (one Arc share, no copy).
+    #[must_use]
+    pub fn into_bytes(self) -> Bytes {
+        self.inner
+    }
+}
+
 #[cfg(test)]
 mod event_type_tests {
     use super::*;
@@ -225,4 +294,32 @@ mod event_type_tests {
             dbg.len(),
         );
     }
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn from_bytes_accepts_empty() {
+        let p = Payload::from_bytes(Bytes::new()).expect("empty payload is valid");
+        assert!(p.as_slice().is_empty());
+    }
+
+    #[test]
+    fn from_bytes_accepts_small() {
+        let p = Payload::from_bytes(Bytes::from_static(b"hello")).expect("valid");
+        assert_eq!(p.as_slice(), b"hello");
+    }
+
+    #[test]
+    fn into_bytes_returns_inner_arc() {
+        let p = Payload::from_bytes(Bytes::from_static(b"payload")).expect("valid");
+        let bytes = p.into_bytes();
+        assert_eq!(bytes.as_ref(), b"payload");
+    }
+
+    // Note: oversize check (length > MAX_PAYLOAD_LEN = u32::MAX) is
+    // covered by the property tests in Task 1.6 with a synthetic length
+    // boundary. Allocating ~4 GB in a unit test is impractical.
 }
