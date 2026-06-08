@@ -401,6 +401,75 @@ impl PersistedEnvelope {
         self.metadata_range.as_ref().map(|r| self.slice_range(r))
     }
 
+    /// Owned, validated event type — one Arc share over the underlying buffer.
+    ///
+    /// The UTF-8 and size invariants were established at `try_new` time;
+    /// this constructor skips re-validation via the crate-internal
+    /// `from_validated_bytes` path.
+    #[must_use]
+    pub fn event_type_owned(&self) -> EventType {
+        // SAFETY: `PersistedEnvelope::try_new` validated the
+        // `event_type_range` slice as UTF-8, and `check_range` ensured
+        // `event_type_range.end <= value.len()`. `event_type_range` is a
+        // `Range<u32>`, so the slice length is bounded by `u32::MAX`, which
+        // is well within `MAX_EVENT_TYPE_LEN = u16::MAX` only when the
+        // upstream decoder respected the wire-format `u16` length field —
+        // which `check_range` indirectly enforces via the buffer's own
+        // length bound. The `Bytes` returned by `event_type_bytes()` is a
+        // slice of the same validated buffer, preserving both invariants.
+        #[allow(
+            unsafe_code,
+            reason = "UTF-8 + size invariants established at PersistedEnvelope::try_new"
+        )]
+        unsafe {
+            EventType::from_validated_bytes(self.event_type_bytes())
+        }
+    }
+
+    /// Owned, validated payload — one Arc share over the underlying buffer.
+    #[must_use]
+    pub fn payload_owned(&self) -> Payload {
+        // SAFETY: `PersistedEnvelope::try_new` validated `payload_range`
+        // against `value.len()` via `check_range`. The range is a
+        // `Range<u32>`, so the resulting slice length is bounded by
+        // `u32::MAX = MAX_PAYLOAD_LEN`. `payload_bytes()` returns a slice
+        // of the same validated buffer.
+        #[allow(
+            unsafe_code,
+            reason = "size invariant established at PersistedEnvelope::try_new"
+        )]
+        unsafe {
+            Payload::from_validated_bytes(self.payload_bytes())
+        }
+    }
+
+    /// Owned, validated metadata — one Arc share per `Some` over the
+    /// underlying buffer.
+    ///
+    /// Returns `None` when the wire-level absent sentinel was present.
+    /// "Present but empty" metadata is structurally disallowed by the
+    /// [`Metadata`] invariant.
+    #[must_use]
+    pub fn metadata_owned(&self) -> Option<Metadata> {
+        self.metadata_bytes().map(|b| {
+            // SAFETY: `PersistedEnvelope::try_new` validated `metadata_range`
+            // against `value.len()` via `check_range`; `MAX_METADATA_LEN =
+            // u32::MAX - 1` accommodates any `Range<u32>`. `metadata_bytes()`
+            // returns `Some` only when `metadata_range` is `Some`, i.e. the
+            // wire frame carried real metadata (not the `u32::MAX` absent
+            // sentinel), so the slice is non-empty by wire-layer
+            // construction.
+            #[allow(
+                unsafe_code,
+                reason = "non-empty + size invariants established at PersistedEnvelope::try_new \
+                          and the wire-format absent sentinel"
+            )]
+            unsafe {
+                Metadata::from_validated_bytes(b)
+            }
+        })
+    }
+
     /// The schema version as a `Version` for upcaster APIs.
     ///
     /// # Panics
@@ -619,5 +688,72 @@ mod tests {
         )
         .expect_err("must reject non-UTF-8 event_type");
         assert!(matches!(err, EnvelopeError::InvalidUtf8 { .. }));
+    }
+
+    #[test]
+    fn persisted_envelope_event_type_owned_returns_validated_value_newtype() {
+        let env = PersistedEnvelope::try_new(
+            Version::INITIAL,
+            crate::store::GlobalSeq::new(1).expect("nonzero"),
+            Bytes::from_static(b"TYPEpayload"),
+            1,
+            0..4,
+            4..11,
+            None,
+        )
+        .expect("valid");
+
+        let et = env.event_type_owned();
+        assert_eq!(et.as_str(), "TYPE");
+    }
+
+    #[test]
+    fn persisted_envelope_payload_owned_returns_validated_value_newtype() {
+        let env = PersistedEnvelope::try_new(
+            Version::INITIAL,
+            crate::store::GlobalSeq::new(1).expect("nonzero"),
+            Bytes::from_static(b"TYPEpayload"),
+            1,
+            0..4,
+            4..11,
+            None,
+        )
+        .expect("valid");
+
+        let p = env.payload_owned();
+        assert_eq!(p.as_slice(), b"payload");
+    }
+
+    #[test]
+    fn persisted_envelope_metadata_owned_returns_some_when_present() {
+        let env = PersistedEnvelope::try_new(
+            Version::INITIAL,
+            crate::store::GlobalSeq::new(1).expect("nonzero"),
+            Bytes::from_static(b"TYPEpayloadMETA"),
+            1,
+            0..4,
+            4..11,
+            Some(11..15),
+        )
+        .expect("valid");
+
+        let m = env.metadata_owned().expect("present");
+        assert_eq!(m.as_slice(), b"META");
+    }
+
+    #[test]
+    fn persisted_envelope_metadata_owned_returns_none_when_absent() {
+        let env = PersistedEnvelope::try_new(
+            Version::INITIAL,
+            crate::store::GlobalSeq::new(1).expect("nonzero"),
+            Bytes::from_static(b"TYPEpayload"),
+            1,
+            0..4,
+            4..11,
+            None,
+        )
+        .expect("valid");
+
+        assert!(env.metadata_owned().is_none());
     }
 }
