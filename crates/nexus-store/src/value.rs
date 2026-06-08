@@ -563,13 +563,6 @@ mod property_tests {
         }
 
         #[test]
-        fn metadata_empty_always_rejected(_ in Just(())) {
-            let err = Metadata::from_bytes(Bytes::new())
-                .expect_err("empty metadata always rejected");
-            prop_assert!(matches!(err, ValueError::MetadataEmpty));
-        }
-
-        #[test]
         fn event_type_invalid_utf8_always_rejected(
             bytes in proptest::collection::vec(any::<u8>(), 1..256),
         ) {
@@ -606,6 +599,12 @@ mod property_tests {
 
     // Pure unit tests for the structural boundaries that proptest can't
     // exercise cheaply (4 GiB+ allocations).
+    #[test]
+    fn metadata_empty_always_rejected() {
+        let err = Metadata::from_bytes(Bytes::new()).expect_err("empty metadata always rejected");
+        assert!(matches!(err, ValueError::MetadataEmpty));
+    }
+
     #[test]
     fn schema_version_zero_rejected() {
         let err = SchemaVersion::from_u32(0).expect_err("zero rejected");
