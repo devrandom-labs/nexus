@@ -465,6 +465,10 @@ fn execute(plan: FramePlan<'_>) -> EncodedFrame {
 
 /// Build one frame buffer with payload aligned to [`PAYLOAD_ALIGN`].
 ///
+/// Argument order: `(global_seq, schema_version, &event_type, &payload, metadata)`.
+/// `payload` precedes `metadata` to keep the optional argument trailing per
+/// Rust API conventions.
+///
 /// Layout:
 ///
 /// ```text

@@ -289,7 +289,7 @@ fn store_error_variants_are_known() {
         StoreError::Adapter(_) => {}
         StoreError::Kernel(_) => {}
         StoreError::VersionOverflow => {} // If you add a variant, add it here
-        StoreError::Wire(_) => {}
+        StoreError::EnvelopeSynthesis(_) => {}
         StoreError::Envelope(_) => {}
     }
 }

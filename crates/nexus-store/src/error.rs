@@ -67,7 +67,7 @@ pub enum StoreError<A, EncErr, DecErr> {
     /// `event_type`/`payload`), the wire encode (`FrameLengthOverflow`),
     /// or the envelope construction (range invariants).
     #[error("envelope synthesis error: {0}")]
-    Wire(#[source] crate::envelope::ForDecodeError),
+    EnvelopeSynthesis(#[source] crate::envelope::ForDecodeError),
 
     /// Envelope construction rejected user-supplied bytes
     /// (payload exceeded its size cap, or another value-newtype invariant).

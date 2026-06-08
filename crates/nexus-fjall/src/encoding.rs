@@ -26,8 +26,13 @@ pub enum EncodeError {
     #[error("stream ID too long: {len} bytes (max {})", u16::MAX)]
     IdTooLong { len: usize },
 
-    #[error("frame length overflow")]
-    FrameLengthOverflow,
+    /// Wire-format build failure (e.g. `FrameLengthOverflow`). Wraps
+    /// [`wire::WireError`] verbatim via `#[from]` so the source error's
+    /// structured fields (header / padding / payload sizes) survive
+    /// through the encoding-layer boundary instead of being collapsed
+    /// to a bare variant.
+    #[error(transparent)]
+    Wire(#[from] wire::WireError),
 
     /// Value newtype rejected an input (oversize `event_type` / payload /
     /// metadata, invalid UTF-8 in `event_type`, empty metadata, or zero
@@ -36,14 +41,6 @@ pub enum EncodeError {
     /// rejection at the encoding-layer boundary.
     #[error(transparent)]
     Value(#[from] nexus_store::value::ValueError),
-}
-
-impl From<wire::WireError> for EncodeError {
-    fn from(e: wire::WireError) -> Self {
-        match e {
-            wire::WireError::FrameLengthOverflow { .. } => Self::FrameLengthOverflow,
-        }
-    }
 }
 
 /// Size of the event key header: `[u16 BE id_len]`.

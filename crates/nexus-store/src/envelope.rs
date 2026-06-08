@@ -354,7 +354,7 @@ impl PersistedEnvelope {
         // newtypes; mirroring them here makes `event_type_value` /
         // `metadata_value` sound without re-validation.
         let et_range_len = event_type_range.end - event_type_range.start;
-        if usize::try_from(et_range_len).unwrap_or(usize::MAX) > MAX_EVENT_TYPE_LEN {
+        if idx(et_range_len) > MAX_EVENT_TYPE_LEN {
             return Err(EnvelopeError::EventTypeRangeTooLong {
                 actual: et_range_len,
                 max: MAX_EVENT_TYPE_LEN,
@@ -365,7 +365,7 @@ impl PersistedEnvelope {
             if meta_range_len == 0 {
                 return Err(EnvelopeError::MetadataRangeEmpty);
             }
-            if usize::try_from(meta_range_len).unwrap_or(usize::MAX) > MAX_METADATA_LEN {
+            if idx(meta_range_len) > MAX_METADATA_LEN {
                 return Err(EnvelopeError::MetadataRangeTooLong {
                     actual: meta_range_len,
                     max: MAX_METADATA_LEN,
@@ -696,6 +696,34 @@ mod tests {
         )
         .expect_err("must reject out-of-bounds range");
         assert!(matches!(err, EnvelopeError::RangeOutOfBounds { .. }));
+    }
+
+    #[test]
+    fn try_new_rejects_event_type_range_too_long() {
+        let len = MAX_EVENT_TYPE_LEN + 1;
+        let mut buf = vec![0u8; len];
+        // Fill with valid UTF-8 (all-zeros is valid UTF-8 ASCII).
+        buf[0] = b'A';
+        let value = Bytes::from(buf);
+        let too_long_end = u32::try_from(len).expect("len fits in u32 by construction");
+
+        let err = PersistedEnvelope::try_new(
+            Version::INITIAL,
+            crate::store::GlobalSeq::new(1).expect("nonzero"),
+            value,
+            SchemaVersion::INITIAL,
+            0..too_long_end,
+            too_long_end..too_long_end,
+            None,
+        )
+        .expect_err("event_type range > MAX_EVENT_TYPE_LEN must be rejected");
+
+        let expected_actual = u32::try_from(len).expect("len fits in u32 by construction (above)");
+        assert!(matches!(
+            err,
+            EnvelopeError::EventTypeRangeTooLong { actual, max }
+                if actual == expected_actual && max == MAX_EVENT_TYPE_LEN
+        ));
     }
 
     #[test]
