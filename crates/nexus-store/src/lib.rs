@@ -89,6 +89,7 @@ pub mod stream;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod upcasting;
+pub mod value;
 pub mod wire;
 
 pub use arrayvec::ArrayString;
@@ -120,3 +121,4 @@ pub use stream::EventStream;
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::EventMorsel;
+pub use value::{EventType, Metadata, Payload, SchemaVersion, ValueError};
