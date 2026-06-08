@@ -530,3 +530,103 @@ mod schema_version_tests {
         assert_eq!(v.as_u64(), 7);
     }
 }
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use bytes::Bytes;
+    use proptest::prelude::*;
+    use std::num::NonZeroU32;
+
+    proptest! {
+        #[test]
+        fn event_type_from_bytes_roundtrips_valid_utf8(s in "[a-zA-Z][a-zA-Z0-9_]{0,63}") {
+            let bytes = Bytes::from(s.clone().into_bytes());
+            let et = EventType::from_bytes(bytes).expect("valid");
+            prop_assert_eq!(et.as_str(), &s);
+        }
+
+        #[test]
+        fn payload_arbitrary_bytes_within_cap_accepted(
+            buf in proptest::collection::vec(any::<u8>(), 0..4096),
+        ) {
+            let p = Payload::from_bytes(Bytes::from(buf.clone())).expect("under cap");
+            prop_assert_eq!(p.as_slice(), buf.as_slice());
+        }
+
+        #[test]
+        fn metadata_nonempty_within_cap_accepted(
+            buf in proptest::collection::vec(any::<u8>(), 1..4096),
+        ) {
+            let m = Metadata::from_bytes(Bytes::from(buf.clone())).expect("nonempty, under cap");
+            prop_assert_eq!(m.as_slice(), buf.as_slice());
+        }
+
+        #[test]
+        fn metadata_empty_always_rejected(_ in Just(())) {
+            let err = Metadata::from_bytes(Bytes::new())
+                .expect_err("empty metadata always rejected");
+            prop_assert!(matches!(err, ValueError::MetadataEmpty));
+        }
+
+        #[test]
+        fn event_type_invalid_utf8_always_rejected(
+            bytes in proptest::collection::vec(any::<u8>(), 1..256),
+        ) {
+            // Filter to bytes containing 0xFE or 0xFF, which are never valid
+            // UTF-8 start bytes — guarantees the input is invalid UTF-8.
+            prop_assume!(bytes.iter().any(|&b| b == 0xFEu8 || b == 0xFFu8));
+            let result = EventType::from_bytes(Bytes::from(bytes));
+            prop_assert!(result.is_err());
+        }
+
+        #[test]
+        fn schema_version_from_u32_roundtrips_nonzero(value in 1u32..) {
+            let sv = SchemaVersion::from_u32(value).expect("nonzero");
+            prop_assert_eq!(sv.get(), value);
+        }
+
+        #[test]
+        fn schema_version_widens_to_version(value in 1u32..) {
+            let sv = SchemaVersion::from_u32(value).expect("nonzero");
+            let v: nexus::Version = sv.into();
+            prop_assert_eq!(v.as_u64(), u64::from(value));
+        }
+
+        #[test]
+        fn schema_version_ord_agrees_with_inner_u32_ord(
+            a in 1u32..,
+            b in 1u32..,
+        ) {
+            let sa = SchemaVersion::from_u32(a).expect("nonzero");
+            let sb = SchemaVersion::from_u32(b).expect("nonzero");
+            prop_assert_eq!(sa.cmp(&sb), a.cmp(&b));
+        }
+    }
+
+    // Pure unit tests for the structural boundaries that proptest can't
+    // exercise cheaply (4 GiB+ allocations).
+    #[test]
+    fn schema_version_zero_rejected() {
+        let err = SchemaVersion::from_u32(0).expect_err("zero rejected");
+        assert!(matches!(err, ValueError::SchemaVersionZero));
+    }
+
+    #[test]
+    fn schema_version_initial_equals_one() {
+        assert_eq!(SchemaVersion::INITIAL.get(), 1);
+    }
+
+    #[test]
+    fn schema_version_initial_widens_to_version_one() {
+        let v: nexus::Version = SchemaVersion::INITIAL.into();
+        assert_eq!(v.as_u64(), 1);
+    }
+
+    #[test]
+    fn schema_version_new_from_nonzero_construction() {
+        let nz = NonZeroU32::new(99).expect("nonzero");
+        let sv = SchemaVersion::new(nz);
+        assert_eq!(sv.get(), 99);
+    }
+}

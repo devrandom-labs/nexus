@@ -121,3 +121,4 @@ pub use stream::EventStream;
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::EventMorsel;
+pub use value::{EventType, Metadata, Payload, SchemaVersion, ValueError};
