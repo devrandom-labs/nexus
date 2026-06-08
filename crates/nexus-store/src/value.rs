@@ -48,6 +48,8 @@ pub enum ValueError {
     },
     #[error("metadata length {actual} exceeds maximum {MAX_METADATA_LEN}")]
     MetadataTooLong { actual: usize },
+    #[error("metadata is empty; use Option::None to represent absent metadata")]
+    MetadataEmpty,
     #[error("payload length {actual} exceeds maximum {MAX_PAYLOAD_LEN}")]
     PayloadTooLong { actual: usize },
 }
@@ -234,6 +236,92 @@ impl Payload {
     }
 }
 
+/// Validated envelope metadata.
+///
+/// Invariants:
+/// - Length is in `1..=MAX_METADATA_LEN`. Empty metadata is rejected —
+///   use `Option::<Metadata>::None` to represent "absent." This avoids
+///   the `bytes::Bytes::slice(empty)` footgun where an empty slice
+///   orphans from the parent buffer's `STATIC_VTABLE` (the footgun is
+///   documented on [`crate::envelope::PersistedEnvelope::metadata_bytes`]).
+/// - The non-empty invariant is wire-format-driven: `u32::MAX` is the
+///   absent-metadata sentinel in the wire encoding, so `Some(Metadata)`
+///   on the read path always carries actual bytes.
+///
+/// Backed by [`Bytes`] for Arc-shared ownership.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Metadata {
+    inner: Bytes,
+}
+
+impl Metadata {
+    /// Construct from arbitrary bytes, validating non-empty and size cap.
+    ///
+    /// # Errors
+    ///
+    /// - [`ValueError::MetadataEmpty`] if `bytes.is_empty()`.
+    /// - [`ValueError::MetadataTooLong`] if `bytes.len() > MAX_METADATA_LEN`.
+    pub fn from_bytes(bytes: Bytes) -> Result<Self, ValueError> {
+        if bytes.is_empty() {
+            return Err(ValueError::MetadataEmpty);
+        }
+        if bytes.len() > MAX_METADATA_LEN {
+            return Err(ValueError::MetadataTooLong {
+                actual: bytes.len(),
+            });
+        }
+        Ok(Self { inner: bytes })
+    }
+
+    /// Construct from already-validated bytes — crate-internal fast path.
+    ///
+    /// # Safety
+    ///
+    /// The caller MUST guarantee:
+    /// - `!bytes.is_empty()` (the wire format's `u32::MAX` sentinel handles
+    ///   absent metadata; a `Some(Metadata)` must carry actual bytes).
+    /// - `bytes.len() <= MAX_METADATA_LEN`.
+    ///
+    /// Violating these invariants does not produce undefined behavior in
+    /// this type's own methods (no `unsafe` consumers), but it will
+    /// surface as `WireError::FrameLengthOverflow` at encode time or
+    /// trigger the `bytes::Bytes::slice(empty)` `STATIC_VTABLE` footgun
+    /// on the read path. Marked `unsafe` for consistency with the other
+    /// `from_validated_bytes` constructors and to make the invariant
+    /// obligation visible at call sites.
+    ///
+    /// The read path ([`crate::envelope::PersistedEnvelope::metadata_owned`],
+    /// added in a later PR) uses this after the wire decoder has rejected
+    /// the absent sentinel into `Option::None`.
+    #[expect(
+        dead_code,
+        reason = "wired up by the PersistedEnvelope read-path task later in this PR series"
+    )]
+    pub(crate) unsafe fn from_validated_bytes(bytes: Bytes) -> Self {
+        debug_assert!(
+            !bytes.is_empty(),
+            "from_validated_bytes invariant: non-empty"
+        );
+        debug_assert!(
+            bytes.len() <= MAX_METADATA_LEN,
+            "from_validated_bytes invariant: length ≤ MAX_METADATA_LEN"
+        );
+        Self { inner: bytes }
+    }
+
+    /// Borrow as `&[u8]`. Zero-cost.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.inner
+    }
+
+    /// Take ownership of the inner [`Bytes`] (one Arc share, no copy).
+    #[must_use]
+    pub fn into_bytes(self) -> Bytes {
+        self.inner
+    }
+}
+
 #[cfg(test)]
 mod event_type_tests {
     use super::*;
@@ -322,4 +410,29 @@ mod payload_tests {
     // Note: oversize check (length > MAX_PAYLOAD_LEN = u32::MAX) is
     // covered by the property tests in Task 1.6 with a synthetic length
     // boundary. Allocating ~4 GB in a unit test is impractical.
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn from_bytes_accepts_small() {
+        let m = Metadata::from_bytes(Bytes::from_static(b"meta")).expect("valid");
+        assert_eq!(m.as_slice(), b"meta");
+    }
+
+    #[test]
+    fn from_bytes_rejects_empty() {
+        let err = Metadata::from_bytes(Bytes::new())
+            .expect_err("empty metadata must be rejected — use Option::None for absent");
+        assert!(matches!(err, ValueError::MetadataEmpty));
+    }
+
+    #[test]
+    fn into_bytes_returns_inner_arc() {
+        let m = Metadata::from_bytes(Bytes::from_static(b"m")).expect("valid");
+        let bytes = m.into_bytes();
+        assert_eq!(bytes.as_ref(), b"m");
+    }
 }
