@@ -248,6 +248,7 @@ fn make_envelopes(n: usize) -> Vec<PendingEnvelope> {
             pending_envelope(Version::new(version).unwrap())
                 .event_type("BenchEvent")
                 .payload(vec![1, 2, 3, 4])
+                .expect("valid payload")
                 .build()
         })
         .collect()
@@ -264,6 +265,7 @@ fn bench_builder_throughput(c: &mut Criterion) {
                 pending_envelope(black_box(Version::INITIAL))
                     .event_type("UserCreated")
                     .payload(vec![1, 2, 3, 4])
+                    .expect("valid payload")
                     .build(),
             )
         });

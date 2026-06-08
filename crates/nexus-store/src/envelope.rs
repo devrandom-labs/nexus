@@ -1,4 +1,3 @@
-use std::num::NonZeroU32;
 use std::ops::Range;
 
 use bytes::Bytes;
@@ -6,6 +5,7 @@ use nexus::Version;
 use thiserror::Error;
 
 use crate::store::GlobalSeq;
+use crate::value::{EventType, Metadata, Payload, SchemaVersion};
 
 /// Cast `u32` index to `usize` for slice indexing.
 ///
@@ -51,17 +51,17 @@ pub enum EnvelopeError {
 
 /// Event envelope for the write path.
 ///
-/// `payload` and `metadata` are `bytes::Bytes` — Arc-shared, cheap to clone,
-/// no lifetime. Safe to hold across awaits or in long-lived containers.
+/// Fields hold validated value newtypes — `EventType`, `Payload`, `Metadata`,
+/// `SchemaVersion` — so downstream wire encoding can skip re-validation.
 ///
 /// Construction is via the typestate builder rooted at [`pending_envelope`].
 #[derive(Debug, Clone)]
 pub struct PendingEnvelope {
     version: Version,
-    event_type: &'static str,
-    schema_version: u32,
-    payload: Bytes,
-    metadata: Option<Bytes>,
+    event_type: EventType,
+    schema_version: SchemaVersion,
+    payload: Payload,
+    metadata: Option<Metadata>,
 }
 
 impl PendingEnvelope {
@@ -70,35 +70,61 @@ impl PendingEnvelope {
         self.version
     }
 
+    /// Borrowed event type as `&str`.
     #[must_use]
-    pub const fn event_type(&self) -> &'static str {
-        self.event_type
+    pub fn event_type(&self) -> &str {
+        self.event_type.as_str()
+    }
+
+    /// Owned event type — one Arc share.
+    #[must_use]
+    pub fn event_type_value(&self) -> EventType {
+        self.event_type.clone()
     }
 
     #[must_use]
     pub fn payload(&self) -> &[u8] {
-        &self.payload
+        self.payload.as_slice()
     }
 
-    /// Owned view — one atomic refcount inc, zero allocation.
+    /// Owned payload — one Arc share.
     #[must_use]
     pub fn payload_bytes(&self) -> Bytes {
+        self.payload.clone().into_bytes()
+    }
+
+    /// Owned payload value newtype — one Arc share.
+    #[must_use]
+    pub fn payload_value(&self) -> Payload {
         self.payload.clone()
     }
 
     #[must_use]
     pub fn metadata(&self) -> Option<&[u8]> {
-        self.metadata.as_deref()
+        self.metadata.as_ref().map(Metadata::as_slice)
     }
 
-    /// Owned view — one atomic refcount inc per `Some`, zero allocation.
+    /// Owned metadata — one Arc share per `Some`.
     #[must_use]
     pub fn metadata_bytes(&self) -> Option<Bytes> {
+        self.metadata.as_ref().map(|m| m.clone().into_bytes())
+    }
+
+    /// Owned metadata value newtype — one Arc share per `Some`.
+    #[must_use]
+    pub fn metadata_value(&self) -> Option<Metadata> {
         self.metadata.clone()
     }
 
+    /// The raw u32 view (always > 0, by the `SchemaVersion` invariant).
     #[must_use]
     pub const fn schema_version(&self) -> u32 {
+        self.schema_version.get()
+    }
+
+    /// The typed schema version.
+    #[must_use]
+    pub const fn schema_version_value(&self) -> SchemaVersion {
         self.schema_version
     }
 }
@@ -108,60 +134,80 @@ impl PendingEnvelope {
 // =============================================================================
 
 /// Step 1: has `version`, needs `event_type`.
+#[derive(Debug)]
 pub struct WithVersion {
     version: Version,
 }
 
 /// Step 2: has `version` + `event_type`, needs payload.
+#[derive(Debug)]
 pub struct WithEventType {
     version: Version,
-    event_type: &'static str,
+    event_type: EventType,
 }
 
 /// Step 3: has all core fields; optional `schema_version` override; finalize via `build`/`with_metadata`.
+#[derive(Debug)]
 pub struct WithPayload {
     version: Version,
-    event_type: &'static str,
-    payload: Bytes,
-    schema_version: u32,
+    event_type: EventType,
+    payload: Payload,
+    schema_version: SchemaVersion,
 }
 
 impl WithVersion {
+    /// Set the event type from a `&'static str` literal. Infallible.
     #[must_use]
-    pub const fn event_type(self, event_type: &'static str) -> WithEventType {
+    pub fn event_type(self, event_type: &'static str) -> WithEventType {
         WithEventType {
             version: self.version,
-            event_type,
+            event_type: EventType::from_static_str(event_type),
         }
+    }
+
+    /// Set the event type from arbitrary bytes; validates UTF-8 and size cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EnvelopeError::Value`] if the bytes are invalid UTF-8 or
+    /// exceed [`MAX_EVENT_TYPE_LEN`](crate::value::MAX_EVENT_TYPE_LEN).
+    pub fn event_type_bytes(self, bytes: Bytes) -> Result<WithEventType, EnvelopeError> {
+        let event_type = EventType::from_bytes(bytes)?;
+        Ok(WithEventType {
+            version: self.version,
+            event_type,
+        })
     }
 }
 
 impl WithEventType {
-    /// Accepts anything that converts into `Bytes` — `Bytes`, `Vec<u8>`
-    /// (reuses the Vec's allocation), `&'static [u8]`, `String`.
-    #[must_use]
-    pub fn payload(self, payload: impl Into<Bytes>) -> WithPayload {
-        WithPayload {
+    /// Set the payload from any `Into<Bytes>` source. Fallible: validates
+    /// the size cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EnvelopeError::Value`] if the payload exceeds
+    /// [`MAX_PAYLOAD_LEN`](crate::value::MAX_PAYLOAD_LEN).
+    pub fn payload(self, payload: impl Into<Bytes>) -> Result<WithPayload, EnvelopeError> {
+        let validated = Payload::from_bytes(payload.into())?;
+        Ok(WithPayload {
             version: self.version,
             event_type: self.event_type,
-            payload: payload.into(),
-            schema_version: 1,
-        }
+            payload: validated,
+            schema_version: SchemaVersion::INITIAL,
+        })
     }
 }
 
 impl WithPayload {
-    /// Override the schema version (default: 1).
-    ///
-    /// Uses `NonZeroU32` so `schema_version == 0` is a compile-time error,
-    /// matching the invariant enforced by `PersistedEnvelope::try_new`.
+    /// Override the schema version (default: [`SchemaVersion::INITIAL`]).
     #[must_use]
-    pub const fn schema_version(mut self, schema_version: NonZeroU32) -> Self {
-        self.schema_version = schema_version.get();
+    pub const fn schema_version(mut self, schema_version: SchemaVersion) -> Self {
+        self.schema_version = schema_version;
         self
     }
 
-    /// Build with no metadata.
+    /// Build with no metadata. Infallible.
     #[must_use]
     pub fn build(self) -> PendingEnvelope {
         PendingEnvelope {
@@ -173,16 +219,24 @@ impl WithPayload {
         }
     }
 
-    /// Build with metadata. Accepts any `Into<Bytes>`.
-    #[must_use]
-    pub fn with_metadata(self, metadata: impl Into<Bytes>) -> PendingEnvelope {
-        PendingEnvelope {
+    /// Build with metadata; fallible (validates non-empty + size cap).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EnvelopeError::Value`] if the metadata is empty or
+    /// exceeds [`MAX_METADATA_LEN`](crate::value::MAX_METADATA_LEN).
+    pub fn with_metadata(
+        self,
+        metadata: impl Into<Bytes>,
+    ) -> Result<PendingEnvelope, EnvelopeError> {
+        let validated = Metadata::from_bytes(metadata.into())?;
+        Ok(PendingEnvelope {
             version: self.version,
             event_type: self.event_type,
             schema_version: self.schema_version,
             payload: self.payload,
-            metadata: Some(metadata.into()),
-        }
+            metadata: Some(validated),
+        })
     }
 }
 
@@ -433,7 +487,9 @@ mod tests {
         let env = pending_envelope(Version::INITIAL)
             .event_type("UserCreated")
             .payload(Bytes::from_static(b"payload-bytes"))
-            .with_metadata(Bytes::from_static(b"meta-bytes"));
+            .expect("valid payload")
+            .with_metadata(Bytes::from_static(b"meta-bytes"))
+            .expect("valid metadata");
 
         assert_eq!(env.event_type(), "UserCreated");
         assert_eq!(env.payload(), b"payload-bytes");
@@ -445,10 +501,30 @@ mod tests {
     fn pending_envelope_builds_without_metadata() {
         let env = pending_envelope(Version::INITIAL)
             .event_type("X")
-            .payload(Bytes::from_static(b""))
+            .payload(Bytes::from_static(b"p"))
+            .expect("valid payload")
             .build();
 
         assert_eq!(env.metadata(), None);
+    }
+
+    #[test]
+    fn pending_envelope_holds_typed_event_type() {
+        let env = pending_envelope(Version::INITIAL)
+            .event_type("UserCreated")
+            .payload(Bytes::from_static(b"p"))
+            .expect("valid payload")
+            .build();
+        assert_eq!(env.event_type(), "UserCreated");
+    }
+
+    #[test]
+    fn pending_envelope_rejects_oversize_event_type() {
+        let oversized = "x".repeat(crate::value::MAX_EVENT_TYPE_LEN + 1);
+        let err = pending_envelope(Version::INITIAL)
+            .event_type_bytes(Bytes::from(oversized))
+            .expect_err("oversized must be rejected");
+        assert!(matches!(err, EnvelopeError::Value(_)));
     }
 
     #[test]

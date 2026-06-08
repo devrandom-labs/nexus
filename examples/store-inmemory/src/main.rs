@@ -226,6 +226,7 @@ async fn main() {
         let envelope = pending_envelope(Version::new(version_num).expect("version > 0"))
             .event_type(event_type)
             .payload(payload.clone())
+            .expect("valid payload")
             .build();
         println!(
             "  Envelope: version={}, type={}",
@@ -270,6 +271,7 @@ async fn main() {
         let legacy_envelope = pending_envelope(Version::new(4).expect("version > 0"))
             .event_type("TaskCreated")
             .payload(old_json.into_bytes())
+            .expect("valid payload")
             .build();
 
         store
@@ -353,6 +355,7 @@ async fn main() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("TodoCreated")
         .payload(payload)
+        .expect("valid payload")
         .build();
     typed_store
         .raw()

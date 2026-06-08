@@ -55,6 +55,7 @@ use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::RawEventStore;
+use nexus_store::value::SchemaVersion;
 
 use proptest::prelude::*;
 
@@ -109,6 +110,7 @@ fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> Pend
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
+        .expect("valid payload")
         .build()
 }
 
@@ -122,7 +124,8 @@ fn make_envelope_with_schema(
     pending_envelope(Version::new(version).unwrap())
         .event_type(event_type)
         .payload(payload.to_vec())
-        .schema_version(sv)
+        .expect("valid payload")
+        .schema_version(SchemaVersion::new(sv))
         .build()
 }
 
@@ -134,6 +137,7 @@ fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
             pending_envelope(Version::new(u64::try_from(i).unwrap() + 1).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
+                .expect("valid payload")
                 .build()
         })
         .collect()
@@ -147,6 +151,7 @@ fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<Pending
             pending_envelope(Version::new(start_version + u64::try_from(i).unwrap()).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
+                .expect("valid payload")
                 .build()
         })
         .collect()
@@ -1161,7 +1166,8 @@ async fn attack_schema_version_zero_clamped_by_builder() {
     let env = pending_envelope(Version::INITIAL)
         .event_type("BadSchema")
         .payload(b"data".to_vec())
-        .schema_version(NonZeroU32::MIN) // Minimum valid schema version
+        .expect("valid payload")
+        .schema_version(SchemaVersion::INITIAL) // Minimum valid schema version
         .build();
 
     // schema_version should be 1

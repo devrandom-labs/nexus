@@ -67,6 +67,15 @@ pub enum StoreError<A, EncErr, DecErr> {
     /// a `payload` longer than `u32::MAX` bytes.
     #[error("wire-format error: {0}")]
     Wire(#[source] crate::wire::WireError),
+
+    /// Envelope construction rejected user-supplied bytes
+    /// (size cap exceeded, UTF-8 invalid, or zero schema version).
+    ///
+    /// Raised on the save path when an encoded payload, metadata, or
+    /// event-type name violates the value-newtype invariants enforced by
+    /// the [`PendingEnvelope`](crate::PendingEnvelope) builder.
+    #[error("envelope error: {0}")]
+    Envelope(#[from] crate::envelope::EnvelopeError),
 }
 
 /// Errors from the with-upcaster load path.

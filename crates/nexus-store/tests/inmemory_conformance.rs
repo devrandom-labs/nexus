@@ -15,6 +15,7 @@ use nexus::Id;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
+use nexus_store::value::SchemaVersion;
 use nexus_store::{PendingEnvelope, Version};
 use nexus_store_testing::{ConformanceRow, assert_event_stream_conformance};
 
@@ -53,12 +54,15 @@ async fn inmemory_event_stream_conforms() {
                     let event_type: &'static str = Box::leak(r.event_type.into_boxed_str());
                     let with_payload = pending_envelope(Version::new(r.version).unwrap())
                         .event_type(event_type)
-                        .payload(r.payload);
+                        .payload(r.payload)
+                        .expect("valid payload");
                     if r.schema_version == 1 {
                         with_payload.build()
                     } else {
                         with_payload
-                            .schema_version(NonZeroU32::new(r.schema_version).unwrap())
+                            .schema_version(SchemaVersion::new(
+                                NonZeroU32::new(r.schema_version).unwrap(),
+                            ))
                             .build()
                     }
                 })

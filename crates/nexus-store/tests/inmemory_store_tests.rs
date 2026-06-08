@@ -29,6 +29,7 @@ async fn append_and_read_back() {
     let envelope = pending_envelope(Version::INITIAL)
         .event_type("TestEvent")
         .payload(b"hello".to_vec())
+        .expect("valid payload")
         .build();
     store
         .append(&TestId("stream-1"), None, &[envelope])
@@ -55,14 +56,17 @@ async fn read_from_version_filters_correctly() {
         pending_envelope(Version::new(1).unwrap())
             .event_type("E1")
             .payload(b"one".to_vec())
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(2).unwrap())
             .event_type("E2")
             .payload(b"two".to_vec())
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(3).unwrap())
             .event_type("E3")
             .payload(b"three".to_vec())
+            .expect("valid payload")
             .build(),
     ];
     store.append(&TestId("s1"), None, &envelopes).await.unwrap();
@@ -96,10 +100,12 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
         pending_envelope(Version::new(1).unwrap())
             .event_type("A1")
             .payload(b"a1".to_vec())
+            .expect("valid payload")
             .build(),
         pending_envelope(Version::new(2).unwrap())
             .event_type("A2")
             .payload(b"a2".to_vec())
+            .expect("valid payload")
             .build(),
     ];
     store.append(&TestId("a"), None, &batch_a).await.unwrap();
@@ -110,6 +116,7 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
         pending_envelope(Version::new(1).unwrap())
             .event_type("B1")
             .payload(b"b1".to_vec())
+            .expect("valid payload")
             .build(),
     ];
     store.append(&TestId("b"), None, &batch_b).await.unwrap();

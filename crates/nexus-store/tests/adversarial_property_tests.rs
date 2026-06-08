@@ -270,6 +270,7 @@ fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
             pending_envelope(Version::new(u64::try_from(i).unwrap() + 1).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
+                .expect("valid payload")
                 .build()
         })
         .collect()
@@ -283,6 +284,7 @@ fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<Pending
             pending_envelope(Version::new(start_version + u64::try_from(i).unwrap()).unwrap())
                 .event_type(leak("TestEvent"))
                 .payload(p.clone())
+                .expect("valid payload")
                 .build()
         })
         .collect()
@@ -436,6 +438,7 @@ proptest! {
         let env = pending_envelope(ver)
             .event_type(leak("AnyType"))
             .payload(payload.clone())
+            .expect("valid payload")
             .build();
 
         prop_assert_eq!(env.version().as_u64(), version);
@@ -603,6 +606,7 @@ proptest! {
                 pending_envelope(Version::new(v).unwrap())
                     .event_type(leak("E"))
                     .payload(vec![v as u8])
+                    .expect("valid payload")
                     .build()
             }).collect();
 
@@ -633,6 +637,7 @@ proptest! {
                 pending_envelope(Version::INITIAL)
                     .event_type(leak("E"))
                     .payload(vec![1])
+                    .expect("valid payload")
                     .build()
             }).collect();
 
@@ -669,6 +674,7 @@ proptest! {
                 pending_envelope(Version::new(v).unwrap())
                     .event_type(leak("E"))
                     .payload(vec![v as u8])
+                    .expect("valid payload")
                     .build()
             }).collect();
 
@@ -1109,6 +1115,7 @@ async fn attack_event_store_transforms_applied_on_load() {
         pending_envelope(Version::INITIAL)
             .event_type(leak("Happened"))
             .payload(payload)
+            .expect("valid payload")
             .build(),
     ];
     raw_store
@@ -1294,6 +1301,7 @@ proptest! {
             let envelope = pending_envelope(Version::INITIAL)
                 .event_type(leak("E"))
                 .payload(vec![1, 2, 3])
+                .expect("valid payload")
                 .build();
 
             // Append should not panic (may succeed or fail with error)
@@ -1724,6 +1732,7 @@ async fn attack_concurrent_writers_exactly_one_wins() {
             let envelope = pending_envelope(Version::INITIAL)
                 .event_type(Box::leak(format!("Writer{writer_id}").into_boxed_str()))
                 .payload(vec![writer_id as u8])
+                .expect("valid payload")
                 .build();
 
             store.append(&sn("race-stream"), None, &[envelope]).await
