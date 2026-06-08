@@ -40,6 +40,9 @@ pub enum EnvelopeError {
         #[source]
         source: std::str::Utf8Error,
     },
+
+    #[error(transparent)]
+    Value(#[from] crate::value::ValueError),
 }
 
 // =============================================================================
