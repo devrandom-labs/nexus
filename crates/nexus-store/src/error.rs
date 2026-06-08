@@ -69,11 +69,13 @@ pub enum StoreError<A, EncErr, DecErr> {
     Wire(#[source] crate::wire::WireError),
 
     /// Envelope construction rejected user-supplied bytes
-    /// (size cap exceeded, UTF-8 invalid, or zero schema version).
+    /// (payload exceeded its size cap, or another value-newtype invariant).
     ///
-    /// Raised on the save path when an encoded payload, metadata, or
-    /// event-type name violates the value-newtype invariants enforced by
-    /// the [`PendingEnvelope`](crate::PendingEnvelope) builder.
+    /// Raised on the save path when an encoded payload violates the
+    /// invariants enforced by the [`PendingEnvelope`](crate::PendingEnvelope)
+    /// builder. The schema-version-zero case is not reachable from the
+    /// typed-repository save path because `SchemaVersion` is constructed
+    /// from `NonZeroU32`.
     #[error("envelope error: {0}")]
     Envelope(#[from] crate::envelope::EnvelopeError),
 }

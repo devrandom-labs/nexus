@@ -479,6 +479,7 @@ const fn check_range(range: &Range<u32>, len: usize) -> Result<(), EnvelopeError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::value::MAX_EVENT_TYPE_LEN;
     use bytes::Bytes;
     use nexus::Version;
 
@@ -509,18 +510,26 @@ mod tests {
     }
 
     #[test]
-    fn pending_envelope_holds_typed_event_type() {
+    fn pending_envelope_typed_accessors_roundtrip() {
         let env = pending_envelope(Version::INITIAL)
             .event_type("UserCreated")
-            .payload(Bytes::from_static(b"p"))
+            .payload(Bytes::from_static(b"payload-bytes"))
             .expect("valid payload")
-            .build();
-        assert_eq!(env.event_type(), "UserCreated");
+            .with_metadata(Bytes::from_static(b"meta-bytes"))
+            .expect("valid metadata");
+
+        assert_eq!(env.event_type_value().as_str(), "UserCreated");
+        assert_eq!(env.payload_value().as_slice(), b"payload-bytes");
+        assert_eq!(
+            env.metadata_value().map(|m| m.as_slice().to_vec()),
+            Some(b"meta-bytes".to_vec())
+        );
+        assert_eq!(env.schema_version_value().get(), 1);
     }
 
     #[test]
     fn pending_envelope_rejects_oversize_event_type() {
-        let oversized = "x".repeat(crate::value::MAX_EVENT_TYPE_LEN + 1);
+        let oversized = "x".repeat(MAX_EVENT_TYPE_LEN + 1);
         let err = pending_envelope(Version::INITIAL)
             .event_type_bytes(Bytes::from(oversized))
             .expect_err("oversized must be rejected");
