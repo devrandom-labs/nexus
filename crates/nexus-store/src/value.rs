@@ -66,21 +66,23 @@ pub struct EventType {
 }
 
 impl EventType {
-    /// Construct from a `&'static str` literal. Infallible: `&str` is
-    /// already UTF-8 valid, and literal lengths are bounded by the
-    /// program text.
+    /// Construct from a `&'static str` literal. Infallible for valid
+    /// literals: `&str` is UTF-8 by Rust's type system, and program-text
+    /// literals are bounded by the source file.
     ///
     /// # Panics
     ///
-    /// Panics in debug builds if the literal exceeds [`MAX_EVENT_TYPE_LEN`].
-    /// Release builds silently truncate the panic check; in practice this
-    /// only fires for compile-time-known oversized literals, which is a
-    /// programmer error.
+    /// Panics if `s.len() > MAX_EVENT_TYPE_LEN`. For string literals this
+    /// is a programmer error caught at first use; the runtime check
+    /// catches the `Box::leak(String::from(runtime))` case that would
+    /// otherwise silently corrupt the wire encoding.
     #[must_use]
     pub fn from_static_str(s: &'static str) -> Self {
-        debug_assert!(
+        assert!(
             s.len() <= MAX_EVENT_TYPE_LEN,
-            "event_type literal exceeds MAX_EVENT_TYPE_LEN"
+            "event_type length {} exceeds MAX_EVENT_TYPE_LEN ({})",
+            s.len(),
+            MAX_EVENT_TYPE_LEN,
         );
         Self {
             inner: Bytes::from_static(s.as_bytes()),
@@ -106,14 +108,25 @@ impl EventType {
         Ok(Self { inner: bytes })
     }
 
-    /// Construct from already-validated bytes. Crate-internal: the read
-    /// path (`PersistedEnvelope`) uses this after construction-time
-    /// validation has already confirmed the invariants.
+    /// Construct from already-validated bytes — crate-internal fast path.
+    ///
+    /// # Safety
+    ///
+    /// The caller MUST guarantee both invariants:
+    /// - `bytes` is valid UTF-8.
+    /// - `bytes.len() <= MAX_EVENT_TYPE_LEN`.
+    ///
+    /// Violating either invariant makes [`EventType::as_str`] undefined
+    /// behavior in release builds. The `debug_assert!`s below are
+    /// diagnostic-only and compiled out in release.
+    ///
+    /// The read path ([`crate::envelope::PersistedEnvelope::event_type_owned`],
+    /// added in a later PR) uses this after `try_new` has already validated.
     #[expect(
         dead_code,
         reason = "wired up by the PersistedEnvelope read-path task later in this PR series"
     )]
-    pub(crate) fn from_validated_bytes(bytes: Bytes) -> Self {
+    pub(crate) unsafe fn from_validated_bytes(bytes: Bytes) -> Self {
         debug_assert!(
             bytes.len() <= MAX_EVENT_TYPE_LEN,
             "from_validated_bytes invariant: length ≤ MAX_EVENT_TYPE_LEN"
@@ -206,5 +219,10 @@ mod event_type_tests {
         let et = EventType::from_static_str("Foo");
         let dbg = format!("{et:?}");
         assert!(dbg.contains("Foo"), "Debug should include event type name");
+        assert!(
+            dbg.len() < 40,
+            "Debug should be tight (no padding/extra fields): got {} chars: {dbg}",
+            dbg.len(),
+        );
     }
 }
