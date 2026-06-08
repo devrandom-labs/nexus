@@ -43,7 +43,6 @@ use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_fjall::encoding::{EncodeError, decode_event_value, encode_event_value};
-use nexus_store::GlobalSeq;
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
@@ -84,7 +83,7 @@ fn decode_ev_slices(buf: &[u8]) -> (u64, u32, String, Vec<u8>) {
             .unwrap()
             .to_owned();
     let pl = b[d.payload_range.start as usize..d.payload_range.end as usize].to_vec();
-    (d.global_seq, d.schema_version, et, pl)
+    (d.global_seq, d.schema_version.get(), et, pl)
 }
 
 fn leak(s: &str) -> &'static str {
@@ -765,8 +764,8 @@ fn attack_encoding_schema_version_boundaries() {
     let mut buf = Vec::new();
     let result = encode_event_value(&mut buf, 1, 0, "Test", None, b"data");
     match result {
-        Err(EncodeError::InvalidSchemaVersion) => {}
-        other => panic!("expected InvalidSchemaVersion at encoding layer, got {other:?}"),
+        Err(EncodeError::Value(nexus_store::value::ValueError::SchemaVersionZero)) => {}
+        other => panic!("expected Value(SchemaVersionZero) at encoding layer, got {other:?}"),
     }
 
     // schema_version = 1 is the minimum valid value and must round-trip.
@@ -1106,21 +1105,17 @@ async fn attack_reopen_10_times_with_appends() {
 /// of defense against corrupt persisted data.
 #[test]
 fn attack_schema_version_zero_rejected_by_type_system() {
-    // NonZeroU32::new(0) returns None — 0 is structurally unrepresentable
+    // Defense in depth: every layer rejects schema_version=0 by construction.
+    // - NonZeroU32::new(0) returns None.
+    // - SchemaVersion::from_u32(0) returns SchemaVersionZero.
+    // - PersistedEnvelope::try_new takes SchemaVersion, so 0 is unrepresentable
+    //   at the type level (no test case can pass it).
+    // - wire::decode_frame rejects on-disk schema_version=0 (corrupt-data path),
+    //   pinned in nexus_store::wire::tests::decode_frame_rejects_corrupt_schema_version_zero.
     assert!(NonZeroU32::new(0).is_none(), "NonZeroU32 must reject 0");
-    // And try_new on the read path still rejects 0
-    let result = nexus_store::PersistedEnvelope::try_new(
-        Version::INITIAL,
-        GlobalSeq::INITIAL,
-        Bytes::from_static(b"E"),
-        0,
-        0..1,
-        1..1,
-        None,
-    );
     assert!(
-        result.is_err(),
-        "PersistedEnvelope::try_new must reject schema_version=0"
+        nexus_store::value::SchemaVersion::from_u32(0).is_err(),
+        "SchemaVersion::from_u32(0) must return Err"
     );
 }
 

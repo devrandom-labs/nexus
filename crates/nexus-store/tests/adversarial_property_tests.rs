@@ -94,11 +94,13 @@ fn build_persisted(
     let value = bytes::Bytes::from(buf);
     let et_end = u32::try_from(event_type.len()).expect("event_type fits u32");
     let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
+    let sv = nexus_store::value::SchemaVersion::from_u32(schema_version)
+        .expect("test fixture schema_version nonzero");
     PersistedEnvelope::try_new(
         version,
         global_seq,
         value,
-        schema_version,
+        sv,
         0..et_end,
         et_end..pl_end,
         None,
@@ -360,34 +362,25 @@ fn schema_version_strategy() -> impl Strategy<Value = u32> {
 }
 
 // ============================================================================
-// ATTACK 1: PersistedEnvelope schema_version=0 MUST panic/error
+// ATTACK 1: schema_version=0 is structurally unrepresentable
 // ============================================================================
+//
+// `PersistedEnvelope::try_new` now takes `SchemaVersion` (NonZeroU32) — zero
+// can't be constructed, so the entire "ATTACK" surface lives on
+// `SchemaVersion::from_u32`. The wire-decode side is pinned in
+// `nexus_store::wire::tests::decode_frame_rejects_corrupt_schema_version_zero`.
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn attack_persisted_envelope_try_new_rejects_zero(
-        version in 1..1000u64,
-        event_type in "[A-Z]{1,10}",
-        payload in prop::collection::vec(any::<u8>(), 0..100),
+    fn attack_schema_version_from_u32_rejects_zero(
+        _ignored in 0u32..1,
     ) {
-        let mut buf = Vec::with_capacity(event_type.len() + payload.len());
-        buf.extend_from_slice(event_type.as_bytes());
-        buf.extend_from_slice(&payload);
-        let value = bytes::Bytes::from(buf);
-        let et_end = u32::try_from(event_type.len()).unwrap();
-        let pl_end = u32::try_from(event_type.len() + payload.len()).unwrap();
-        let result = PersistedEnvelope::try_new(
-            Version::new(version).unwrap(),
-            GlobalSeq::INITIAL,
-            value,
-            0, // ATTACK
-            0..et_end,
-            et_end..pl_end,
-            None,
-        );
-        prop_assert!(result.is_err(), "try_new with schema_version=0 must return Err");
+        // SchemaVersion::from_u32(0) is the only construction surface for
+        // raw u32 inputs. Verify rejection.
+        let result = nexus_store::value::SchemaVersion::from_u32(0);
+        prop_assert!(result.is_err(), "SchemaVersion::from_u32(0) must return Err");
     }
 }
 
@@ -1474,9 +1467,9 @@ proptest! {
         schema_version in schema_version_strategy(),
     ) {
         if schema_version == 0 {
-            // try_new must return Err for schema_version=0
-            let result = PersistedEnvelope::try_new(Version::new(1).unwrap(), GlobalSeq::INITIAL, bytes::Bytes::from_static(b"E"), 0, 0..1, 1..1, None);
-            prop_assert!(result.is_err(), "try_new(schema_version=0) must error");
+            // SchemaVersion::from_u32(0) errors — try_new can't even be called.
+            let result = nexus_store::value::SchemaVersion::from_u32(schema_version);
+            prop_assert!(result.is_err(), "SchemaVersion::from_u32(0) must error");
         } else {
             // Must succeed
             let env = build_persisted(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", schema_version, &[]);

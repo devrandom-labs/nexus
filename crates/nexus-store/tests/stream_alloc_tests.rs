@@ -183,7 +183,7 @@ impl futures::Stream for VecStream {
             Version::new(row.version).expect("non-zero"),
             GlobalSeq::INITIAL,
             row.value,
-            1,
+            nexus_store::value::SchemaVersion::INITIAL,
             row.event_type_range,
             row.payload_range,
             None,

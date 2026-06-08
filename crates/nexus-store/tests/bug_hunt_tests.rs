@@ -55,7 +55,7 @@ fn build_persisted(
         version,
         global_seq,
         value,
-        1,
+        nexus_store::value::SchemaVersion::INITIAL,
         0..et_end,
         et_end..pl_end,
         None,

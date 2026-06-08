@@ -256,8 +256,8 @@ pub enum CodecSnapshotStoreError<S, EncErr, DecErr> {
     /// Wire-format synthesis failed while wrapping the snapshot bytes in
     /// an envelope for the codec. Practically unreachable for in-budget
     /// labels (≤64 bytes via `Id::to_label`) and snapshot bytes ≤ 4 GiB.
-    #[error("wire-format error: {0}")]
-    Wire(#[source] crate::wire::WireError),
+    #[error("envelope synthesis error: {0}")]
+    Wire(#[source] crate::envelope::ForDecodeError),
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

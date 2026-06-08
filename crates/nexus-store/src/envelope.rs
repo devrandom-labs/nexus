@@ -5,7 +5,9 @@ use nexus::Version;
 use thiserror::Error;
 
 use crate::store::GlobalSeq;
-use crate::value::{EventType, Metadata, Payload, SchemaVersion};
+use crate::value::{
+    EventType, MAX_EVENT_TYPE_LEN, MAX_METADATA_LEN, Metadata, Payload, SchemaVersion, ValueError,
+};
 
 /// Cast `u32` index to `usize` for slice indexing.
 ///
@@ -27,9 +29,6 @@ const fn idx(n: u32) -> usize {
 /// Errors from envelope construction.
 #[derive(Debug, Error)]
 pub enum EnvelopeError {
-    #[error("schema_version must be > 0 (got 0)")]
-    InvalidSchemaVersion,
-
     #[error("range {start}..{end} exceeds buffer length {len}")]
     RangeOutOfBounds { start: u32, end: u32, len: usize },
 
@@ -41,8 +40,45 @@ pub enum EnvelopeError {
         source: std::str::Utf8Error,
     },
 
+    /// The `event_type` range length exceeds the wire-format cap.
+    ///
+    /// Structurally rules out the only path that could otherwise hand
+    /// `EventType::from_validated_bytes` an oversize slice on the read
+    /// side, so the fast-path accessor is sound by construction.
+    #[error("event_type range length {actual} exceeds maximum {max}")]
+    EventTypeRangeTooLong { actual: u32, max: usize },
+
+    /// The metadata range length exceeds the wire-format cap.
+    ///
+    /// Mirrors `EventTypeRangeTooLong` for metadata.
+    #[error("metadata range length {actual} exceeds maximum {max}")]
+    MetadataRangeTooLong { actual: u32, max: usize },
+
+    /// `Some(range)` was passed where `range` is empty. The wire format
+    /// reserves the absent sentinel (`meta_len == u32::MAX`) for "no
+    /// metadata"; an empty range collides with the `Bytes::slice(empty)`
+    /// `STATIC_VTABLE` orphan footgun and the value newtype invariant
+    /// `!Metadata::is_empty()`.
+    #[error("metadata range is empty; use None to represent absent metadata")]
+    MetadataRangeEmpty,
+
     #[error(transparent)]
-    Value(#[from] crate::value::ValueError),
+    Value(#[from] ValueError),
+}
+
+/// Errors from [`PersistedEnvelope::for_decode`].
+///
+/// Combines the failure modes of the underlying value-newtype
+/// construction, the wire encode, and the envelope `try_new` — `?`
+/// promotes any of the three.
+#[derive(Debug, Error)]
+pub enum ForDecodeError {
+    #[error(transparent)]
+    Value(#[from] ValueError),
+    #[error(transparent)]
+    Wire(#[from] crate::wire::WireError),
+    #[error(transparent)]
+    Envelope(#[from] EnvelopeError),
 }
 
 // =============================================================================
@@ -266,13 +302,14 @@ pub const fn pending_envelope(version: Version) -> WithVersion {
 /// the one Arc; accessors return `&[u8]`/`&str` cheaply or `Bytes` via
 /// `value.slice(range)` for owned views.
 ///
-/// Construction validates ranges against the buffer and UTF-8 of `event_type`
-/// at one point; accessors are then panic-free fast paths.
+/// Construction validates ranges against the buffer, UTF-8 of `event_type`,
+/// and the structural per-field caps that the value newtypes own (so the
+/// fast-path `*_value()` accessors are sound without re-validation).
 #[derive(Debug, Clone)]
 pub struct PersistedEnvelope {
     version: Version,
     global_seq: GlobalSeq,
-    schema_version: u32,
+    schema_version: SchemaVersion,
     value: Bytes,
     event_type_range: Range<u32>,
     payload_range: Range<u32>,
@@ -284,9 +321,14 @@ impl PersistedEnvelope {
     ///
     /// # Errors
     ///
-    /// - `InvalidSchemaVersion` if `schema_version == 0`.
-    /// - `RangeOutOfBounds` if any range's `end` exceeds `value.len()`.
-    /// - `InvalidUtf8` if `event_type` bytes are not valid UTF-8.
+    /// - [`EnvelopeError::RangeOutOfBounds`] if any range's `end` exceeds `value.len()`.
+    /// - [`EnvelopeError::InvalidUtf8`] if `event_type` bytes are not valid UTF-8.
+    /// - [`EnvelopeError::EventTypeRangeTooLong`] if the event-type range
+    ///   length exceeds [`MAX_EVENT_TYPE_LEN`].
+    /// - [`EnvelopeError::MetadataRangeTooLong`] if the metadata range
+    ///   length exceeds [`MAX_METADATA_LEN`].
+    /// - [`EnvelopeError::MetadataRangeEmpty`] if `Some(range)` is passed
+    ///   with an empty range.
     #[allow(
         clippy::too_many_arguments,
         reason = "all 7 fields are required to construct a validated PersistedEnvelope; \
@@ -296,20 +338,41 @@ impl PersistedEnvelope {
         version: Version,
         global_seq: GlobalSeq,
         value: Bytes,
-        schema_version: u32,
+        schema_version: SchemaVersion,
         event_type_range: Range<u32>,
         payload_range: Range<u32>,
         metadata_range: Option<Range<u32>>,
     ) -> Result<Self, EnvelopeError> {
-        if schema_version == 0 {
-            return Err(EnvelopeError::InvalidSchemaVersion);
-        }
         let len = value.len();
         check_range(&event_type_range, len)?;
         check_range(&payload_range, len)?;
         if let Some(ref m) = metadata_range {
             check_range(m, len)?;
         }
+
+        // Structural per-field caps — owned upstream by the value
+        // newtypes; mirroring them here makes `event_type_value` /
+        // `metadata_value` sound without re-validation.
+        let et_range_len = event_type_range.end - event_type_range.start;
+        if usize::try_from(et_range_len).unwrap_or(usize::MAX) > MAX_EVENT_TYPE_LEN {
+            return Err(EnvelopeError::EventTypeRangeTooLong {
+                actual: et_range_len,
+                max: MAX_EVENT_TYPE_LEN,
+            });
+        }
+        if let Some(ref m) = metadata_range {
+            let meta_range_len = m.end - m.start;
+            if meta_range_len == 0 {
+                return Err(EnvelopeError::MetadataRangeEmpty);
+            }
+            if usize::try_from(meta_range_len).unwrap_or(usize::MAX) > MAX_METADATA_LEN {
+                return Err(EnvelopeError::MetadataRangeTooLong {
+                    actual: meta_range_len,
+                    max: MAX_METADATA_LEN,
+                });
+            }
+        }
+
         // UTF-8 validation of event_type once at construction.
         let et_start = idx(event_type_range.start);
         let et_end = idx(event_type_range.end);
@@ -339,8 +402,16 @@ impl PersistedEnvelope {
         self.global_seq
     }
 
+    /// The raw `u32` view of `schema_version` (always > 0 by the
+    /// [`SchemaVersion`] invariant).
     #[must_use]
     pub const fn schema_version(&self) -> u32 {
+        self.schema_version.get()
+    }
+
+    /// The typed [`SchemaVersion`].
+    #[must_use]
+    pub const fn schema_version_value(&self) -> SchemaVersion {
         self.schema_version
     }
 
@@ -391,11 +462,8 @@ impl PersistedEnvelope {
 
     /// Owned `Bytes` view of `metadata` — one atomic refcount inc per `Some`.
     ///
-    /// Note: per the design doc footgun F1, an empty range would collapse to
-    /// `STATIC_VTABLE` and orphan from the parent buffer. The wire format
-    /// MUST use `meta_len == u32::MAX` for absent (decoded to `None`), and
-    /// "present but empty" metadata is currently disallowed — the decoder
-    /// must enforce this.
+    /// `try_new` rejects `Some(empty)`, so the `Bytes::slice(empty)`
+    /// `STATIC_VTABLE` orphan footgun is structurally unreachable here.
     #[must_use]
     pub fn metadata_bytes(&self) -> Option<Bytes> {
         self.metadata_range.as_ref().map(|r| self.slice_range(r))
@@ -405,20 +473,13 @@ impl PersistedEnvelope {
     #[must_use]
     pub fn event_type_value(&self) -> EventType {
         // SAFETY: `from_validated_bytes` requires (1) valid UTF-8 and
-        // (2) `bytes.len() <= MAX_EVENT_TYPE_LEN`.
-        //
-        // (1) is established by `try_new`, which calls `std::str::from_utf8`
-        //     on the same buffer slice.
-        // (2) is not structurally enforced by `try_new` today — `check_range`
-        //     only verifies `range.end <= value.len()`. The cap holds whenever
-        //     the producer is `wire::decode_frame` (the `u16` event_type_len
-        //     wire field bounds the range). Task 3.2/3.3 adds structural
-        //     per-field validation to `try_new`. Until then, `EventType::as_str`
-        //     depends only on (1), so cap violation has no UB consequence —
-        //     it surfaces as `WireError::FrameLengthOverflow` at encode time.
+        // (2) `bytes.len() <= MAX_EVENT_TYPE_LEN`. Both invariants are
+        // established by `try_new`: UTF-8 via `std::str::from_utf8`, and
+        // the cap via the `EventTypeRangeTooLong` check on the range
+        // length.
         #[allow(
             unsafe_code,
-            reason = "UTF-8 established by try_new; cap holds for wire decoder; tightened in Task 3.2/3.3"
+            reason = "UTF-8 and length cap both established by try_new"
         )]
         unsafe {
             EventType::from_validated_bytes(self.event_type_bytes())
@@ -450,19 +511,13 @@ impl PersistedEnvelope {
     pub fn metadata_value(&self) -> Option<Metadata> {
         self.metadata_bytes().map(|b| {
             // SAFETY: `from_validated_bytes` requires (1) `!bytes.is_empty()` and
-            // (2) `bytes.len() <= MAX_METADATA_LEN`.
-            //
-            // Neither invariant is structurally enforced by `try_new` today —
-            // `check_range` accepts `Some(0..0)` and admits ranges up to `u32::MAX`.
-            // Both hold whenever the producer is `wire::decode_frame` (the absent
-            // sentinel decodes to `None`, length bounded by `u32::MAX - 1`).
-            // Task 3.2/3.3 adds structural per-field validation to `try_new`.
-            // Until then, `Metadata` has no `unsafe` reader path — invariant
-            // violation surfaces at encode time or as the `Bytes::slice(empty)`
-            // `STATIC_VTABLE` orphan footgun, not as UB.
+            // (2) `bytes.len() <= MAX_METADATA_LEN`. Both invariants are
+            // established by `try_new`: the `MetadataRangeEmpty` check rejects
+            // an empty `Some(range)`, and `MetadataRangeTooLong` enforces the
+            // cap on the range length.
             #[allow(
                 unsafe_code,
-                reason = "invariants hold for wire decoder; no UB reader path; tightened in Task 3.2/3.3"
+                reason = "non-empty and length cap both established by try_new"
             )]
             unsafe {
                 Metadata::from_validated_bytes(b)
@@ -470,17 +525,12 @@ impl PersistedEnvelope {
         })
     }
 
-    /// The schema version as a `Version` for upcaster APIs.
+    /// The schema version widened to the kernel's [`Version`] for upcaster APIs.
     ///
-    /// # Panics
-    ///
-    /// Panics if `schema_version == 0`, which `try_new` rejects — so this
-    /// can only fire if internal invariants are violated.
+    /// Total conversion — [`SchemaVersion`] is structurally nonzero.
     #[must_use]
-    #[allow(clippy::expect_used, reason = "try_new guarantees schema_version >= 1")]
     pub fn schema_version_as_version(&self) -> Version {
-        Version::new(u64::from(self.schema_version))
-            .expect("PersistedEnvelope invariant: schema_version >= 1")
+        Version::from(self.schema_version)
     }
 
     /// Wrap raw bytes in a synthetic envelope suitable for [`Decode`].
@@ -491,42 +541,32 @@ impl PersistedEnvelope {
     /// buffer — snapshot decoding, upcaster post-transform decoding, codec
     /// round-trip tests.
     ///
-    /// Reports `Version::INITIAL`, `GlobalSeq::INITIAL`, and `schema_version=1`.
-    /// Most codecs ignore those fields; when they don't (or you're bridging
-    /// an upcast back to a decode and need to preserve the original
-    /// envelope's version triple), construct the envelope manually via
-    /// [`try_new`](Self::try_new).
+    /// Reports `Version::INITIAL`, `GlobalSeq::INITIAL`, and
+    /// `schema_version = SchemaVersion::INITIAL`. Most codecs ignore those
+    /// fields; when they don't (or you're bridging an upcast back to a
+    /// decode and need to preserve the original envelope's version
+    /// triple), construct the envelope manually via [`try_new`](Self::try_new).
     ///
     /// # Errors
     ///
-    /// Returns [`WireError`](crate::wire::WireError) if `event_type` exceeds
-    /// 65,535 bytes or `payload` exceeds `u32::MAX` bytes.
-    ///
-    /// # Panics
-    ///
-    /// Never under normal use. The post-`encode_frame` [`try_new`](Self::try_new)
-    /// is `expect`'d because its inputs are controlled here: ranges come from
-    /// the just-built frame, `event_type` is a valid `&str`, and
-    /// `schema_version = 1` is nonzero — none of `try_new`'s failure
-    /// conditions can fire.
-    pub fn for_decode(event_type: &str, payload: &[u8]) -> Result<Self, crate::wire::WireError> {
-        let frame =
-            crate::wire::encode_frame(GlobalSeq::INITIAL.as_u64(), 1, event_type, None, payload)?;
-        #[allow(
-            clippy::expect_used,
-            reason = "ranges come from wire::encode_frame which validated them, \
-                      event_type is a valid &str, schema_version=1 is nonzero"
-        )]
+    /// Returns [`ForDecodeError`] if the value newtypes reject the inputs
+    /// (oversize `event_type`/`payload`), the wire encode fails
+    /// (`FrameLengthOverflow`), or the envelope `try_new` fails (range
+    /// invariants).
+    pub fn for_decode(event_type: &str, payload: &[u8]) -> Result<Self, ForDecodeError> {
+        let et = EventType::from_bytes(Bytes::copy_from_slice(event_type.as_bytes()))?;
+        let pl = Payload::from_bytes(Bytes::copy_from_slice(payload))?;
+        let sv = SchemaVersion::INITIAL;
+        let frame = crate::wire::encode_frame(GlobalSeq::INITIAL.as_u64(), sv, &et, &pl, None)?;
         Ok(Self::try_new(
             Version::INITIAL,
             GlobalSeq::INITIAL,
             frame.value,
-            1,
+            sv,
             frame.offsets.event_type,
             frame.offsets.payload,
             None,
-        )
-        .expect("try_new is infallible given encode_frame outputs and valid &str"))
+        )?)
     }
 
     fn slice_range(&self, range: &Range<u32>) -> Bytes {
@@ -613,7 +653,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             value,
-            1,
+            SchemaVersion::INITIAL,
             0..4,
             4..11,
             Some(11..15),
@@ -631,7 +671,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
-            1,
+            SchemaVersion::INITIAL,
             0..4,
             4..11,
             None,
@@ -649,7 +689,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             value,
-            1,
+            SchemaVersion::INITIAL,
             0..4,
             4..100,
             None,
@@ -659,19 +699,17 @@ mod tests {
     }
 
     #[test]
-    fn persisted_envelope_rejects_schema_version_zero() {
-        let value = Bytes::from_static(b"TYPEpayload");
-        let err = PersistedEnvelope::try_new(
+    fn persisted_envelope_rejects_empty_metadata_range() {
+        let env = PersistedEnvelope::try_new(
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
-            value,
-            0,
+            Bytes::from_static(b"TYPEpayload"),
+            SchemaVersion::INITIAL,
             0..4,
             4..11,
-            None,
-        )
-        .expect_err("must reject schema_version == 0");
-        assert!(matches!(err, EnvelopeError::InvalidSchemaVersion));
+            Some(4..4),
+        );
+        assert!(matches!(env, Err(EnvelopeError::MetadataRangeEmpty)));
     }
 
     #[test]
@@ -681,7 +719,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             value,
-            1,
+            SchemaVersion::INITIAL,
             0..2,
             2..5,
             None,
@@ -696,7 +734,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
-            1,
+            SchemaVersion::INITIAL,
             0..4,
             4..11,
             None,
@@ -713,7 +751,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
-            1,
+            SchemaVersion::INITIAL,
             0..4,
             4..11,
             None,
@@ -730,7 +768,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayloadMETA"),
-            1,
+            SchemaVersion::INITIAL,
             0..4,
             4..11,
             Some(11..15),
@@ -747,7 +785,7 @@ mod tests {
             Version::INITIAL,
             crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
-            1,
+            SchemaVersion::INITIAL,
             0..4,
             4..11,
             None,
