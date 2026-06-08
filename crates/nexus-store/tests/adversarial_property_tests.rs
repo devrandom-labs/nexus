@@ -66,6 +66,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrayvec::ArrayString;
+use bytes::Bytes;
 use futures::StreamExt;
 use nexus::Version;
 use nexus_store::InMemoryStoreError;
@@ -78,6 +79,8 @@ use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
+use nexus_store::value::{EventType, Metadata, Payload, SchemaVersion};
+use nexus_store::wire;
 
 use proptest::prelude::*;
 
@@ -2039,5 +2042,55 @@ proptest! {
             prop_assert_eq!(loaded.state().events_applied, u64::try_from(n + 1).unwrap());
             Ok(())
         })?;
+    }
+}
+
+// 25. Wire+envelope round-trip through the typed value-newtype accessors.
+//
+// Closes the loop the validate-once design rests on: arbitrary
+// well-formed value newtypes → wire::encode_frame → wire::decode_frame →
+// PersistedEnvelope::try_new → owned-value accessors → equality with
+// the originals. Asserts the read-path accessors recover the same bytes
+// the write-path injected, across the encode/decode boundary.
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn wire_roundtrip_through_value_accessors_preserves_values(
+        et in "[a-zA-Z][a-zA-Z0-9_]{0,63}",
+        payload in proptest::collection::vec(any::<u8>(), 0..4096),
+        meta in proptest::collection::vec(any::<u8>(), 1..4096),
+    ) {
+        let event_type = EventType::from_bytes(Bytes::from(et.clone().into_bytes()))
+            .expect("valid event type by strategy");
+        let payload_v = Payload::from_bytes(Bytes::from(payload.clone()))
+            .expect("valid payload by strategy");
+        let metadata_v = Metadata::from_bytes(Bytes::from(meta.clone()))
+            .expect("valid metadata by strategy");
+        let sv = SchemaVersion::INITIAL;
+
+        let frame = wire::encode_frame(1, sv, &event_type, &payload_v, Some(&metadata_v))
+            .expect("encode_frame succeeds on validated newtypes");
+
+        let decoded = wire::decode_frame(&frame.value)
+            .expect("decode_frame succeeds on a freshly encoded frame");
+
+        let env = PersistedEnvelope::try_new(
+            Version::INITIAL,
+            GlobalSeq::new(1).expect("nonzero"),
+            frame.value,
+            decoded.schema_version,
+            decoded.offsets.event_type,
+            decoded.offsets.payload,
+            decoded.offsets.metadata,
+        )
+        .expect("try_new succeeds with offsets from decode_frame");
+
+        let recovered_event_type = env.event_type_value();
+        let recovered_payload = env.payload_value();
+        let recovered_metadata = env.metadata_value().expect("metadata present");
+        prop_assert_eq!(recovered_event_type.as_str(), et.as_str());
+        prop_assert_eq!(recovered_payload.as_slice(), payload.as_slice());
+        prop_assert_eq!(recovered_metadata.as_slice(), meta.as_slice());
     }
 }
