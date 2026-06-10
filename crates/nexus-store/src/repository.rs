@@ -345,7 +345,7 @@ impl<S, C> EventStore<S, C> {
                         transformed.event_type(),
                         transformed.payload(),
                     )
-                    .map_err(|e| LoadWithError::Store(StoreError::Wire(e)))?;
+                    .map_err(|e| LoadWithError::Store(StoreError::EnvelopeSynthesis(e)))?;
                     let event: EventOf<A> = <C as Decode<EventOf<A>>>::decode(&codec, &upcast_env)
                         .map_err(|e| LoadWithError::Store(StoreError::Decode(e)))?;
                     r.replay(version, &event)
@@ -641,7 +641,7 @@ impl<S, C> ZeroCopyEventStore<S, C> {
                         transformed.event_type(),
                         transformed.payload(),
                     )
-                    .map_err(|e| LoadWithError::Store(StoreError::Wire(e)))?;
+                    .map_err(|e| LoadWithError::Store(StoreError::EnvelopeSynthesis(e)))?;
                     let event: &EventOf<A> = <C as Decode<EventOf<A>>>::decode(&codec, &upcast_env)
                         .map_err(|e| LoadWithError::Store(StoreError::Decode(e)))?;
                     r.replay(version, event)

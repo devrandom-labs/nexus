@@ -55,18 +55,19 @@ pub enum StoreError<A, EncErr, DecErr> {
     #[error("version overflow: cannot advance past u64::MAX")]
     VersionOverflow,
 
-    /// Wire-format failure while synthesizing an envelope for codec decode.
+    /// Failure while synthesizing a fresh envelope for codec decode.
     ///
     /// Reachable only from upcaster-driven paths
     /// ([`EventStore::load_with`](crate::EventStore::load_with),
     /// [`ZeroCopyEventStore::load_with`](crate::ZeroCopyEventStore::load_with)):
     /// after the user's upcast transforms the event, a fresh aligned
     /// envelope is built from the transformed `event_type` + payload via
-    /// [`wire::encode_frame`](crate::wire::encode_frame), and that build can fail
-    /// if the transform produced a `event_type` longer than 65,535 bytes or
-    /// a `payload` longer than `u32::MAX` bytes.
-    #[error("wire-format error: {0}")]
-    Wire(#[source] crate::wire::WireError),
+    /// [`PersistedEnvelope::for_decode`](crate::PersistedEnvelope::for_decode).
+    /// The build can fail at the value-newtype boundary (oversize
+    /// `event_type`/`payload`), the wire encode (`FrameLengthOverflow`),
+    /// or the envelope construction (range invariants).
+    #[error("envelope synthesis error: {0}")]
+    EnvelopeSynthesis(#[source] crate::envelope::ForDecodeError),
 
     /// Envelope construction rejected user-supplied bytes
     /// (payload exceeded its size cap, or another value-newtype invariant).

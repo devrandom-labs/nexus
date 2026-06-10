@@ -6,6 +6,7 @@ use nexus::Version;
 use nexus_store::envelope::{EnvelopeError, PersistedEnvelope};
 use nexus_store::pending_envelope;
 use nexus_store::store::GlobalSeq;
+use nexus_store::value::SchemaVersion;
 
 fn make_persisted(
     version: Version,
@@ -19,11 +20,12 @@ fn make_persisted(
     let value = Bytes::from(buf);
     let et_end = u32::try_from(event_type.len()).expect("fits");
     let pl_end = u32::try_from(event_type.len() + payload.len()).expect("fits");
+    let sv = SchemaVersion::from_u32(schema_version).expect("nonzero test fixture");
     PersistedEnvelope::try_new(
         version,
         GlobalSeq::INITIAL,
         value,
-        schema_version,
+        sv,
         0..et_end,
         et_end..pl_end,
         None,
@@ -88,7 +90,7 @@ fn persisted_envelope_metadata_bytes() {
         Version::new(1).unwrap(),
         GlobalSeq::INITIAL,
         value,
-        1,
+        SchemaVersion::INITIAL,
         0..et_end,
         et_end..pl_end,
         Some(pl_end..meta_end),
@@ -147,23 +149,10 @@ fn build_without_metadata_has_no_metadata() {
 // PersistedEnvelope::try_new() tests
 // =============================================================================
 
-#[test]
-fn try_new_rejects_zero_schema_version() {
-    let result = PersistedEnvelope::try_new(
-        Version::new(1).unwrap(),
-        GlobalSeq::INITIAL,
-        Bytes::from_static(b"Epayload"),
-        0,
-        0..1,
-        1..8,
-        None,
-    );
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        EnvelopeError::InvalidSchemaVersion
-    ));
-}
+// Note: `try_new` no longer takes a raw `u32` schema_version — the `SchemaVersion`
+// newtype makes zero structurally unrepresentable. The corrupt-on-disk zero case
+// is now surfaced one layer down by `wire::decode_frame`, pinned in
+// `wire::tests::decode_frame_rejects_corrupt_schema_version_zero`.
 
 #[test]
 fn try_new_accepts_valid_schema_version() {
@@ -184,7 +173,7 @@ fn try_new_rejects_out_of_bounds_range() {
         Version::new(1).unwrap(),
         GlobalSeq::INITIAL,
         Bytes::from_static(b"E"),
-        1,
+        SchemaVersion::INITIAL,
         0..100, // ATTACK: range beyond buffer
         100..100,
         None,
@@ -204,7 +193,7 @@ fn try_new_rejects_invalid_utf8_event_type() {
         Version::new(1).unwrap(),
         GlobalSeq::INITIAL,
         value,
-        1,
+        SchemaVersion::INITIAL,
         0..2, // invalid UTF-8 bytes as event_type
         2..3,
         None,

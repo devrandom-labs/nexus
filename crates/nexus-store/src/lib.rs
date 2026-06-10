@@ -101,7 +101,9 @@ pub use codec::serde::json::{Json, JsonCodec};
 #[cfg(feature = "serde")]
 pub use codec::serde::{SerdeCodec, SerdeFormat};
 pub use codec::{Decode, Encode};
-pub use envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope, pending_envelope};
+pub use envelope::{
+    EnvelopeError, ForDecodeError, PendingEnvelope, PersistedEnvelope, pending_envelope,
+};
 pub use error::LoadWithError;
 pub use error::{AppendError, StoreError};
 pub use nexus::Version;

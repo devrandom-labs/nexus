@@ -173,10 +173,10 @@ impl RawEventStore for FjallStore {
             })?;
             let frame = wire::encode_frame(
                 global_seq,
-                env.schema_version(),
-                env.event_type(),
-                env.metadata(),
-                env.payload(),
+                env.schema_version_value(),
+                &env.event_type_value(),
+                &env.payload_value(),
+                env.metadata_value().as_ref(),
             )
             .map_err(|e| {
                 AppendError::Store(FjallError::InvalidInput {

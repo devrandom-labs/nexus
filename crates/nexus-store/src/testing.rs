@@ -43,6 +43,11 @@ pub enum InMemoryStoreError {
         #[source]
         source: EnvelopeError,
     },
+
+    /// Stored row carries `schema_version == 0` — structurally corrupt
+    /// (the write path uses `SchemaVersion`, which is `NonZeroU32`).
+    #[error("corrupt schema_version on stored row at version {version}: got 0, must be > 0")]
+    CorruptSchemaVersion { version: u64 },
 }
 
 /// A frame stored in the in-memory database.
@@ -152,10 +157,10 @@ fn encode_pending_to_frame(
 ) -> Result<StoredFrame, AppendError<InMemoryStoreError>> {
     let frame = wire::encode_frame(
         global_seq.as_u64(),
-        env.schema_version(),
-        env.event_type(),
-        env.metadata(),
-        env.payload(),
+        env.schema_version_value(),
+        &env.event_type_value(),
+        &env.payload_value(),
+        env.metadata_value().as_ref(),
     )
     .map_err(|e| AppendError::Store(InMemoryStoreError::Wire(e)))?;
 
@@ -193,12 +198,18 @@ fn frame_to_envelope(frame: &StoredFrame) -> Result<PersistedEnvelope, InMemoryS
             version: frame.version,
         });
     };
-    let schema_version = u32::from_le_bytes([
+    let schema_version_raw = u32::from_le_bytes([
         value[wire::SCHEMA_VERSION_OFFSET],
         value[wire::SCHEMA_VERSION_OFFSET + 1],
         value[wire::SCHEMA_VERSION_OFFSET + 2],
         value[wire::SCHEMA_VERSION_OFFSET + 3],
     ]);
+    let schema_version =
+        crate::value::SchemaVersion::from_u32(schema_version_raw).map_err(|_| {
+            InMemoryStoreError::CorruptSchemaVersion {
+                version: frame.version,
+            }
+        })?;
 
     PersistedEnvelope::try_new(
         version,

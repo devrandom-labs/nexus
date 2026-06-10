@@ -382,19 +382,23 @@ pub mod bytemuck {
         }
 
         fn build_test_envelope(payload: &[u8]) -> PersistedEnvelope {
+            let et = crate::value::EventType::from_static_str("Pos");
+            let pl = crate::value::Payload::from_bytes(bytes::Bytes::copy_from_slice(payload))
+                .expect("valid payload");
+            let sv = crate::value::SchemaVersion::INITIAL;
             let frame = wire::encode_frame(
                 crate::store::GlobalSeq::INITIAL.as_u64(),
-                1,
-                "Pos",
+                sv,
+                &et,
+                &pl,
                 None,
-                payload,
             )
             .expect("wire encode_frame ok");
             PersistedEnvelope::try_new(
                 nexus::Version::INITIAL,
                 crate::store::GlobalSeq::INITIAL,
                 frame.value,
-                1,
+                sv,
                 frame.offsets.event_type,
                 frame.offsets.payload,
                 None,
@@ -540,19 +544,23 @@ pub mod rkyv {
         }
 
         fn build_test_envelope(payload: &[u8]) -> PersistedEnvelope {
+            let et = crate::value::EventType::from_static_str("Move");
+            let pl = crate::value::Payload::from_bytes(bytes::Bytes::copy_from_slice(payload))
+                .expect("valid payload");
+            let sv = crate::value::SchemaVersion::INITIAL;
             let frame = wire::encode_frame(
                 crate::store::GlobalSeq::INITIAL.as_u64(),
-                1,
-                "Move",
+                sv,
+                &et,
+                &pl,
                 None,
-                payload,
             )
             .expect("wire encode_frame ok");
             PersistedEnvelope::try_new(
                 nexus::Version::INITIAL,
                 crate::store::GlobalSeq::INITIAL,
                 frame.value,
-                1,
+                sv,
                 frame.offsets.event_type,
                 frame.offsets.payload,
                 None,

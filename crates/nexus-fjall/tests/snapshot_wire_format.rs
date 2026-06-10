@@ -114,7 +114,12 @@ fn event_value_schema_zero_rejected() {
     let mut buf = Vec::new();
     let result = encode_event_value(&mut buf, 1, 0, "Empty", None, b"");
     assert!(
-        matches!(result, Err(EncodeError::InvalidSchemaVersion)),
+        matches!(
+            result,
+            Err(EncodeError::Value(
+                nexus_store::value::ValueError::SchemaVersionZero
+            ))
+        ),
         "encode_event_value must reject schema_version=0, got {result:?}",
     );
     assert!(

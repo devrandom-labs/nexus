@@ -212,7 +212,7 @@ where
         // snapshot wire format is *not* the event wire format; this
         // synthesis only carries the bytes through to `decode()`.
         let env = crate::envelope::PersistedEnvelope::for_decode(label.as_str(), &bytes)
-            .map_err(CodecSnapshotStoreError::Wire)?;
+            .map_err(CodecSnapshotStoreError::EnvelopeSynthesis)?;
         let state =
             <C as Decode<S>>::decode(&self.codec, &env).map_err(CodecSnapshotStoreError::Decode)?;
 
@@ -256,8 +256,8 @@ pub enum CodecSnapshotStoreError<S, EncErr, DecErr> {
     /// Wire-format synthesis failed while wrapping the snapshot bytes in
     /// an envelope for the codec. Practically unreachable for in-budget
     /// labels (≤64 bytes via `Id::to_label`) and snapshot bytes ≤ 4 GiB.
-    #[error("wire-format error: {0}")]
-    Wire(#[source] crate::wire::WireError),
+    #[error("envelope synthesis error: {0}")]
+    EnvelopeSynthesis(#[source] crate::envelope::ForDecodeError),
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

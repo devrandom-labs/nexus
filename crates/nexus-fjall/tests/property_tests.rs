@@ -97,7 +97,7 @@ fn decode_ev_slices(buf: &[u8]) -> (u64, u32, String, Vec<u8>) {
             .unwrap()
             .to_owned();
     let pl = b[d.payload_range.start as usize..d.payload_range.end as usize].to_vec();
-    (d.global_seq, d.schema_version, et, pl)
+    (d.global_seq, d.schema_version.get(), et, pl)
 }
 
 fn temp_store() -> (FjallStore, tempfile::TempDir) {

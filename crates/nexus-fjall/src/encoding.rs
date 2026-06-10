@@ -23,39 +23,24 @@ pub enum DecodeError {
 /// Errors from encoding values into byte layouts.
 #[derive(Debug, Error)]
 pub enum EncodeError {
-    #[error("event type too long: {len} bytes (max {})", u16::MAX)]
-    EventTypeTooLong { len: usize },
-
     #[error("stream ID too long: {len} bytes (max {})", u16::MAX)]
     IdTooLong { len: usize },
 
-    #[error("metadata too long: {len} bytes (max {})", u32::MAX - 1)]
-    MetadataTooLong { len: usize },
+    /// Wire-format build failure (e.g. `FrameLengthOverflow`). Wraps
+    /// [`wire::WireError`] verbatim via `#[from]` so the source error's
+    /// structured fields (header / padding / payload sizes) survive
+    /// through the encoding-layer boundary instead of being collapsed
+    /// to a bare variant.
+    #[error(transparent)]
+    Wire(#[from] wire::WireError),
 
-    #[error("payload too long: {len} bytes (max {})", u32::MAX)]
-    PayloadTooLong { len: usize },
-
-    #[error("frame length overflow")]
-    FrameLengthOverflow,
-
-    #[error("schema_version must be > 0 (got 0)")]
-    InvalidSchemaVersion,
-}
-
-impl From<wire::WireError> for EncodeError {
-    fn from(e: wire::WireError) -> Self {
-        match e {
-            wire::WireError::EventTypeTooLong { actual, .. } => {
-                Self::EventTypeTooLong { len: actual }
-            }
-            wire::WireError::MetadataTooLong { actual, .. } => {
-                Self::MetadataTooLong { len: actual }
-            }
-            wire::WireError::PayloadTooLong { actual, .. } => Self::PayloadTooLong { len: actual },
-            wire::WireError::FrameLengthOverflow { .. } => Self::FrameLengthOverflow,
-            wire::WireError::InvalidSchemaVersion => Self::InvalidSchemaVersion,
-        }
-    }
+    /// Value newtype rejected an input (oversize `event_type` / payload /
+    /// metadata, invalid UTF-8 in `event_type`, empty metadata, or zero
+    /// `schema_version`). The size-cap and `schema_version` invariants
+    /// live on [`nexus_store::value`] now; this variant surfaces every
+    /// rejection at the encoding-layer boundary.
+    #[error(transparent)]
+    Value(#[from] nexus_store::value::ValueError),
 }
 
 /// Size of the event key header: `[u16 BE id_len]`.
@@ -180,11 +165,13 @@ pub fn decode_stream_version(value: &[u8]) -> Result<u64, DecodeError> {
 /// to `decode_event_value`. `metadata_range` is `None` when the encoded
 /// `meta_len` is the [`META_LEN_ABSENT`] sentinel. The payload offset
 /// honors the 16-byte alignment invariant from
-/// [`nexus_store::wire`][wire].
+/// [`nexus_store::wire`][wire]. `schema_version` is the typed
+/// [`nexus_store::value::SchemaVersion`] — corrupt on-disk zeros are
+/// surfaced as `DecodeError::Wire(wire::DecodeError::CorruptSchemaVersion)`.
 #[derive(Debug)]
 pub struct DecodedEvent {
     pub global_seq: u64,
-    pub schema_version: u32,
+    pub schema_version: nexus_store::value::SchemaVersion,
     pub event_type_range: std::ops::Range<u32>,
     pub payload_range: std::ops::Range<u32>,
     pub metadata_range: Option<std::ops::Range<u32>>,
@@ -212,7 +199,15 @@ pub fn encode_event_value(
     metadata: Option<&[u8]>,
     payload: &[u8],
 ) -> Result<(), EncodeError> {
-    let frame = wire::encode_frame(global_seq, schema_version, event_type, metadata, payload)?;
+    let sv = nexus_store::value::SchemaVersion::from_u32(schema_version)?;
+    let et = nexus_store::value::EventType::from_bytes(bytes::Bytes::copy_from_slice(
+        event_type.as_bytes(),
+    ))?;
+    let pl = nexus_store::value::Payload::from_bytes(bytes::Bytes::copy_from_slice(payload))?;
+    let md = metadata
+        .map(|m| nexus_store::value::Metadata::from_bytes(bytes::Bytes::copy_from_slice(m)))
+        .transpose()?;
+    let frame = wire::encode_frame(global_seq, sv, &et, &pl, md.as_ref())?;
     buf.clear();
     buf.extend_from_slice(&frame.value);
     Ok(())
@@ -404,7 +399,7 @@ mod tests {
         let decoded = decode_event_value(&bytes_buf).unwrap();
 
         assert_eq!(decoded.global_seq, global_seq);
-        assert_eq!(decoded.schema_version, schema_version);
+        assert_eq!(decoded.schema_version.get(), schema_version);
         assert!(decoded.metadata_range.is_none());
         let et = &bytes_buf
             [decoded.event_type_range.start as usize..decoded.event_type_range.end as usize];
@@ -421,7 +416,7 @@ mod tests {
         let bytes_buf = bytes::Bytes::copy_from_slice(&buf);
         let decoded = decode_event_value(&bytes_buf).unwrap();
         assert_eq!(decoded.global_seq, 7);
-        assert_eq!(decoded.schema_version, 1);
+        assert_eq!(decoded.schema_version.get(), 1);
         let et = &bytes_buf
             [decoded.event_type_range.start as usize..decoded.event_type_range.end as usize];
         assert_eq!(et, b"Empty");
@@ -458,7 +453,7 @@ mod tests {
         let decoded = decode_event_value(&bytes_buf).unwrap();
 
         assert_eq!(decoded.global_seq, global_seq);
-        assert_eq!(decoded.schema_version, schema_version);
+        assert_eq!(decoded.schema_version.get(), schema_version);
         assert_eq!(
             &bytes_buf
                 [decoded.event_type_range.start as usize..decoded.event_type_range.end as usize],
@@ -484,7 +479,7 @@ mod tests {
         let decoded = decode_event_value(&bytes_buf).unwrap();
 
         assert_eq!(decoded.global_seq, 7);
-        assert_eq!(decoded.schema_version, 1);
+        assert_eq!(decoded.schema_version.get(), 1);
         assert!(decoded.metadata_range.is_none());
         assert_eq!(decoded.payload_range.end, decoded.payload_range.start);
     }
