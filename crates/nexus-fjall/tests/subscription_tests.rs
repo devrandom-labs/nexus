@@ -11,14 +11,13 @@
 #![allow(clippy::expect_used, reason = "test code")]
 #![allow(clippy::shadow_reuse, reason = "tests")]
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
-use nexus_store::store::{RawEventStore, Subscription};
-use nexus_store::{PendingEnvelope, pending_envelope};
+use nexus_store::store::RawEventStore;
+use nexus_store::{PendingEnvelope, Store, Subscription, pending_envelope};
 use tokio::time::timeout;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -62,14 +61,14 @@ fn temp_store() -> (FjallStore, tempfile::TempDir) {
 
 /// Helper: append a single event to a stream, with expected version.
 async fn append_one(
-    store: &FjallStore,
+    store: &Store<FjallStore>,
     id: &TestId,
     version: u64,
     expected: Option<Version>,
     event_type: &'static str,
 ) {
     let envelope = make_envelope(version, event_type, format!("payload-{version}").as_bytes());
-    store.append(id, expected, &[envelope]).await.unwrap();
+    store.raw().append(id, expected, &[envelope]).await.unwrap();
 }
 
 /// Timeout duration for operations that should complete quickly.
@@ -82,7 +81,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 #[tokio::test]
 async fn subscribe_catchup_then_live() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("stream-1");
 
     // Pre-populate 2 events.
@@ -90,7 +89,10 @@ async fn subscribe_catchup_then_live() {
     append_one(&store, &id, 2, Version::new(1), "E2").await;
 
     // Subscribe from the beginning (None = start from version 1).
-    let mut stream = store.subscribe(&id, None).await.unwrap();
+    let mut stream = Subscription::new(&store)
+        .subscribe(&id, None)
+        .await
+        .unwrap();
 
     // Read catch-up event 1.
     let env1 = timeout(TIMEOUT, stream.next())
@@ -126,7 +128,7 @@ async fn subscribe_catchup_then_live() {
 #[tokio::test]
 async fn subscribe_from_checkpoint() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("stream-1");
 
     // Pre-populate 3 events.
@@ -135,7 +137,7 @@ async fn subscribe_from_checkpoint() {
     append_one(&store, &id, 3, Version::new(2), "E3").await;
 
     // Subscribe from version 2 (should yield events AFTER version 2, i.e., event 3).
-    let mut stream = store
+    let mut stream = Subscription::new(&store)
         .subscribe(&id, Some(Version::new(2).unwrap()))
         .await
         .unwrap();
@@ -156,7 +158,7 @@ async fn subscribe_from_checkpoint() {
 #[tokio::test]
 async fn drop_and_resubscribe() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("stream-1");
 
     // Append event 1.
@@ -164,7 +166,10 @@ async fn drop_and_resubscribe() {
 
     // Subscribe, read event, note checkpoint version, drop.
     let checkpoint = {
-        let mut sub_stream = store.subscribe(&id, None).await.unwrap();
+        let mut sub_stream = Subscription::new(&store)
+            .subscribe(&id, None)
+            .await
+            .unwrap();
         let first_env = timeout(TIMEOUT, sub_stream.next())
             .await
             .unwrap()
@@ -179,7 +184,10 @@ async fn drop_and_resubscribe() {
     append_one(&store, &id, 3, Version::new(2), "E3").await;
 
     // Re-subscribe from saved checkpoint.
-    let mut stream = store.subscribe(&id, Some(checkpoint)).await.unwrap();
+    let mut stream = Subscription::new(&store)
+        .subscribe(&id, Some(checkpoint))
+        .await
+        .unwrap();
 
     // Should get events 2 and 3 (after the checkpoint).
     let env2 = timeout(TIMEOUT, stream.next())
@@ -207,7 +215,7 @@ async fn write_close_reopen_subscribe() {
 
     // Phase 1: Open, append events, close.
     {
-        let store = FjallStore::builder(&db_path).open().unwrap();
+        let store = Store::new(FjallStore::builder(&db_path).open().unwrap());
         append_one(&store, &id, 1, None, "E1").await;
         append_one(&store, &id, 2, Version::new(1), "E2").await;
         // Store dropped here — flushes to disk.
@@ -215,8 +223,11 @@ async fn write_close_reopen_subscribe() {
 
     // Phase 2: Reopen and subscribe — verify all events via catch-up.
     {
-        let store = Arc::new(FjallStore::builder(&db_path).open().unwrap());
-        let mut stream = store.subscribe(&id, None).await.unwrap();
+        let store = Store::new(FjallStore::builder(&db_path).open().unwrap());
+        let mut stream = Subscription::new(&store)
+            .subscribe(&id, None)
+            .await
+            .unwrap();
 
         let env1 = timeout(TIMEOUT, stream.next())
             .await
@@ -243,10 +254,13 @@ async fn write_close_reopen_subscribe() {
 #[tokio::test]
 async fn subscribe_to_nonexistent_stream_waits() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("ghost-stream");
 
-    let mut stream = store.subscribe(&id, None).await.unwrap();
+    let mut stream = Subscription::new(&store)
+        .subscribe(&id, None)
+        .await
+        .unwrap();
 
     // next() should block because the stream doesn't exist yet.
     let result = tokio::time::timeout(Duration::from_millis(50), stream.next()).await;
@@ -268,7 +282,7 @@ async fn subscribe_to_nonexistent_stream_waits() {
 #[tokio::test]
 async fn subscribe_from_beyond_head() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("stream-1");
 
     // Append 2 events (head is at version 2).
@@ -276,7 +290,7 @@ async fn subscribe_from_beyond_head() {
     append_one(&store, &id, 2, Version::new(1), "E2").await;
 
     // Subscribe from version 5 — beyond the current head.
-    let mut stream = store
+    let mut stream = Subscription::new(&store)
         .subscribe(&id, Some(Version::new(5).unwrap()))
         .await
         .unwrap();
@@ -308,14 +322,17 @@ async fn subscribe_from_beyond_head() {
 #[tokio::test]
 async fn concurrent_append_and_subscribe() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("concurrent-stream");
     let event_count: u64 = 50;
 
-    let mut stream = store.subscribe(&id, None).await.unwrap();
+    let mut stream = Subscription::new(&store)
+        .subscribe(&id, None)
+        .await
+        .unwrap();
 
     // Spawn a task that appends events sequentially.
-    let writer_store = Arc::clone(&store);
+    let writer_store = store.clone();
     let writer_id = id.clone();
     let writer = tokio::spawn(async move {
         for i in 1..=event_count {
@@ -353,7 +370,7 @@ async fn concurrent_append_and_subscribe() {
 #[tokio::test]
 async fn append_during_catchup_no_loss() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("stream-1");
 
     // Pre-populate 20 events.
@@ -362,7 +379,10 @@ async fn append_during_catchup_no_loss() {
         append_one(&store, &id, i, expected, "Prepop").await;
     }
 
-    let mut stream = store.subscribe(&id, None).await.unwrap();
+    let mut stream = Subscription::new(&store)
+        .subscribe(&id, None)
+        .await
+        .unwrap();
 
     // Read first 5 events (mid-catch-up).
     for expected_v in 1..=5u64 {
@@ -391,12 +411,13 @@ async fn append_during_catchup_no_loss() {
 #[tokio::test]
 async fn multiple_subscribers_same_stream() {
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("shared-stream");
 
     // Two subscribers to the same stream.
-    let mut sub1 = store.subscribe(&id, None).await.unwrap();
-    let mut sub2 = store.subscribe(&id, None).await.unwrap();
+    let sub = Subscription::new(&store);
+    let mut sub1 = sub.subscribe(&id, None).await.unwrap();
+    let mut sub2 = sub.subscribe(&id, None).await.unwrap();
 
     // Append one event.
     append_one(&store, &id, 1, None, "SharedEvent").await;
@@ -430,8 +451,11 @@ async fn multiple_subscribers_same_stream() {
 async fn subscription_cursor_is_static() {
     fn assert_static<T: 'static>(_: &T) {}
     let (store, _dir) = temp_store();
-    let store = Arc::new(store);
+    let store = Store::new(store);
     let id = TestId::new("s-1");
-    let sub = store.subscribe(&id, None).await.unwrap();
+    let sub = Subscription::new(&store)
+        .subscribe(&id, None)
+        .await
+        .unwrap();
     assert_static(&sub);
 }
