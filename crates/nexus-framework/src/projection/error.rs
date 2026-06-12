@@ -23,12 +23,12 @@ pub enum ProjectionError<P, EC, SS, Sub> {
     Subscription(#[source] Sub),
 }
 
-/// `try_fold_async_until` requires `E: From<Self::Error>` where
-/// `Self::Error` is the subscription stream's error type. Since
-/// `<Self::Stream as EventStream<()>>::Error == Self::Error` in
-/// [`nexus_store::store::Subscription`], routing that error into
-/// [`ProjectionError::Subscription`] gives the combinator what it
-/// needs without extra glue at the call site.
+/// Routes the subscription cursor's `Error` into
+/// [`ProjectionError::Subscription`]. The adapter trait
+/// [`nexus_store::subscription::RawSubscription`] guarantees
+/// `<Self::Stream as EventStream>::Error == Self::Error`, so a single
+/// `From` impl threads stream errors through the run loop without extra
+/// glue at the call site.
 impl<P, EC, SS, Sub> From<Sub> for ProjectionError<P, EC, SS, Sub> {
     fn from(err: Sub) -> Self {
         Self::Subscription(err)

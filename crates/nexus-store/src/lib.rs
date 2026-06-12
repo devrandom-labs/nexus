@@ -22,9 +22,14 @@
 //!   `Range<u32>` offsets). The read envelope is cheap-to-clone (Arc
 //!   refcount + range copies) and has no lifetime parameter, so it flows
 //!   through `futures::Stream` items without bridging code.
-//! - [`store`] — adapter-facing traits: [`RawEventStore`],
-//!   [`Subscription`], [`Store<S>`](crate::store::Store) wrapper,
-//!   [`GlobalSeq`] (store-wide monotonic-but-gappy stamp).
+//! - [`store`] — adapter-facing [`RawEventStore`] trait,
+//!   [`Store<S>`](crate::store::Store) shared handle, and [`GlobalSeq`]
+//!   (store-wide monotonic-but-gappy stamp).
+//! - [`subscription`] — user-facing [`Subscription<S>`] struct (built
+//!   via `Subscription::new(&store)`); adapter-facing
+//!   [`RawSubscription`](crate::subscription::RawSubscription) trait
+//!   (sealed via [`sealed::Sealed`](crate::subscription::sealed::Sealed),
+//!   intentionally not re-exported at the crate root).
 //! - [`stream`] — [`EventStream`] marker trait over
 //!   `futures::Stream<Item = Result<PersistedEnvelope, _>>`. The marker
 //!   carries no methods of its own — every combinator comes from
@@ -86,6 +91,7 @@ pub mod snapshot;
 pub mod state;
 pub mod store;
 pub mod stream;
+pub mod subscription;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod upcasting;
@@ -118,8 +124,9 @@ pub use state::{
     AfterEventTypes, CodecSnapshotStore, CodecSnapshotStoreError, EveryNEvents, PersistTrigger,
     SnapshotStore,
 };
-pub use store::{GlobalSeq, RawEventStore, Store, Subscription, SubscriptionBackend};
+pub use store::{GlobalSeq, RawEventStore, Store};
 pub use stream::EventStream;
+pub use subscription::Subscription;
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::EventMorsel;

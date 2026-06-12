@@ -8,7 +8,8 @@ use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
-use nexus_store::store::{RawEventStore, SubscriptionBackend};
+use nexus_store::store::RawEventStore;
+use nexus_store::subscription::{RawSubscription, sealed};
 use nexus_store::wire;
 use std::fmt::Write;
 use std::path::Path;
@@ -332,10 +333,12 @@ mod snapshot_impl {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SubscriptionBackend impl
+// RawSubscription impl
 // ═══════════════════════════════════════════════════════════════════════════
 
-impl SubscriptionBackend for FjallStore {
+impl sealed::Sealed for FjallStore {}
+
+impl RawSubscription for FjallStore {
     type Stream = FjallSubscriptionStream;
     type Error = FjallError;
 

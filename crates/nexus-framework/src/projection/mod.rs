@@ -7,9 +7,10 @@ use std::num::NonZeroU32;
 use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_store::Decode;
+use nexus_store::Subscription;
 use nexus_store::projection::Projector;
 use nexus_store::state::{PersistTrigger, SnapshotStore};
-use nexus_store::store::Subscription;
+use nexus_store::subscription::RawSubscription;
 
 pub use builder::ProjectionBuilder;
 pub use error::ProjectionError;
@@ -104,10 +105,10 @@ impl<I, Sub, SS, P, EC, Trig, Mode> Projection<I, Sub, SS, P, EC, Trig, Mode> {
 // Projection<Configured> — hydrate the snapshot, resolve startup
 // ═══════════════════════════════════════════════════════════════════════════
 
-impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Configured>
+impl<I, S, SS, P, EC, Trig> Projection<I, Subscription<S>, SS, P, EC, Trig, Configured>
 where
     I: Id + Clone,
-    Sub: Subscription,
+    S: RawSubscription,
     SS: SnapshotStore<P::State, Version>,
     P: Projector,
     EC: Decode<P::Event>,
@@ -131,8 +132,8 @@ where
     pub async fn initialize(
         self,
     ) -> Result<
-        Projection<I, Sub, SS, P, EC, Trig, Ready<P::State>>,
-        ProjectionError<P::Error, EC::Error, SS::Error, Sub::Error>,
+        Projection<I, Subscription<S>, SS, P, EC, Trig, Ready<P::State>>,
+        ProjectionError<P::Error, EC::Error, SS::Error, S::Error>,
     > {
         let loaded = self
             .snapshot_store
@@ -201,11 +202,11 @@ where
     }
 }
 
-impl<I, Sub, SS, P, EC, Trig> Projection<I, Sub, SS, P, EC, Trig, Ready<P::State>>
+impl<I, S, SS, P, EC, Trig> Projection<I, Subscription<S>, SS, P, EC, Trig, Ready<P::State>>
 where
     I: Id + Clone + Send + Sync,
-    Sub: Subscription + Send,
-    Sub::Stream: Send + Unpin,
+    S: RawSubscription,
+    S::Stream: Send + Unpin,
     SS: SnapshotStore<P::State, Version> + Send + Sync,
     P: Projector + Send + Sync,
     P::State: Clone + Send,
@@ -214,17 +215,16 @@ where
 {
     /// Run the event loop until shutdown or error.
     ///
-    /// Drives the subscription through a single
-    /// [`try_fold_async_until`](EventStreamExt::try_fold_async_until)
-    /// invocation. The fold body is the *only* place projection-specific
-    /// logic lives:
+    /// Drives the subscription through a `tokio::select!` between the
+    /// stream's next item and the shutdown future. The select body is
+    /// the *only* place projection-specific logic lives:
     ///
     /// 1. Decode the envelope.
     /// 2. Run the pure [`apply_event`] FSM transition.
     /// 3. If the new status is `Committed`, persist the snapshot —
     ///    state and position together — in one atomic `commit`.
     ///
-    /// When the shutdown future resolves, the combinator returns the
+    /// When the shutdown future resolves, the loop exits with the
     /// accumulator at the last completed iteration. If that accumulator
     /// is `Pending`, the flush tail commits it once.
     ///
@@ -235,7 +235,7 @@ where
     pub async fn run(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send,
-    ) -> Result<(), ProjectionError<P::Error, EC::Error, SS::Error, Sub::Error>> {
+    ) -> Result<(), ProjectionError<P::Error, EC::Error, SS::Error, S::Error>> {
         let Self {
             id,
             subscription,

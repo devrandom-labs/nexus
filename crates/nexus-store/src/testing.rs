@@ -2,7 +2,8 @@
 
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::store::{GlobalSeq, RawEventStore, SubscriptionBackend};
+use crate::store::{GlobalSeq, RawEventStore};
+use crate::subscription::{RawSubscription, sealed};
 use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
 use nexus::Id;
@@ -397,7 +398,9 @@ impl futures::Stream for InMemorySubscriptionStream {
     }
 }
 
-impl SubscriptionBackend for InMemoryStore {
+impl sealed::Sealed for InMemoryStore {}
+
+impl RawSubscription for InMemoryStore {
     type Stream = InMemorySubscriptionStream;
     type Error = InMemoryStoreError;
 

@@ -1,5 +1,4 @@
 use core::fmt;
-use std::future::Future;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -51,29 +50,27 @@ impl<S> Store<S> {
     /// flexible enough (e.g. you want to filter, peek, branch, or chain
     /// custom combinators during load). Hand the borrowed `&S` to
     /// [`RawEventStore::read_stream`] / [`RawEventStore::append`] and
-    /// compose your own chain via [`EventStreamExt`](crate::EventStreamExt).
+    /// compose your own chain via [`futures::StreamExt`] /
+    /// [`futures::TryStreamExt`].
     ///
     /// Users who just want "load this aggregate" should stay on the facade.
     ///
     /// # Example
     ///
-    /// Substrate-path read: convert the adapter error eagerly via
-    /// [`map_err`](crate::EventStreamExt::map_err) and drive a custom fold.
+    /// Substrate-path read: convert the adapter error eagerly and drive
+    /// a custom fold.
     ///
     /// ```ignore
-    /// use nexus_store::{EventStreamExt, RawEventStore, Store};
+    /// use futures::TryStreamExt;
+    /// use nexus_store::{RawEventStore, Store};
     ///
     /// async fn count_events<S: RawEventStore>(
     ///     store: &Store<S>,
     ///     id: &impl nexus::Id,
     ///     from: nexus::Version,
     /// ) -> Result<usize, MyError> {
-    ///     store.raw()
-    ///         .read_stream(id, from).await
-    ///         .map_err(MyError::Adapter)?
-    ///         .map_err(MyError::Adapter)
-    ///         .try_count()
-    ///         .await
+    ///     let stream = store.raw().read_stream(id, from).await.map_err(MyError::Adapter)?;
+    ///     stream.map_err(MyError::Adapter).try_fold(0usize, |acc, _| async move { Ok(acc + 1) }).await
     /// }
     /// ```
     ///
@@ -82,6 +79,16 @@ impl<S> Store<S> {
     /// [`RawEventStore::append`]: crate::RawEventStore::append
     #[must_use]
     pub fn raw(&self) -> &S {
+        &self.inner
+    }
+
+    /// Borrow the inner `Arc<S>` for the subscription module's use.
+    ///
+    /// `pub(crate)` so the subscription module can pull the `Arc` out for
+    /// [`Subscription::new`](crate::subscription::Subscription::new) without
+    /// leaking `Arc` to library users.
+    #[must_use]
+    pub(crate) const fn arc(&self) -> &Arc<S> {
         &self.inner
     }
 }
@@ -158,118 +165,6 @@ pub trait RawEventStore: Send + Sync {
         id: &impl Id,
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::Stream, Self::Error>> + Send;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Subscription<M> — Arc-based 'static subscription shape
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// A subscription whose cursor owns an `Arc<Store>` and is therefore `'static`.
-///
-/// Implemented on `Arc<Store>` directly so the trait method `subscribe`
-/// takes `&self` and returns a cursor that outlives the call. Each
-/// subscription pays one `Arc::clone` at `subscribe()` time.
-///
-/// # Shape
-///
-/// `type Stream: EventStream<M> + Send + 'static` is a concrete, non-GAT
-/// associated type. Consumers can name `Sub::Stream` directly and bound it
-/// with HRTBs (e.g. `for<'a> Sub::Stream::Item<'a> = PersistedEnvelope`)
-/// without forcing `Self: 'static` via the `where Self: 'a` clause a GAT
-/// would require. The cursor's own per-record `Item<'a>` GAT on
-/// [`EventStream`](crate::stream::EventStream) is **preserved** — each
-/// `next()` still lends a `PersistedEnvelope` from the cursor's
-/// internal buffer.
-///
-/// # Contract
-///
-/// - `from: None` → start from the beginning of the stream (version 1)
-/// - `from: Some(v)` → start from the event *after* version `v`
-/// - The returned stream **never returns `None`**. When all existing
-///   events have been yielded, it blocks until new events are appended.
-/// - Events are yielded with monotonically increasing versions, same
-///   as [`EventStream`](crate::stream::EventStream).
-///
-/// # Difference from [`RawEventStore::read_stream`]
-///
-/// `read_stream` returns a fused stream that terminates when caught up.
-/// `subscribe` returns a stream that *waits* instead of terminating.
-pub trait Subscription {
-    /// The subscription stream type — an [`EventStream`](crate::stream::EventStream) that never exhausts.
-    type Stream: EventStream<Error = Self::Error> + 'static;
-
-    /// The error type for subscription operations.
-    type Error: core::error::Error + Send + Sync + 'static;
-
-    /// Subscribe to events in a single stream.
-    ///
-    /// `from: None` starts from the beginning of the stream (version 1);
-    /// `from: Some(v)` starts from the event *after* version `v`. The
-    /// returned cursor **never returns `None`** — it waits for new events
-    /// when caught up instead of terminating.
-    fn subscribe(
-        &self,
-        id: &impl Id,
-        from: Option<Version>,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SubscriptionBackend<M> — adapter-facing primitive
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Adapter-facing primitive for the [`Subscription`] blanket impl.
-///
-/// Adapters implement this trait on the **bare** store type (e.g.
-/// `FjallStore`, [`InMemoryStore`](crate::testing::InMemoryStore)), not on
-/// `Arc<Store>`. The blanket impl below then provides [`Subscription<M>`]
-/// on `Arc<Store>` automatically — users never name this trait directly. They
-/// call `store.subscribe(&id, None)` on an `Arc<Store>` and the blanket
-/// dispatches here.
-///
-/// # Why this trait exists
-///
-/// Rust's orphan rule (E0117) forbids
-/// `impl Subscription<M> for Arc<Store>` in an adapter crate when
-/// both `Subscription` and `Arc` are foreign — `Store` at a covered
-/// position inside `Arc<Store>` does not satisfy coherence. The escape is
-/// this trait, whose `Self` is the bare store type (local to the adapter
-/// crate). The blanket in this crate translates to the user-facing shape.
-pub trait SubscriptionBackend: Send + Sync + 'static {
-    /// The cursor type — a `futures::Stream` of envelopes, `'static`.
-    type Stream: EventStream<Error = Self::Error> + 'static;
-
-    /// The error type for subscription operations.
-    type Error: core::error::Error + Send + Sync + 'static;
-
-    /// Subscribe to events.
-    ///
-    /// First parameter is `&Arc<Self>`, not a `self` receiver — the
-    /// adapter clones the Arc inside to give the returned cursor its
-    /// own owned reference to the store.
-    fn subscribe(
-        arc: &Arc<Self>,
-        id: &impl Id,
-        from: Option<Version>,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
-}
-
-// ─── Blanket: Arc<T> + SubscriptionBackend → Subscription ───────────────────
-
-impl<T> Subscription for Arc<T>
-where
-    T: SubscriptionBackend,
-{
-    type Stream = T::Stream;
-    type Error = T::Error;
-
-    fn subscribe(
-        &self,
-        id: &impl Id,
-        from: Option<Version>,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send {
-        T::subscribe(self, id, from)
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
