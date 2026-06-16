@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrayvec::ArrayString;
 use nexus::{Id, Version};
 use nexus_store::PersistedEnvelope;
+use nexus_store::notify::SubscriptionGuard;
 use nexus_store::store::RawEventStore;
 
 use crate::error::FjallError;
@@ -58,12 +59,17 @@ pub struct FjallSubscriptionStream {
 }
 
 impl FjallSubscriptionStream {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "cursor constructor threads six distinct pieces of subscription state: store handle, stream key, diagnostic label, initial batch, resume version, and wake guard"
+    )]
     pub(crate) fn new(
         store: Arc<FjallStore>,
         stream_key: OwnedStreamId,
         label: ArrayString<64>,
         inner: FjallStream,
         last_version: Option<Version>,
+        guard: SubscriptionGuard,
     ) -> Self {
         let state = SubState {
             store,
@@ -71,6 +77,7 @@ impl FjallSubscriptionStream {
             label,
             inner,
             last_version,
+            guard,
         };
         let unfolded = futures::stream::unfold(state, |mut s| async move {
             loop {
@@ -85,10 +92,17 @@ impl FjallSubscriptionStream {
                     }
                 }
 
-                // Buffer empty. Register notify BEFORE refilling to avoid
-                // racing a concurrent append.
-                let store_handle = Arc::clone(&s.store);
-                let notified = store_handle.notify.notified();
+                // Buffer empty. Register the waiter BEFORE refilling to close
+                // the lost-wakeup race. `wake` uses `notify_waiters` (no stored
+                // permit) and a `Notified` only joins the waiter list when
+                // polled, so `enable()` must register it before the refill read
+                // — otherwise a `wake` landing during `refill` is lost. Clone
+                // the `Arc` to an owned handle so the `Notified` borrows the
+                // local, not `s`, leaving `s` free for the refill and move.
+                let notify = Arc::clone(s.guard.notifier());
+                let notified = notify.notified();
+                tokio::pin!(notified);
+                let _ = notified.as_mut().enable();
 
                 let from = match s.next_read_version() {
                     Ok(v) => v,
@@ -127,6 +141,10 @@ struct SubState {
     label: ArrayString<64>,
     inner: FjallStream,
     last_version: Option<Version>,
+    /// Keeps this stream's wake entry registered for the cursor's whole
+    /// life and supplies the per-stream `Notify`. Dropped with the cursor,
+    /// which reaps the entry once the last subscriber leaves.
+    guard: SubscriptionGuard,
 }
 
 impl SubState {

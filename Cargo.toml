@@ -21,9 +21,11 @@ bytemuck = { version = "1", features = ["derive"] }
 bytes = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 fjall = { version = "3", features = ["bytes_1"] }
+foldhash = "0.2.0"
 futures = "0.3"
 futures-core = { version = "0.3", default-features = false }
 insta = "1.47.2"
+parking_lot = "0.12.5"
 proptest = "1.11.0"
 proptest-state-machine = "0.8.0"
 rkyv = "0.8"

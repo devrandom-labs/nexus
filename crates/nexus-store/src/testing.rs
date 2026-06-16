@@ -2,6 +2,7 @@
 
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
+use crate::notify::{NotifyError, StreamNotifiers, SubscriptionGuard};
 use crate::store::{GlobalSeq, RawEventStore};
 use crate::subscription::{RawSubscription, sealed};
 use crate::wire::{self, FrameOffsets};
@@ -12,7 +13,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tokio::sync::Notify;
 
 /// Error type for the [`InMemoryStore`] adapter.
 #[derive(Debug, Error)]
@@ -49,6 +49,10 @@ pub enum InMemoryStoreError {
     /// (the write path uses `SchemaVersion`, which is `NonZeroU32`).
     #[error("corrupt schema_version on stored row at version {version}: got 0, must be > 0")]
     CorruptSchemaVersion { version: u64 },
+
+    /// Failed to register a per-stream subscription wake handle.
+    #[error("subscription wake registration failed")]
+    Subscription(#[from] NotifyError),
 }
 
 /// A frame stored in the in-memory database.
@@ -89,7 +93,7 @@ struct StoredFrame {
 ///   multiple writers on different machines racing on the same stream.
 pub struct InMemoryStore {
     streams: Mutex<HashMap<String, Vec<StoredFrame>>>,
-    notify: Arc<Notify>,
+    notifiers: Arc<StreamNotifiers>,
     next_global_seq: Mutex<GlobalSeq>,
 }
 
@@ -99,7 +103,7 @@ impl InMemoryStore {
     pub fn new() -> Self {
         Self {
             streams: Mutex::new(HashMap::new()),
-            notify: Arc::new(Notify::new()),
+            notifiers: StreamNotifiers::new(),
             next_global_seq: Mutex::new(GlobalSeq::INITIAL),
         }
     }
@@ -299,8 +303,10 @@ impl RawEventStore for InMemoryStore {
         // wake up and immediately try to acquire the same Mutex.
         drop(guard);
 
+        // Wake only the subscribers parked on this stream, keyed by the
+        // stable byte representation (`as_ref`), matching `subscribe`.
         if should_notify {
-            self.notify.notify_waiters();
+            self.notifiers.wake(id.as_ref());
         }
 
         Ok(())
@@ -347,6 +353,10 @@ struct SubState {
     stream_id: String,
     buffer: std::collections::VecDeque<StoredFrame>,
     last_version: Option<Version>,
+    /// Keeps this stream's wake entry registered for the cursor's whole
+    /// life and supplies the per-stream `Notify`. Dropped with the cursor,
+    /// which reaps the entry once the last subscriber leaves.
+    guard: SubscriptionGuard,
     #[cfg(debug_assertions)]
     prev_version: Option<u64>,
 }
@@ -415,11 +425,17 @@ impl RawSubscription for InMemoryStore {
             Some(v) => v.next().ok_or(InMemoryStoreError::VersionOverflow)?,
         };
 
+        // Register the per-stream wake guard before the catch-up read, so the
+        // map entry is live for any concurrent append's `wake`. Keyed by the
+        // stable byte representation, matching `append`'s `wake(id.as_ref())`.
+        let guard = arc.notifiers.subscribe(id.as_ref())?;
+
         let mut state = SubState {
             store: Arc::clone(arc),
             stream_id,
             buffer: std::collections::VecDeque::new(),
             last_version: from,
+            guard,
             #[cfg(debug_assertions)]
             prev_version: from.map(Version::as_u64),
         };
@@ -452,10 +468,17 @@ impl RawSubscription for InMemoryStore {
                     };
                 }
 
-                // Buffer empty. Register notify BEFORE refilling to avoid
-                // missing a concurrent append.
-                let notify = Arc::clone(&s.store.notify);
+                // Buffer empty. Register the waiter BEFORE refilling to close
+                // the lost-wakeup race. `wake` uses `notify_waiters` (no stored
+                // permit) and a `Notified` only joins the waiter list when
+                // polled, so `enable()` must register it before the refill read
+                // — otherwise a `wake` landing during `refill` is lost. Clone
+                // the `Arc` to a local so the `Notified` does not borrow `s`
+                // across the refill.
+                let notify = Arc::clone(s.guard.notifier());
                 let notified = notify.notified();
+                tokio::pin!(notified);
+                let _ = notified.as_mut().enable();
                 let next_from = match s.next_read_version() {
                     Ok(v) => v,
                     Err(e) => return Some((Err(e), s)),

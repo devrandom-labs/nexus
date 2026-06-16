@@ -8,13 +8,13 @@ use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
+use nexus_store::notify::StreamNotifiers;
 use nexus_store::store::RawEventStore;
 use nexus_store::subscription::{RawSubscription, sealed};
 use nexus_store::wire;
 use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::Notify;
 
 /// Format a `Display` value into a stack-allocated reason label,
 /// silently truncating at 128 bytes on a char boundary.
@@ -46,7 +46,10 @@ pub struct FjallStore {
     #[cfg(feature = "snapshot")]
     pub(crate) snapshots: fjall::SingleWriterTxKeyspace,
     pub(crate) global: fjall::SingleWriterTxKeyspace,
-    pub(crate) notify: Notify,
+    /// Per-stream wake registry. After a durable commit to stream `X`,
+    /// `append` calls `wake(X)`, rousing only the subscribers parked on
+    /// `X` rather than every subscriber in the store.
+    pub(crate) notifiers: Arc<StreamNotifiers>,
 }
 
 impl FjallStore {
@@ -208,7 +211,9 @@ impl RawEventStore for FjallStore {
         tx.commit()
             .map_err(|e| AppendError::Store(FjallError::Io(e)))?;
 
-        self.notify.notify_waiters();
+        // Wake only the subscribers parked on this stream, AFTER the commit
+        // is durable so a woken subscriber re-reads already-visible data.
+        self.notifiers.wake(id_bytes);
 
         Ok(())
     }
@@ -351,6 +356,10 @@ impl RawSubscription for FjallStore {
             None => Version::INITIAL,
             Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
         };
+        // Register the per-stream wake guard before the catch-up read, so the
+        // map entry is live for any concurrent append's `wake`. The cursor
+        // holds it for its whole life; dropping the cursor reaps the entry.
+        let guard = arc.notifiers.subscribe(id.as_ref())?;
         let owned_id = OwnedStreamId::from_id(id);
         let label = id.to_label();
         let inner = arc.read_stream(&owned_id, start).await?;
@@ -360,6 +369,7 @@ impl RawSubscription for FjallStore {
             label,
             inner,
             from,
+            guard,
         ))
     }
 }

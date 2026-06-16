@@ -2,8 +2,8 @@ use crate::error::FjallError;
 use crate::partition::{KeyspaceConfig, point_read_defaults, scan_defaults};
 use crate::store::FjallStore;
 use fjall::KeyspaceCreateOptions;
+use nexus_store::notify::StreamNotifiers;
 use std::path::{Path, PathBuf};
-use tokio::sync::Notify;
 
 /// Builder for [`FjallStore`].
 ///
@@ -102,7 +102,7 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
             #[cfg(feature = "snapshot")]
             snapshots,
             global,
-            notify: Notify::new(),
+            notifiers: StreamNotifiers::new(),
         })
     }
 }
