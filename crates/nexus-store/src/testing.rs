@@ -1,5 +1,6 @@
 //! Test utilities for nexus-store. Gated behind the `testing` feature.
 
+use crate::batch::BatchSize;
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::notify::{NotifyError, StreamNotifiers, SubscriptionGuard};
@@ -92,20 +93,34 @@ struct StoredFrame {
 /// - **Distributed concurrency**: Single-process only. Cannot simulate
 ///   multiple writers on different machines racing on the same stream.
 pub struct InMemoryStore {
-    streams: Mutex<HashMap<String, Vec<StoredFrame>>>,
+    streams: Arc<Mutex<HashMap<String, Vec<StoredFrame>>>>,
     notifiers: Arc<StreamNotifiers>,
     next_global_seq: Mutex<GlobalSeq>,
+    batch_size: BatchSize,
 }
 
 impl InMemoryStore {
-    /// Create a new empty in-memory store.
+    /// Create a new empty in-memory store with the default batch size.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_batch_size(BatchSize::DEFAULT)
+    }
+
+    /// Create a new empty in-memory store with an explicit batch size.
+    #[must_use]
+    pub fn with_batch_size(batch_size: BatchSize) -> Self {
         Self {
-            streams: Mutex::new(HashMap::new()),
+            streams: Arc::new(Mutex::new(HashMap::new())),
             notifiers: StreamNotifiers::new(),
             next_global_seq: Mutex::new(GlobalSeq::INITIAL),
+            batch_size,
         }
+    }
+
+    /// The configured read / refill batch size.
+    #[must_use]
+    pub const fn batch_size(&self) -> BatchSize {
+        self.batch_size
     }
 }
 
@@ -493,5 +508,24 @@ impl RawSubscription for InMemoryStore {
         Ok(InMemorySubscriptionStream {
             inner: Box::pin(unfolded),
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod batch_config_tests {
+    use super::*;
+    use crate::batch::{BatchSize, DEFAULT_BATCH};
+
+    #[test]
+    fn default_store_uses_default_batch() {
+        let store = InMemoryStore::new();
+        assert_eq!(store.batch_size().get(), DEFAULT_BATCH);
+    }
+
+    #[test]
+    fn with_batch_size_overrides_default() {
+        let store = InMemoryStore::with_batch_size(BatchSize::new(8).unwrap());
+        assert_eq!(store.batch_size().get(), 8);
     }
 }
