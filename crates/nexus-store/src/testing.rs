@@ -441,6 +441,7 @@ struct SubState {
     stream_id: String,
     buffer: VecDeque<StoredFrame>,
     last_version: Option<Version>,
+    batch_size: usize,
     /// Keeps this stream's wake entry registered for the cursor's whole
     /// life and supplies the per-stream `Notify`. Dropped with the cursor,
     /// which reaps the entry once the last subscriber leaves.
@@ -455,12 +456,7 @@ impl SubState {
             let guard = self.store.streams.lock().await;
             guard
                 .get(&self.stream_id)
-                .map(|rows| {
-                    rows.iter()
-                        .filter(|r| r.version >= from_version.as_u64())
-                        .cloned()
-                        .collect()
-                })
+                .map(|rows| scan_batch(rows, from_version.as_u64(), self.batch_size))
                 .unwrap_or_default()
         };
         self.buffer = buffer;
@@ -523,6 +519,7 @@ impl RawSubscription for InMemoryStore {
             stream_id,
             buffer: VecDeque::new(),
             last_version: from,
+            batch_size: arc.batch_size().get(),
             guard,
             #[cfg(debug_assertions)]
             prev_version: from.map(Version::as_u64),
@@ -719,5 +716,75 @@ mod bounded_read_tests {
         // Exhausted stream must keep returning None (fused), not panic or re-yield.
         assert!(stream.next().await.is_none());
         assert!(stream.next().await.is_none());
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::as_conversions,
+    reason = "test code"
+)]
+mod bounded_subscription_tests {
+    use super::*;
+    use crate::batch::BatchSize;
+    use crate::envelope::pending_envelope;
+    use crate::subscription::RawSubscription;
+    use futures::StreamExt;
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct Tid(String);
+    impl std::fmt::Display for Tid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+
+    fn env(v: u64) -> PendingEnvelope {
+        pending_envelope(Version::new(v).unwrap())
+            .event_type("E")
+            .payload(vec![v as u8])
+            .unwrap()
+            .build()
+    }
+
+    #[tokio::test]
+    async fn subscription_drains_many_batches_then_sees_new_event() {
+        // batch_size 4; pre-seed 10 (catch-up across 3 refills), then push 1 live.
+        let store = Arc::new(InMemoryStore::with_batch_size(BatchSize::new(4).unwrap()));
+        let id = Tid("s".into());
+        for v in 1..=10 {
+            store
+                .append(&id, Version::new(v - 1), &[env(v)])
+                .await
+                .unwrap();
+        }
+
+        let mut sub = InMemoryStore::subscribe(&store, &id, None).await.unwrap();
+
+        for expected in 1..=10u64 {
+            let got = sub.next().await.unwrap().unwrap();
+            assert_eq!(got.version().as_u64(), expected);
+        }
+
+        let store2 = Arc::clone(&store);
+        let id2 = id.clone();
+        tokio::spawn(async move {
+            store2
+                .append(&id2, Version::new(10), &[env(11)])
+                .await
+                .unwrap();
+        });
+        let live = sub.next().await.unwrap().unwrap();
+        assert_eq!(live.version().as_u64(), 11);
     }
 }
