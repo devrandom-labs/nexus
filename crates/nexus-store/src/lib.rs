@@ -80,6 +80,7 @@
 //! (kernel-pure → store-persistence → adapters); the boundary that
 //! didn't matter was inside `nexus-store`.
 
+pub mod batch;
 pub mod builder;
 pub mod codec;
 pub mod envelope;
@@ -102,6 +103,7 @@ pub mod value;
 pub mod wire;
 
 pub use arrayvec::ArrayString;
+pub use batch::{BatchSize, BatchSizeError, DEFAULT_BATCH, MAX_BATCH};
 #[cfg(feature = "snapshot")]
 pub use builder::WithSnapshot;
 pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};

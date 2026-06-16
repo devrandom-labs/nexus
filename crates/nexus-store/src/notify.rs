@@ -234,6 +234,14 @@ impl Drop for SubscriptionGuard {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 #[allow(clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::similar_names,
+    reason = "notifier/notified are domain-accurate names"
+)]
+#[allow(
+    clippy::shadow_reuse,
+    reason = "Arc::clone rebinds are idiomatic for task captures"
+)]
 mod tests {
     use super::{Arc, StreamNotifiers};
     use std::time::Duration;
