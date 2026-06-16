@@ -1,9 +1,8 @@
 use crate::builder::FjallStoreBuilder;
 use crate::encoding::{decode_stream_version, encode_event_key, encode_stream_version};
-use crate::error::FjallError;
+use crate::error::{FjallError, reason_label};
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
-use arrayvec::ArrayString;
 use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
@@ -12,17 +11,8 @@ use nexus_store::notify::StreamNotifiers;
 use nexus_store::store::RawEventStore;
 use nexus_store::subscription::{RawSubscription, sealed};
 use nexus_store::wire;
-use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
-
-/// Format a `Display` value into a stack-allocated reason label,
-/// silently truncating at 128 bytes on a char boundary.
-fn reason_label(value: &impl std::fmt::Display) -> ArrayString<128> {
-    let mut buf = ArrayString::<128>::new();
-    let _ = write!(buf, "{value}");
-    buf
-}
 
 /// The single key under which the store-global sequence counter is kept
 /// in the `global` partition.

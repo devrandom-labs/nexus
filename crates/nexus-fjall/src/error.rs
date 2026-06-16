@@ -1,6 +1,15 @@
 use arrayvec::ArrayString;
 use nexus_store::envelope::EnvelopeError;
+use std::fmt::Write;
 use thiserror::Error;
+
+/// Format a `Display` value into a stack-allocated reason label,
+/// silently truncating at 128 bytes on a char boundary.
+pub(crate) fn reason_label(value: &impl std::fmt::Display) -> ArrayString<128> {
+    let mut buf = ArrayString::<128>::new();
+    let _ = write!(buf, "{value}");
+    buf
+}
 
 /// Errors produced by the fjall event store adapter.
 ///
