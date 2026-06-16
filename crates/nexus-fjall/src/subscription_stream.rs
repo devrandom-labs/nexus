@@ -111,7 +111,7 @@ impl FjallSubscriptionStream {
                 if let Err(e) = s.refill(from).await {
                     return Some((Err(e), s));
                 }
-                if s.inner.events.is_empty() {
+                if s.inner.is_empty() {
                     notified.await;
                 }
             }
