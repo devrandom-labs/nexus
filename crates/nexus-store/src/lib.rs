@@ -68,7 +68,8 @@
 //! | `snapshot-json` | `snapshot` + `json` |
 //! | `projection` | `Projector` trait |
 //! | `projection-json` | `projection` + `json` |
-//! | `testing` | `InMemoryStore`, `InMemorySnapshotStore` for tests |
+//! | `subscription` | [`StreamNotifiers`](crate::notify) per-stream wake registry (pulls `tokio`, `foldhash`, `parking_lot`) |
+//! | `testing` | `InMemoryStore`, `InMemorySnapshotStore` for tests (implies `subscription`) |
 //!
 //! # Design notes
 //!
@@ -83,6 +84,8 @@ pub mod builder;
 pub mod codec;
 pub mod envelope;
 pub mod error;
+#[cfg(feature = "subscription")]
+pub mod notify;
 #[cfg(feature = "projection")]
 pub mod projection;
 pub mod repository;

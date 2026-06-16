@@ -11,7 +11,15 @@ keywords = ["event-sourcing", "event-store", "cqrs", "persistence"]
 categories = ["data-structures"]
 
 [features]
-testing = ["dep:tokio"]
+# Per-stream subscription wake path (`notify` module). Pulls `tokio` (for its
+# `Notify` sync primitive), `foldhash` (fast hot-path hasher), and `parking_lot`
+# (sync `Mutex` lockable from the drop-guard's `Drop`). Adapter crates that
+# implement `RawSubscription` enable this; pure event-sourcing users
+# (repository/codec/wire only) build with no tokio dependency at all.
+subscription = ["dep:tokio", "dep:foldhash", "dep:parking_lot"]
+# `testing` ships `InMemoryStore`, whose subscription cursor uses the wake
+# registry, so it implies `subscription`.
+testing = ["subscription"]
 serde = ["dep:serde"]
 json = ["serde", "dep:serde_json"]
 snapshot = []
@@ -31,9 +39,11 @@ aligned-vec = { workspace = true }
 arrayvec = { workspace = true }
 bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true }
+foldhash = { workspace = true, optional = true }
 futures = { workspace = true }
 futures-core = { workspace = true }
 nexus = { version = "0.1.0", path = "../nexus" }
+parking_lot = { workspace = true, optional = true }
 rkyv = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

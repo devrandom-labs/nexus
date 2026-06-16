@@ -53,6 +53,14 @@ pub enum FjallError {
     /// The store-global sequence counter would overflow `u64::MAX`.
     #[error("global sequence overflow: cannot advance past u64::MAX")]
     GlobalSeqOverflow,
+
+    /// Failed to register a per-stream subscription wake handle.
+    ///
+    /// Surfaces [`NotifyError`](nexus_store::notify::NotifyError) from the
+    /// wake registry — in practice only the unreachable subscriber-count
+    /// overflow.
+    #[error("subscription wake registration failed")]
+    Subscription(#[from] nexus_store::notify::NotifyError),
 }
 
 #[cfg(test)]
