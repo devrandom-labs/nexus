@@ -572,6 +572,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_from_midpoint_resumes_across_refills() {
+        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
+        let (store, _dir) = store_with_batch(3);
+        let id = btid("s");
+        seed(&store, &id, 10).await;
+        let mut stream = store
+            .read_stream(&id, Version::new(6).unwrap())
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, vec![6, 7, 8, 9, 10]);
+    }
+
+    #[tokio::test]
     async fn read_reopened_store_recovers_all_across_refills() {
         use nexus_store::batch::BatchSize;
         let dir = tempfile::tempdir().unwrap();

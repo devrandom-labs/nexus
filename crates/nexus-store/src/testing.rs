@@ -759,10 +759,10 @@ mod bounded_subscription_tests {
 
     #[tokio::test]
     async fn subscription_drains_many_batches_then_sees_new_event() {
-        // batch_size 4; pre-seed 10 (catch-up across 3 refills), then push 1 live.
+        // batch_size 4; pre-seed 40 (10× batch_size backlog, 10 full refills), then push 1 live.
         let store = Arc::new(InMemoryStore::with_batch_size(BatchSize::new(4).unwrap()));
         let id = Tid("s".into());
-        for v in 1..=10 {
+        for v in 1..=40 {
             store
                 .append(&id, Version::new(v - 1), &[env(v)])
                 .await
@@ -771,7 +771,7 @@ mod bounded_subscription_tests {
 
         let mut sub = InMemoryStore::subscribe(&store, &id, None).await.unwrap();
 
-        for expected in 1..=10u64 {
+        for expected in 1..=40u64 {
             let got = sub.next().await.unwrap().unwrap();
             assert_eq!(got.version().as_u64(), expected);
         }
@@ -780,11 +780,11 @@ mod bounded_subscription_tests {
         let id2 = id.clone();
         tokio::spawn(async move {
             store2
-                .append(&id2, Version::new(10), &[env(11)])
+                .append(&id2, Version::new(40), &[env(41)])
                 .await
                 .unwrap();
         });
         let live = sub.next().await.unwrap().unwrap();
-        assert_eq!(live.version().as_u64(), 11);
+        assert_eq!(live.version().as_u64(), 41);
     }
 }
