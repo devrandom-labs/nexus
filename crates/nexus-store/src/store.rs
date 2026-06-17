@@ -160,6 +160,16 @@ pub trait RawEventStore: Send + Sync {
     ///
     /// Events are yielded one at a time as a `futures::Stream` of
     /// owned [`PersistedEnvelope`](crate::envelope::PersistedEnvelope)s.
+    ///
+    /// # Batching
+    ///
+    /// An adapter materializes at most its configured `batch_size` rows at a
+    /// time and refills the next batch internally as the cursor drains, by
+    /// keyset resume on the stream version. This is invisible to callers:
+    /// `next()` has the same contract regardless of how the events are
+    /// chunked, and the stream returns `None` once the persisted stream is
+    /// exhausted. The bound caps resident memory so a large stream cannot be
+    /// loaded all at once.
     fn read_stream(
         &self,
         id: &impl Id,

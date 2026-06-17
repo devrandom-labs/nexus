@@ -122,6 +122,11 @@ impl<S: RawSubscription> Subscription<S> {
     /// the event *after* version `v`. The returned cursor **never returns
     /// `None`** — it waits for new events when caught up.
     ///
+    /// Catch-up is bounded: the cursor materializes at most the adapter's
+    /// configured `batch_size` events per refill, paginating by keyset resume
+    /// until caught up, then waits for new events. A slow consumer never forces
+    /// the whole backlog into memory at once.
+    ///
     /// # Errors
     ///
     /// Returns `S::Error` if the adapter cannot open the cursor (e.g. an
