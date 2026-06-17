@@ -2,6 +2,7 @@ use crate::error::FjallError;
 use crate::partition::{KeyspaceConfig, point_read_defaults, scan_defaults};
 use crate::store::FjallStore;
 use fjall::KeyspaceCreateOptions;
+use nexus_store::batch::BatchSize;
 use nexus_store::notify::StreamNotifiers;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +23,7 @@ pub struct FjallStoreBuilder<S = (), E = ()> {
     path: PathBuf,
     streams_config: S,
     events_config: E,
+    batch_size: BatchSize,
 }
 
 impl FjallStoreBuilder {
@@ -31,6 +33,7 @@ impl FjallStoreBuilder {
             path: path.as_ref().to_path_buf(),
             streams_config: (),
             events_config: (),
+            batch_size: BatchSize::DEFAULT,
         }
     }
 }
@@ -50,6 +53,7 @@ impl<S, E> FjallStoreBuilder<S, E> {
             path: self.path,
             streams_config: f,
             events_config: self.events_config,
+            batch_size: self.batch_size,
         }
     }
 
@@ -67,7 +71,20 @@ impl<S, E> FjallStoreBuilder<S, E> {
             path: self.path,
             streams_config: self.streams_config,
             events_config: f,
+            batch_size: self.batch_size,
         }
+    }
+
+    /// Set the read / refill batch size — the maximum number of event rows
+    /// held in memory at once by a read stream or subscription refill.
+    ///
+    /// Out-of-range values are rejected when constructing the
+    /// [`BatchSize`](nexus_store::batch::BatchSize), so this setter is
+    /// infallible. Defaults to [`BatchSize::DEFAULT`].
+    #[must_use]
+    pub const fn batch_size(mut self, batch_size: BatchSize) -> Self {
+        self.batch_size = batch_size;
+        self
     }
 }
 
@@ -103,6 +120,7 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
             snapshots,
             global,
             notifiers: StreamNotifiers::new(),
+            batch_size: self.batch_size,
         })
     }
 }

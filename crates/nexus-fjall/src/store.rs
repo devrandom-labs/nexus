@@ -1,28 +1,19 @@
 use crate::builder::FjallStoreBuilder;
 use crate::encoding::{decode_stream_version, encode_event_key, encode_stream_version};
-use crate::error::FjallError;
+use crate::error::{FjallError, reason_label};
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
-use arrayvec::ArrayString;
 use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
+use nexus_store::batch::BatchSize;
 use nexus_store::error::AppendError;
 use nexus_store::notify::StreamNotifiers;
 use nexus_store::store::RawEventStore;
 use nexus_store::subscription::{RawSubscription, sealed};
 use nexus_store::wire;
-use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
-
-/// Format a `Display` value into a stack-allocated reason label,
-/// silently truncating at 128 bytes on a char boundary.
-fn reason_label(value: &impl std::fmt::Display) -> ArrayString<128> {
-    let mut buf = ArrayString::<128>::new();
-    let _ = write!(buf, "{value}");
-    buf
-}
 
 /// The single key under which the store-global sequence counter is kept
 /// in the `global` partition.
@@ -50,6 +41,8 @@ pub struct FjallStore {
     /// `append` calls `wake(X)`, rousing only the subscribers parked on
     /// `X` rather than every subscriber in the store.
     pub(crate) notifiers: Arc<StreamNotifiers>,
+    /// Maximum event rows materialized per read batch / refill.
+    pub(crate) batch_size: BatchSize,
 }
 
 impl FjallStore {
@@ -219,62 +212,15 @@ impl RawEventStore for FjallStore {
     }
 
     async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
-        let id_bytes = id.as_ref();
-
-        // Check if the stream exists. If not, return an empty stream.
-        if self.streams.get(id_bytes)?.is_none() {
-            return Ok(FjallStream {
-                events: std::collections::VecDeque::new(),
-                stream_id: id.to_label(),
-                poisoned: false,
-                #[cfg(debug_assertions)]
-                prev_version: None,
-            });
-        }
-
-        // Range scan from (id_bytes, from_version) to (id_bytes, u64::MAX).
-        let start =
-            encode_event_key(id_bytes, from.as_u64()).map_err(|e| FjallError::InvalidInput {
-                stream_id: id.to_label(),
-                version: from.as_u64(),
-                reason: reason_label(&e),
-            })?;
-        let end = encode_event_key(id_bytes, u64::MAX).map_err(|e| FjallError::InvalidInput {
-            stream_id: id.to_label(),
-            version: u64::MAX,
-            reason: reason_label(&e),
-        })?;
-
-        // Precondition: start key must sort <= end key (same ID bytes).
-        debug_assert!(
-            start <= end,
-            "read_stream precondition: start key must sort <= end key"
-        );
-
-        let events_vec: Vec<_> = self
-            .events
-            .inner()
-            .range(start..=end)
-            .map(fjall::Guard::into_inner)
-            .collect::<Result<_, _>>()?;
-
-        // Postcondition: events must be sorted by key (fjall guarantees this,
-        // but we verify in debug mode).
-        #[cfg(debug_assertions)]
-        for window in events_vec.windows(2) {
-            debug_assert!(
-                window[0].0 < window[1].0,
-                "read_stream postcondition: events must be strictly sorted by key"
-            );
-        }
-
-        Ok(FjallStream {
-            events: events_vec.into(),
-            stream_id: id.to_label(),
-            poisoned: false,
-            #[cfg(debug_assertions)]
-            prev_version: None,
-        })
+        // A single bounded range scan; a nonexistent stream simply yields an
+        // empty first batch (done), so no separate existence check is needed.
+        FjallStream::new(
+            self.events.clone(),
+            OwnedStreamId::from_id(id),
+            from.as_u64(),
+            self.batch_size.get(),
+            id.to_label(),
+        )
     }
 }
 
@@ -371,6 +317,54 @@ impl RawSubscription for FjallStore {
             from,
             guard,
         ))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+pub(crate) mod batch_test_helpers {
+    use super::*;
+    use nexus_store::batch::BatchSize;
+    use nexus_store::envelope::pending_envelope;
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    pub struct Tid(pub String);
+    impl std::fmt::Display for Tid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+
+    pub fn tid(s: &str) -> Tid {
+        Tid(s.to_owned())
+    }
+
+    pub fn store_with_batch(n: usize) -> (FjallStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FjallStore::builder(dir.path().join("db"))
+            .batch_size(BatchSize::new(n).unwrap())
+            .open()
+            .unwrap();
+        (store, dir)
+    }
+
+    pub async fn seed(store: &FjallStore, id: &Tid, count: u64) {
+        for v in 1..=count {
+            let env = pending_envelope(Version::new(v).unwrap())
+                .event_type("E")
+                .payload(b"payload".to_vec())
+                .unwrap()
+                .build();
+            store.append(id, Version::new(v - 1), &[env]).await.unwrap();
+        }
     }
 }
 
@@ -544,5 +538,150 @@ mod tests {
             assert_eq!(e2.version().as_u64(), 2);
         }
         assert!(stream.next().await.is_none());
+    }
+
+    // ---- bounded-read (batch pagination) tests ----
+
+    #[tokio::test]
+    async fn read_yields_all_across_refills() {
+        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
+        let (store, _dir) = store_with_batch(4);
+        let id = btid("s");
+        seed(&store, &id, 14).await;
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, (1..=14).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn read_terminates_at_exact_batch_boundary() {
+        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
+        let (store, _dir) = store_with_batch(4);
+        let id = btid("s");
+        seed(&store, &id, 8).await; // exactly 2 full batches
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut count = 0u64;
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            item.unwrap();
+            count += 1;
+        }
+        assert_eq!(count, 8);
+    }
+
+    #[tokio::test]
+    async fn read_from_midpoint_resumes_across_refills() {
+        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
+        let (store, _dir) = store_with_batch(3);
+        let id = btid("s");
+        seed(&store, &id, 10).await;
+        let mut stream = store
+            .read_stream(&id, Version::new(6).unwrap())
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, vec![6, 7, 8, 9, 10]);
+    }
+
+    #[tokio::test]
+    async fn read_reopened_store_recovers_all_across_refills() {
+        use nexus_store::batch::BatchSize;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let id = tid("s");
+        {
+            let store = FjallStore::builder(&path)
+                .batch_size(BatchSize::new(4).unwrap())
+                .open()
+                .unwrap();
+            for v in 1..=10u64 {
+                let env = make_envelope(v, "E", b"payload");
+                store
+                    .append(&id, Version::new(v - 1), &[env])
+                    .await
+                    .unwrap();
+            }
+        }
+        let store = FjallStore::builder(&path)
+            .batch_size(BatchSize::new(4).unwrap())
+            .open()
+            .unwrap();
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, (1..=10).collect::<Vec<_>>());
+    }
+
+    // ---- linearizability / concurrency tests ----
+
+    #[allow(clippy::as_conversions, reason = "test code: v as u8 for payload byte")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "test code: v stays within 0..=20"
+    )]
+    #[tokio::test]
+    async fn reader_sees_monotonic_gapfree_while_writer_appends() {
+        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
+        use std::sync::Arc as StdArc;
+        use tokio::sync::Barrier;
+
+        let (raw_store, _dir) = store_with_batch(4);
+        let store = StdArc::new(raw_store);
+        let id = btid("s");
+        seed(&store, &id, 4).await;
+
+        // Force the writer and reader to start together so the reader's
+        // pagination genuinely races concurrent appends.
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let writer = StdArc::clone(&store);
+        let wid = id.clone();
+        let wbarrier = StdArc::clone(&barrier);
+        let handle = tokio::spawn(async move {
+            wbarrier.wait().await;
+            for v in 5..=20u64 {
+                let env = nexus_store::envelope::pending_envelope(Version::new(v).unwrap())
+                    .event_type("E")
+                    .payload(vec![v as u8])
+                    .unwrap()
+                    .build();
+                writer
+                    .append(&wid, Version::new(v - 1), &[env])
+                    .await
+                    .unwrap();
+            }
+        });
+
+        // Concurrent read: assert a strictly monotonic, gap-free prefix
+        // (linearizability — never observe a gap, reorder, dup, or phantom).
+        barrier.wait().await;
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut prev = 0u64;
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            let v = item.unwrap().version().as_u64();
+            assert_eq!(
+                v,
+                prev + 1,
+                "concurrent read saw gap/reorder: {prev} -> {v}"
+            );
+            prev = v;
+        }
+        handle.await.unwrap();
+
+        // Deterministic completeness check: after all writes commit, a fresh
+        // paginating read must yield every event 1..=20 in order.
+        let mut full = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut full).await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, (1..=20).collect::<Vec<_>>());
     }
 }

@@ -111,7 +111,7 @@ impl FjallSubscriptionStream {
                 if let Err(e) = s.refill(from).await {
                     return Some((Err(e), s));
                 }
-                if s.inner.events.is_empty() {
+                if s.inner.is_empty() {
                     notified.await;
                 }
             }
@@ -158,5 +158,43 @@ impl SubState {
         let fresh = self.store.read_stream(&self.stream_key, from).await?;
         self.inner = fresh;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::store::batch_test_helpers::{seed, store_with_batch, tid};
+    use futures::StreamExt;
+    use nexus_store::envelope::pending_envelope;
+    use nexus_store::subscription::RawSubscription;
+
+    #[tokio::test]
+    async fn subscription_drains_many_batches_then_sees_live_event() {
+        // 10× batch_size backlog: batch_size 4, 40 pre-seeded events (10 full refills).
+        let (raw_store, _dir) = store_with_batch(4);
+        let store = Arc::new(raw_store);
+        let id = tid("s");
+        seed(&store, &id, 40).await; // 10 bounded catch-up refills (4×10)
+
+        let mut sub = FjallStore::subscribe(&store, &id, None).await.unwrap();
+        for expected in 1..=40u64 {
+            let got = sub.next().await.unwrap().unwrap();
+            assert_eq!(got.version().as_u64(), expected);
+        }
+
+        let store2 = Arc::clone(&store);
+        let id2 = id.clone();
+        tokio::spawn(async move {
+            let env = pending_envelope(Version::new(41).unwrap())
+                .event_type("E")
+                .payload(vec![41u8])
+                .unwrap()
+                .build();
+            store2.append(&id2, Version::new(40), &[env]).await.unwrap();
+        });
+        let live = sub.next().await.unwrap().unwrap();
+        assert_eq!(live.version().as_u64(), 41);
     }
 }

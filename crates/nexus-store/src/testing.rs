@@ -1,5 +1,6 @@
 //! Test utilities for nexus-store. Gated behind the `testing` feature.
 
+use crate::batch::BatchSize;
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::notify::{NotifyError, StreamNotifiers, SubscriptionGuard};
@@ -10,6 +11,7 @@ use bytes::Bytes;
 use nexus::Id;
 use nexus::Version;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -92,20 +94,34 @@ struct StoredFrame {
 /// - **Distributed concurrency**: Single-process only. Cannot simulate
 ///   multiple writers on different machines racing on the same stream.
 pub struct InMemoryStore {
-    streams: Mutex<HashMap<String, Vec<StoredFrame>>>,
+    streams: Arc<Mutex<HashMap<String, Vec<StoredFrame>>>>,
     notifiers: Arc<StreamNotifiers>,
     next_global_seq: Mutex<GlobalSeq>,
+    batch_size: BatchSize,
 }
 
 impl InMemoryStore {
-    /// Create a new empty in-memory store.
+    /// Create a new empty in-memory store with the default batch size.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_batch_size(BatchSize::DEFAULT)
+    }
+
+    /// Create a new empty in-memory store with an explicit batch size.
+    #[must_use]
+    pub fn with_batch_size(batch_size: BatchSize) -> Self {
         Self {
-            streams: Mutex::new(HashMap::new()),
+            streams: Arc::new(Mutex::new(HashMap::new())),
             notifiers: StreamNotifiers::new(),
             next_global_seq: Mutex::new(GlobalSeq::INITIAL),
+            batch_size,
         }
+    }
+
+    /// The configured read / refill batch size.
+    #[must_use]
+    pub const fn batch_size(&self) -> BatchSize {
+        self.batch_size
     }
 }
 
@@ -115,15 +131,50 @@ impl Default for InMemoryStore {
     }
 }
 
-/// `futures::Stream` of envelopes over an in-memory snapshot.
-///
-/// Yields each row from a pre-loaded `VecDeque<StoredFrame>` in sequence.
-/// `poll_next` is pure sync (no IO) — the events were materialized at
-/// `read_stream()` time.
-pub struct InMemoryStream {
-    events: std::collections::VecDeque<StoredFrame>,
+/// Keyset-paginating read state for a one-shot `read_stream`.
+struct ReadState {
+    streams: Arc<Mutex<HashMap<String, Vec<StoredFrame>>>>,
+    stream_id: String,
+    /// Start version of the *first* batch (used until the first yield).
+    from: Version,
+    last_version: Option<Version>,
+    batch_size: usize,
+    buffer: VecDeque<StoredFrame>,
+    /// Set when a refill returns fewer than `batch_size` rows — no more data.
+    done: bool,
     #[cfg(debug_assertions)]
     prev_version: Option<u64>,
+}
+
+impl ReadState {
+    fn next_read_version(&self) -> Result<Version, InMemoryStoreError> {
+        self.last_version.map_or(Ok(self.from), |v| {
+            v.next().ok_or(InMemoryStoreError::VersionOverflow)
+        })
+    }
+
+    async fn refill(&mut self, from: Version) {
+        let batch = {
+            let guard = self.streams.lock().await;
+            guard
+                .get(&self.stream_id)
+                .map(|rows| scan_batch(rows, from.as_u64(), self.batch_size))
+                .unwrap_or_default()
+        };
+        self.done = batch.len() < self.batch_size;
+        self.buffer = batch;
+    }
+}
+
+/// `futures::Stream` of envelopes over an in-memory stream.
+///
+/// Loads at most `batch_size` rows at a time and keyset-resumes
+/// (`last_version + 1`) when the buffer drains, terminating with `None` once a
+/// refill returns a short (or empty) batch.
+pub struct InMemoryStream {
+    inner: core::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<PersistedEnvelope, InMemoryStoreError>> + Send>,
+    >,
 }
 
 impl futures::Stream for InMemoryStream {
@@ -131,24 +182,9 @@ impl futures::Stream for InMemoryStream {
 
     fn poll_next(
         mut self: core::pin::Pin<&mut Self>,
-        _cx: &mut core::task::Context<'_>,
+        cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Option<Self::Item>> {
-        let Some(row) = self.events.pop_front() else {
-            return core::task::Poll::Ready(None);
-        };
-        #[cfg(debug_assertions)]
-        {
-            if let Some(prev) = self.prev_version {
-                debug_assert!(
-                    row.version > prev,
-                    "EventStream monotonicity violated: version {} is not greater than previous {}",
-                    row.version,
-                    prev,
-                );
-            }
-            self.prev_version = Some(row.version);
-        }
-        core::task::Poll::Ready(Some(frame_to_envelope(&row)))
+        self.inner.as_mut().poll_next(cx)
     }
 }
 
@@ -229,6 +265,18 @@ fn frame_to_envelope(frame: &StoredFrame) -> Result<PersistedEnvelope, InMemoryS
         version: frame.version,
         source,
     })
+}
+
+/// Collect up to `batch_size` frames with `version >= from`, in version order.
+///
+/// `rows` is in insertion = version order, so the matching frames are a
+/// contiguous suffix; `take(batch_size)` bounds the materialized slice.
+fn scan_batch(rows: &[StoredFrame], from: u64, batch_size: usize) -> VecDeque<StoredFrame> {
+    rows.iter()
+        .filter(|r| r.version >= from)
+        .take(batch_size)
+        .cloned()
+        .collect()
 }
 
 impl RawEventStore for InMemoryStore {
@@ -313,23 +361,63 @@ impl RawEventStore for InMemoryStore {
     }
 
     async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
-        let key = id.to_string();
-        let events: std::collections::VecDeque<StoredFrame> = self
-            .streams
-            .lock()
-            .await
-            .get(&key)
-            .map(|rows| {
-                rows.iter()
-                    .filter(|r| r.version >= from.as_u64())
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(InMemoryStream {
-            events,
+        let state = ReadState {
+            streams: Arc::clone(&self.streams),
+            stream_id: id.to_string(),
+            from,
+            last_version: None,
+            batch_size: self.batch_size.get(),
+            buffer: VecDeque::new(),
+            done: false,
             #[cfg(debug_assertions)]
             prev_version: None,
+        };
+
+        let unfolded = futures::stream::unfold(state, |mut s| async move {
+            loop {
+                if let Some(row) = s.buffer.pop_front() {
+                    #[cfg(debug_assertions)]
+                    {
+                        if let Some(prev) = s.prev_version {
+                            debug_assert!(
+                                row.version > prev,
+                                "InMemoryStream monotonicity violated: version {} not > previous {}",
+                                row.version,
+                                prev,
+                            );
+                        }
+                        s.prev_version = Some(row.version);
+                    }
+                    return match frame_to_envelope(&row) {
+                        Ok(env) => {
+                            s.last_version = Some(env.version());
+                            Some((Ok(env), s))
+                        }
+                        Err(e) => {
+                            s.done = true;
+                            Some((Err(e), s))
+                        }
+                    };
+                }
+                if s.done {
+                    return None;
+                }
+                let next_from = match s.next_read_version() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        s.done = true;
+                        return Some((Err(e), s));
+                    }
+                };
+                s.refill(next_from).await;
+                if s.buffer.is_empty() {
+                    return None;
+                }
+            }
+        });
+
+        Ok(InMemoryStream {
+            inner: Box::pin(futures::StreamExt::fuse(unfolded)),
         })
     }
 }
@@ -351,8 +439,9 @@ impl RawEventStore for InMemoryStore {
 struct SubState {
     store: Arc<InMemoryStore>,
     stream_id: String,
-    buffer: std::collections::VecDeque<StoredFrame>,
+    buffer: VecDeque<StoredFrame>,
     last_version: Option<Version>,
+    batch_size: usize,
     /// Keeps this stream's wake entry registered for the cursor's whole
     /// life and supplies the per-stream `Notify`. Dropped with the cursor,
     /// which reaps the entry once the last subscriber leaves.
@@ -367,12 +456,7 @@ impl SubState {
             let guard = self.store.streams.lock().await;
             guard
                 .get(&self.stream_id)
-                .map(|rows| {
-                    rows.iter()
-                        .filter(|r| r.version >= from_version.as_u64())
-                        .cloned()
-                        .collect()
-                })
+                .map(|rows| scan_batch(rows, from_version.as_u64(), self.batch_size))
                 .unwrap_or_default()
         };
         self.buffer = buffer;
@@ -433,8 +517,9 @@ impl RawSubscription for InMemoryStore {
         let mut state = SubState {
             store: Arc::clone(arc),
             stream_id,
-            buffer: std::collections::VecDeque::new(),
+            buffer: VecDeque::new(),
             last_version: from,
+            batch_size: arc.batch_size().get(),
             guard,
             #[cfg(debug_assertions)]
             prev_version: from.map(Version::as_u64),
@@ -493,5 +578,213 @@ impl RawSubscription for InMemoryStore {
         Ok(InMemorySubscriptionStream {
             inner: Box::pin(unfolded),
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod batch_config_tests {
+    use super::*;
+    use crate::batch::{BatchSize, DEFAULT_BATCH};
+
+    #[test]
+    fn default_store_uses_default_batch() {
+        let store = InMemoryStore::new();
+        assert_eq!(store.batch_size().get(), DEFAULT_BATCH);
+    }
+
+    #[test]
+    fn with_batch_size_overrides_default() {
+        let store = InMemoryStore::with_batch_size(BatchSize::new(8).unwrap());
+        assert_eq!(store.batch_size().get(), 8);
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::as_conversions,
+    reason = "test code"
+)]
+mod bounded_read_tests {
+    use super::*;
+    use crate::batch::BatchSize;
+    use crate::envelope::pending_envelope;
+    use futures::StreamExt;
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct Tid(String);
+    impl std::fmt::Display for Tid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+
+    fn env(v: u64) -> PendingEnvelope {
+        pending_envelope(Version::new(v).unwrap())
+            .event_type("E")
+            .payload(vec![v as u8])
+            .unwrap()
+            .build()
+    }
+
+    async fn seed(store: &InMemoryStore, id: &Tid, count: u64) {
+        for v in 1..=count {
+            let expected = Version::new(v - 1);
+            store.append(id, expected, &[env(v)]).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn read_yields_all_events_across_refills() {
+        let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
+        let id = Tid("s".into());
+        seed(&store, &id, 14).await;
+
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = stream.next().await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, (1..=14).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn read_terminates_at_exact_batch_boundary() {
+        let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
+        let id = Tid("s".into());
+        seed(&store, &id, 4).await;
+
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = stream.next().await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, vec![1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn read_empty_stream_yields_nothing() {
+        let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
+        let id = Tid("missing".into());
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_from_midpoint_resumes_correctly() {
+        let store = InMemoryStore::with_batch_size(BatchSize::new(3).unwrap());
+        let id = Tid("s".into());
+        seed(&store, &id, 10).await;
+        let mut stream = store
+            .read_stream(&id, Version::new(6).unwrap())
+            .await
+            .unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = stream.next().await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, vec![6, 7, 8, 9, 10]);
+    }
+
+    // Error paths in the unfold closure set `s.done = true` before returning
+    // `Some((Err(_), s))`, so an errored stream goes terminal. In-memory frames
+    // are always valid, so the error path can't be injected cheaply here; the
+    // observable terminal property is the same one the fuse guarantees, so we
+    // assert that a fully drained stream keeps returning `None`.
+    #[tokio::test]
+    async fn read_stays_none_after_exhaustion() {
+        let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
+        let id = Tid("s".into());
+        seed(&store, &id, 5).await;
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut count = 0u64;
+        while let Some(item) = stream.next().await {
+            item.unwrap();
+            count += 1;
+        }
+        assert_eq!(count, 5);
+        // Exhausted stream must keep returning None (fused), not panic or re-yield.
+        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.is_none());
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::as_conversions,
+    reason = "test code"
+)]
+mod bounded_subscription_tests {
+    use super::*;
+    use crate::batch::BatchSize;
+    use crate::envelope::pending_envelope;
+    use crate::subscription::RawSubscription;
+    use futures::StreamExt;
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct Tid(String);
+    impl std::fmt::Display for Tid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+
+    fn env(v: u64) -> PendingEnvelope {
+        pending_envelope(Version::new(v).unwrap())
+            .event_type("E")
+            .payload(vec![v as u8])
+            .unwrap()
+            .build()
+    }
+
+    #[tokio::test]
+    async fn subscription_drains_many_batches_then_sees_new_event() {
+        // batch_size 4; pre-seed 40 (10× batch_size backlog, 10 full refills), then push 1 live.
+        let store = Arc::new(InMemoryStore::with_batch_size(BatchSize::new(4).unwrap()));
+        let id = Tid("s".into());
+        for v in 1..=40 {
+            store
+                .append(&id, Version::new(v - 1), &[env(v)])
+                .await
+                .unwrap();
+        }
+
+        let mut sub = InMemoryStore::subscribe(&store, &id, None).await.unwrap();
+
+        for expected in 1..=40u64 {
+            let got = sub.next().await.unwrap().unwrap();
+            assert_eq!(got.version().as_u64(), expected);
+        }
+
+        let store2 = Arc::clone(&store);
+        let id2 = id.clone();
+        tokio::spawn(async move {
+            store2
+                .append(&id2, Version::new(40), &[env(41)])
+                .await
+                .unwrap();
+        });
+        let live = sub.next().await.unwrap().unwrap();
+        assert_eq!(live.version().as_u64(), 41);
     }
 }
