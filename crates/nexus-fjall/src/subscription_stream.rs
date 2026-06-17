@@ -160,3 +160,40 @@ impl SubState {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+    use crate::store::batch_test_helpers::{seed, store_with_batch, tid};
+    use futures::StreamExt;
+    use nexus_store::envelope::pending_envelope;
+    use nexus_store::subscription::RawSubscription;
+
+    #[tokio::test]
+    async fn subscription_drains_many_batches_then_sees_live_event() {
+        let (store, _dir) = store_with_batch(4);
+        let store = Arc::new(store);
+        let id = tid("s");
+        seed(&store, &id, 10).await; // 3 bounded catch-up refills (4+4+2)
+
+        let mut sub = FjallStore::subscribe(&store, &id, None).await.unwrap();
+        for expected in 1..=10u64 {
+            let got = sub.next().await.unwrap().unwrap();
+            assert_eq!(got.version().as_u64(), expected);
+        }
+
+        let store2 = Arc::clone(&store);
+        let id2 = id.clone();
+        tokio::spawn(async move {
+            let env = pending_envelope(Version::new(11).unwrap())
+                .event_type("E")
+                .payload(vec![11u8])
+                .unwrap()
+                .build();
+            store2.append(&id2, Version::new(10), &[env]).await.unwrap();
+        });
+        let live = sub.next().await.unwrap().unwrap();
+        assert_eq!(live.version().as_u64(), 11);
+    }
+}
