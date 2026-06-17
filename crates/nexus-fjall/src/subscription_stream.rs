@@ -172,8 +172,8 @@ mod tests {
 
     #[tokio::test]
     async fn subscription_drains_many_batches_then_sees_live_event() {
-        let (store, _dir) = store_with_batch(4);
-        let store = Arc::new(store);
+        let (raw_store, _dir) = store_with_batch(4);
+        let store = Arc::new(raw_store);
         let id = tid("s");
         seed(&store, &id, 10).await; // 3 bounded catch-up refills (4+4+2)
 

@@ -601,4 +601,70 @@ mod tests {
         }
         assert_eq!(seen, (1..=10).collect::<Vec<_>>());
     }
+
+    // ---- linearizability / concurrency tests ----
+
+    #[allow(clippy::as_conversions, reason = "test code: v as u8 for payload byte")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "test code: v stays within 0..=20"
+    )]
+    #[tokio::test]
+    async fn reader_sees_monotonic_gapfree_while_writer_appends() {
+        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
+        use std::sync::Arc as StdArc;
+        use tokio::sync::Barrier;
+
+        let (raw_store, _dir) = store_with_batch(4);
+        let store = StdArc::new(raw_store);
+        let id = btid("s");
+        seed(&store, &id, 4).await;
+
+        // Force the writer and reader to start together so the reader's
+        // pagination genuinely races concurrent appends.
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let writer = StdArc::clone(&store);
+        let wid = id.clone();
+        let wbarrier = StdArc::clone(&barrier);
+        let handle = tokio::spawn(async move {
+            wbarrier.wait().await;
+            for v in 5..=20u64 {
+                let env = nexus_store::envelope::pending_envelope(Version::new(v).unwrap())
+                    .event_type("E")
+                    .payload(vec![v as u8])
+                    .unwrap()
+                    .build();
+                writer
+                    .append(&wid, Version::new(v - 1), &[env])
+                    .await
+                    .unwrap();
+            }
+        });
+
+        // Concurrent read: assert a strictly monotonic, gap-free prefix
+        // (linearizability — never observe a gap, reorder, dup, or phantom).
+        barrier.wait().await;
+        let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut prev = 0u64;
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            let v = item.unwrap().version().as_u64();
+            assert_eq!(
+                v,
+                prev + 1,
+                "concurrent read saw gap/reorder: {prev} -> {v}"
+            );
+            prev = v;
+        }
+        handle.await.unwrap();
+
+        // Deterministic completeness check: after all writes commit, a fresh
+        // paginating read must yield every event 1..=20 in order.
+        let mut full = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut full).await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, (1..=20).collect::<Vec<_>>());
+    }
 }
