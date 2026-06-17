@@ -54,7 +54,8 @@
 //!   hydrate from a [`SnapshotStore`] on read and commit on write per a
 //!   [`PersistTrigger`].
 //! - [`projection`] (feature-gated) — [`Projector`] trait (pure fallible
-//!   fold). The IO-driven runner lives in `nexus-framework`.
+//!   fold). nexus ships no runner; the loop is consumer-owned (see
+//!   `examples/projection-tokio`).
 //!
 //! # Feature flags
 //!

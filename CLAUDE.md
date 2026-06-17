@@ -26,7 +26,7 @@ cargo fmt --all
 ### Crate Dependency Graph
 
 ```
-nexus-framework --> nexus-store --> nexus (kernel)
+nexus-store --> nexus (kernel)
 nexus-fjall   --> nexus-store
 nexus-macros <-- nexus (kernel, optional via "derive" feature)
 ```
@@ -73,7 +73,7 @@ Flat layout — one file per concept, no module subdirectories. The earlier `cod
   - `PersistTrigger` trait: `EveryNEvents(N)` (bucket-crossing), `AfterEventTypes(&[&str])` (semantic). Used by both projection runners and the snapshot decorator.
   - Inline `#[cfg(feature = "testing")] mod testing` block: `InMemorySnapshotStore`.
 - **`projection.rs`** — Feature-gated under `projection`. Slim by design.
-  - `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`). Fallibility is intentional: projections may do checked arithmetic where aggregates do not. Recovery policy (skip/fail/dead-letter) is the framework's concern, not the projector's. The IO-driven runner lives in `nexus-framework`.
+  - `Projector` trait: pure fallible fold function (`initial()` + `apply(state, &event) -> Result`). Fallibility is intentional: projections may do checked arithmetic where aggregates do not. Recovery policy (skip/fail/dead-letter) is the framework's concern, not the projector's. nexus ships no runner; the IO-driven loop is the consumer's. See `examples/projection-tokio`.
 - **`repository.rs`** — Aggregate-facing trait + its two facade impls.
   - `Repository<A>` trait: high-level `load` and `save` for aggregates.
   - `EventStore<S, C, U>` facade — owning codec; HRTB bound `for<'a> C: Encode<E> + Decode<E, Output<'a> = E> + 'static`.
@@ -89,17 +89,9 @@ Feature flags: `serde`, `json` (implies `serde`), `snapshot`, `snapshot-json`, `
 
 Public sub-paths after the flatten: `nexus_store::codec::*`, `::envelope::*`, `::upcasting::*`, `::store::*`, `::state::*`, `::projection::*`, `::repository::*` (Repository + facades), `::builder::*` (builder typestate), `::snapshot::*` (decorator). All top-level types remain re-exported at `nexus_store::*` for convenience.
 
-### Framework Crate (`nexus-framework`) — Batteries-Included Runtime Layer
+### Projection — primitives only, no runner
 
-Depends on `nexus-store` (with `projection` feature) + `tokio` + `futures`. Provides IO-driven components that require an async runtime. The kernel and store remain runtime-agnostic; tokio is confined here.
-
-- **`projection/`** — Subscription-powered CQRS projection runner. Built on `Subscription<S>` + `SnapshotStore` from `nexus-store`.
-  - `projection.rs` — `Projection<I, Sub, SS, P, EC, Trig, Mode>`: two-phase typestate. `Configured` (built, not loaded) → `initialize()` → `Ready<S>` (loaded, can run). `initialize()` does one `hydrate()` and resolves to `Fresh` (nothing persisted) or `Resume` (snapshot loaded). `Ready` carries `ProjectionStatus<S>` and `StartupDecision` (Fresh/Resume/Rebuild — the label is for supervisor inspection only). `run()` subscribes and enters the event loop — a `tokio::pin!` + `tokio::select!` between `futures::Stream::next` (the subscription) and a `shutdown` future. (Replaces an earlier hand-rolled `try_fold_async_until` combinator on a GAT lending stream trait; the 2026-05-27 collapse of event streams to plain `futures::Stream` made the custom combinator unnecessary.) `rebuild()` resets to initial state and is the only path that produces `StartupDecision::Rebuild`.
-  - `status.rs` — `ProjectionStatus<S>` enum: explicit FSM for the event loop with three write-centric states (`Idle`, `Pending`, `Committed`). Pure sync `apply_event` transition function — no IO, no async. Driven by the async shell in `Projection::run()`.
-  - `builder.rs` — `ProjectionBuilder`: typestate builder with `!Send` marker structs (`NeedsSub`, `NeedsSnap`, `NeedsProj`, `NeedsEvtCodec`) that prevent calling `.build()` until each required field is set. The snapshot store is required; trigger defaults to `EveryNEvents(1)` (persist every event).
-  - `error.rs` — `ProjectionError<P, EC, SS, Sub>`: one variant per failure domain (projector, event codec, snapshot store, subscription).
-
-The framework persists projection state through `nexus-store::state::SnapshotStore<P::State, Version>` — the same trait the aggregate snapshot decorator uses. State and resume position are committed together, atomically; there is no separate checkpoint store and no checkpoint-only mode.
+nexus deliberately ships **no** projection runner and **no** event loop. A read-model projection is built from four pure primitives that already live in `nexus-store`: `Projector` (the fallible fold), `PersistTrigger` (when to persist), `Subscription` (the cursor), and `SnapshotStore` (atomic `(state, position)` commit). The loop that wires them — and all runtime concerns (lifecycle, supervision, passivation, cursor management) — is owned by the consumer, never by nexus; shipping a loop here would make nexus a runtime and would duplicate logic that belongs to the runtime layer. In the Nexus + Agency product, that runtime is Agency's Zenoh-native actor framework (a kameo fork); a tokio reference loop lives in `examples/projection-tokio`. The earlier `nexus-framework` crate (a `tokio::select!` runner plus an Idle/Pending/Committed FSM) was retired on 2026-06-17 for exactly this reason — the FSM was loop bookkeeping, not an event-sourcing primitive.
 
 ### Fjall Adapter Crate (`nexus-fjall`) — Embedded LSM-Tree Event Store
 

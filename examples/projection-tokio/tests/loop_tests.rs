@@ -1,4 +1,23 @@
-#![cfg(feature = "testing")]
+//! Integration tests that exercise the consumer-owned `run_projection` loop
+//! (these replace the former projection-runner tests).
+//!
+//! The loop itself lives in `examples/projection-tokio/src/lib.rs`; the
+//! nexus-framework typestate runner it supersedes has been retired. The four
+//! cross-cutting test categories (sequence/protocol, lifecycle,
+//! defensive-boundary, linearizability) are covered below against the plain
+//! `run_projection` function.
+//!
+//! Conversion notes
+//! ────────────────
+//! • `ProjectionError::Projector(_)` / `::EventCodec(_)` matches → replaced
+//!   by `is_err()` + `to_string().contains(...)` on the boxed error.
+//! • All startup-decision and projection-status invariants → verified via
+//!   `snapshot_store.hydrate` after the run.
+//! • Two `ProjectionError` *unit* tests that directly constructed the old
+//!   `ProjectionError<...>` type were not ported: that enum no longer exists.
+//!   Their coverage (error display + Infallible variant) is moot — the
+//!   boxed-error path is tested by the codec/projector error integration tests
+//!   below.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -18,13 +37,12 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 use futures::StreamExt;
 use nexus::{DomainEvent, Message, Version};
-use nexus_framework::projection::{Projection, ProjectionError, ProjectionStatus, StartupDecision};
+use nexus_example_projection_tokio::run_projection;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::{
-    Decode, Encode, InMemorySnapshotStore, RawEventStore, SnapshotStore, Store, Subscription,
-    pending_envelope,
+    Decode, Encode, EveryNEvents, InMemorySnapshotStore, Projector, RawEventStore, SnapshotStore,
+    Store, Subscription, pending_envelope,
 };
-use nexus_store::{EveryNEvents, Projector};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Test fixtures
@@ -208,26 +226,22 @@ async fn runner_processes_events_and_checkpoints() {
     )
     .await;
 
-    // Build runner with EveryNEvents(1) — checkpoint every event
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    // Run with delayed shutdown to let the runner process existing events
-    let shutdown = async {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    };
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(shutdown)
-        .await
-        .unwrap();
+    // Run with delayed shutdown to let the runner process existing events.
+    // Pass &snapshots so we can hydrate after the call.
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        },
+    )
+    .await
+    .unwrap();
 
     // Verify checkpoint + state — persisted together in the snapshot.
     let (position, state) = snapshots
@@ -263,22 +277,20 @@ async fn runner_resumes_from_checkpoint() {
     )
     .await;
 
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Append 2 more events
     append_events(
@@ -289,22 +301,20 @@ async fn runner_resumes_from_checkpoint() {
     .await;
 
     // Run again — should resume from checkpoint (version 3)
-    let runner2 = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    runner2
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Verify: checkpoint at 5, state = count:5 total:95
     let (position, state) = snapshots
@@ -343,23 +353,20 @@ async fn runner_trigger_controls_checkpoint_frequency() {
     .await;
 
     // Trigger every 3 events
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .trigger(EveryNEvents(NonZeroU64::new(3).unwrap()))
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::new(3).unwrap()),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Checkpoint should be at version 5 (flushed on shutdown), state reflects
     // all 5 events.
@@ -379,86 +386,6 @@ async fn runner_trigger_controls_checkpoint_frequency() {
 }
 
 #[tokio::test]
-async fn runner_rebuilds_from_beginning_on_schema_version_bump() {
-    let store = Store::new(InMemoryStore::new());
-    let snapshots = snapshot_store();
-    let stream_id = TestId("stream-1".into());
-
-    // Append 3 events, run with schema v1
-    append_events(
-        &store,
-        &stream_id,
-        &[
-            TestEvent::Added(10),
-            TestEvent::Added(20),
-            TestEvent::Added(30),
-        ],
-    )
-    .await;
-
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
-
-    // Verify: snapshot at v3 with schema v1
-    let (position, _) = snapshots
-        .hydrate(&stream_id, NonZeroU32::MIN)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(position, Version::new(3).unwrap());
-
-    // Now restart with schema v2 — the schema-mismatched snapshot is invisible
-    // to hydrate, so the projection replays from the beginning.
-    let runner2 = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .state_schema_version(NonZeroU32::new(2).unwrap())
-        .build();
-
-    runner2
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
-
-    // State should reflect ALL 3 events from initial() — not resume from v3
-    let (position, state) = snapshots
-        .hydrate(&stream_id, NonZeroU32::new(2).unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        state,
-        CountState {
-            count: 3,
-            total: 60
-        }
-    );
-    // Snapshot for schema v2 should be at v3
-    assert_eq!(position, Version::new(3).unwrap());
-}
-
-#[tokio::test]
 async fn runner_resumes_normally_after_rebuild_completes() {
     let store = Store::new(InMemoryStore::new());
     let snapshots = snapshot_store();
@@ -472,62 +399,54 @@ async fn runner_resumes_normally_after_rebuild_completes() {
     )
     .await;
 
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Phase 2: restart with schema v2 — replays from the beginning
-    let runner2 = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .state_schema_version(NonZeroU32::new(2).unwrap())
-        .build();
-
-    runner2
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::new(2).unwrap(),
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Phase 3: append more events, restart with same schema v2 — normal resume
     append_events(&store, &stream_id, &[TestEvent::Added(30)]).await;
 
-    let runner3 = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .state_schema_version(NonZeroU32::new(2).unwrap())
-        .build();
-
-    runner3
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::new(2).unwrap(),
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Verify: state reflects all 3 events, checkpoint at v3
     let (position, state) = snapshots
@@ -555,13 +474,6 @@ async fn runner_immediate_shutdown_with_no_events() {
     let snapshots = snapshot_store();
     let stream_id = TestId("empty-stream".into());
 
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
     // Immediate shutdown — should return Ok without errors
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     tx.send(()).unwrap();
@@ -569,13 +481,18 @@ async fn runner_immediate_shutdown_with_no_events() {
         rx.await.ok();
     };
 
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(shutdown)
-        .await
-        .unwrap();
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        shutdown,
+    )
+    .await
+    .unwrap();
 
     // No snapshot saved (no events processed)
     let loaded = snapshots
@@ -603,22 +520,20 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     )
     .await;
 
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Snapshot at v3 with schema v1
     let (position, _) = snapshots
@@ -636,44 +551,37 @@ async fn runner_rebuild_is_idempotent_after_crash_before_trigger() {
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     tx.send(()).unwrap();
 
-    let runner2 = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .state_schema_version(NonZeroU32::new(2).unwrap())
-        .trigger(EveryNEvents(NonZeroU64::new(100).unwrap()))
-        .build();
-
-    runner2
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::new(100).unwrap()),
+        NonZeroU32::new(2).unwrap(),
+        async {
             rx.await.ok();
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Phase 3: restart with schema v2 — whether Phase 2 processed some
     // events or none, the final result must be correct (idempotent)
-    let runner3 = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .state_schema_version(NonZeroU32::new(2).unwrap())
-        .build();
-
-    runner3
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::new(2).unwrap(),
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // Now state should be correctly rebuilt
     let (_, state) = snapshots
@@ -706,23 +614,20 @@ async fn runner_graceful_shutdown_flushes_dirty_state() {
 
     // Trigger every 100 events — so the trigger never fires during these 2 events.
     // Only the shutdown flush should persist state.
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .trigger(EveryNEvents(NonZeroU64::new(100).unwrap()))
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::new(100).unwrap()),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // State + checkpoint should be flushed on shutdown even though the
     // trigger never fired.
@@ -770,23 +675,20 @@ async fn runner_stale_state_falls_back_to_initial() {
     .await;
 
     // Runner with schema version 2 — stale state should be ignored
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .state_schema_version(NonZeroU32::new(2).unwrap())
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::new(2).unwrap(),
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // State should start from initial(), not from stale v1 state
     let (_, state) = snapshots
@@ -809,6 +711,9 @@ async fn runner_stale_state_falls_back_to_initial() {
 
 #[tokio::test]
 async fn runner_first_run_with_state_persistence_is_not_rebuild() {
+    // Observable invariant: a first run (no prior snapshot) folds from initial(),
+    // not from stale state. Verified by confirming the committed state equals the
+    // fold of the two appended events from CountState { 0, 0 }.
     let store = Store::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
@@ -820,24 +725,27 @@ async fn runner_first_run_with_state_persistence_is_not_rebuild() {
     )
     .await;
 
-    // First run ever — no snapshot. Should process from beginning
-    // without treating it as a "rebuild".
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    let ready = runner.initialize().await.unwrap();
-    assert_eq!(ready.decision(), StartupDecision::Fresh);
-
-    ready
-        .run(async {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
+    // Verify no prior snapshot exists — confirms this is truly a first run.
+    let before = snapshots
+        .hydrate(&stream_id, NonZeroU32::MIN)
         .await
         .unwrap();
+    assert!(before.is_none(), "expected no snapshot before first run");
+
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        },
+    )
+    .await
+    .unwrap();
 
     let (_, state) = snapshots
         .hydrate(&stream_id, NonZeroU32::MIN)
@@ -869,24 +777,28 @@ async fn runner_returns_projector_error_on_apply_failure() {
     )
     .await;
 
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    let result = runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    let result = run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        })
-        .await;
+        },
+    )
+    .await;
 
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), ProjectionError::Projector(_)));
+    assert!(result.is_err(), "expected projector error");
+    // The boxed error preserves the #[source] chain; TestProjectionError's
+    // Display is "projection overflow".
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("projection overflow"),
+        "expected 'projection overflow' in error: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -907,27 +819,28 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
         .await
         .unwrap();
 
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    let result = runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    let result = run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        })
-        .await;
+        },
+    )
+    .await;
 
-    assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        ProjectionError::EventCodec(_)
-    ));
+    assert!(result.is_err(), "expected codec error");
+    // TestEventCodec::decode returns io::Error with message "bad len"
+    // when payload.len() != 9.
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("bad len"),
+        "expected 'bad len' in error: {msg}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -954,22 +867,20 @@ async fn runner_catches_up_and_processes_all_existing_events() {
     )
     .await;
 
-    let runner = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    runner
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     // All 5 events processed
     let (position, state) = snapshots
@@ -988,55 +899,18 @@ async fn runner_catches_up_and_processes_all_existing_events() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 5. ProjectionError display tests (moved from nexus-store)
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn projection_error_displays_projector_variant() {
-    let err: ProjectionError<
-        TestProjectionError,
-        std::io::Error,
-        std::convert::Infallible,
-        std::io::Error,
-    > = ProjectionError::Projector(TestProjectionError);
-    let msg = err.to_string();
-    assert!(msg.contains("projector"), "expected 'projector' in: {msg}");
-}
-
-#[test]
-fn projection_error_snapshot_variant_is_unconstructable_when_infallible() {
-    let _err: ProjectionError<
-        TestProjectionError,
-        std::io::Error,
-        std::convert::Infallible,
-        std::io::Error,
-    > = ProjectionError::Projector(TestProjectionError);
-    // If this compiles, the Snapshot(Infallible) variant is unconstructable.
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 6. Typestate / Phased Startup Tests
+// 5. Checkpoint Resume and Schema-Bump Replay
+//
+// These tests verify hydrate-based startup invariants: that a second run
+// correctly resumes from the stored checkpoint, and that a schema-version
+// bump forces a full replay from initial().
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn initialize_returns_starting_on_first_run() {
-    let store = Store::new(InMemoryStore::new());
-    let snapshots = snapshot_store();
-    let stream_id = TestId("fresh-stream".into());
-
-    let runner = Projection::builder(stream_id)
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    let ready = runner.initialize().await.unwrap();
-    assert_eq!(ready.decision(), StartupDecision::Fresh);
-}
-
-#[tokio::test]
-async fn initialize_returns_resuming_after_successful_run() {
+async fn runner_resumes_from_checkpoint_on_second_run() {
+    // Observable invariant: the second run resumes from the checkpoint left by
+    // the first run, so the committed state after the second run reflects only
+    // the event added between runs (not a re-fold of the first event).
     let store = Store::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
@@ -1044,35 +918,75 @@ async fn initialize_returns_resuming_after_successful_run() {
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
 
     // First run
-    Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build()
-        .initialize()
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        },
+    )
+    .await
+    .unwrap();
+
+    // Checkpoint at v1, count:1, total:10
+    let (cp1, state1) = snapshots
+        .hydrate(&stream_id, NonZeroU32::MIN)
         .await
         .unwrap()
-        .run(async {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
         .unwrap();
+    assert_eq!(cp1, Version::new(1).unwrap());
+    assert_eq!(
+        state1,
+        CountState {
+            count: 1,
+            total: 10
+        }
+    );
 
-    // Second run — should resume
-    let runner2 = Projection::builder(stream_id)
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
+    // Append a second event
+    append_events(&store, &stream_id, &[TestEvent::Added(5)]).await;
 
-    let ready = runner2.initialize().await.unwrap();
-    assert_eq!(ready.decision(), StartupDecision::Resume);
+    // Second run — must resume from v1, fold only the new event
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        },
+    )
+    .await
+    .unwrap();
+
+    let (cp2, state2) = snapshots
+        .hydrate(&stream_id, NonZeroU32::MIN)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cp2, Version::new(2).unwrap());
+    // count:2, total:15 — not count:1/total:5 (fresh) or count:2/total:20 (double-fold)
+    assert_eq!(
+        state2,
+        CountState {
+            count: 2,
+            total: 15
+        }
+    );
 }
 
 #[tokio::test]
 async fn schema_bump_resolves_to_fresh() {
+    // Observable invariant: running with v2 after a v1 snapshot produces a state
+    // that is a full re-fold from initial(), not a delta from the v1 checkpoint.
     let store = Store::new(InMemoryStore::new());
     let snapshots = snapshot_store();
     let stream_id = TestId("stream-1".into());
@@ -1080,145 +994,54 @@ async fn schema_bump_resolves_to_fresh() {
     append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
 
     // First run with schema v1
-    Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build()
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::MIN,
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
-
-    // Second run with schema v2 — the schema-mismatched snapshot is invisible
-    // to hydrate, so initialize() resolves to Fresh and replays from scratch.
-    let runner2 = Projection::builder(stream_id)
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .state_schema_version(NonZeroU32::new(2).unwrap())
-        .build();
-
-    let ready = runner2.initialize().await.unwrap();
-    assert_eq!(ready.decision(), StartupDecision::Fresh);
-}
-
-#[tokio::test]
-async fn force_rebuild_replays_from_beginning() {
-    let store = Store::new(InMemoryStore::new());
-    let snapshots = snapshot_store();
-    let stream_id = TestId("stream-1".into());
-
-    append_events(
-        &store,
-        &stream_id,
-        &[TestEvent::Added(10), TestEvent::Added(20)],
+        },
     )
-    .await;
+    .await
+    .unwrap();
 
-    // First run
-    Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build()
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
-
-    // Second run — force rebuild despite valid state
-    let runner2 = Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    let ready = runner2.initialize().await.unwrap();
-    assert_eq!(ready.decision(), StartupDecision::Resume);
-
-    // Force rebuild and run
-    let rebuilt = ready.rebuild();
-    assert_eq!(rebuilt.decision(), StartupDecision::Rebuild);
-    rebuilt
-        .run(async {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
-        .await
-        .unwrap();
-
-    // State should be freshly computed from initial()
-    let (_, state) = snapshots
+    // Confirm v1 snapshot was committed
+    let v1 = snapshots
         .hydrate(&stream_id, NonZeroU32::MIN)
         .await
-        .unwrap()
         .unwrap();
-    assert_eq!(
-        state,
-        CountState {
-            count: 2,
-            total: 30
-        }
-    );
-}
+    assert!(v1.is_some(), "expected v1 snapshot to exist");
 
-#[tokio::test]
-async fn resuming_accessors_return_correct_values() {
-    let store = Store::new(InMemoryStore::new());
-    let snapshots = snapshot_store();
-    let stream_id = TestId("stream-1".into());
-
-    append_events(&store, &stream_id, &[TestEvent::Added(10)]).await;
-
-    // First run to create checkpoint + state
-    Projection::builder(stream_id.clone())
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build()
-        .initialize()
-        .await
-        .unwrap()
-        .run(async {
+    // Second run with schema v2 — the schema-mismatched snapshot is invisible.
+    // hydrate returns None → state starts from initial() → full replay.
+    run_projection(
+        stream_id.clone(),
+        Subscription::new(&store),
+        &snapshots,
+        CountingProjector,
+        TestEventCodec,
+        EveryNEvents(NonZeroU64::MIN),
+        NonZeroU32::new(2).unwrap(),
+        async {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        })
+        },
+    )
+    .await
+    .unwrap();
+
+    // v2 snapshot must reflect a full fold of all 1 events from initial()
+    let (pos2, state2) = snapshots
+        .hydrate(&stream_id, NonZeroU32::new(2).unwrap())
         .await
+        .unwrap()
         .unwrap();
-
-    // Second run — inspect Resuming variant
-    let runner2 = Projection::builder(stream_id)
-        .subscription(Subscription::new(&store))
-        .projector(CountingProjector)
-        .event_codec(TestEventCodec)
-        .snapshot_store(&snapshots)
-        .build();
-
-    let ready = runner2.initialize().await.unwrap();
-    assert_eq!(ready.decision(), StartupDecision::Resume);
-
-    let ProjectionStatus::Idle {
-        ref state,
-        checkpoint,
-    } = *ready.status()
-    else {
-        panic!("expected Idle");
-    };
-    assert_eq!(checkpoint, Some(Version::new(1).unwrap()));
+    assert_eq!(pos2, Version::new(1).unwrap());
     assert_eq!(
-        *state,
+        state2,
         CountState {
             count: 1,
             total: 10

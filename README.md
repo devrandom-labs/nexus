@@ -62,7 +62,8 @@ impl Handle<Deposit> for BankAccount {
 | [`nexus-macros`](crates/nexus-macros) | Derive macros — `DomainEvent`, `#[aggregate]`, `#[transforms]` |
 | [`nexus-store`](crates/nexus-store) | Persistence edge — codecs, event streams, upcasters, repositories |
 | [`nexus-fjall`](crates/nexus-fjall) | Embedded LSM-tree event store adapter (fjall) |
-| [`nexus-framework`](crates/nexus-framework) | Runtime layer — projection runner over `Subscription` + `SnapshotStore` (tokio) |
+
+Projection is provided as primitives (`Projector`, `PersistTrigger`, `Subscription`, `SnapshotStore`); nexus ships no event-loop runner — the loop is the consumer's. See `examples/projection-tokio`.
 
 ## Features
 
