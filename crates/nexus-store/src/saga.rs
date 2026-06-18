@@ -233,6 +233,36 @@ impl<S: Saga, const N: usize> fmt::Debug for ProjectedIntents<S, N> {
     }
 }
 
+/// Outcome of one [`SagaRepository::react_and_save`]/[`dispatch`](SagaRepository::dispatch).
+///
+/// `#[must_use]`: discarding it drops intents the runtime was meant to dispatch
+/// — a lost-work bug the compiler now warns on (a `Vec` return could not).
+#[must_use = "projected intents must be handed to the runtime for dispatch"]
+pub enum Reaction<S: Saga, const N: usize> {
+    /// `react` returned `Ok(None)` — routed, no-op, nothing persisted.
+    Ignored,
+    /// `react` produced events; they were appended atomically.
+    Reacted {
+        /// Version the saga stream advanced to (the last appended event's version).
+        version: Version,
+        /// Intents projected from the recorded events, in order (`<= one` per event).
+        intents: ProjectedIntents<S, N>,
+    },
+}
+
+impl<S: Saga, const N: usize> fmt::Debug for Reaction<S, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ignored => f.write_str("Ignored"),
+            Self::Reacted { version, intents } => f
+                .debug_struct("Reacted")
+                .field("version", version)
+                .field("intents", intents)
+                .finish(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod error_tests {
     use super::SagaError;
