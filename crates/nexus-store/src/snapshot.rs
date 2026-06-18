@@ -59,7 +59,6 @@ impl<R, SS, T> Snapshotting<R, SS, T> {
 impl<A, R, SS, T> Repository<A> for Snapshotting<R, SS, T>
 where
     A: Aggregate,
-    A::State: Clone,
     R: Repository<A> + ReplayFrom<A, Error = <R as Repository<A>>::Error>,
     <R as Repository<A>>::Error: From<KernelError>,
     SS: state::SnapshotStore<A::State, Version>,

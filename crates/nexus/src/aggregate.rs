@@ -6,6 +6,7 @@ use crate::version::Version;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+use std::mem;
 use std::num::NonZeroUsize;
 
 /// State of an event-sourced aggregate. Mutated by applying domain events.
@@ -14,9 +15,9 @@ use std::num::NonZeroUsize;
 /// the next state. It is infallible — events are facts that have already
 /// been accepted.
 ///
-/// `Clone` is required so that [`AggregateRoot::replay`] can preserve the
-/// original state if `apply` panics. The aggregate remains valid after
-/// a panic in user code.
+/// No `Clone` bound: [`apply`](Self::apply) takes `self` by value and
+/// returns the next state, so rehydration folds the owned state through
+/// `apply` with no per-event copy.
 ///
 /// # Example
 ///
@@ -52,7 +53,7 @@ use std::num::NonZeroUsize;
 ///     }
 /// }
 /// ```
-pub trait AggregateState: Send + Sync + Debug + Clone + 'static {
+pub trait AggregateState: Send + Sync + Debug + 'static {
     type Event: DomainEvent;
 
     /// The initial state of a new aggregate.
@@ -214,9 +215,11 @@ pub const DEFAULT_MAX_REHYDRATION_EVENTS: NonZeroUsize = NonZeroUsize::new(1_000
 ///
 /// # Panic safety
 ///
-/// If [`AggregateState::apply`] panics during [`replay`](Self::replay),
-/// the aggregate remains fully valid — the original state is preserved
-/// via clone and the version is not advanced.
+/// [`replay`](Self::replay), [`apply_event`](Self::apply_event), and
+/// [`apply_events`](Self::apply_events) move the state out via
+/// [`mem::replace`] and fold it through [`AggregateState::apply`] — no
+/// clone. If `apply` panics (a state-machine bug), the state is left at
+/// [`AggregateState::initial`]: valid, never partially mutated.
 pub struct AggregateRoot<A: Aggregate> {
     id: A::Id,
     state: A::State,
@@ -296,6 +299,12 @@ impl<A: Aggregate> AggregateRoot<A> {
 
     /// Replay a single persisted event during rehydration.
     ///
+    /// Moves the current state out via [`mem::replace`] and folds it through
+    /// [`AggregateState::apply`] — no per-event clone, so the rehydration hot
+    /// path copies nothing (only a cheap [`initial`](AggregateState::initial)
+    /// placeholder is constructed). On version-validation failure the
+    /// aggregate is left untouched (the placeholder is never installed).
+    ///
     /// Takes a borrowed event reference so zero-copy codecs (rkyv, flatbuffers)
     /// can pass views directly from database buffers without cloning.
     ///
@@ -340,9 +349,11 @@ impl<A: Aggregate> AggregateRoot<A> {
                 max: A::MAX_REHYDRATION_EVENTS.get(),
             });
         }
-        // Clone state before applying — if apply panics, original is preserved.
-        let new_state = self.state.clone().apply(event);
-        self.state = new_state;
+        // Move the state out and fold it through `apply` — no clone. If
+        // `apply` panics (a state-machine bug), the state is left at
+        // `initial()` (valid, never partially mutated).
+        let taken = mem::replace(&mut self.state, A::State::initial());
+        self.state = taken.apply(event);
         self.version = Some(version);
         Ok(())
     }
@@ -374,22 +385,23 @@ impl<A: Aggregate> AggregateRoot<A> {
     #[doc(hidden)]
     pub fn apply_events<const N: usize>(&mut self, events: &Events<EventOf<A>, N>) {
         for event in events {
-            let new_state = self.state.clone().apply(event);
-            self.state = new_state;
+            self.apply_event(event);
         }
     }
 
     /// Apply a single event to the aggregate state.
     ///
     /// Called by the repository after successful persistence to keep
-    /// the in-memory state in sync. Clone-based for panic safety —
-    /// if `apply` panics, the original state is preserved.
+    /// the in-memory state in sync. Moves the state out via [`mem::replace`]
+    /// and folds it through `apply` — no clone. If `apply` panics (a
+    /// state-machine bug), the state is left at [`AggregateState::initial`]
+    /// (valid, never partially mutated).
     ///
     /// Internal — driven by the repository; not part of the user-facing flow.
     #[doc(hidden)]
     pub fn apply_event(&mut self, event: &EventOf<A>) {
-        let new_state = self.state.clone().apply(event);
-        self.state = new_state;
+        let taken = mem::replace(&mut self.state, A::State::initial());
+        self.state = taken.apply(event);
     }
 }
 
@@ -402,6 +414,7 @@ mod purist_dispatch_tests {
     use crate::events::Events;
     use crate::id::Id;
     use crate::message::Message;
+    use crate::version::Version;
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     struct CtrId([u8; 8]);
@@ -443,7 +456,8 @@ mod purist_dispatch_tests {
         }
     }
 
-    #[derive(Debug, Clone)]
+    // Intentionally NOT `Clone` — replay/apply must not require it.
+    #[derive(Debug)]
     struct CtrState {
         total: u64,
     }
@@ -503,5 +517,19 @@ mod purist_dispatch_tests {
             AggregateRoot::<Counter>::new(CtrId::new(1)).handle(Add(0)),
             Err(CtrError)
         );
+    }
+
+    #[test]
+    fn replay_folds_state_without_clone() {
+        // `CtrState: !Clone` — this only compiles because `replay`/`apply`
+        // move the state out (mem::replace) instead of cloning it. If a
+        // `Clone` bound creeps back onto `AggregateState`, this fails to build.
+        let mut root = AggregateRoot::<Counter>::new(CtrId::new(7));
+        root.replay(Version::INITIAL, &CtrEvent::Added(10))
+            .expect("replay v1");
+        root.replay(Version::new(2).expect("nonzero"), &CtrEvent::Added(5))
+            .expect("replay v2");
+        assert_eq!(root.state().total, 15);
+        assert_eq!(root.version(), Version::new(2));
     }
 }
