@@ -28,6 +28,8 @@ mod newtype_aggregate_tests;
 mod property_tests;
 #[path = "kernel_tests/replay_tests.rs"]
 mod replay_tests;
+#[path = "kernel_tests/saga_tests.rs"]
+mod saga_tests;
 #[path = "kernel_tests/security_tests.rs"]
 mod security_tests;
 #[path = "kernel_tests/static_assertion_tests.rs"]
