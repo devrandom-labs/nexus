@@ -8,6 +8,7 @@ members = [
     "crates/nexus-store",
     "crates/nexus-store-testing",
     "crates/workspace-hack",
+    "examples/closing-the-books",
     "examples/inmemory",
     "examples/projection-tokio",
     "examples/store-and-kernel",
