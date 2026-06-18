@@ -14,9 +14,9 @@ Aggregates with thousands of events reload slowly because every event must be re
 | 50–200 | Rarely helps unless deserialization is expensive |
 | 200–500 | Measure. Depends on event size and apply complexity |
 | 500+ | Likely helps |
-| 10,000+ | Essential — but also consider "Closing the Books" pattern (#139) |
+| 10,000+ | Essential — but first consider the "Closing the Books" pattern (see the `nexus::closing_the_books` guide module and `examples/closing-the-books`) |
 
-**Preferred alternative:** Short-lived streams with natural lifecycle boundaries (e.g., `CashierShift` instead of `CashRegister`) eliminate the need for snapshots entirely. See #139.
+**Preferred alternative:** Short-lived streams with natural lifecycle boundaries (e.g., `CashierShift` instead of `CashRegister`) eliminate the need for snapshots entirely. See the `nexus::closing_the_books` guide module and the runnable `examples/closing-the-books` crate.
 
 ## Design Decisions
 
@@ -295,7 +295,7 @@ Implements `SnapshotStore` behind `nexus-fjall/snapshot` feature.
 - **Expensive deserialization:** Aggregates with large event payloads or complex `apply()` logic benefit from snapshots at lower event counts.
 - **Latency-sensitive reads:** IoT/mobile scenarios where reload latency must be bounded regardless of aggregate history length.
 
-**Alternative: "Closing the Books" (#139):** Design aggregates with natural lifecycle boundaries (e.g., `CashierShift` per shift vs. `CashRegister` forever). When an aggregate completes its lifecycle, archive its stream and start a new one. This eliminates the need for snapshots entirely and is the preferred approach when domain semantics allow it.
+**Alternative: "Closing the Books":** Design aggregates with natural lifecycle boundaries (e.g., `CashierShift` per shift vs. `CashRegister` forever). When an aggregate completes its lifecycle, archive its stream and start a new one. This eliminates the need for snapshots entirely and is the preferred approach when domain semantics allow it. Documented in the `nexus::closing_the_books` guide module with a runnable contrast in `examples/closing-the-books`.
 
 ## Related Issues
 

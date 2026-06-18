@@ -7,6 +7,11 @@ use crate::state;
 
 /// Snapshot-aware repository decorator.
 ///
+/// **Before reaching for snapshots, consider the
+/// [Closing the Books](nexus::closing_the_books) pattern** — modeling the
+/// aggregate as bounded, lifecycle-scoped streams often removes the need for
+/// snapshots entirely.
+///
 /// Wraps an inner repository (e.g., `EventStore` or `ZeroCopyEventStore`)
 /// and adds transparent snapshot support:
 ///
