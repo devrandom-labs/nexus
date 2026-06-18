@@ -482,7 +482,13 @@ mod projected_intents_tests {
         let mut intents = ProjectedIntents::<M, 2>::new();
         for v in 1u64..=3 {
             let version = Version::new(v).expect("non-zero");
-            intents.push(ProjectedIntent::new(Sid(9), version, Cmd(v as u8)));
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::as_conversions,
+                reason = "test: v ranges 1..=3, fits u8"
+            )]
+            let tag = v as u8;
+            intents.push(ProjectedIntent::new(Sid(9), version, Cmd(tag)));
         }
         assert_eq!(intents.len(), 3);
         assert!(!intents.is_empty());
