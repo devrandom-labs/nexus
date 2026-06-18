@@ -153,6 +153,35 @@ impl React<PaymentSettled> for OrderSaga {
     }
 }
 
+// Upstream event that drives TWO own-events at once (`N = 1`). Exercises the
+// fixture's intent projection over multiple events: order-preserving, with the
+// internal-only `OrderCompleted` filtered out of the intents.
+#[derive(Debug)]
+struct OrderExpedited {
+    id: u64,
+}
+impl Message for OrderExpedited {}
+impl DomainEvent for OrderExpedited {
+    fn name(&self) -> &'static str {
+        "OrderExpedited"
+    }
+}
+
+impl React<OrderExpedited, 1> for OrderSaga {
+    fn correlate(event: &OrderExpedited) -> Option<u64> {
+        Some(event.id)
+    }
+    fn react(
+        _state: &OrderSagaState,
+        _event: &OrderExpedited,
+    ) -> Result<Option<Events<SagaEvent, 1>>, OrderSagaError> {
+        Ok(Some(events![
+            SagaEvent::PaymentRequested,
+            SagaEvent::OrderCompleted
+        ]))
+    }
+}
+
 // ── Basic given/when/then ────────────────────────────────────────
 #[test]
 fn react_on_empty_history_produces_event_and_intent() {
@@ -181,6 +210,19 @@ fn internal_only_event_projects_no_intent() {
         .then_expect_events([SagaEvent::OrderCompleted])
         .then_expect_commands([])
         .then_expect_state(|s| assert!(s.completed));
+}
+
+#[test]
+fn multi_event_react_projects_intents_in_order_filtering_internal() {
+    // OrderExpedited (N = 1) produces two own-events; `intent_for` maps
+    // PaymentRequested -> TakePayment and OrderCompleted -> None, so exactly one
+    // intent is projected while BOTH events are folded, in order.
+    SagaFixture::<OrderSaga>::new()
+        .given([])
+        .when(&OrderExpedited { id: 1 })
+        .then_expect_events([SagaEvent::PaymentRequested, SagaEvent::OrderCompleted])
+        .then_expect_commands([Intent::TakePayment])
+        .then_expect_state(|s| assert!(s.payment_requested && s.completed));
 }
 
 // ── Category 1: Sequence/Protocol ────────────────────────────────
