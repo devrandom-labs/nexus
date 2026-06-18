@@ -750,6 +750,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-example-closing-the-books"
+version = "0.0.0"
+dependencies = [
+ "nexus",
+ "thiserror",
+ "workspace-hack",
+]
+
+[[package]]
 name = "nexus-example-inmemory"
 version = "0.0.0"
 dependencies = [
