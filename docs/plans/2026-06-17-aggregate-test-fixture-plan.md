@@ -63,26 +63,35 @@ Create `crates/nexus/tests/aggregate_fixture_tests.rs`. This file defines a samp
 //! Tests for `nexus::testing::AggregateFixture`. Exercises the real
 //! given (replay) -> when (handle) -> then chain on a sample aggregate.
 #![cfg(all(feature = "testing", feature = "derive"))]
-#![allow(clippy::unwrap_used, reason = "test code")]
+#![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
 use nexus::testing::AggregateFixture;
 use nexus::{AggregateState, DomainEvent, Handle, Id, Message, events, Events};
 
 // ── Sample domain ────────────────────────────────────────────────
+// Store the id as fixed bytes so `as_ref` can borrow them (the kernel's
+// own `Id` tests use the same `[u8; N]` pattern). `Id` requires the
+// associated `const BYTE_LEN` — the fixed storage width of `as_ref()`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-struct CounterId(u64);
+struct CounterId([u8; 8]);
+impl CounterId {
+    fn new(n: u64) -> Self {
+        Self(n.to_le_bytes())
+    }
+}
 impl core::fmt::Display for CounterId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", u64::from_le_bytes(self.0))
     }
 }
 impl AsRef<[u8]> for CounterId {
     fn as_ref(&self) -> &[u8] {
-        // stable bytes for storage keys; fine for a test id
-        Box::leak(self.0.to_le_bytes().to_vec().into_boxed_slice())
+        &self.0
     }
 }
-impl Id for CounterId {}
+impl Id for CounterId {
+    const BYTE_LEN: usize = 8;
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum CounterEvent {
@@ -146,7 +155,7 @@ fn given_replays_history_then_asserts_state() {
 
 #[test]
 fn with_id_constructs_equivalently_to_new() {
-    AggregateFixture::<Counter>::with_id(CounterId(42))
+    AggregateFixture::<Counter>::with_id(CounterId::new(42))
         .given([CounterEvent::Incremented(7)])
         .then_expect_state(|s| assert_eq!(s.total, 7));
 }
@@ -170,12 +179,15 @@ Create `crates/nexus/src/testing.rs`:
 //! No store, codec, or serialization. See
 //! `docs/plans/2026-06-17-aggregate-test-fixture-design.md`.
 
-use crate::aggregate::{Aggregate, EventOf, Handle};
-use crate::aggregate::AggregateState;
-use crate::aggregate::AggregateRoot;
+use crate::aggregate::{Aggregate, AggregateRoot, EventOf, Handle};
 use crate::events::Events;
 use crate::version::Version;
 use core::fmt::Debug;
+
+// Note: `AggregateState` is intentionally NOT imported. The fixture never
+// calls `AggregateState::apply`/`initial` directly — `AggregateRoot::new`,
+// `replay`, and `apply_events` drive the fold internally. Importing it would
+// trip `clippy::unused_imports`.
 
 /// Entry point. Carries the id used to construct the root for replay.
 pub struct AggregateFixture<A: Aggregate> {
@@ -306,16 +318,32 @@ In `crates/nexus/src/testing.rs`, add to `impl<A: Aggregate> Given<A>`:
 
 ```rust
     /// Issue a command. Calls [`AggregateRoot::handle`] (which dispatches to
-    /// [`Aggregate::handle`]) and captures the result.
+    /// [`Aggregate::handle`]), and — on success — folds the decided events
+    /// into the root via [`AggregateRoot::apply_events`] so the root reaches
+    /// the post-command state, exactly as the repository does after a
+    /// successful persist. The fold uses the kernel's `mem::replace` path
+    /// (no clone), so the fixture imposes **no** `Clone` bound on `A::State`
+    /// (`AggregateState: Clone` was removed in #197's follow-up perf change).
+    /// The raw `Result` is captured for `then_expect_events`/`then_expect_error`.
+    /// On a rejected command the root is left at the rehydrated state.
     #[must_use]
     pub fn when<C, const N: usize>(self, cmd: C) -> Acted<A, N>
     where
         A: Handle<C, N>,
     {
-        let result = self.root.handle(cmd);
-        Acted { root: self.root, result }
+        let mut root = self.root;
+        let result = root.handle(cmd);
+        if let Ok(events) = &result {
+            root.apply_events(events);
+        }
+        Acted { root, result }
     }
 ```
+
+Note: `apply_events` is `#[doc(hidden)]` (repository-internal), but it is
+`pub` and the fixture lives in the same `nexus` crate, so it is reachable.
+Folding here — rather than lazily in `Acted::then_expect_state` — is what
+lets `then_expect_state` be a pure borrow with zero added bounds.
 
 Then add the `Acted` type and its first assertion:
 
@@ -540,24 +568,25 @@ Expected: FAIL to compile — `Acted::then_expect_state` missing.
 In `crates/nexus/src/testing.rs`, add to `impl<A: Aggregate, const N: usize> Acted<A, N>`:
 
 ```rust
-    /// Assert against the resulting state: the rehydrated state with the
-    /// decided events applied (if the command succeeded). After a rejected
-    /// command no events were decided and `handle` does not mutate, so the
-    /// asserted state equals the rehydrated state. Chainable.
+    /// Assert against the resulting state. `when` already folded the decided
+    /// events into the root (on success) via the kernel's no-clone
+    /// `apply_events`, so the root *is* the post-command state — this is a
+    /// pure borrow. After a rejected command no events were folded and
+    /// `handle` does not mutate, so the asserted state equals the rehydrated
+    /// state ("the rejected command changed nothing"). Chainable.
     #[must_use]
     pub fn then_expect_state(self, assertion: impl FnOnce(&A::State)) -> Self {
-        let mut state = self.root.state().clone();
-        if let Ok(events) = &self.result {
-            for event in events.iter() {
-                state = state.apply(event);
-            }
-        }
-        assertion(&state);
+        assertion(self.root.state());
         self
     }
 ```
 
-Note: `A::State: Clone` is guaranteed by `AggregateState: Clone`; `state.apply(event)` is `AggregateState::apply(self, &Self::Event) -> Self` (consumes + returns), matching the kernel's own fold. `AggregateState` is already imported.
+Note: this needs **no** extra bound. `AggregateState: Clone` was removed
+(#197's perf follow-up: replay/apply fold via `mem::replace`), so cloning
+state here would not even compile for a `!Clone` state. Because `when`
+already advanced the root, `then_expect_state` is a borrow of
+`self.root.state()` — identical to `Given::then_expect_state`. It is also
+idempotent under chaining (borrow only, no further mutation).
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -593,7 +622,7 @@ Append:
 // ── Lifecycle: rehydration parity ────────────────────────────────
 #[test]
 fn multi_event_history_replays_in_order() {
-    AggregateFixture::<Counter>::with_id(CounterId(1))
+    AggregateFixture::<Counter>::with_id(CounterId::new(1))
         .given([
             CounterEvent::Incremented(1),
             CounterEvent::Incremented(2),
@@ -709,4 +738,4 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **2. Placeholder scan:** No TBD/TODO. Every code step has complete code. The one self-correcting note (Task 6 Step 1 `then_expect_state_panics_on_wrong_state`) is resolved inline (use bare `#[should_panic]`). The Task 7 flake-feature caveat is an explicit verification instruction, not a placeholder.
 
-**3. Type consistency:** The fixture is generic over `A: Aggregate` (not the deleted `AggregateEntity`) throughout. `AggregateFixture<A>` / `Given<A>` / `Acted<A, N>` hold an `AggregateRoot<A>` (`root` field), built by `given` via `AggregateRoot::<A>::new(id)` + `replay`, and `when` calls `self.root.handle(cmd)`. `Acted<A, const N: usize>` fields (`root`, `result`) and methods (`then_expect_events`/`then_expect_error`/`then_expect_error_matching`/`then_expect_state`) are consistent across Tasks 3–5. `given(impl IntoIterator<Item = EventOf<A>>)` and `then_expect_events(impl IntoIterator<Item = EventOf<A>>)` match. The sample `Counter` is a bare marker (`#[nexus::aggregate(...)] struct Counter;`) whose `Handle` impls take `state: &CounterState` (no `&self`). Bounds: `EventOf<A>: PartialEq + Debug` (events), `<A as Aggregate>::Error: PartialEq` (exact error), `A::State: Clone` (free via `AggregateState`). Sample-aggregate command types (`Increment`, `IncrementBounded`) are defined before the tests that use them.
+**3. Type consistency:** The fixture is generic over `A: Aggregate` (not the deleted `AggregateEntity`) throughout. `AggregateFixture<A>` / `Given<A>` / `Acted<A, N>` hold an `AggregateRoot<A>` (`root` field), built by `given` via `AggregateRoot::<A>::new(id)` + `replay`, and `when` calls `self.root.handle(cmd)`. `Acted<A, const N: usize>` fields (`root`, `result`) and methods (`then_expect_events`/`then_expect_error`/`then_expect_error_matching`/`then_expect_state`) are consistent across Tasks 3–5. `given(impl IntoIterator<Item = EventOf<A>>)` and `then_expect_events(impl IntoIterator<Item = EventOf<A>>)` match. The sample `Counter` is a bare marker (`#[nexus::aggregate(...)] struct Counter;`) whose `Handle` impls take `state: &CounterState` (no `&self`). Bounds: `EventOf<A>: PartialEq + Debug` (events), `<A as Aggregate>::Error: PartialEq` (exact error). `then_expect_state` adds **no** bound — `when` eagerly folds decided events into the root via the kernel's no-clone `apply_events`, and `then_expect_state` borrows `root.state()`. (`AggregateState: Clone` no longer exists after #197's perf follow-up, so a clone-based resulting-state would not compile for `!Clone` state.) Sample-aggregate command types (`Increment`, `IncrementBounded`) are defined before the tests that use them.

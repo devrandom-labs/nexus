@@ -6,6 +6,9 @@ mod id;
 mod message;
 mod version;
 
+#[cfg(feature = "testing")]
+pub mod testing;
+
 pub use aggregate::{
     Aggregate, AggregateRoot, AggregateState, DEFAULT_MAX_REHYDRATION_EVENTS, EventOf, Handle,
 };

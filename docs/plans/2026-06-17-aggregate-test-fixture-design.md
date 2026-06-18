@@ -62,14 +62,14 @@ AggregateFixture<A>  --given(history)-->  Given<A>  --when(cmd)-->  Acted<A, N>
   - `fn then_expect_events(self, expected: impl IntoIterator<Item = EventOf<A>>) -> Self` — requires the result is `Ok`; compares the produced `Events<EventOf<A>, N>` against `expected` by exact element-wise `PartialEq`, including count. On `Err`, or on mismatch, panics with a diff. Bound: `EventOf<A>: PartialEq + Debug`.
   - `fn then_expect_error(self, expected: A::Error) -> Self` — requires `Err`; exact match. Bound (on this method only): `A::Error: PartialEq`.
   - `fn then_expect_error_matching(self, f: impl FnOnce(&A::Error) -> bool) -> Self` — requires `Err`; asserts `f(&err)`. No `PartialEq` bound — the escape hatch for errors that wrap non-`PartialEq` sources.
-  - `fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self` — computes the resulting state: clone the rehydrated state (`root.state()`), and **if the command succeeded**, fold the decided events into it via `AggregateState::apply`; then run `f` against that state. After a rejected command there are no decided events and `handle` is non-mutating, so the asserted state equals the rehydrated state (i.e. "the rejected command changed nothing"). Chainable.
+  - `fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self` — asserts against the resulting state. `when` already folded the decided events into the root **(on success)** via the kernel's no-clone `AggregateRoot::apply_events`, so this is a pure borrow of `root.state()`. After a rejected command nothing was folded and `handle` is non-mutating, so the asserted state equals the rehydrated state (i.e. "the rejected command changed nothing"). Chainable. **No bound** — see below (`AggregateState: Clone` was removed).
 
 All `then_expect_*` methods are **chainable** (return `Self`), enabling `…when(cmd).then_expect_events(...).then_expect_state(...)`.
 
 ## Behavior details
 
 - **Versions for `given`:** start at `Version::INITIAL` (= 1), increment with `Version::next()` / checked add; never bare arithmetic (workspace rule). An overflow across a test history is effectively impossible but is handled by surfacing the `KernelError`, not by saturating.
-- **Resulting state for `Acted::then_expect_state`:** folds the decided events into a clone of the rehydrated state (`root.state().clone()`) via `AggregateState::apply`. State is `Clone` (guaranteed by `AggregateState: Clone`), so cloning to keep the chain re-assertable is sound and cheap for test-sized state.
+- **Resulting state for `Acted::then_expect_state`:** computed eagerly in `when`, not here. On a successful command `when` folds the decided events into the root via `AggregateRoot::apply_events` (the kernel's `mem::replace` fold — no clone), so `then_expect_state` is a pure borrow of `root.state()` and is idempotent under chaining. This deliberately avoids any `Clone` bound: `AggregateState: Clone` was removed in #197's perf follow-up (commit `c914606`), so a clone-based resulting-state would not compile for a `!Clone` state.
 - **Event comparison:** compares the produced events as a slice against the collected `expected`. Exact count + exact element equality; a length or element mismatch panics with both sequences printed (`Debug`).
 - **Failure output:** every assertion failure prints expected vs actual via `assert_eq!`/`assert!` with a message naming which expectation failed (events / error / state).
 
@@ -81,7 +81,7 @@ All `then_expect_*` methods are **chainable** (return `Self`), enabling `…when
 | `then_expect_events` | `EventOf<A>: PartialEq + Debug` |
 | `then_expect_error` (exact) | `A::Error: PartialEq` (Debug already on `Aggregate::Error`) |
 | `then_expect_error_matching` | none |
-| `then_expect_state` | none beyond the kernel's existing `AggregateState: Debug + Clone` |
+| `then_expect_state` | none (resulting state is folded clone-free in `when`; `AggregateState` no longer requires `Clone`) |
 
 Everything is per-method, so a user who only does `then_expect_error_matching` + `then_expect_state` pays no extra bounds at all.
 
@@ -128,7 +128,7 @@ impl<A: Aggregate> AggregateFixture<A> {
 }
 
 impl<A: Aggregate> Given<A> {
-    pub fn when<C, const N: usize>(self, cmd: C) -> Acted<A, N> where A: Handle<C, N> { /* root.handle(cmd) */ }
+    pub fn when<C, const N: usize>(self, cmd: C) -> Acted<A, N> where A: Handle<C, N> { /* root.handle(cmd); on Ok, root.apply_events(&events) */ }
     pub fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self { /* f(root.state()) */ }
 }
 
@@ -138,6 +138,6 @@ impl<A: Aggregate, const N: usize> Acted<A, N> {
     pub fn then_expect_error(self, expected: <A as Aggregate>::Error) -> Self
         where <A as Aggregate>::Error: PartialEq { /* compare Err */ }
     pub fn then_expect_error_matching(self, f: impl FnOnce(&<A as Aggregate>::Error) -> bool) -> Self { /* assert f(err) */ }
-    pub fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self { /* clone root.state(), apply decided events if Ok, f(state) */ }
+    pub fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self { /* f(root.state()) — root already folded in when() */ }
 }
 ```
