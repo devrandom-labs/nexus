@@ -123,6 +123,9 @@ pub use nexus::Version;
 #[cfg(feature = "projection")]
 pub use projection::Projector;
 pub use repository::{EventStore, Repository, ZeroCopyEventStore};
+pub use saga::{
+    ConflictPredicate, ProjectedIntent, ProjectedIntents, Reaction, SagaError, SagaRepository,
+};
 #[cfg(feature = "snapshot")]
 pub use snapshot::Snapshotting;
 #[cfg(feature = "testing")]
