@@ -11,13 +11,15 @@
 //! See `docs/plans/2026-06-18-saga-repository-design.md`.
 
 use core::fmt;
+use core::future::Future;
 use core::iter::Chain;
 use core::option;
 
 use arrayvec::ArrayVec;
-use nexus::{Saga, Version};
+use nexus::{AggregateRoot, DomainEvent, EventOf, React, Saga, Version};
 
 use crate::error::StoreError;
+use crate::repository::{Repository, first_persisted_version};
 
 mod sealed {
     pub trait Sealed {}
@@ -88,10 +90,6 @@ pub struct ProjectedIntent<S: Saga> {
 
 impl<S: Saga> ProjectedIntent<S> {
     /// Internal constructor — see the type docs for why this is not public.
-    #[allow(
-        dead_code,
-        reason = "constructed by SagaRepository::react_and_save, added in a follow-up task"
-    )]
     pub(crate) const fn new(saga_id: S::Id, source_version: Version, intent: S::Command) -> Self {
         Self {
             saga_id,
@@ -157,10 +155,6 @@ pub struct ProjectedIntents<S: Saga, const N: usize> {
 }
 
 impl<S: Saga, const N: usize> ProjectedIntents<S, N> {
-    #[allow(
-        dead_code,
-        reason = "constructed by SagaRepository::react_and_save, added in a follow-up task"
-    )]
     pub(crate) const fn new() -> Self {
         Self {
             first: None,
@@ -173,8 +167,7 @@ impl<S: Saga, const N: usize> ProjectedIntents<S, N> {
     /// exceeded once `first` absorbs the first push.
     #[allow(
         clippy::expect_used,
-        dead_code,
-        reason = "capacity N+1 is guaranteed by the producing Events<_, N>; overflow is a programmer bug; consumed by SagaRepository::react_and_save in a follow-up task"
+        reason = "capacity N+1 is guaranteed by the producing Events<_, N>; overflow is a programmer bug"
     )]
     pub(crate) fn push(&mut self, intent: ProjectedIntent<S>) {
         if self.first.is_none() {
@@ -262,6 +255,109 @@ impl<S: Saga, const N: usize> fmt::Debug for Reaction<S, N> {
         }
     }
 }
+
+/// The saga-facing port: `react → save → project` as one callable bounded
+/// transaction.
+///
+/// Extends [`Repository<S>`] and inherits its snapshot-aware `load` and atomic,
+/// optimistic `save` unchanged. Both methods are provided; the blanket impl
+/// below gives them to every repository for free.
+pub trait SagaRepository<S: Saga>: Repository<S> {
+    /// **Core (single-writer / world A *and* the base for world B).** React to
+    /// one upstream `event` against a saga `root` already in hand, persist any
+    /// produced own-events atomically, and return their intents pinned to the
+    /// versions `save` just assigned. No load — the caller supplies the root.
+    ///
+    /// - `Ok(Reaction::Ignored)` — `react` returned `Ok(None)`; nothing persisted.
+    /// - `Ok(Reaction::Reacted { .. })` — events appended; intents projected.
+    /// - `Err(SagaError::React)` — `react` rejected the event; nothing persisted.
+    /// - `Err(SagaError::Store)` — load/save failed (use [`SagaError::is_conflict`]).
+    ///
+    /// # Errors
+    /// See the variants above.
+    fn react_and_save<E, const N: usize>(
+        &self,
+        root: &mut AggregateRoot<S>,
+        event: &E,
+    ) -> impl Future<Output = Result<Reaction<S, N>, SagaError<S::Error, Self::Error>>> + Send
+    where
+        S: React<E, N>,
+        E: DomainEvent,
+    {
+        async move {
+            let before = root.version();
+
+            // React is pure. Ok(None) ⇒ routed but no-op; persist nothing.
+            let Some(produced) = root.react::<E, N>(event).map_err(SagaError::React)? else {
+                return Ok(Reaction::Ignored);
+            };
+
+            // Materialize once to satisfy `Repository::save(&[EventOf<S>])`.
+            // `save` already allocates a Vec<PendingEnvelope> of equal length
+            // internally, so this is a bounded sibling allocation (not new
+            // asymptotic cost) and doubles as the projection source below.
+            let events: Vec<EventOf<S>> = produced.into_iter().collect();
+
+            // First version this append assigns. Checked pre-save so overflow is
+            // a clean error (save would also reject it).
+            let first = first_persisted_version(before).ok_or(SagaError::VersionOverflow)?;
+
+            // Persist atomically (optimistic concurrency enforced inside `save`).
+            self.save(root, &events).await.map_err(SagaError::Store)?;
+
+            // Project intents, each pinned to its event's assigned version.
+            // `events` is non-empty (`react` returned `Some`; `Events` holds >= 1),
+            // so the loop runs at least once and `current` ends on the last event's
+            // version. `peekable` advances the version only when a successor exists,
+            // sidestepping a bare `len() - 1` index computation entirely.
+            let mut intents = ProjectedIntents::<S, N>::new();
+            let mut current = first;
+            let mut iter = events.iter().peekable();
+            while let Some(recorded) = iter.next() {
+                if let Some(intent) = S::intent_for(recorded) {
+                    intents.push(ProjectedIntent::new(root.id().clone(), current, intent));
+                }
+                if iter.peek().is_some() {
+                    current = current.next().ok_or(SagaError::VersionOverflow)?;
+                }
+            }
+
+            Ok(Reaction::Reacted {
+                version: current,
+                intents,
+            })
+        }
+    }
+
+    /// **Convenience (stateless concurrent reactors / world B).** `load` the
+    /// instance then [`react_and_save`](Self::react_and_save). One call per
+    /// upstream event; a concurrent writer may cause `save` to surface
+    /// `Err(SagaError::Store)` with [`is_conflict`](SagaError::is_conflict) — the
+    /// caller reloads and retries. `load` is whichever `Repository<S>::load` is
+    /// in play, so snapshot hydration composes for free.
+    ///
+    /// # Errors
+    /// As [`react_and_save`](Self::react_and_save), plus `Err(SagaError::Store)`
+    /// from the `load`.
+    fn dispatch<E, const N: usize>(
+        &self,
+        id: S::Id,
+        event: &E,
+    ) -> impl Future<Output = Result<Reaction<S, N>, SagaError<S::Error, Self::Error>>> + Send
+    where
+        S: React<E, N>,
+        E: DomainEvent,
+    {
+        async move {
+            let mut root = self.load(id).await.map_err(SagaError::Store)?;
+            self.react_and_save(&mut root, event).await
+        }
+    }
+}
+
+// Rides on every repository — bare `EventStore`/`ZeroCopyEventStore` AND the
+// `Snapshotting` decorator — with zero per-type code. Fully static dispatch.
+impl<S: Saga, R: Repository<S>> SagaRepository<S> for R {}
 
 #[cfg(test)]
 mod error_tests {
