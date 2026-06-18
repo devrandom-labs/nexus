@@ -33,7 +33,7 @@ nexus-macros <-- nexus (kernel, optional via "derive" feature)
 
 ### Kernel Crate (`nexus`) — Flat Module Layout
 
-- **`aggregate.rs`** — `Aggregate` trait (binds State + Error + Id), `AggregateRoot<A>` (read-only state container with version tracking + `replay` + `advance_version` + `apply_events`), `AggregateState` trait (`initial()`, `apply(self, &Event) -> Self`; requires `Clone` for panic safety), `AggregateEntity` trait (newtype delegation pattern with default methods: `id`, `state`, `version`, `replay`), `Handle<C, const N: usize = 0>` trait (per-command decide function returning `Events<E, N>`; N declares max additional events, default 0 = single event). Configurable limit: `MAX_REHYDRATION_EVENTS` (default 1M, `NonZeroUsize`).
+- **`aggregate.rs`** — `Aggregate` trait (binds State + Error + Id), implemented on a **bare marker** type (a unit struct, never instantiated — state lives in `AggregateRoot`). `AggregateRoot<A>` (read-only state container with version tracking + `replay` + `advance_version` + `apply_events`; the post-persist mutators are `#[doc(hidden)]` — driven by the repository, not user code) carries the inherent `handle<C, N>(&self, cmd)` **dispatch** that forwards to `A::handle(self.state(), cmd)`, so a loaded `AggregateRoot<A>` is directly decidable. `AggregateState` trait (`initial()`, `apply(self, &Event) -> Self`; requires `Clone` for panic safety). `Handle<C, const N: usize = 0>` trait (per-command **decide** function, `handle(state: &State, cmd) -> Events<E, N>`) — a pure function of `(state, command)`, implemented **on the marker**, with no access to version/identity (a decision never branches on persistence position); supertrait is `Aggregate`. There is **no entity newtype** and **no `AggregateEntity`/`from_root`** — `Handle` on the local marker coheres even for foreign command types, and the seam between "load returns `AggregateRoot`" and "decide" is dissolved by the dispatch method. Configurable limit: `MAX_REHYDRATION_EVENTS` (default 1M, `NonZeroUsize`). One `Handle<C, N>` per command type (two impls differing only in `N` for the same `C` are ambiguous at the dispatch call site).
 - **`version.rs`** — `Version` newtype over `NonZeroU64` (event versions always >= 1). `Version::new(u64) -> Option<Self>` (mirrors `NonZeroU64::new`), `Version::INITIAL` = 1, `Version::next() -> Option<Self>`. `VersionedEvent<E>` pairs an event with its version.
 - **`event.rs`** / **`events.rs`** — `DomainEvent` trait (extends `Message`, provides `name() -> &'static str`). `Events<E, const N: usize = 0>` is an `ArrayVec`-backed collection guaranteeing at least one event with compile-time capacity N+1; constructed via `events![e1, e2]` macro. N=0 (default) = single event, no heap allocation, `no_std`/`no_alloc` compatible.
 - **`error.rs`** — `KernelError`: `VersionMismatch { expected, actual }`, `RehydrationLimitExceeded { max }`, `VersionOverflow`.
@@ -107,16 +107,16 @@ The workspace pins `fjall = { version = "3", features = ["bytes_1"] }`. That fea
 
 ### Aggregate Lifecycle (Key Flow)
 
-1. Define aggregate via `#[nexus::aggregate(state = S, error = E, id = I)]` on a unit struct, or implement `Aggregate` + `AggregateEntity` + `Handle<C, N>` manually
-2. `Aggregate::new(id)` creates a fresh aggregate (delegates to `AggregateRoot::new`; version = `None`)
-3. **Load (rehydration):** `root.replay(version, &event)` replays persisted events with strict version validation (must start at 1, strictly sequential, enforces `MAX_REHYDRATION_EVENTS`)
-4. **Decide:** `aggregate.handle(command) -> Result<Events<E, N>, Error>` — pure decision function, reads state via `&self`, returns decided events without mutating. N is the const generic capacity declared on `Handle<C, N>` (default 0 = single event).
+1. Define the aggregate marker via `#[nexus::aggregate(state = S, error = E, id = I)]` on a unit struct (emits `impl Aggregate`), or implement `Aggregate` manually; implement `Handle<C, N>` on the marker as `handle(state, cmd)`
+2. `AggregateRoot::<A>::new(id)` creates a fresh aggregate (version = `None`)
+3. **Load (rehydration):** `root.replay(version, &event)` replays persisted events with strict version validation (must start at 1, strictly sequential, enforces `MAX_REHYDRATION_EVENTS`) — driven by the repository
+4. **Decide:** `root.handle(command) -> Result<Events<E, N>, Error>` dispatches to `Aggregate::handle(root.state(), command)` — a pure decision function of `(state, command)`, returns decided events without mutating. N is the const generic capacity declared on `Handle<C, N>` (default 0 = single event).
 5. **Persist + advance:** Repository writes events to store, then calls `root.advance_version(new_version)` + `root.apply_events(&events)` to sync in-memory state
 
 ### `nexus-macros` — Proc Macros
 
 Three macros:
-- **`#[nexus::aggregate(state = S, error = E, id = I)]`** — Attribute macro on a unit struct. Generates `Aggregate` impl, `AggregateEntity` impl, newtype wrapping `AggregateRoot`, `new(id)` constructor, and redacted `Debug` (shows only id + version).
+- **`#[nexus::aggregate(state = S, error = E, id = I)]`** — Attribute macro on a unit struct. Generates **only** the `Aggregate` impl; the struct stays a bare marker. Construct instances as `AggregateRoot::<Name>::new(id)` and implement `Handle<C>` on the marker. (No newtype, no `new`, no `AggregateEntity`, no generated `Debug`.)
 - **`#[derive(DomainEvent)]`** — Derive macro for enums only. Generates `Message` + `DomainEvent` impls, with `name()` returning variant names as `&'static str`.
 - **`#[nexus::transforms(aggregate = A, error = E)]`** — Attribute macro on an impl block. Generates `Upcaster` impl with `type Error = E`, iterative apply loop, and `current_version()` lookup. Transform functions annotated with `#[transform(event = "...", from = N, to = N+1)]`.
 

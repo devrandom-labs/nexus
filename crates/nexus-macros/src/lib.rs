@@ -12,12 +12,9 @@ use syn::{Data, DeriveInput, Error, Result, Type, parse_macro_input};
 /// struct MyAggregate;
 /// ```
 ///
-/// Generates:
-/// - Replaces the unit struct with a newtype wrapping `AggregateRoot<Self>`
-/// - `impl Aggregate` with the specified associated types
-/// - `impl AggregateEntity` with `root()`/`root_mut()` delegation
-/// - `new(id)` constructor
-/// - `impl Debug`
+/// Generates `impl Aggregate` for the unit struct, which becomes a
+/// type-level marker. Construct instances as `AggregateRoot::<Name>::new(id)`
+/// and implement `Handle<C>` on the marker as `handle(state, cmd) -> events`.
 #[proc_macro_attribute]
 pub fn aggregate(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(item as DeriveInput);
@@ -509,41 +506,12 @@ fn parse_aggregate(
 
     let expanded = quote! {
         #(#user_attrs)*
-        #vis struct #name(::nexus::AggregateRoot<#name>);
+        #vis struct #name;
 
         impl ::nexus::Aggregate for #name {
             type State = #state_type;
             type Error = #error_type;
             type Id = #id_type;
-        }
-
-        impl ::nexus::AggregateEntity for #name {
-            fn root(&self) -> &::nexus::AggregateRoot<Self> {
-                &self.0
-            }
-            fn root_mut(&mut self) -> &mut ::nexus::AggregateRoot<Self> {
-                &mut self.0
-            }
-        }
-
-        impl #name {
-            /// Create a new aggregate with default state.
-            #[must_use]
-            #vis fn new(id: #id_type) -> Self {
-                Self(::nexus::AggregateRoot::new(id))
-            }
-        }
-
-        impl ::std::fmt::Debug for #name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                // Redacted: only shows aggregate name, id, and version.
-                // Internal state is NOT exposed to prevent information leakage
-                // in logs, error messages, and panic output.
-                f.debug_struct(stringify!(#name))
-                    .field("id", self.root().id())
-                    .field("version", &self.root().version())
-                    .finish_non_exhaustive()
-            }
         }
     };
 

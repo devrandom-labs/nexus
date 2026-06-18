@@ -2,7 +2,6 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use nexus::Aggregate;
-use nexus::AggregateEntity;
 use nexus::AggregateRoot;
 use nexus::AggregateState;
 use nexus::DomainEvent;
@@ -85,46 +84,15 @@ enum CounterError {
     ZeroIncrement,
 }
 
-struct CounterAggregate;
-
-impl Aggregate for CounterAggregate {
-    type State = CounterState;
-    type Error = CounterError;
-    type Id = TestId;
-}
-
-// ---------------------------------------------------------------------------
-// AggregateEntity newtype (delegation pattern)
-// ---------------------------------------------------------------------------
-
-struct Counter(AggregateRoot<Self>);
-
-impl fmt::Debug for Counter {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Counter").field(&self.0).finish()
-    }
-}
+// `Counter` is a bare marker aggregate. Command handlers are pure associated
+// functions implemented directly on the marker; the loaded `AggregateRoot<Counter>`
+// dispatches to them via its inherent `handle`.
+struct Counter;
 
 impl Aggregate for Counter {
     type State = CounterState;
     type Error = CounterError;
     type Id = TestId;
-}
-
-impl AggregateEntity for Counter {
-    fn root(&self) -> &AggregateRoot<Self> {
-        &self.0
-    }
-
-    fn root_mut(&mut self) -> &mut AggregateRoot<Self> {
-        &mut self.0
-    }
-}
-
-impl Counter {
-    fn new(id: TestId) -> Self {
-        Self(AggregateRoot::new(id))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -140,13 +108,19 @@ struct IncrementBy {
 struct Decrement;
 
 impl Handle<Increment> for Counter {
-    fn handle(&self, _cmd: Increment) -> Result<Events<CounterEvent>, CounterError> {
+    fn handle(
+        _state: &CounterState,
+        _cmd: Increment,
+    ) -> Result<Events<CounterEvent>, CounterError> {
         Ok(events![CounterEvent::Incremented])
     }
 }
 
 impl Handle<IncrementBy> for Counter {
-    fn handle(&self, cmd: IncrementBy) -> Result<Events<CounterEvent>, CounterError> {
+    fn handle(
+        _state: &CounterState,
+        cmd: IncrementBy,
+    ) -> Result<Events<CounterEvent>, CounterError> {
         if cmd.amount == 0 {
             return Err(CounterError::ZeroIncrement);
         }
@@ -155,8 +129,8 @@ impl Handle<IncrementBy> for Counter {
 }
 
 impl Handle<Decrement> for Counter {
-    fn handle(&self, _cmd: Decrement) -> Result<Events<CounterEvent>, CounterError> {
-        if self.state().value <= 0 {
+    fn handle(state: &CounterState, _cmd: Decrement) -> Result<Events<CounterEvent>, CounterError> {
+        if state.value <= 0 {
             return Err(CounterError::WouldGoNegative);
         }
         Ok(events![CounterEvent::Decremented])
@@ -169,13 +143,13 @@ impl Handle<Decrement> for Counter {
 
 #[test]
 fn new_aggregate_has_none_version() {
-    let agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     assert_eq!(agg.version(), None);
 }
 
 #[test]
 fn new_aggregate_has_initial_state() {
-    let agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     assert_eq!(agg.state().value, 0);
 }
 
@@ -185,7 +159,7 @@ fn new_aggregate_has_initial_state() {
 
 #[test]
 fn aggregate_id_is_accessible() {
-    let agg = AggregateRoot::<CounterAggregate>::new(TestId("abc".into()));
+    let agg = AggregateRoot::<Counter>::new(TestId("abc".into()));
     assert_eq!(agg.id(), &TestId("abc".into()));
 }
 
@@ -195,7 +169,7 @@ fn aggregate_id_is_accessible() {
 
 #[test]
 fn replay_single_event_advances_version_and_state() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     agg.replay(Version::INITIAL, &CounterEvent::Incremented)
         .unwrap();
     assert_eq!(agg.version(), Some(Version::INITIAL));
@@ -204,7 +178,7 @@ fn replay_single_event_advances_version_and_state() {
 
 #[test]
 fn replay_multiple_events_sequentially() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     agg.replay(Version::new(1).unwrap(), &CounterEvent::Incremented)
         .unwrap();
     agg.replay(Version::new(2).unwrap(), &CounterEvent::Incremented)
@@ -222,7 +196,7 @@ fn replay_multiple_events_sequentially() {
 
 #[test]
 fn replay_rejects_version_gap() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     agg.replay(Version::new(1).unwrap(), &CounterEvent::Incremented)
         .unwrap();
 
@@ -241,7 +215,7 @@ fn replay_rejects_version_gap() {
 
 #[test]
 fn replay_rejects_gap_on_fresh_aggregate() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     let err = agg
         .replay(Version::new(5).unwrap(), &CounterEvent::Incremented)
         .unwrap_err();
@@ -261,7 +235,7 @@ fn replay_rejects_gap_on_fresh_aggregate() {
 
 #[test]
 fn replay_rejects_duplicate_version() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     agg.replay(Version::new(1).unwrap(), &CounterEvent::Incremented)
         .unwrap();
 
@@ -284,7 +258,7 @@ fn replay_rejects_duplicate_version() {
 
 #[test]
 fn replay_does_not_mutate_state_on_version_gap() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     agg.replay(Version::new(1).unwrap(), &CounterEvent::Incremented)
         .unwrap();
 
@@ -300,7 +274,7 @@ fn replay_does_not_mutate_state_on_version_gap() {
 
 #[test]
 fn handle_increment_returns_event() {
-    let counter = Counter::new(TestId("1".into()));
+    let counter = AggregateRoot::<Counter>::new(TestId("1".into()));
     let decided = counter.handle(Increment).unwrap();
     assert_eq!(decided.len(), 1);
     assert!(matches!(
@@ -311,7 +285,7 @@ fn handle_increment_returns_event() {
 
 #[test]
 fn handle_increment_by_returns_event_with_amount() {
-    let counter = Counter::new(TestId("1".into()));
+    let counter = AggregateRoot::<Counter>::new(TestId("1".into()));
     let decided = counter.handle(IncrementBy { amount: 42 }).unwrap();
     assert_eq!(decided.len(), 1);
     assert!(matches!(
@@ -322,21 +296,21 @@ fn handle_increment_by_returns_event_with_amount() {
 
 #[test]
 fn handle_rejects_invalid_command() {
-    let counter = Counter::new(TestId("1".into()));
+    let counter = AggregateRoot::<Counter>::new(TestId("1".into()));
     let err = counter.handle(Decrement).unwrap_err();
     assert!(matches!(err, CounterError::WouldGoNegative));
 }
 
 #[test]
 fn handle_rejects_zero_increment() {
-    let counter = Counter::new(TestId("1".into()));
+    let counter = AggregateRoot::<Counter>::new(TestId("1".into()));
     let err = counter.handle(IncrementBy { amount: 0 }).unwrap_err();
     assert!(matches!(err, CounterError::ZeroIncrement));
 }
 
 #[test]
 fn handle_uses_current_state_for_decision() {
-    let mut counter = Counter::new(TestId("1".into()));
+    let mut counter = AggregateRoot::<Counter>::new(TestId("1".into()));
     // Replay an increment so decrement becomes valid.
     counter
         .replay(Version::new(1).unwrap(), &CounterEvent::Incremented)
@@ -356,7 +330,7 @@ fn handle_uses_current_state_for_decision() {
 
 #[test]
 fn advance_version_updates_version() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     assert_eq!(agg.version(), None);
 
     agg.advance_version(Version::new(1).unwrap());
@@ -365,7 +339,7 @@ fn advance_version_updates_version() {
 
 #[test]
 fn apply_events_updates_state_without_changing_version() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     let decided: Events<_, 1> = events![CounterEvent::Incremented, CounterEvent::Incremented];
     agg.apply_events(&decided);
 
@@ -376,7 +350,7 @@ fn apply_events_updates_state_without_changing_version() {
 
 #[test]
 fn advance_version_then_apply_events_full_workflow() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
 
     // Simulate: handle -> persist -> advance + apply.
     let decided: Events<_, 1> = events![CounterEvent::Incremented, CounterEvent::IncrementedBy(9)];
@@ -390,7 +364,7 @@ fn advance_version_then_apply_events_full_workflow() {
 
 #[test]
 fn advance_version_then_replay_continues_from_advanced_version() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
 
     // First, replay version 1.
     agg.replay(Version::new(1).unwrap(), &CounterEvent::Incremented)
@@ -417,7 +391,7 @@ fn advance_version_then_replay_continues_from_advanced_version() {
 
 #[test]
 fn apply_event_updates_state_single_increment() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     assert_eq!(agg.state().value, 0);
 
     agg.apply_event(&CounterEvent::Incremented);
@@ -426,7 +400,7 @@ fn apply_event_updates_state_single_increment() {
 
 #[test]
 fn apply_event_called_twice_accumulates_state() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     assert_eq!(agg.state().value, 0);
 
     agg.apply_event(&CounterEvent::Incremented);
@@ -438,58 +412,11 @@ fn apply_event_called_twice_accumulates_state() {
 
 #[test]
 fn apply_event_does_not_change_version() {
-    let mut agg = AggregateRoot::<CounterAggregate>::new(TestId("1".into()));
+    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
     agg.apply_event(&CounterEvent::Incremented);
 
     // apply_event does NOT advance version — that is advance_version's job.
     assert_eq!(agg.version(), None);
-}
-
-// ---------------------------------------------------------------------------
-// Tests: AggregateEntity delegation
-// ---------------------------------------------------------------------------
-
-#[test]
-fn entity_id_delegates_to_root() {
-    let counter = Counter::new(TestId("e1".into()));
-    assert_eq!(counter.id(), &TestId("e1".into()));
-}
-
-#[test]
-fn entity_state_delegates_to_root() {
-    let counter = Counter::new(TestId("e1".into()));
-    assert_eq!(counter.state().value, 0);
-}
-
-#[test]
-fn entity_version_delegates_to_root() {
-    let counter = Counter::new(TestId("e1".into()));
-    assert_eq!(counter.version(), None);
-}
-
-#[test]
-fn entity_replay_delegates_to_root() {
-    let mut counter = Counter::new(TestId("e1".into()));
-    counter
-        .replay(Version::new(1).unwrap(), &CounterEvent::Incremented)
-        .unwrap();
-    assert_eq!(counter.version(), Version::new(1));
-    assert_eq!(counter.state().value, 1);
-}
-
-#[test]
-fn entity_replay_rejects_gap_same_as_root() {
-    let mut counter = Counter::new(TestId("e1".into()));
-    let err = counter
-        .replay(Version::new(2).unwrap(), &CounterEvent::Incremented)
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        KernelError::VersionMismatch {
-            expected,
-            actual,
-        } if expected == Version::INITIAL && actual == Version::new(2).unwrap()
-    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +483,7 @@ fn restore_creates_root_at_given_state_and_version() {
     let state = CounterState { value: 42 };
     let version = Version::new(10).unwrap();
 
-    let root = AggregateRoot::<CounterAggregate>::restore(id.clone(), state, version);
+    let root = AggregateRoot::<Counter>::restore(id.clone(), state, version);
 
     assert_eq!(root.id(), &id);
     assert_eq!(root.state().value, 42);
@@ -569,7 +496,7 @@ fn restore_then_replay_continues_from_snapshot_version() {
     let state = CounterState { value: 42 };
     let version = Version::new(10).unwrap();
 
-    let mut root = AggregateRoot::<CounterAggregate>::restore(id, state, version);
+    let mut root = AggregateRoot::<Counter>::restore(id, state, version);
 
     // Next replay must be version 11
     let result = root.replay(Version::new(11).unwrap(), &CounterEvent::Incremented);
@@ -584,7 +511,7 @@ fn restore_then_replay_rejects_wrong_version() {
     let state = CounterState { value: 42 };
     let version = Version::new(10).unwrap();
 
-    let mut root = AggregateRoot::<CounterAggregate>::restore(id, state, version);
+    let mut root = AggregateRoot::<Counter>::restore(id, state, version);
 
     // Replaying version 10 (not 11) must fail
     let result = root.replay(Version::new(10).unwrap(), &CounterEvent::Incremented);

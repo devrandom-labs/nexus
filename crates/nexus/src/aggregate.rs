@@ -101,17 +101,12 @@ pub trait AggregateState: Send + Sync + Debug + Clone + 'static {
 /// # impl Id for MyId { const BYTE_LEN: usize = 0; }
 /// # #[derive(Debug, thiserror::Error)] #[error("e")] struct MyError;
 ///
-/// struct MyAggregate(AggregateRoot<Self>);
+/// struct MyAggregate;
 ///
 /// impl Aggregate for MyAggregate {
 ///     type State = St;
 ///     type Error = MyError;
 ///     type Id = MyId;
-/// }
-///
-/// impl AggregateEntity for MyAggregate {
-///     fn root(&self) -> &AggregateRoot<Self> { &self.0 }
-///     fn root_mut(&mut self) -> &mut AggregateRoot<Self> { &mut self.0 }
 /// }
 /// ```
 pub trait Aggregate: Sized {
@@ -127,8 +122,8 @@ pub trait Aggregate: Sized {
 
 /// Per-command handler trait — the **decide** function.
 ///
-/// Implement this for each command your aggregate accepts. The handler
-/// reads aggregate state via `&self`, validates invariants, and returns
+/// Implement this on the aggregate marker for each command it accepts. The
+/// handler reads the current `state`, validates invariants, and returns
 /// decided events. It never mutates the aggregate — the repository
 /// handles persistence and state advancement.
 ///
@@ -155,75 +150,33 @@ pub trait Aggregate: Sized {
 /// # impl AsRef<[u8]> for TodoId { fn as_ref(&self) -> &[u8] { self.0.as_bytes() } }
 /// # impl Id for TodoId { const BYTE_LEN: usize = 0; }
 /// # #[derive(Debug, thiserror::Error)] #[error("e")] struct TodoError;
-/// # struct Todo(AggregateRoot<Self>);
+/// # struct Todo;
 /// # impl Aggregate for Todo { type State = TodoState; type Error = TodoError; type Id = TodoId; }
-/// # impl AggregateEntity for Todo { fn root(&self) -> &AggregateRoot<Self> { &self.0 } fn root_mut(&mut self) -> &mut AggregateRoot<Self> { &mut self.0 } }
 ///
 /// struct CompleteTodo;
 ///
 /// impl Handle<CompleteTodo> for Todo {
-///     fn handle(&self, _cmd: CompleteTodo) -> Result<Events<TodoEvent>, TodoError> {
-///         if self.state().done {
+///     fn handle(state: &TodoState, _cmd: CompleteTodo) -> Result<Events<TodoEvent>, TodoError> {
+///         if state.done {
 ///             return Err(TodoError);
 ///         }
 ///         Ok(events![TodoEvent::Completed])
 ///     }
 /// }
 /// ```
-pub trait Handle<C, const N: usize = 0>: AggregateEntity {
-    /// Handle a command, returning decided events or a domain error.
+pub trait Handle<C, const N: usize = 0>: Aggregate {
+    /// Decide a command, returning decided events or a domain error.
     ///
-    /// This is a pure decision — `&self` provides read-only access to
-    /// the aggregate's state. External data (service results, enriched
-    /// context) should be resolved by the application layer and passed
-    /// as fields on the command `C`.
+    /// A **pure decision**: reads the aggregate's current `state` and the
+    /// command, returns the decided events. No access to version or identity —
+    /// a decision is a function of domain state and command only, never of
+    /// persistence position. Implemented on the aggregate marker type; invoke
+    /// via [`AggregateRoot::handle`] on a loaded aggregate.
     ///
     /// # Errors
     ///
     /// Returns `Self::Error` when the command violates a domain invariant.
-    fn handle(&self, cmd: C) -> Result<Events<EventOf<Self>, N>, <Self as Aggregate>::Error>;
-}
-
-/// Trait for user-defined aggregate newtypes wrapping `AggregateRoot`.
-///
-/// Provides default method implementations so users get `state()`,
-/// `version()`, etc. on their own type. Only `root()` and
-/// `root_mut()` must be implemented — typically via `#[derive(Aggregate)]`.
-pub trait AggregateEntity: Aggregate {
-    /// Access the inner `AggregateRoot`.
-    fn root(&self) -> &AggregateRoot<Self>;
-
-    /// Mutably access the inner `AggregateRoot`.
-    fn root_mut(&mut self) -> &mut AggregateRoot<Self>;
-
-    /// The aggregate's identity.
-    #[must_use]
-    fn id(&self) -> &Self::Id {
-        self.root().id()
-    }
-
-    /// The current state (read-only).
-    #[must_use]
-    fn state(&self) -> &Self::State {
-        self.root().state()
-    }
-
-    /// The last persisted version, or `None` for a fresh aggregate with no history.
-    #[must_use]
-    fn version(&self) -> Option<Version> {
-        self.root().version()
-    }
-
-    /// Replay a single persisted event during rehydration.
-    ///
-    /// Delegates to [`AggregateRoot::replay`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KernelError`] on version mismatch, overflow, or limit exceeded.
-    fn replay(&mut self, version: Version, event: &EventOf<Self>) -> Result<(), KernelError> {
-        self.root_mut().replay(version, event)
-    }
+    fn handle(state: &Self::State, cmd: C) -> Result<Events<EventOf<Self>, N>, Self::Error>;
 }
 
 /// Shorthand for accessing the event type of an aggregate.
@@ -325,10 +278,28 @@ impl<A: Aggregate> AggregateRoot<A> {
         self.version
     }
 
+    /// Decide a command against the current state.
+    ///
+    /// Dispatches to the aggregate's [`Handle`] impl, passing the current
+    /// [`state`](Self::state). Pure — reads state, returns decided events,
+    /// mutates nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns `A::Error` when the command violates a domain invariant.
+    pub fn handle<C, const N: usize>(&self, cmd: C) -> Result<Events<EventOf<A>, N>, A::Error>
+    where
+        A: Handle<C, N>,
+    {
+        A::handle(self.state(), cmd)
+    }
+
     /// Replay a single persisted event during rehydration.
     ///
     /// Takes a borrowed event reference so zero-copy codecs (rkyv, flatbuffers)
     /// can pass views directly from database buffers without cloning.
+    ///
+    /// Internal — driven by the repository; not part of the user-facing flow.
     ///
     /// # Errors
     ///
@@ -345,6 +316,7 @@ impl<A: Aggregate> AggregateRoot<A> {
     ///
     /// Panics if `MAX_REHYDRATION_EVENTS` exceeds `u64::MAX` on the
     /// current platform (impossible on 32/64-bit systems).
+    #[doc(hidden)]
     #[allow(
         clippy::expect_used,
         reason = "u64::try_from(usize) cannot fail on supported platforms (max 64-bit)"
@@ -385,6 +357,9 @@ impl<A: Aggregate> AggregateRoot<A> {
     /// Only call after a successful write to the event store. Calling
     /// without persistence leaves the aggregate's version ahead of
     /// the store — subsequent saves will produce a version conflict.
+    ///
+    /// Internal — driven by the repository; not part of the user-facing flow.
+    #[doc(hidden)]
     pub const fn advance_version(&mut self, new_version: Version) {
         self.version = Some(new_version);
     }
@@ -394,6 +369,9 @@ impl<A: Aggregate> AggregateRoot<A> {
     /// Called by the repository after successful persistence to keep
     /// the in-memory state in sync with the store. Events have already
     /// been persisted — this just updates the local projection.
+    ///
+    /// Internal — driven by the repository; not part of the user-facing flow.
+    #[doc(hidden)]
     pub fn apply_events<const N: usize>(&mut self, events: &Events<EventOf<A>, N>) {
         for event in events {
             let new_state = self.state.clone().apply(event);
@@ -406,8 +384,124 @@ impl<A: Aggregate> AggregateRoot<A> {
     /// Called by the repository after successful persistence to keep
     /// the in-memory state in sync. Clone-based for panic safety —
     /// if `apply` panics, the original state is preserved.
+    ///
+    /// Internal — driven by the repository; not part of the user-facing flow.
+    #[doc(hidden)]
     pub fn apply_event(&mut self, event: &EventOf<A>) {
         let new_state = self.state.clone().apply(event);
         self.state = new_state;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, reason = "test code")]
+mod purist_dispatch_tests {
+    use super::{Aggregate, AggregateRoot, AggregateState, Handle};
+    use crate::event::DomainEvent;
+    use crate::events;
+    use crate::events::Events;
+    use crate::id::Id;
+    use crate::message::Message;
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct CtrId([u8; 8]);
+
+    impl CtrId {
+        fn new(n: u64) -> Self {
+            Self(n.to_le_bytes())
+        }
+    }
+
+    impl std::fmt::Display for CtrId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", u64::from_le_bytes(self.0))
+        }
+    }
+
+    impl AsRef<[u8]> for CtrId {
+        fn as_ref(&self) -> &[u8] {
+            &self.0
+        }
+    }
+
+    impl Id for CtrId {
+        const BYTE_LEN: usize = 8;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum CtrEvent {
+        Added(u64),
+    }
+
+    impl Message for CtrEvent {}
+
+    impl DomainEvent for CtrEvent {
+        fn name(&self) -> &'static str {
+            match self {
+                Self::Added(_) => "Added",
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct CtrState {
+        total: u64,
+    }
+
+    impl AggregateState for CtrState {
+        type Event = CtrEvent;
+
+        fn initial() -> Self {
+            Self { total: 0 }
+        }
+
+        fn apply(mut self, event: &CtrEvent) -> Self {
+            match event {
+                CtrEvent::Added(n) => self.total = self.total.wrapping_add(*n),
+            }
+            self
+        }
+    }
+
+    #[derive(Debug, thiserror::Error, PartialEq)]
+    #[error("counter error")]
+    struct CtrError;
+
+    struct Counter;
+
+    impl Aggregate for Counter {
+        type State = CtrState;
+        type Error = CtrError;
+        type Id = CtrId;
+    }
+
+    struct Add(u64);
+
+    impl Handle<Add> for Counter {
+        fn handle(state: &CtrState, cmd: Add) -> Result<Events<CtrEvent>, CtrError> {
+            if cmd.0 == 0 {
+                return Err(CtrError);
+            }
+            let _ = state.total;
+            Ok(events![CtrEvent::Added(cmd.0)])
+        }
+    }
+
+    #[test]
+    fn dispatches_to_handle_on_the_marker() {
+        let root = AggregateRoot::<Counter>::new(CtrId::new(1));
+        let decided = root.handle(Add(5)).expect("ok");
+        assert_eq!(
+            decided.into_iter().collect::<Vec<_>>(),
+            vec![CtrEvent::Added(5)]
+        );
+    }
+
+    #[test]
+    fn surfaces_domain_error_from_handle() {
+        assert_eq!(
+            AggregateRoot::<Counter>::new(CtrId::new(1)).handle(Add(0)),
+            Err(CtrError)
+        );
     }
 }

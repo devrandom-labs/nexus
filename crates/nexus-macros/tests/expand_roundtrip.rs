@@ -77,8 +77,12 @@ struct RtError;
 
 // --- What #[nexus::aggregate(...)] expands to ---
 // (manually written, no macro)
+//
+// The macro now emits ONLY the unit marker struct plus `impl Aggregate`.
+// No newtype field, no `new` constructor, no `AggregateEntity`, no `Debug`.
+// Aggregates are constructed and driven via `AggregateRoot::<Name>::new(id)`.
 
-struct RtAggregate(::nexus::AggregateRoot<RtAggregate>);
+struct RtAggregate;
 
 impl ::nexus::Aggregate for RtAggregate {
     type State = RtState;
@@ -86,98 +90,55 @@ impl ::nexus::Aggregate for RtAggregate {
     type Id = RtId;
 }
 
-impl ::nexus::AggregateEntity for RtAggregate {
-    fn root(&self) -> &::nexus::AggregateRoot<Self> {
-        &self.0
-    }
-    fn root_mut(&mut self) -> &mut ::nexus::AggregateRoot<Self> {
-        &mut self.0
-    }
-}
-
-impl RtAggregate {
-    #[must_use]
-    fn new(id: RtId) -> Self {
-        Self(::nexus::AggregateRoot::new(id))
-    }
-}
-
-impl ::std::fmt::Debug for RtAggregate {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.debug_struct("RtAggregate")
-            .field("id", self.root().id())
-            .field("version", &self.root().version())
-            .finish_non_exhaustive()
-    }
-}
-
-// --- Business logic (same as user would write) ---
-
-impl RtAggregate {
-    fn add(&mut self, item: String) {
-        self.root_mut().apply_event(&RtEvent::Added(item));
-    }
-
-    fn remove(&mut self) {
-        self.root_mut().apply_event(&RtEvent::Removed);
-    }
-}
-
 // --- Tests proving the expansion works identically to the macro ---
 
 #[test]
 fn expanded_lifecycle() {
-    let mut agg = RtAggregate::new(RtId::new(1));
-    agg.add("one".into());
-    agg.add("two".into());
-    agg.remove();
+    let mut root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
+    root.apply_event(&RtEvent::Added("one".into()));
+    root.apply_event(&RtEvent::Added("two".into()));
+    root.apply_event(&RtEvent::Removed);
 
-    assert_eq!(agg.state().items, vec!["one"]);
+    assert_eq!(root.state().items, vec!["one"]);
     // Version is None because apply_event does not advance version
-    assert_eq!(agg.version(), None);
+    assert_eq!(root.version(), None);
 }
 
 #[test]
 fn expanded_rehydrate() {
-    let mut agg = RtAggregate::new(RtId::new(1));
-    agg.root_mut()
-        .replay(Version::INITIAL, &RtEvent::Added("a".into()))
+    let mut root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
+    root.replay(Version::INITIAL, &RtEvent::Added("a".into()))
         .unwrap();
-    agg.root_mut()
-        .replay(
-            Version::INITIAL.next().expect("version 2"),
-            &RtEvent::Added("b".into()),
-        )
-        .unwrap();
-    assert_eq!(agg.state().items, vec!["a", "b"]);
-    assert_eq!(agg.version(), Version::new(2));
+    root.replay(
+        Version::INITIAL.next().expect("version 2"),
+        &RtEvent::Added("b".into()),
+    )
+    .unwrap();
+    assert_eq!(root.state().items, vec!["a", "b"]);
+    assert_eq!(root.version(), Version::new(2));
 }
 
 #[test]
-fn expanded_entity_trait_works() {
-    let mut agg = RtAggregate::new(RtId::new(1));
-    agg.add("test".into());
+fn expanded_root_accessors_work() {
+    let mut root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
+    root.apply_event(&RtEvent::Added("test".into()));
 
-    // AggregateEntity methods
-    assert_eq!(agg.id(), &RtId::new(1));
-    assert_eq!(agg.state().items, vec!["test"]);
+    // AggregateRoot accessors
+    assert_eq!(root.id(), &RtId::new(1));
+    assert_eq!(root.state().items, vec!["test"]);
     // Version is None because apply_event does not advance version
-    assert_eq!(agg.version(), None);
+    assert_eq!(root.version(), None);
 }
 
 #[test]
 fn expanded_debug() {
-    let agg = RtAggregate::new(RtId::new(1));
-    let debug = format!("{agg:?}");
-    assert!(debug.contains("RtAggregate"));
+    let root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
+    let debug = format!("{root:?}");
+    assert!(debug.contains("AggregateRoot"));
 }
 
 #[test]
-fn expanded_generic_entity_bound() {
-    fn takes_entity<A: AggregateEntity>(agg: &A) -> Option<Version> {
-        agg.version()
-    }
-
-    let agg = RtAggregate::new(RtId::new(1));
-    assert_eq!(takes_entity(&agg), None);
+fn expanded_root_version_default() {
+    let root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
+    assert_eq!(root.version(), None);
 }

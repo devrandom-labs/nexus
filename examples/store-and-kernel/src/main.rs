@@ -141,9 +141,15 @@ struct Withdraw {
     amount: u64,
 }
 
+// Handlers are pure decision functions on the marker type: they read the
+// borrowed `state`, validate invariants, and return decided events. They never
+// touch version or identity — that's the repository's job.
 impl Handle<OpenAccount> for BankAccount {
-    fn handle(&self, cmd: OpenAccount) -> Result<Events<AccountEvent>, AccountError> {
-        if self.state().is_open {
+    fn handle(
+        state: &AccountState,
+        cmd: OpenAccount,
+    ) -> Result<Events<AccountEvent>, AccountError> {
+        if state.is_open {
             return Err(AccountError::AlreadyOpen);
         }
         Ok(events![AccountEvent::Opened(AccountOpened {
@@ -153,8 +159,8 @@ impl Handle<OpenAccount> for BankAccount {
 }
 
 impl Handle<Deposit> for BankAccount {
-    fn handle(&self, cmd: Deposit) -> Result<Events<AccountEvent>, AccountError> {
-        if !self.state().is_open {
+    fn handle(state: &AccountState, cmd: Deposit) -> Result<Events<AccountEvent>, AccountError> {
+        if !state.is_open {
             return Err(AccountError::Closed);
         }
         Ok(events![AccountEvent::Deposited(MoneyDeposited {
@@ -164,13 +170,13 @@ impl Handle<Deposit> for BankAccount {
 }
 
 impl Handle<Withdraw> for BankAccount {
-    fn handle(&self, cmd: Withdraw) -> Result<Events<AccountEvent>, AccountError> {
-        if !self.state().is_open {
+    fn handle(state: &AccountState, cmd: Withdraw) -> Result<Events<AccountEvent>, AccountError> {
+        if !state.is_open {
             return Err(AccountError::Closed);
         }
-        if self.state().balance < cmd.amount {
+        if state.balance < cmd.amount {
             return Err(AccountError::InsufficientFunds {
-                balance: self.state().balance,
+                balance: state.balance,
                 amount: cmd.amount,
             });
         }
@@ -267,27 +273,27 @@ async fn main() {
     println!("=== Step 1: Create and operate on BankAccount ===");
 
     let alice_id = AccountId("alice".to_owned());
-    let mut account = BankAccount::new(alice_id.clone());
+    let mut account = AggregateRoot::<BankAccount>::new(alice_id.clone());
 
     let decided = account
         .handle(OpenAccount {
             owner: "Alice Smith".to_owned(),
         })
         .expect("open should succeed");
-    account.root_mut().apply_events(&decided);
-    account.root_mut().advance_version(Version::new(1).unwrap());
+    account.apply_events(&decided);
+    account.advance_version(Version::new(1).unwrap());
 
     let decided = account
         .handle(Deposit { amount: 1000 })
         .expect("deposit should succeed");
-    account.root_mut().apply_events(&decided);
-    account.root_mut().advance_version(Version::new(2).unwrap());
+    account.apply_events(&decided);
+    account.advance_version(Version::new(2).unwrap());
 
     let decided = account
         .handle(Deposit { amount: 500 })
         .expect("deposit should succeed");
-    account.root_mut().apply_events(&decided);
-    account.root_mut().advance_version(Version::new(3).unwrap());
+    account.apply_events(&decided);
+    account.advance_version(Version::new(3).unwrap());
 
     println!(
         "State: owner={}, balance={}, version={:?}",
@@ -303,7 +309,7 @@ async fn main() {
 
     // For this demo, re-handle all three commands and persist them.
     // In a real system, the repository handles this atomically.
-    let mut fresh = BankAccount::new(alice_id.clone());
+    let mut fresh = AggregateRoot::<BankAccount>::new(alice_id.clone());
 
     let decided = fresh
         .handle(OpenAccount {
@@ -311,14 +317,14 @@ async fn main() {
         })
         .expect("open");
     let envelopes = encode_decided(&codec, &decided, 0);
-    fresh.root_mut().apply_events(&decided);
-    fresh.root_mut().advance_version(Version::new(1).unwrap());
+    fresh.apply_events(&decided);
+    fresh.advance_version(Version::new(1).unwrap());
 
     let decided = fresh.handle(Deposit { amount: 1000 }).expect("deposit");
     let mut more = encode_decided(&codec, &decided, 1);
     envelopes.len(); // keep envelopes alive
-    fresh.root_mut().apply_events(&decided);
-    fresh.root_mut().advance_version(Version::new(2).unwrap());
+    fresh.apply_events(&decided);
+    fresh.advance_version(Version::new(2).unwrap());
 
     let decided = fresh.handle(Deposit { amount: 500 }).expect("deposit");
     let mut even_more = encode_decided(&codec, &decided, 2);
@@ -341,11 +347,10 @@ async fn main() {
     println!("\n=== Step 3: Rehydrate from store ===");
 
     let versioned = load_events(&codec, &store, &alice_id).await;
-    let mut account = BankAccount::new(alice_id.clone());
+    let mut account = AggregateRoot::<BankAccount>::new(alice_id.clone());
     for ve in versioned {
         let (version, event) = ve.into_parts();
         account
-            .root_mut()
             .replay(version, &event)
             .expect("rehydration should succeed");
     }
@@ -373,9 +378,9 @@ async fn main() {
         .await
         .expect("append should succeed");
 
-    account.root_mut().apply_events(&decided);
+    account.apply_events(&decided);
     let new_ver = Version::new(base + 1).unwrap();
-    account.root_mut().advance_version(new_ver);
+    account.advance_version(new_ver);
 
     println!(
         "Persisted {} more event(s). balance={}, version={:?}",
@@ -392,11 +397,10 @@ async fn main() {
     let versioned = load_events(&codec, &store, &alice_id).await;
     println!("Total events in stream: {}", versioned.len());
 
-    let mut account = BankAccount::new(alice_id);
+    let mut account = AggregateRoot::<BankAccount>::new(alice_id);
     for ve in versioned {
         let (version, event) = ve.into_parts();
         account
-            .root_mut()
             .replay(version, &event)
             .expect("rehydration should succeed");
     }

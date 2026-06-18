@@ -146,9 +146,15 @@ struct Withdraw {
 
 struct CloseAccount;
 
+// Handlers are pure decision functions on the marker type: they read the
+// borrowed `state`, validate invariants, and return decided events. They never
+// see version or identity — a decision depends only on domain state + command.
 impl Handle<OpenAccount> for BankAccount {
-    fn handle(&self, cmd: OpenAccount) -> Result<Events<AccountEvent>, AccountError> {
-        if self.state().is_open {
+    fn handle(
+        state: &AccountState,
+        cmd: OpenAccount,
+    ) -> Result<Events<AccountEvent>, AccountError> {
+        if state.is_open {
             return Err(AccountError::AlreadyOpen);
         }
         Ok(events![AccountEvent::Opened(AccountOpened {
@@ -158,8 +164,8 @@ impl Handle<OpenAccount> for BankAccount {
 }
 
 impl Handle<Deposit> for BankAccount {
-    fn handle(&self, cmd: Deposit) -> Result<Events<AccountEvent>, AccountError> {
-        if !self.state().is_open {
+    fn handle(state: &AccountState, cmd: Deposit) -> Result<Events<AccountEvent>, AccountError> {
+        if !state.is_open {
             return Err(AccountError::Closed);
         }
         Ok(events![AccountEvent::Deposited(MoneyDeposited {
@@ -169,13 +175,13 @@ impl Handle<Deposit> for BankAccount {
 }
 
 impl Handle<Withdraw> for BankAccount {
-    fn handle(&self, cmd: Withdraw) -> Result<Events<AccountEvent>, AccountError> {
-        if !self.state().is_open {
+    fn handle(state: &AccountState, cmd: Withdraw) -> Result<Events<AccountEvent>, AccountError> {
+        if !state.is_open {
             return Err(AccountError::Closed);
         }
-        if self.state().balance < cmd.amount {
+        if state.balance < cmd.amount {
             return Err(AccountError::InsufficientFunds {
-                balance: self.state().balance,
+                balance: state.balance,
                 amount: cmd.amount,
             });
         }
@@ -186,12 +192,15 @@ impl Handle<Withdraw> for BankAccount {
 }
 
 impl Handle<CloseAccount> for BankAccount {
-    fn handle(&self, _cmd: CloseAccount) -> Result<Events<AccountEvent>, AccountError> {
-        if !self.state().is_open {
+    fn handle(
+        state: &AccountState,
+        _cmd: CloseAccount,
+    ) -> Result<Events<AccountEvent>, AccountError> {
+        if !state.is_open {
             return Err(AccountError::Closed);
         }
-        if self.state().balance > 0 {
-            return Err(AccountError::NonZeroBalance(self.state().balance));
+        if state.balance > 0 {
+            return Err(AccountError::NonZeroBalance(state.balance));
         }
         Ok(events![AccountEvent::Closed(AccountClosed)])
     }
@@ -213,8 +222,9 @@ impl InMemoryStore {
     }
 
     /// Simulate persist + apply: store the decided events, advance version,
-    /// and apply to in-memory state.
-    fn save(&mut self, account: &mut BankAccount, decided: &Events<AccountEvent>) {
+    /// and apply to in-memory state. Operates on the kernel's `AggregateRoot`
+    /// directly — the aggregate marker (`BankAccount`) carries no state.
+    fn save(&mut self, account: &mut AggregateRoot<BankAccount>, decided: &Events<AccountEvent>) {
         let stream = self.streams.entry(account.id().clone()).or_default();
         let base = account.version().map_or(0, |v| v.as_u64());
         for (i, event) in decided.iter().enumerate() {
@@ -222,16 +232,15 @@ impl InMemoryStore {
             stream.push(VersionedEvent::new(ver, event.clone()));
         }
         let new_version = Version::new(base + u64::try_from(decided.len()).unwrap()).unwrap();
-        account.root_mut().advance_version(new_version);
-        account.root_mut().apply_events(decided);
+        account.advance_version(new_version);
+        account.apply_events(decided);
     }
 
-    fn load(&self, id: &AccountId) -> Option<BankAccount> {
+    fn load(&self, id: &AccountId) -> Option<AggregateRoot<BankAccount>> {
         let events = self.streams.get(id)?;
-        let mut account = BankAccount::new(id.clone());
+        let mut account = AggregateRoot::<BankAccount>::new(id.clone());
         for e in events {
             account
-                .root_mut()
                 .replay(e.version(), e.event())
                 .expect("valid event sequence");
         }
@@ -251,7 +260,7 @@ fn main() {
     // --- Alice opens an account and deposits money ---
     println!("=== Alice's Account ===");
 
-    let mut alice = BankAccount::new(alice_id.clone());
+    let mut alice = AggregateRoot::<BankAccount>::new(alice_id.clone());
     let decided = alice
         .handle(OpenAccount {
             owner: "Alice Smith".into(),
@@ -274,7 +283,7 @@ fn main() {
     // --- Bob opens an account ---
     println!("\n=== Bob's Account ===");
 
-    let mut bob = BankAccount::new(bob_id.clone());
+    let mut bob = AggregateRoot::<BankAccount>::new(bob_id.clone());
     let decided = bob
         .handle(OpenAccount {
             owner: "Bob Jones".into(),

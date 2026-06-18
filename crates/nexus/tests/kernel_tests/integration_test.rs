@@ -63,8 +63,8 @@ impl AggregateState for UserState {
     }
 }
 
-// --- Aggregate newtype ---
-struct User(AggregateRoot<Self>);
+// --- Aggregate marker ---
+struct User;
 
 #[derive(Debug, thiserror::Error)]
 enum UserError {
@@ -80,21 +80,6 @@ impl Aggregate for User {
     type Id = UserId;
 }
 
-impl AggregateEntity for User {
-    fn root(&self) -> &AggregateRoot<Self> {
-        &self.0
-    }
-    fn root_mut(&mut self) -> &mut AggregateRoot<Self> {
-        &mut self.0
-    }
-}
-
-impl User {
-    fn new(id: UserId) -> Self {
-        Self(AggregateRoot::new(id))
-    }
-}
-
 // --- Commands ---
 struct CreateUser {
     name: String,
@@ -103,8 +88,8 @@ struct ActivateUser;
 
 // --- Command handlers (decide pattern) ---
 impl Handle<CreateUser> for User {
-    fn handle(&self, cmd: CreateUser) -> Result<Events<UserEvent>, UserError> {
-        if !self.state().name.is_empty() {
+    fn handle(state: &UserState, cmd: CreateUser) -> Result<Events<UserEvent>, UserError> {
+        if !state.name.is_empty() {
             return Err(UserError::AlreadyExists);
         }
         Ok(events![UserEvent::Created(UserCreated { name: cmd.name })])
@@ -112,8 +97,8 @@ impl Handle<CreateUser> for User {
 }
 
 impl Handle<ActivateUser> for User {
-    fn handle(&self, _cmd: ActivateUser) -> Result<Events<UserEvent>, UserError> {
-        if self.state().active {
+    fn handle(state: &UserState, _cmd: ActivateUser) -> Result<Events<UserEvent>, UserError> {
+        if state.active {
             return Err(UserError::AlreadyActive);
         }
         Ok(events![UserEvent::Activated(UserActivated)])
@@ -124,7 +109,7 @@ impl Handle<ActivateUser> for User {
 
 #[test]
 fn full_aggregate_lifecycle_with_handle() {
-    let mut user = User::new(UserId::new(1));
+    let mut user = AggregateRoot::<User>::new(UserId::new(1));
 
     // Decide: command produces events
     let create_events = user
@@ -137,8 +122,8 @@ fn full_aggregate_lifecycle_with_handle() {
 
     // Simulate persistence + state advancement
     let v1 = Version::new(1).unwrap();
-    user.root_mut().advance_version(v1);
-    user.root_mut().apply_events(&create_events);
+    user.advance_version(v1);
+    user.apply_events(&create_events);
 
     assert_eq!(user.state().name, "Alice");
     assert_eq!(user.version(), Some(v1));
@@ -146,8 +131,8 @@ fn full_aggregate_lifecycle_with_handle() {
     // Second command
     let activate_events = user.handle(ActivateUser).unwrap();
     let v2 = Version::new(2).unwrap();
-    user.root_mut().advance_version(v2);
-    user.root_mut().apply_events(&activate_events);
+    user.advance_version(v2);
+    user.apply_events(&activate_events);
 
     assert!(user.state().active);
     assert_eq!(user.version(), Some(v2));
@@ -155,7 +140,7 @@ fn full_aggregate_lifecycle_with_handle() {
 
 #[test]
 fn rehydrate_then_decide() {
-    let mut user = User::new(UserId::new(2));
+    let mut user = AggregateRoot::<User>::new(UserId::new(2));
     user.replay(
         Version::new(1).unwrap(),
         &UserEvent::Created(UserCreated { name: "Bob".into() }),
@@ -171,8 +156,8 @@ fn rehydrate_then_decide() {
 
     // Persist and advance
     let v2 = Version::new(2).unwrap();
-    user.root_mut().advance_version(v2);
-    user.root_mut().apply_events(&events);
+    user.advance_version(v2);
+    user.apply_events(&events);
 
     assert!(user.state().active);
     assert_eq!(user.version(), Some(v2));
@@ -180,7 +165,7 @@ fn rehydrate_then_decide() {
 
 #[test]
 fn invariant_violations_return_domain_errors() {
-    let mut user = User::new(UserId::new(3));
+    let mut user = AggregateRoot::<User>::new(UserId::new(3));
 
     // Create the user
     let events = user
@@ -188,8 +173,8 @@ fn invariant_violations_return_domain_errors() {
             name: "Charlie".into(),
         })
         .unwrap();
-    user.root_mut().advance_version(Version::new(1).unwrap());
-    user.root_mut().apply_events(&events);
+    user.advance_version(Version::new(1).unwrap());
+    user.apply_events(&events);
 
     // Duplicate creation rejected
     assert!(matches!(
@@ -201,8 +186,8 @@ fn invariant_violations_return_domain_errors() {
 
     // Activate the user
     let events = user.handle(ActivateUser).unwrap();
-    user.root_mut().advance_version(Version::new(2).unwrap());
-    user.root_mut().apply_events(&events);
+    user.advance_version(Version::new(2).unwrap());
+    user.apply_events(&events);
 
     // Duplicate activation rejected
     assert!(matches!(
