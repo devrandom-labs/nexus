@@ -38,6 +38,33 @@ fn conflict_display_contains_stream_id_and_versions() {
 }
 
 #[test]
+fn is_conflict_true_only_for_conflict_variant() {
+    let conflict: TestStoreError = StoreError::Conflict {
+        stream_id: label("order-42"),
+        expected: Version::new(3),
+        actual: Version::new(5),
+    };
+    assert!(
+        conflict.is_conflict(),
+        "Conflict variant must be a conflict"
+    );
+
+    let not_found: TestStoreError = StoreError::StreamNotFound {
+        stream_id: label("user-99"),
+    };
+    assert!(!not_found.is_conflict(), "StreamNotFound is not a conflict");
+
+    let decode: TestStoreError = StoreError::Decode(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "bad bytes",
+    ));
+    assert!(!decode.is_conflict(), "Decode is not a conflict");
+
+    let overflow: TestStoreError = StoreError::VersionOverflow;
+    assert!(!overflow.is_conflict(), "VersionOverflow is not a conflict");
+}
+
+#[test]
 fn stream_not_found_display_contains_stream_id() {
     let err: TestStoreError = StoreError::StreamNotFound {
         stream_id: label("user-99"),

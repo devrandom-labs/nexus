@@ -81,6 +81,29 @@ pub enum StoreError<A, EncErr, DecErr> {
     Envelope(#[from] crate::envelope::EnvelopeError),
 }
 
+impl<A, EncErr, DecErr> StoreError<A, EncErr, DecErr> {
+    /// Returns `true` if this is an optimistic-concurrency [`Conflict`].
+    ///
+    /// [`Conflict`] is the one error the store can assert a *semantic* fact
+    /// about that the consumer cannot infer otherwise: the expected version
+    /// was stale, so reloading the aggregate and re-running the (pure,
+    /// side-effect-free) decision will likely succeed. It is the natural
+    /// predicate for a consumer-owned retry loop — e.g. a supervising actor
+    /// retrying load → handle → save, or a `tower::retry::Policy` /
+    /// `backon` `.when(|e| e.is_conflict())`.
+    ///
+    /// nexus deliberately ships no retry machinery: classifying *other*
+    /// errors as retryable (transient adapter I/O, say) needs context only
+    /// the consumer has, and the loop, backoff, and sleep are runtime
+    /// concerns. This predicate is the entire retry-facing surface.
+    ///
+    /// [`Conflict`]: StoreError::Conflict
+    #[must_use]
+    pub const fn is_conflict(&self) -> bool {
+        matches!(self, Self::Conflict { .. })
+    }
+}
+
 /// Errors from the with-upcaster load path.
 ///
 /// Returned by [`EventStore::load_with`](crate::EventStore::load_with) and
