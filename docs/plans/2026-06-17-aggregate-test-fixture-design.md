@@ -6,7 +6,7 @@
 
 ## Goal
 
-Give nexus users a zero-infrastructure way to test their aggregates' domain logic: seed prior history, issue a command, and assert on the decided events, the rejection error, or the resulting state — with no store, codec, or serialization. The fixture drives the **real load path** (rehydration via `replay`), so it catches version/replay bugs as well as decision bugs, not just the pure decide function.
+Give nexus users a zero-infrastructure way to test their aggregates' domain logic: seed prior history, issue a command, and assert on the decided events, the rejection error, or the resulting state — with no store, codec, or serialization. The fixture drives the **real load path** (rehydration via `replay`), so it catches version/replay bugs as well as decision bugs, not just the pure decide function. The fixture holds an `AggregateRoot<A>` directly and dispatches commands through `root.handle(cmd)` (which calls `Aggregate::handle(state, cmd)`).
 
 ```rust
 // decided events
@@ -35,7 +35,7 @@ AggregateFixture::<BankAccount>::new()
 
 ## Core decision: full rehydration path (issue open-question resolved)
 
-`given` does **not** fold state by calling `AggregateState::apply` directly. It drives `AggregateEntity::replay(version, &event)` with versions `1..=n` — exactly what the repository does when loading an aggregate. This means the fixture also exercises strict version validation and `apply` together, the way production does. (Chosen over the "pure decide+evolve" interpretation because the kernel's defensive posture treats replay/version correctness as a first-class invariant, and Agency's keri aggregates will lean on the `sn`→`Version` mapping that this path covers — see agency#137.)
+`given` does **not** fold state by calling `AggregateState::apply` directly. It drives `AggregateRoot::<A>::replay(version, &event)` with versions `1..=n` — exactly what the repository does when loading an aggregate. This means the fixture also exercises strict version validation and `apply` together, the way production does. (Chosen over the "pure decide+evolve" interpretation because the kernel's defensive posture treats replay/version correctness as a first-class invariant, and Agency's keri aggregates will lean on the `sn`→`Version` mapping that this path covers — see agency#137.)
 
 ## Typestate flow
 
@@ -49,27 +49,27 @@ AggregateFixture<A>  --given(history)-->  Given<A>  --when(cmd)-->  Acted<A, N>
                                                                        └─ then_expect_state
 ```
 
-- **`AggregateFixture<A>`** — entry. Holds the id used to construct the entity.
+- **`AggregateFixture<A>`** — entry. Holds the id used to construct the root.
   - `fn new() -> Self where A::Id: Default` — id defaults to `A::Id::default()`. Available only when the id type implements `Default`.
   - `fn with_id(id: A::Id) -> Self` — always available; the escape hatch for id types without `Default`.
-  - `fn given(self, history: impl IntoIterator<Item = EventOf<A>>) -> Given<A>` — constructs the entity via `A::new(id)`, then `replay`s each event with versions `Version::INITIAL`, `+1`, … using checked increment. A `replay` failure (e.g. a malformed test history) panics with the `KernelError` — that is a test-author error surfaced loudly, which is correct for a fixture.
+  - `fn given(self, history: impl IntoIterator<Item = EventOf<A>>) -> Given<A>` — builds `AggregateRoot::<A>::new(id)`, then `replay`s each event with versions `Version::INITIAL`, `+1`, … using checked increment. A `replay` failure (e.g. a malformed test history) panics with the `KernelError` — that is a test-author error surfaced loudly, which is correct for a fixture.
 
-- **`Given<A>`** — entity rehydrated to the post-history state.
-  - `fn when<C, const N: usize>(self, cmd: C) -> Acted<A, N> where A: Handle<C, N>` — calls `handle(&entity, cmd)` and captures the `Result<Events<EventOf<A>, N>, A::Error>`. Keeps the rehydrated entity alongside the result so resulting-state can be computed later. `N` is inferred from the `Handle` impl.
-  - `fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self` — runs `f` against the rehydrated state (`entity.state()`). Chainable (returns `Self`) so you can assert state and then issue a command.
+- **`Given<A>`** — root rehydrated to the post-history state.
+  - `fn when<C, const N: usize>(self, cmd: C) -> Acted<A, N> where A: Handle<C, N>` — calls `root.handle(cmd)` (which dispatches to `Aggregate::handle(root.state(), cmd)`) and captures the `Result<Events<EventOf<A>, N>, A::Error>`. Keeps the rehydrated root alongside the result so resulting-state can be computed later. `N` is inferred from the `Handle` impl.
+  - `fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self` — runs `f` against the rehydrated state (`root.state()`). Chainable (returns `Self`) so you can assert state and then issue a command.
 
-- **`Acted<A, const N: usize>`** — post-command. Holds the rehydrated entity + the handle result.
+- **`Acted<A, const N: usize>`** — post-command. Holds the rehydrated root + the handle result.
   - `fn then_expect_events(self, expected: impl IntoIterator<Item = EventOf<A>>) -> Self` — requires the result is `Ok`; compares the produced `Events<EventOf<A>, N>` against `expected` by exact element-wise `PartialEq`, including count. On `Err`, or on mismatch, panics with a diff. Bound: `EventOf<A>: PartialEq + Debug`.
   - `fn then_expect_error(self, expected: A::Error) -> Self` — requires `Err`; exact match. Bound (on this method only): `A::Error: PartialEq`.
   - `fn then_expect_error_matching(self, f: impl FnOnce(&A::Error) -> bool) -> Self` — requires `Err`; asserts `f(&err)`. No `PartialEq` bound — the escape hatch for errors that wrap non-`PartialEq` sources.
-  - `fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self` — computes the resulting state: clone the rehydrated entity, and **if the command succeeded**, `apply_events` the decided events to it; then run `f` against that state. After a rejected command there are no decided events and `handle` is non-mutating, so the asserted state equals the rehydrated state (i.e. "the rejected command changed nothing"). Chainable.
+  - `fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self` — computes the resulting state: clone the rehydrated state (`root.state()`), and **if the command succeeded**, fold the decided events into it via `AggregateState::apply`; then run `f` against that state. After a rejected command there are no decided events and `handle` is non-mutating, so the asserted state equals the rehydrated state (i.e. "the rejected command changed nothing"). Chainable.
 
 All `then_expect_*` methods are **chainable** (return `Self`), enabling `…when(cmd).then_expect_events(...).then_expect_state(...)`.
 
 ## Behavior details
 
 - **Versions for `given`:** start at `Version::INITIAL` (= 1), increment with `Version::next()` / checked add; never bare arithmetic (workspace rule). An overflow across a test history is effectively impossible but is handled by surfacing the `KernelError`, not by saturating.
-- **Resulting state for `Acted::then_expect_state`:** uses the kernel's own `AggregateRoot::apply_events` against a clone of the rehydrated entity. State is `Clone` (guaranteed by `AggregateState: Clone`), so cloning to keep the chain re-assertable is sound and cheap for test-sized state.
+- **Resulting state for `Acted::then_expect_state`:** folds the decided events into a clone of the rehydrated state (`root.state().clone()`) via `AggregateState::apply`. State is `Clone` (guaranteed by `AggregateState: Clone`), so cloning to keep the chain re-assertable is sound and cheap for test-sized state.
 - **Event comparison:** compares the produced events as a slice against the collected `expected`. Exact count + exact element equality; a length or element mismatch panics with both sequences printed (`Debug`).
 - **Failure output:** every assertion failure prints expected vs actual via `assert_eq!`/`assert!` with a message naming which expectation failed (events / error / state).
 
@@ -114,30 +114,30 @@ Plus targeted cases: exact-vs-`matching` error forms; the "rejected command chan
 ## Sketch (illustrative — exact signatures may shift in implementation)
 
 ```rust
-pub struct AggregateFixture<A: AggregateEntity> { id: A::Id }
-pub struct Given<A: AggregateEntity> { entity: A }
-pub struct Acted<A: AggregateEntity, const N: usize> {
-    entity: A,
+pub struct AggregateFixture<A: Aggregate> { id: A::Id }
+pub struct Given<A: Aggregate> { root: AggregateRoot<A> }
+pub struct Acted<A: Aggregate, const N: usize> {
+    root: AggregateRoot<A>,
     result: Result<Events<EventOf<A>, N>, <A as Aggregate>::Error>,
 }
 
-impl<A: AggregateEntity> AggregateFixture<A> {
+impl<A: Aggregate> AggregateFixture<A> {
     pub fn new() -> Self where A::Id: Default { Self { id: A::Id::default() } }
     pub fn with_id(id: A::Id) -> Self { Self { id } }
-    pub fn given(self, history: impl IntoIterator<Item = EventOf<A>>) -> Given<A> { /* A::new(id) + replay 1..=n */ }
+    pub fn given(self, history: impl IntoIterator<Item = EventOf<A>>) -> Given<A> { /* AggregateRoot::<A>::new(id) + replay 1..=n */ }
 }
 
-impl<A: AggregateEntity> Given<A> {
-    pub fn when<C, const N: usize>(self, cmd: C) -> Acted<A, N> where A: Handle<C, N> { /* handle(&entity, cmd) */ }
-    pub fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self { /* f(entity.state()) */ }
+impl<A: Aggregate> Given<A> {
+    pub fn when<C, const N: usize>(self, cmd: C) -> Acted<A, N> where A: Handle<C, N> { /* root.handle(cmd) */ }
+    pub fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self { /* f(root.state()) */ }
 }
 
-impl<A: AggregateEntity, const N: usize> Acted<A, N> {
+impl<A: Aggregate, const N: usize> Acted<A, N> {
     pub fn then_expect_events(self, expected: impl IntoIterator<Item = EventOf<A>>) -> Self
         where EventOf<A>: PartialEq + core::fmt::Debug { /* compare Ok events */ }
     pub fn then_expect_error(self, expected: <A as Aggregate>::Error) -> Self
         where <A as Aggregate>::Error: PartialEq { /* compare Err */ }
     pub fn then_expect_error_matching(self, f: impl FnOnce(&<A as Aggregate>::Error) -> bool) -> Self { /* assert f(err) */ }
-    pub fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self { /* clone entity, apply decided events if Ok, f(state) */ }
+    pub fn then_expect_state(self, f: impl FnOnce(&A::State)) -> Self { /* clone root.state(), apply decided events if Ok, f(state) */ }
 }
 ```
