@@ -251,9 +251,10 @@ pair each event with its version — **never** reconstructing by subtracting fro
 ### Error type
 
 `react` can fail with the saga's domain `S::Error` *before* any store
-interaction; load/save fail with the repository's `Self::Error`. These are two
-failure domains (CLAUDE.md rule 3 — one variant = one domain), so a two-variant
-`thiserror` enum (rule: all errors use `thiserror`), allocation-free:
+interaction; load/save fail with the repository's `Self::Error`; and a defensive
+overflow guard covers version stepping during intent pinning. Three failure
+domains (CLAUDE.md rule 3 — one variant = one domain), a `thiserror` enum (rule:
+all errors use `thiserror`), allocation-free:
 
 ```rust
 #[derive(thiserror::Error, Debug)]
@@ -264,6 +265,11 @@ pub enum SagaError<SagaErr, StoreErr> {
     /// load or save failed (adapter / codec / conflict / version overflow).
     #[error(transparent)]
     Store(StoreErr),
+    /// Version arithmetic overflowed while pinning intents to event versions.
+    /// Defensive: unreachable after a successful `save`, surfaced rather than
+    /// panicked (rule 2 — no `expect` on data paths).
+    #[error("version overflow while projecting saga intents")]
+    VersionOverflow,
 }
 
 impl<SagaErr, StoreErr: ConflictPredicate> SagaError<SagaErr, StoreErr> {
