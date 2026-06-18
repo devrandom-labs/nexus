@@ -166,6 +166,15 @@ fn derive_aggregate_id() {
 }
 
 #[test]
+fn derive_aggregate_generates_new_constructor() {
+    // The macro emits a convenience `TodoAggregate::new(id)` that returns the
+    // live `AggregateRoot<TodoAggregate>` — no turbofish needed.
+    let todo = TodoAggregate::new(TodoId::new(99));
+    assert_eq!(todo.id(), &TodoId::new(99));
+    assert_eq!(todo.version(), None);
+}
+
+#[test]
 fn derive_aggregate_debug_shows_name_and_version() {
     let todo = AggregateRoot::<TodoAggregate>::new(TodoId::new(1));
     let debug = format!("{todo:?}");

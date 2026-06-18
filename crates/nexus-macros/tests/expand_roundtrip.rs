@@ -78,9 +78,9 @@ struct RtError;
 // --- What #[nexus::aggregate(...)] expands to ---
 // (manually written, no macro)
 //
-// The macro now emits ONLY the unit marker struct plus `impl Aggregate`.
-// No newtype field, no `new` constructor, no `AggregateEntity`, no `Debug`.
-// Aggregates are constructed and driven via `AggregateRoot::<Name>::new(id)`.
+// The macro emits the unit marker struct, `impl Aggregate`, and a convenience
+// `new(id) -> AggregateRoot<Self>` constructor. No newtype field, no
+// `AggregateEntity`, no generated `Debug`.
 
 struct RtAggregate;
 
@@ -88,6 +88,13 @@ impl ::nexus::Aggregate for RtAggregate {
     type State = RtState;
     type Error = RtError;
     type Id = RtId;
+}
+
+impl RtAggregate {
+    #[must_use]
+    fn new(id: RtId) -> ::nexus::AggregateRoot<Self> {
+        ::nexus::AggregateRoot::new(id)
+    }
 }
 
 // --- Tests proving the expansion works identically to the macro ---
@@ -141,4 +148,15 @@ fn expanded_debug() {
 fn expanded_root_version_default() {
     let root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
     assert_eq!(root.version(), None);
+}
+
+#[test]
+fn expanded_new_constructor_returns_root() {
+    // The generated `Name::new(id)` is a convenience entry point that returns
+    // an `AggregateRoot<Self>` at initial state — equivalent to the
+    // turbofish `AggregateRoot::<Name>::new(id)`.
+    let root = RtAggregate::new(RtId::new(7));
+    assert_eq!(root.id(), &RtId::new(7));
+    assert_eq!(root.version(), None);
+    assert!(root.state().items.is_empty());
 }

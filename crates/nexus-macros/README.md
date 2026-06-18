@@ -17,7 +17,7 @@ enum AccountEvent {
 
 ## `#[nexus::aggregate]`
 
-Attribute macro on a unit struct. Generates **only** the `Aggregate` impl; the struct stays a bare marker. Construct instances as `AggregateRoot::<BankAccount>::new(id)` and implement `Handle<C>` on the marker as `handle(state, cmd) -> events`.
+Attribute macro on a unit struct. Generates `impl Aggregate` plus a convenience `BankAccount::new(id) -> AggregateRoot<Self>` constructor; the struct stays a bare marker. Implement `Handle<C>` on the marker as `handle(state, cmd) -> events`.
 
 ```rust
 #[nexus::aggregate(state = AccountState, error = AccountError, id = AccountId)]

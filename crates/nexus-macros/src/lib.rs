@@ -12,9 +12,9 @@ use syn::{Data, DeriveInput, Error, Result, Type, parse_macro_input};
 /// struct MyAggregate;
 /// ```
 ///
-/// Generates `impl Aggregate` for the unit struct, which becomes a
-/// type-level marker. Construct instances as `AggregateRoot::<Name>::new(id)`
-/// and implement `Handle<C>` on the marker as `handle(state, cmd) -> events`.
+/// Generates `impl Aggregate` for the unit struct (a type-level marker) plus a
+/// convenience `Name::new(id) -> AggregateRoot<Self>` constructor. Implement
+/// `Handle<C>` on the marker as `handle(state, cmd) -> events`.
 #[proc_macro_attribute]
 pub fn aggregate(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(item as DeriveInput);
@@ -512,6 +512,19 @@ fn parse_aggregate(
             type State = #state_type;
             type Error = #error_type;
             type Id = #id_type;
+        }
+
+        impl #name {
+            /// Create a fresh aggregate at initial state (version `None`).
+            ///
+            /// Returns the live [`AggregateRoot`](::nexus::AggregateRoot) — the
+            /// stateful container. The aggregate type itself is a marker; this
+            /// is a convenience entry point for
+            /// `AggregateRoot::<Self>::new(id)`.
+            #[must_use]
+            #vis fn new(id: #id_type) -> ::nexus::AggregateRoot<Self> {
+                ::nexus::AggregateRoot::new(id)
+            }
         }
     };
 

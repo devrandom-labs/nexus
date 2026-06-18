@@ -116,7 +116,7 @@ The workspace pins `fjall = { version = "3", features = ["bytes_1"] }`. That fea
 ### `nexus-macros` — Proc Macros
 
 Three macros:
-- **`#[nexus::aggregate(state = S, error = E, id = I)]`** — Attribute macro on a unit struct. Generates **only** the `Aggregate` impl; the struct stays a bare marker. Construct instances as `AggregateRoot::<Name>::new(id)` and implement `Handle<C>` on the marker. (No newtype, no `new`, no `AggregateEntity`, no generated `Debug`.)
+- **`#[nexus::aggregate(state = S, error = E, id = I)]`** — Attribute macro on a unit struct. Generates `impl Aggregate` plus a convenience `Name::new(id) -> AggregateRoot<Self>` constructor; the struct stays a bare marker. Implement `Handle<C>` on the marker. (No newtype, no `AggregateEntity`, no generated `Debug`.)
 - **`#[derive(DomainEvent)]`** — Derive macro for enums only. Generates `Message` + `DomainEvent` impls, with `name()` returning variant names as `&'static str`.
 - **`#[nexus::transforms(aggregate = A, error = E)]`** — Attribute macro on an impl block. Generates `Upcaster` impl with `type Error = E`, iterative apply loop, and `current_version()` lookup. Transform functions annotated with `#[transform(event = "...", from = N, to = N+1)]`.
 
