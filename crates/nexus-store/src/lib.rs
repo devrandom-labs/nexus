@@ -91,6 +91,7 @@ pub mod notify;
 #[cfg(feature = "projection")]
 pub mod projection;
 pub mod repository;
+pub mod saga;
 #[cfg(feature = "snapshot")]
 pub mod snapshot;
 pub mod state;
