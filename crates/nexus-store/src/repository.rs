@@ -142,6 +142,19 @@ pub(super) fn version_to_nz32(version: Version) -> Option<NonZeroU32> {
     NonZeroU32::new(narrow)
 }
 
+/// The first [`Version`] an append will assign, given the stream's current
+/// version (`None` = empty stream). Returns `None` on overflow past `u64::MAX`.
+///
+/// Single source of truth for the "next version to write" computation shared by
+/// the aggregate save paths and the saga repository's intent-version pinning —
+/// keeps the arithmetic checked in exactly one place (CLAUDE.md rule 2).
+pub(crate) const fn first_persisted_version(current: Option<Version>) -> Option<Version> {
+    match current {
+        None => Some(Version::INITIAL),
+        Some(v) => v.next(),
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // EventStore — owning codec (serde, bincode, postcard, etc.)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -417,10 +430,8 @@ where
 
     let expected_version = aggregate.version();
 
-    let mut next_version = match expected_version {
-        None => Version::INITIAL,
-        Some(v) => v.next().ok_or(StoreError::VersionOverflow)?,
-    };
+    let mut next_version =
+        first_persisted_version(expected_version).ok_or(StoreError::VersionOverflow)?;
 
     let mut envelopes = Vec::with_capacity(events.len());
 
@@ -709,10 +720,8 @@ where
 
     let expected_version = aggregate.version();
 
-    let mut next_version = match expected_version {
-        None => Version::INITIAL,
-        Some(v) => v.next().ok_or(StoreError::VersionOverflow)?,
-    };
+    let mut next_version =
+        first_persisted_version(expected_version).ok_or(StoreError::VersionOverflow)?;
 
     let mut envelopes = Vec::with_capacity(events.len());
 
@@ -765,4 +774,27 @@ where
         aggregate.apply_event(event);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod version_helper_tests {
+    use super::first_persisted_version;
+    use nexus::Version;
+
+    #[test]
+    fn fresh_stream_starts_at_initial() {
+        assert_eq!(first_persisted_version(None), Some(Version::INITIAL));
+    }
+
+    #[test]
+    fn existing_stream_advances_by_one() {
+        let v = Version::INITIAL;
+        assert_eq!(first_persisted_version(Some(v)), v.next());
+    }
+
+    #[test]
+    fn overflow_at_max_returns_none() {
+        let max = Version::new(u64::MAX).expect("u64::MAX is non-zero");
+        assert_eq!(first_persisted_version(Some(max)), None);
+    }
 }
