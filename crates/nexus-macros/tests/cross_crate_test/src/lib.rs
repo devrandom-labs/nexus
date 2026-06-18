@@ -87,8 +87,8 @@ pub struct CreateTask {
 pub struct CompleteTask;
 
 impl Handle<CreateTask> for TaskAggregate {
-    fn handle(&self, cmd: CreateTask) -> Result<Events<TaskEvent>, TaskError> {
-        if !self.state().title.is_empty() {
+    fn handle(state: &TaskState, cmd: CreateTask) -> Result<Events<TaskEvent>, TaskError> {
+        if !state.title.is_empty() {
             return Err(TaskError::AlreadyExists);
         }
         Ok(events![TaskEvent::Created(TaskCreated {
@@ -98,17 +98,17 @@ impl Handle<CreateTask> for TaskAggregate {
 }
 
 impl Handle<CompleteTask> for TaskAggregate {
-    fn handle(&self, _cmd: CompleteTask) -> Result<Events<TaskEvent>, TaskError> {
-        if self.state().done {
+    fn handle(state: &TaskState, _cmd: CompleteTask) -> Result<Events<TaskEvent>, TaskError> {
+        if state.done {
             return Err(TaskError::AlreadyDone);
         }
         Ok(events![TaskEvent::Completed(TaskCompleted)])
     }
 }
 
-// --- Verify AggregateEntity works generically ---
-pub fn generic_version<A: AggregateEntity>(agg: &A) -> Option<Version> {
-    agg.version()
+// --- Verify AggregateRoot version accessor works generically ---
+pub fn generic_version<A: Aggregate>(root: &AggregateRoot<A>) -> Option<Version> {
+    root.version()
 }
 
 #[cfg(test)]
@@ -118,18 +118,18 @@ mod tests {
 
     #[test]
     fn cross_crate_lifecycle() {
-        let mut task = TaskAggregate::new(TaskId::new(1));
+        let mut task = AggregateRoot::<TaskAggregate>::new(TaskId::new(1));
         let decided = task
             .handle(CreateTask {
                 title: "Write tests".into(),
             })
             .unwrap();
-        task.root_mut().apply_events(&decided);
-        task.root_mut().advance_version(Version::new(1).unwrap());
+        task.apply_events(&decided);
+        task.advance_version(Version::new(1).unwrap());
 
         let decided = task.handle(CompleteTask).unwrap();
-        task.root_mut().apply_events(&decided);
-        task.root_mut().advance_version(Version::new(2).unwrap());
+        task.apply_events(&decided);
+        task.advance_version(Version::new(2).unwrap());
 
         assert_eq!(task.state().title, "Write tests");
         assert!(task.state().done);
@@ -138,13 +138,13 @@ mod tests {
 
     #[test]
     fn cross_crate_invariants() {
-        let mut task = TaskAggregate::new(TaskId::new(2));
+        let mut task = AggregateRoot::<TaskAggregate>::new(TaskId::new(2));
         let decided = task
             .handle(CreateTask {
                 title: "Task".into(),
             })
             .unwrap();
-        task.root_mut().apply_events(&decided);
+        task.apply_events(&decided);
 
         assert!(
             task.handle(CreateTask {
@@ -154,30 +154,29 @@ mod tests {
         );
 
         let decided = task.handle(CompleteTask).unwrap();
-        task.root_mut().apply_events(&decided);
+        task.apply_events(&decided);
 
         assert!(task.handle(CompleteTask).is_err());
     }
 
     #[test]
     fn cross_crate_rehydrate() {
-        let mut task = TaskAggregate::new(TaskId::new(3));
-        task.root_mut()
-            .replay(
-                Version::new(1).unwrap(),
-                &TaskEvent::Created(TaskCreated {
-                    title: "Loaded".into(),
-                }),
-            )
-            .unwrap();
+        let mut task = AggregateRoot::<TaskAggregate>::new(TaskId::new(3));
+        task.replay(
+            Version::new(1).unwrap(),
+            &TaskEvent::Created(TaskCreated {
+                title: "Loaded".into(),
+            }),
+        )
+        .unwrap();
         assert_eq!(task.state().title, "Loaded");
         assert_eq!(task.version(), Version::new(1));
     }
 
     #[test]
-    fn cross_crate_generic_aggregate_entity() {
-        let task = TaskAggregate::new(TaskId::new(4));
-        // This function accepts any AggregateEntity — proves the trait works
+    fn cross_crate_generic_aggregate_root() {
+        let task = AggregateRoot::<TaskAggregate>::new(TaskId::new(4));
+        // This function accepts any AggregateRoot — proves generic access works
         assert_eq!(generic_version(&task), None);
     }
 

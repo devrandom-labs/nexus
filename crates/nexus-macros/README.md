@@ -17,11 +17,17 @@ enum AccountEvent {
 
 ## `#[nexus::aggregate]`
 
-Attribute macro on a unit struct. Generates `Aggregate` impl, `AggregateEntity` impl, newtype wrapping `AggregateRoot`, `new(id)` constructor, and redacted `Debug`.
+Attribute macro on a unit struct. Generates `impl Aggregate` plus a convenience `BankAccount::new(id) -> AggregateRoot<Self>` constructor; the struct stays a bare marker. Implement `Handle<C>` on the marker as `handle(state, cmd) -> events`.
 
 ```rust
 #[nexus::aggregate(state = AccountState, error = AccountError, id = AccountId)]
 struct BankAccount;
+
+impl Handle<Withdraw> for BankAccount {
+    fn handle(state: &AccountState, cmd: Withdraw) -> Result<Events<AccountEvent>, AccountError> {
+        // pure decision: read state, return decided events
+    }
+}
 ```
 
 ## `#[nexus::transforms]`

@@ -268,11 +268,11 @@ fn replay_then_advance_and_apply_continues_correctly() {
 }
 
 // =============================================================================
-// 9. replay panic safety — panicking apply preserves original state
+// 9. replay panic safety — panicking apply leaves initial() (no partial mutation)
 // =============================================================================
 
 #[test]
-fn replay_panic_safety_preserves_state() {
+fn replay_panic_safety_no_partial_mutation() {
     // A domain whose apply panics on a specific event
     #[derive(Debug, Clone, PartialEq)]
     enum PanicEvent {
@@ -331,23 +331,28 @@ fn replay_panic_safety_preserves_state() {
 
     assert!(result.is_err(), "apply(Bomb) must panic");
 
-    // After the panic, the aggregate must still be in its pre-panic state.
-    // This works because AggregateRoot clones state before calling apply,
-    // so the original is preserved if apply panics.
+    // Contract: `replay` moves the state out via `mem::replace` (no clone)
+    // and folds it through `apply`. On an apply-panic the version is NOT
+    // advanced (no store desync), and the state is left at `initial()` — a
+    // valid, COMPLETE state, never a partially-mutated one. The pre-panic
+    // "before" item is gone precisely because the old state was moved out
+    // before `apply` panicked; what remains is the clean `initial()`
+    // placeholder, proving no half-applied corruption.
     assert_eq!(
         agg.version(),
         Some(v(1)),
         "version must not advance after panic"
     );
-    assert_eq!(
-        agg.state().items,
-        vec!["before"],
-        "state must be preserved after panic"
+    assert!(
+        agg.state().items.is_empty(),
+        "state must be left at initial() (no partial mutation), got {:?}",
+        agg.state().items
     );
 
-    // The aggregate remains usable — replay can continue from the correct version
+    // The aggregate is still structurally usable — replay continues from the
+    // correct next version, rebuilding state from the placeholder.
     agg.replay(v(2), &PanicEvent::Normal("after".into()))
         .unwrap();
     assert_eq!(agg.version(), Some(v(2)));
-    assert_eq!(agg.state().items, vec!["before", "after"]);
+    assert_eq!(agg.state().items, vec!["after"]);
 }

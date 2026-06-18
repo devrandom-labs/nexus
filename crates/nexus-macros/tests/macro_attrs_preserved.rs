@@ -69,7 +69,7 @@ fn doc_attribute_preserved() {
     // If the doc attribute was dropped, this test still passes —
     // but `cargo doc` would show no documentation.
     // The real verification is that this compiles without error.
-    let _agg = DocumentedAggregate::new(AttrId::new(1));
+    let _agg = AggregateRoot::<DocumentedAggregate>::new(AttrId::new(1));
 }
 
 // =============================================================================
@@ -84,7 +84,7 @@ struct TestOnlyAggregate;
 fn cfg_attribute_preserved() {
     // This aggregate only exists in test cfg.
     // If #[cfg(test)] was dropped, it would also exist in non-test builds.
-    let _agg = TestOnlyAggregate::new(AttrId::new(1));
+    let _agg = AggregateRoot::<TestOnlyAggregate>::new(AttrId::new(1));
 }
 
 // =============================================================================

@@ -18,6 +18,11 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 criterion = { workspace = true }
+# Self dev-dependency enabling the test-only features, so the default-feature
+# `nix flake check` nextest run compiles and exercises the `testing` fixture
+# tests via Cargo feature unification (mirrors nexus-store's pattern). Without
+# this, the gate runs default features only and skips the fixture entirely.
+nexus = { version = "0.1.0", path = ".", features = ["testing", "derive"] }
 nexus-macros = { version = "0.1.0", path = "../nexus-macros" }
 proptest = { workspace = true }
 static_assertions = { workspace = true }
@@ -27,6 +32,7 @@ trybuild = "1"
 [features]
 default = []
 derive = ["dep:nexus-macros"]
+testing = []
 
 [[bench]]
 name = "kernel_bench"

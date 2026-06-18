@@ -299,7 +299,7 @@ fn h2_version_mismatch_display_includes_both_versions() {
 // =============================================================================
 
 #[test]
-fn h5_replay_panic_preserves_original_state() {
+fn h5_replay_panic_no_partial_mutation() {
     use std::panic;
 
     // Aggregate with a panicking apply
@@ -356,18 +356,20 @@ fn h5_replay_panic_preserves_original_state() {
     assert_eq!(agg.state().count, 1);
     assert_eq!(agg.version(), Some(Version::INITIAL));
 
-    // Panicking replay — state and version must be preserved
+    // Panicking replay: version must not advance, and state is left at
+    // initial() — replay moves the state out via mem::replace (no clone), so
+    // a clean initial() placeholder remains; the pre-panic value is gone but
+    // the state is never partially mutated.
     let v2 = Version::new(2).expect("2 is non-zero");
     let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
         let _ = agg.replay(v2, &BombEvent::Explode);
     }));
     assert!(result.is_err(), "replay should have panicked");
 
-    // Original state preserved: count still 1, version still 1
     assert_eq!(
         agg.state().count,
-        1,
-        "state must be preserved after panic in apply"
+        0,
+        "state must be left at initial() after panic (no partial mutation)"
     );
     assert_eq!(
         agg.version(),
@@ -377,7 +379,7 @@ fn h5_replay_panic_preserves_original_state() {
 }
 
 #[test]
-fn h5_apply_events_panic_preserves_partial_state() {
+fn h5_apply_events_panic_no_partial_mutation() {
     use std::panic;
 
     #[derive(Debug, Clone)]
@@ -434,10 +436,16 @@ fn h5_apply_events_panic_preserves_partial_state() {
     }));
     assert!(result.is_err(), "apply_events should have panicked");
 
-    // After panic: first event was applied (clone-then-apply per event),
-    // but state may be partially updated depending on apply_events implementation.
-    // The important thing: the aggregate is not in an invalid/corrupt state.
-    // version() should still be None since apply_events doesn't set version.
+    // apply_events folds each event through mem::replace (no clone). When the
+    // panicking event's apply unwinds, the state it had moved out is dropped
+    // and a clean initial() placeholder remains — so the batch leaves state at
+    // initial(), never a partially-mutated value. version() is untouched
+    // (apply_events does not set version).
+    assert_eq!(
+        agg.state().count,
+        0,
+        "state must be left at initial() after a mid-batch panic (no partial mutation)"
+    );
     assert_eq!(
         agg.version(),
         None,

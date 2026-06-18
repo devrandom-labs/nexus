@@ -94,11 +94,11 @@ proptest! {
     #[test]
     fn prop_macro_replay_deterministic(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         let make_agg = |events: &[CountEvent]| {
-            let mut agg = CounterAggregate::new(PId::new(1));
+            let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(1));
             let mut ver = Version::INITIAL;
             for (i, e) in events.iter().enumerate() {
                 let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
-                agg.root_mut().replay(v, e).unwrap();
+                agg.replay(v, e).unwrap();
                 ver = v;
             }
             agg
@@ -116,13 +116,13 @@ proptest! {
     /// After replaying N events, version == Some(N).
     #[test]
     fn prop_macro_version_equals_event_count(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = CounterAggregate::new(PId::new(1));
+        let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(1));
         let n = events.len() as u64;
 
         let mut ver = Version::INITIAL;
         for (i, event) in events.iter().enumerate() {
             let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
-            agg.root_mut().replay(v, event).unwrap();
+            agg.replay(v, event).unwrap();
             ver = v;
         }
 
@@ -134,9 +134,9 @@ proptest! {
     /// apply_event is for post-persistence sync, so version stays None.
     #[test]
     fn prop_macro_apply_event_no_version(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = CounterAggregate::new(PId::new(1));
+        let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(1));
         for event in &events {
-            agg.root_mut().apply_event(event);
+            agg.apply_event(event);
         }
 
         // Version should still be None — apply_event does not advance version
@@ -149,18 +149,18 @@ proptest! {
     #[test]
     fn prop_macro_rehydrate_equals_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
         // Path A: new() + replay()
-        let mut agg_replayed = CounterAggregate::new(PId::new(1));
+        let mut agg_replayed = AggregateRoot::<CounterAggregate>::new(PId::new(1));
         let mut ver = Version::INITIAL;
         for (i, e) in raw_events.iter().enumerate() {
             let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
-            agg_replayed.root_mut().replay(v, e).unwrap();
+            agg_replayed.replay(v, e).unwrap();
             ver = v;
         }
 
         // Path B: new() + apply_event()
-        let mut agg_applied = CounterAggregate::new(PId::new(1));
+        let mut agg_applied = AggregateRoot::<CounterAggregate>::new(PId::new(1));
         for event in &raw_events {
-            agg_applied.root_mut().apply_event(event);
+            agg_applied.apply_event(event);
         }
 
         prop_assert_eq!(agg_replayed.state(), agg_applied.state());
@@ -174,22 +174,22 @@ proptest! {
         batch1 in proptest::collection::vec(arb_event(), 1..20usize),
         batch2 in proptest::collection::vec(arb_event(), 1..20usize),
     ) {
-        let mut agg = CounterAggregate::new(PId::new(1));
+        let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(1));
 
         // Apply batch1 events and advance version
         for event in &batch1 {
-            agg.root_mut().apply_event(event);
+            agg.apply_event(event);
         }
         let v1 = Version::new(batch1.len() as u64).expect("nonzero");
-        agg.root_mut().advance_version(v1);
+        agg.advance_version(v1);
         prop_assert_eq!(agg.version(), Some(v1));
 
         // Apply batch2 events and advance version
         for event in &batch2 {
-            agg.root_mut().apply_event(event);
+            agg.apply_event(event);
         }
         let v2 = Version::new((batch1.len() + batch2.len()) as u64).expect("nonzero");
-        agg.root_mut().advance_version(v2);
+        agg.advance_version(v2);
         prop_assert_eq!(agg.version(), Some(v2));
     }
 
@@ -198,33 +198,30 @@ proptest! {
     /// A freshly created aggregate always has version None.
     #[test]
     fn prop_macro_fresh_no_version(_id in 0..1000u64) {
-        let agg = CounterAggregate::new(PId::new(_id));
+        let agg = AggregateRoot::<CounterAggregate>::new(PId::new(_id));
         prop_assert_eq!(agg.version(), None);
     }
 
-    /// Property 7: AggregateEntity methods match AggregateRoot methods
+    /// Property 7: AggregateRoot accessors reflect applied events
     ///
-    /// The trait default methods must produce identical results to
-    /// calling the methods directly on the inner AggregateRoot.
+    /// `id` is preserved, `version` stays None under `apply_event`, and
+    /// `state` equals the net fold of every applied event.
     #[test]
-    fn prop_macro_entity_matches_root(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = CounterAggregate::new(PId::new(1));
+    fn prop_macro_root_accessors_consistent(events in proptest::collection::vec(arb_event(), 0..50)) {
+        let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(7));
         for event in &events {
-            agg.root_mut().apply_event(event);
+            agg.apply_event(event);
         }
 
-        // AggregateEntity methods (via trait defaults)
-        let entity_version = agg.version();
-        let entity_state = agg.state().clone();
-        let entity_id = agg.id().clone();
+        // Net effect of all events on the counter value.
+        let expected_value: i64 = events.iter().fold(0i64, |acc, event| match event {
+            CountEvent::Incremented => acc + 1,
+            CountEvent::Decremented => acc - 1,
+            CountEvent::Set(v) => *v as i64,
+        });
 
-        // AggregateRoot methods (via root())
-        let root_version = agg.root().version();
-        let root_state = agg.root().state().clone();
-        let root_id = agg.root().id().clone();
-
-        prop_assert_eq!(entity_version, root_version);
-        prop_assert_eq!(entity_state, root_state);
-        prop_assert_eq!(entity_id, root_id);
+        prop_assert_eq!(agg.id(), &PId::new(7));
+        prop_assert_eq!(agg.version(), None);
+        prop_assert_eq!(agg.state().value, expected_value);
     }
 }
