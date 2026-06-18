@@ -10,6 +10,13 @@
 //!
 //! See `docs/plans/2026-06-18-saga-repository-design.md`.
 
+use core::fmt;
+use core::iter::Chain;
+use core::option;
+
+use arrayvec::ArrayVec;
+use nexus::{Saga, Version};
+
 use crate::error::StoreError;
 
 mod sealed {
@@ -65,6 +72,167 @@ impl<SagaErr, StoreErr: ConflictPredicate> SagaError<SagaErr, StoreErr> {
     }
 }
 
+/// One outgoing intent, pinned to the saga-own-event version it projects from.
+///
+/// **Capability token.** Fields are `pub(crate)` and there is no public
+/// constructor: the only way to obtain a `ProjectedIntent` is to receive one
+/// from [`SagaRepository::react_and_save`]/[`dispatch`](SagaRepository::dispatch)
+/// *after* the append committed. Holding one is a type-level witness that the
+/// intent's event is durable — Model A's "never dispatch an unrecorded intent"
+/// becomes unrepresentable-otherwise rather than a convention.
+pub struct ProjectedIntent<S: Saga> {
+    pub(crate) saga_id: S::Id,
+    pub(crate) source_version: Version,
+    pub(crate) intent: S::Command,
+}
+
+impl<S: Saga> ProjectedIntent<S> {
+    /// Internal constructor — see the type docs for why this is not public.
+    #[allow(
+        dead_code,
+        reason = "constructed by SagaRepository::react_and_save, added in a follow-up task"
+    )]
+    pub(crate) const fn new(saga_id: S::Id, source_version: Version, intent: S::Command) -> Self {
+        Self {
+            saga_id,
+            source_version,
+            intent,
+        }
+    }
+
+    /// `(saga_id, source_version)` — the globally stable, idempotent dedup key
+    /// for the runtime's at-least-once outbox. Free under Model A because the
+    /// intent *is* a recorded event's projection.
+    #[must_use]
+    pub const fn dedup_key(&self) -> (&S::Id, Version) {
+        (&self.saga_id, self.source_version)
+    }
+
+    /// The saga instance this intent belongs to.
+    #[must_use]
+    pub const fn saga_id(&self) -> &S::Id {
+        &self.saga_id
+    }
+
+    /// The saga-own-event version this intent projects from.
+    #[must_use]
+    pub const fn source_version(&self) -> Version {
+        self.source_version
+    }
+
+    /// Borrow the intent payload.
+    #[must_use]
+    pub const fn intent(&self) -> &S::Command {
+        &self.intent
+    }
+
+    /// Consume the token, yielding the bare intent for dispatch.
+    #[must_use]
+    pub fn into_intent(self) -> S::Command {
+        self.intent
+    }
+}
+
+// Manual Debug: `S` itself is not `Debug`, but `S::Id` (Id: Debug),
+// `S::Command` (Message: Debug), and `Version` all are — no extra bounds.
+impl<S: Saga> fmt::Debug for ProjectedIntent<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProjectedIntent")
+            .field("saga_id", &self.saga_id)
+            .field("source_version", &self.source_version)
+            .field("intent", &self.intent)
+            .finish()
+    }
+}
+
+/// A bounded, **heap-free** collection of [`ProjectedIntent`]s — at most
+/// `N + 1` (the producing [`Events<_, N>`](nexus::Events) capacity).
+///
+/// Mirrors `Events`' first-plus-rest layout to hit capacity `N + 1` without the
+/// unstable `generic_const_exprs` (`{ N + 1 }`). `first` is `Option` because a
+/// saga event may project no intent, so the collection can be empty.
+pub struct ProjectedIntents<S: Saga, const N: usize> {
+    first: Option<ProjectedIntent<S>>,
+    rest: ArrayVec<ProjectedIntent<S>, N>,
+}
+
+impl<S: Saga, const N: usize> ProjectedIntents<S, N> {
+    #[allow(
+        dead_code,
+        reason = "constructed by SagaRepository::react_and_save, added in a follow-up task"
+    )]
+    pub(crate) const fn new() -> Self {
+        Self {
+            first: None,
+            rest: ArrayVec::new_const(),
+        }
+    }
+
+    /// Append a token. Total pushes are bounded by the producing event count
+    /// (`<= N + 1`) by construction, so the `rest` capacity (`N`) is never
+    /// exceeded once `first` absorbs the first push.
+    #[allow(
+        clippy::expect_used,
+        dead_code,
+        reason = "capacity N+1 is guaranteed by the producing Events<_, N>; overflow is a programmer bug; consumed by SagaRepository::react_and_save in a follow-up task"
+    )]
+    pub(crate) fn push(&mut self, intent: ProjectedIntent<S>) {
+        if self.first.is_none() {
+            self.first = Some(intent);
+        } else {
+            self.rest.try_push(intent).expect(
+                "ProjectedIntents capacity exceeded: intents must not exceed the producing Events<_, N> count",
+            );
+        }
+    }
+
+    /// Iterate the tokens in projection order.
+    pub fn iter(
+        &self,
+    ) -> Chain<option::Iter<'_, ProjectedIntent<S>>, core::slice::Iter<'_, ProjectedIntent<S>>>
+    {
+        self.first.iter().chain(self.rest.iter())
+    }
+
+    /// Number of intents (`0..=N + 1`).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        usize::from(self.first.is_some()) + self.rest.len()
+    }
+
+    /// `true` when the saga produced events but none projected an intent.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.first.is_none()
+    }
+}
+
+impl<'a, S: Saga, const N: usize> IntoIterator for &'a ProjectedIntents<S, N> {
+    type Item = &'a ProjectedIntent<S>;
+    type IntoIter =
+        Chain<option::Iter<'a, ProjectedIntent<S>>, core::slice::Iter<'a, ProjectedIntent<S>>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<S: Saga, const N: usize> IntoIterator for ProjectedIntents<S, N> {
+    type Item = ProjectedIntent<S>;
+    type IntoIter =
+        Chain<option::IntoIter<ProjectedIntent<S>>, arrayvec::IntoIter<ProjectedIntent<S>, N>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.first.into_iter().chain(self.rest)
+    }
+}
+
+impl<S: Saga, const N: usize> fmt::Debug for ProjectedIntents<S, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
 #[cfg(test)]
 mod error_tests {
     use super::SagaError;
@@ -96,5 +264,108 @@ mod error_tests {
     fn version_overflow_is_not_conflict() {
         let e: TestSagaError = SagaError::VersionOverflow;
         assert!(!e.is_conflict());
+    }
+}
+
+#[cfg(test)]
+mod projected_intents_tests {
+    use super::{ProjectedIntent, ProjectedIntents};
+    use nexus::{
+        Aggregate, AggregateState, DomainEvent, Events, Id, Message, React, Saga, Version,
+    };
+
+    // Minimal saga purely to instantiate the generic collection.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct Sid(u8);
+    impl core::fmt::Display for Sid {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl AsRef<[u8]> for Sid {
+        fn as_ref(&self) -> &[u8] {
+            core::slice::from_ref(&self.0)
+        }
+    }
+    impl Id for Sid {
+        const BYTE_LEN: usize = 1;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Ev;
+    impl Message for Ev {}
+    impl DomainEvent for Ev {
+        fn name(&self) -> &'static str {
+            "Ev"
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Cmd(u8);
+    impl Message for Cmd {}
+
+    #[derive(Debug)]
+    struct St;
+    impl AggregateState for St {
+        type Event = Ev;
+        fn initial() -> Self {
+            Self
+        }
+        fn apply(self, _e: &Ev) -> Self {
+            self
+        }
+    }
+
+    #[derive(Debug, thiserror::Error, PartialEq)]
+    #[error("err")]
+    struct Err;
+
+    struct M;
+    impl Aggregate for M {
+        type State = St;
+        type Error = Err;
+        type Id = Sid;
+    }
+    impl Saga for M {
+        type CorrelationKey = u8;
+        type Command = Cmd;
+        fn intent_for(_e: &Ev) -> Option<Cmd> {
+            None
+        }
+    }
+    impl React<Ev> for M {
+        fn correlate(_e: &Ev) -> Option<u8> {
+            Some(0)
+        }
+        fn react(_s: &St, _e: &Ev) -> Result<Option<Events<Ev, 0>>, Err> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn empty_collection_reports_empty() {
+        let intents = ProjectedIntents::<M, 2>::new();
+        assert!(intents.is_empty());
+        assert_eq!(intents.len(), 0);
+        assert_eq!(intents.iter().count(), 0);
+    }
+
+    #[test]
+    fn holds_n_plus_one_without_panic_and_iterates_in_order() {
+        // N = 2 → capacity 3.
+        let mut intents = ProjectedIntents::<M, 2>::new();
+        for v in 1u64..=3 {
+            let version = Version::new(v).expect("non-zero");
+            intents.push(ProjectedIntent::new(Sid(9), version, Cmd(v as u8)));
+        }
+        assert_eq!(intents.len(), 3);
+        assert!(!intents.is_empty());
+        let versions: Vec<u64> = intents
+            .iter()
+            .map(|p| p.source_version().as_u64())
+            .collect();
+        assert_eq!(versions, vec![1, 2, 3]);
+        let owned: Vec<u8> = intents.into_iter().map(|p| p.into_intent().0).collect();
+        assert_eq!(owned, vec![1, 2, 3]);
     }
 }
