@@ -4,6 +4,7 @@ mod event;
 mod events;
 mod id;
 mod message;
+mod saga;
 mod version;
 
 #[cfg(feature = "testing")]
@@ -19,6 +20,7 @@ pub use event::DomainEvent;
 pub use events::Events;
 pub use id::Id;
 pub use message::Message;
+pub use saga::{React, Saga};
 pub use version::{Version, VersionedEvent};
 
 #[cfg(feature = "derive")]
