@@ -129,6 +129,10 @@ build fails — that is the "red" step.)
     clippy::print_stdout,
     reason = "example code prints to demonstrate output"
 )]
+#![allow(
+    clippy::implicit_saturating_sub,
+    reason = "explicit compare-then-subtract is the project's underflow guard; saturating_sub is banned (CLAUDE.md rule 2)"
+)]
 
 use nexus::*;
 use std::fmt;
@@ -137,8 +141,9 @@ use std::fmt;
 // Shared helpers (a tiny stand-in for what a repository does)
 // =============================================================================
 
-/// Append decided events to a stream history and advance the in-memory root,
-/// mirroring a repository's persist-then-apply step.
+/// Append decided events to a stream history and advance the in-memory root.
+/// This stands in for a real `Repository`, mirroring its persist-then-apply
+/// step by driving the `advance_version` / `apply_events` mutators directly.
 fn record<A: Aggregate, const N: usize>(
     root: &mut AggregateRoot<A>,
     history: &mut Vec<VersionedEvent<EventOf<A>>>,
@@ -157,14 +162,15 @@ fn record<A: Aggregate, const N: usize>(
 }
 
 /// Rebuild current state from one stream by replaying every event, returning
-/// the number of events that had to be replayed.
-fn replay_count<A: Aggregate>(id: A::Id, history: &[VersionedEvent<EventOf<A>>]) -> usize {
+/// the rehydrated root. The pattern's payoff shows up at the call site: a
+/// bounded stream means only a handful of events to replay here.
+fn replay_stream<A: Aggregate>(id: A::Id, history: &[VersionedEvent<EventOf<A>>]) -> AggregateRoot<A> {
     let mut root = AggregateRoot::<A>::new(id);
     for versioned in history {
         root.replay(versioned.version(), versioned.event())
             .expect("valid history");
     }
-    history.len()
+    root
 }
 
 // =============================================================================
@@ -362,6 +368,8 @@ fn run_cashier_shift_demo() {
             declared_tender: 110,
         })
         .expect("close shift 1");
+    // The summary event carries the closing float forward — read it from the
+    // decided ShiftClosed event rather than recomputing it.
     let final_float = closed
         .iter()
         .find_map(|e| match e {
@@ -393,9 +401,15 @@ fn run_cashier_shift_demo() {
         record(&mut shift2, &mut shift2_stream, &txn);
     }
 
-    let replayed = replay_count::<CashierShift>(shift2_id.clone(), &shift2_stream);
+    // Read current state by replaying ONLY shift #2's short stream — no earlier
+    // shift is touched. The recovered total confirms the carry-forward worked.
+    let shift2_root = replay_stream::<CashierShift>(shift2_id.clone(), &shift2_stream);
     println!("shift #2 {shift2_id} opened from carried float {final_float}");
-    println!("current float read by replaying ONLY the current shift: {replayed} events");
+    println!(
+        "replaying ONLY the current shift ({} events) recovers registered total = {}",
+        shift2_stream.len(),
+        shift2_root.state().registered_total,
+    );
 }
 
 fn main() {
@@ -485,7 +499,7 @@ Expected: 4 tests pass (`close_with_exact_tender_has_no_discrepancy`, `close_wit
 - [ ] **Step 3: Run the example to eyeball the demo**
 
 Run: `nix develop -c cargo run -p nexus-example-closing-the-books`
-Expected output (numbers exact): a `=== Closing the Books: CashierShift (bounded streams) ===` header, `shift #1 closed: stream length = 12, final_float = 110`, `shift #2 urn:cashier_shift:till-1:2 opened from carried float 110`, and `current float read by replaying ONLY the current shift: 11 events`.
+Expected output (numbers exact): a `=== Closing the Books: CashierShift (bounded streams) ===` header, `shift #1 closed: stream length = 12, final_float = 110`, `shift #2 urn:cashier_shift:till-1:2 opened from carried float 110`, and `replaying ONLY the current shift (11 events) recovers registered total = 10`.
 
 - [ ] **Step 4: Commit** (pre-commit hook runs the full gate; fix any clippy nit it reports, then re-commit)
 
@@ -600,6 +614,8 @@ impl Handle<OpenRegister> for CashRegister {
         state: &RegisterState,
         cmd: OpenRegister,
     ) -> Result<Events<RegisterEvent>, RegisterError> {
+        // No CloseRegister command: a register has no lifecycle end, so (unlike
+        // a shift) there is no `closed` state to guard against here.
         if state.is_open {
             return Err(RegisterError::AlreadyOpen);
         }
@@ -623,9 +639,12 @@ impl Handle<RegisterSale> for CashRegister {
     }
 }
 
-/// Drive 5,000 sales into one never-ending stream and return how many events
-/// must be replayed to read the current float.
-fn run_long_lived_demo() -> usize {
+/// Drive 5,000 sales into one never-ending stream, then show that reading the
+/// current float means replaying the whole thing. Self-contained like
+/// `run_cashier_shift_demo`: it prints its own section.
+fn run_long_lived_demo() {
+    println!("=== Anti-pattern: one long-lived CashRegister stream ===");
+
     let id = RegisterId("till-1".to_owned());
     let mut register = AggregateRoot::<CashRegister>::new(id.clone());
     let mut stream: Vec<VersionedEvent<RegisterEvent>> = Vec::new();
@@ -642,7 +661,12 @@ fn run_long_lived_demo() -> usize {
     }
 
     // To read the current float we must replay the ENTIRE stream.
-    replay_count::<CashRegister>(id, &stream)
+    let root = replay_stream::<CashRegister>(id, &stream);
+    println!(
+        "long-lived CashRegister -> replaying all {} events recovers current float = {}",
+        stream.len(),
+        root.state().float,
+    );
 }
 ```
 
@@ -652,12 +676,7 @@ Replace the existing `fn main()` with:
 
 ```rust
 fn main() {
-    let long_lived = run_long_lived_demo();
-    println!("=== Anti-pattern: one long-lived CashRegister stream ===");
-    println!(
-        "long-lived CashRegister -> {long_lived} events in one stream; \
-         replay all {long_lived} to read current float"
-    );
+    run_long_lived_demo();
     println!();
     run_cashier_shift_demo();
     println!();
@@ -672,7 +691,7 @@ Run: `nix develop -c cargo test -p nexus-example-closing-the-books`
 Expected: the same 4 tests pass.
 
 Run: `nix develop -c cargo run -p nexus-example-closing-the-books`
-Expected: prints `long-lived CashRegister -> 5001 events in one stream; replay all 5001 to read current float`, then the CashierShift demo block showing `11 events`, then the takeaway lines.
+Expected: prints `=== Anti-pattern: one long-lived CashRegister stream ===` then `long-lived CashRegister -> replaying all 5001 events recovers current float = 5100`, then the CashierShift demo block (`replaying ONLY the current shift (11 events) recovers registered total = 10`), then the takeaway lines.
 
 - [ ] **Step 4: Commit** (gate runs; fix any clippy nit and re-commit)
 
@@ -902,7 +921,7 @@ git commit -m "docs(store): link snapshot decorator to closing_the_books guide (
 - [ ] **Run the whole example once more end-to-end**
 
 Run: `nix develop -c cargo run -p nexus-example-closing-the-books`
-Expected: long-lived prints `5001`, shift prints `11`, takeaway lines present.
+Expected: long-lived line shows `all 5001 events ... current float = 5100`, shift line shows `ONLY the current shift (11 events) ... registered total = 10`, takeaway lines present.
 
 - [ ] **Confirm the branch is clean and all five commits landed**
 

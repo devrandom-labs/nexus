@@ -11,6 +11,10 @@
     clippy::print_stdout,
     reason = "example code prints to demonstrate output"
 )]
+#![allow(
+    clippy::implicit_saturating_sub,
+    reason = "explicit compare-then-subtract is the project's underflow guard; saturating_sub is banned (CLAUDE.md rule 2)"
+)]
 
 use nexus::*;
 use std::fmt;
