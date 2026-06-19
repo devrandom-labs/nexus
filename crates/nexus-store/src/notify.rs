@@ -89,7 +89,7 @@ pub enum NotifyError {
 }
 
 /// In-memory, per-stream wake registry. Cheap to share via `Arc`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StreamNotifiers {
     // A single `Mutex` over a `foldhash`-hashed map. Two facts drove this over a
     // sharded/lock-free map (`dashmap`, `papaya`) on the IoT/mobile target:
@@ -109,6 +109,20 @@ pub struct StreamNotifiers {
     // contended, `dashmap` is a drop-in with the same API and the same foldhash
     // hasher; revisit then, not before.
     map: Mutex<HashMap<Box<[u8]>, Entry, RandomState>>,
+    /// Store-wide notifier for `$all` subscribers. Always present (no
+    /// drop-guard / refcount): every commit wakes it, and every `$all`
+    /// subscriber genuinely wants every event, so there is no thundering
+    /// herd to avoid here — unlike the per-stream `map`.
+    all: Arc<Notify>,
+}
+
+impl Default for StreamNotifiers {
+    fn default() -> Self {
+        Self {
+            map: Mutex::default(),
+            all: Arc::new(Notify::new()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -170,6 +184,23 @@ impl StreamNotifiers {
         if let Some(notify) = maybe_notify {
             notify.notify_waiters();
         }
+    }
+
+    /// Wake every task parked on the store-wide `$all` notifier.
+    ///
+    /// MUST be called *after* the corresponding event(s) are durably
+    /// committed, so a woken `$all` subscriber re-reads visible data. A no-op
+    /// when no `$all` subscriber is parked.
+    pub fn wake_all(&self) {
+        self.all.notify_waiters();
+    }
+
+    /// The store-wide `$all` notifier. An all-streams subscription cursor
+    /// clones this and parks on it; obey the same enable-before-read ordering
+    /// as the per-stream path (see the module-level ordering contract).
+    #[must_use]
+    pub const fn all_notifier(&self) -> &Arc<Notify> {
+        &self.all
     }
 
     /// Number of streams with at least one live subscriber. Diagnostics only.
@@ -382,6 +413,38 @@ mod tests {
             .expect("empty-key waiter must wake")
             .unwrap();
         assert_eq!(reg.active_streams(), 0); // guard dropped inside the task
+    }
+
+    /// A waiter on the store-wide $all notifier wakes on `wake_all()`, and is
+    /// NOT roused by a per-stream `wake()`.
+    #[tokio::test]
+    async fn wake_all_rouses_all_waiter_not_per_stream_wake() {
+        let reg = StreamNotifiers::new();
+        let notifier = Arc::clone(reg.all_notifier());
+        let start = Arc::new(Barrier::new(2));
+        let start_sub = Arc::clone(&start);
+        let mut sub = tokio::spawn(async move {
+            let notified = notifier.notified();
+            tokio::pin!(notified);
+            let _ = notified.as_mut().enable(); // join waiter list BEFORE signalling
+            start_sub.wait().await;
+            notified.await;
+        });
+        start.wait().await; // waiter is enabled and about to park
+
+        // A per-stream wake must NOT rouse the $all waiter.
+        reg.wake(b"some-stream");
+        assert!(
+            timeout(MUST_NOT_WAKE, &mut sub).await.is_err(),
+            "a per-stream wake must not rouse the $all waiter"
+        );
+
+        // wake_all must rouse it.
+        reg.wake_all();
+        timeout(MUST_WAKE, sub)
+            .await
+            .expect("wake_all must rouse the $all waiter")
+            .unwrap();
     }
 
     /// A wake for a DIFFERENT stream must not rouse this stream's waiter; a wake

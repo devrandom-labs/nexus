@@ -5,11 +5,12 @@ use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::notify::{NotifyError, StreamNotifiers, SubscriptionGuard};
 use crate::store::{GlobalSeq, RawEventStore};
-use crate::subscription::{RawSubscription, sealed};
+use crate::subscription::{RawAllSubscription, RawSubscription, sealed};
 use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
 use nexus::Id;
 use nexus::Version;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -97,6 +98,10 @@ pub struct InMemoryStore {
     streams: Arc<Mutex<HashMap<String, Vec<StoredFrame>>>>,
     notifiers: Arc<StreamNotifiers>,
     next_global_seq: Mutex<GlobalSeq>,
+    /// All events keyed by `global_seq`, the `$all` read order. Holds the
+    /// same `StoredFrame`s as `streams` (Arc-shared `Bytes`, cheap clones);
+    /// written under `streams`'s lock in `append` so the two never diverge.
+    global_index: Arc<Mutex<BTreeMap<u64, StoredFrame>>>,
     batch_size: BatchSize,
 }
 
@@ -114,6 +119,7 @@ impl InMemoryStore {
             streams: Arc::new(Mutex::new(HashMap::new())),
             notifiers: StreamNotifiers::new(),
             next_global_seq: Mutex::new(GlobalSeq::INITIAL),
+            global_index: Arc::new(Mutex::new(BTreeMap::new())),
             batch_size,
         }
     }
@@ -160,6 +166,31 @@ impl ReadState {
                 .get(&self.stream_id)
                 .map(|rows| scan_batch(rows, from.as_u64(), self.batch_size))
                 .unwrap_or_default()
+        };
+        self.done = batch.len() < self.batch_size;
+        self.buffer = batch;
+    }
+}
+
+/// Keyset-paginating read state for a one-shot `read_all` ([`GlobalSeq`] order).
+struct GlobalReadState {
+    global_index: Arc<Mutex<BTreeMap<u64, StoredFrame>>>,
+    /// Next `global_seq` to scan from (inclusive). Resumes at `last + 1`.
+    from: u64,
+    batch_size: usize,
+    buffer: VecDeque<StoredFrame>,
+    done: bool,
+}
+
+impl GlobalReadState {
+    async fn refill(&mut self) {
+        let batch: VecDeque<StoredFrame> = {
+            let guard = self.global_index.lock().await;
+            guard
+                .range(self.from..)
+                .take(self.batch_size)
+                .map(|(_, frame)| frame.clone())
+                .collect()
         };
         self.done = batch.len() < self.batch_size;
         self.buffer = batch;
@@ -282,6 +313,7 @@ fn scan_batch(rows: &[StoredFrame], from: u64, batch_size: usize) -> VecDeque<St
 impl RawEventStore for InMemoryStore {
     type Error = InMemoryStoreError;
     type Stream = InMemoryStream;
+    type AllStream = InMemoryStream;
 
     async fn append(
         &self,
@@ -332,9 +364,9 @@ impl RawEventStore for InMemoryStore {
         // all streams; gaps are permitted by the `RawEventStore` contract.
         let mut counter = self.next_global_seq.lock().await;
         let mut seq = *counter;
-        let mut rows = Vec::with_capacity(envelopes.len());
+        let mut rows: Vec<(u64, StoredFrame)> = Vec::with_capacity(envelopes.len());
         for env in envelopes {
-            rows.push(encode_pending_to_frame(env, seq)?);
+            rows.push((seq.as_u64(), encode_pending_to_frame(env, seq)?));
             seq = seq
                 .next()
                 .ok_or(AppendError::Store(InMemoryStoreError::GlobalSeqOverflow))?;
@@ -342,8 +374,17 @@ impl RawEventStore for InMemoryStore {
         *counter = seq;
         drop(counter);
 
-        // Store the events.
-        stream.extend(rows);
+        // Index by global_seq for $all reads, in the same critical section as
+        // the per-stream store, so a reader never sees one without the other.
+        {
+            let mut gidx = self.global_index.lock().await;
+            for (s, frame) in &rows {
+                gidx.insert(*s, frame.clone());
+            }
+        }
+
+        // Store the events per-stream.
+        stream.extend(rows.into_iter().map(|(_, frame)| frame));
 
         let should_notify = !envelopes.is_empty();
 
@@ -355,6 +396,7 @@ impl RawEventStore for InMemoryStore {
         // stable byte representation (`as_ref`), matching `subscribe`.
         if should_notify {
             self.notifiers.wake(id.as_ref());
+            self.notifiers.wake_all();
         }
 
         Ok(())
@@ -410,6 +452,48 @@ impl RawEventStore for InMemoryStore {
                     }
                 };
                 s.refill(next_from).await;
+                if s.buffer.is_empty() {
+                    return None;
+                }
+            }
+        });
+
+        Ok(InMemoryStream {
+            inner: Box::pin(futures::StreamExt::fuse(unfolded)),
+        })
+    }
+
+    async fn read_all(&self, from: GlobalSeq) -> Result<Self::AllStream, Self::Error> {
+        let state = GlobalReadState {
+            global_index: Arc::clone(&self.global_index),
+            from: from.as_u64(),
+            batch_size: self.batch_size.get(),
+            buffer: VecDeque::new(),
+            done: false,
+        };
+
+        let unfolded = futures::stream::unfold(state, |mut s| async move {
+            loop {
+                if let Some(frame) = s.buffer.pop_front() {
+                    return match frame_to_envelope(&frame) {
+                        Ok(env) => {
+                            // Resume strictly after this global_seq.
+                            match env.global_seq().as_u64().checked_add(1) {
+                                Some(next) => s.from = next,
+                                None => s.done = true,
+                            }
+                            Some((Ok(env), s))
+                        }
+                        Err(e) => {
+                            s.done = true;
+                            Some((Err(e), s))
+                        }
+                    };
+                }
+                if s.done {
+                    return None;
+                }
+                s.refill().await;
                 if s.buffer.is_empty() {
                     return None;
                 }
@@ -581,6 +665,130 @@ impl RawSubscription for InMemoryStore {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// InMemoryAllSubscriptionStream — Arc-owning $all subscription cursor
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Inner state for the store-wide `$all` subscription's async generator.
+///
+/// Mirrors [`SubState`] but resumes on [`GlobalSeq`] instead of [`Version`],
+/// scans [`InMemoryStore::global_index`] in `GlobalSeq` order, and parks on
+/// the store-wide `all_notifier()` instead of a per-stream guard. No
+/// [`SubscriptionGuard`] is held — the `$all` notifier is permanently alive.
+struct AllSubState {
+    store: Arc<InMemoryStore>,
+    /// Next `global_seq` to scan from (inclusive). Starts at 1 (initial) or
+    /// `from + 1`; advanced to `last_global_seq + 1` after each yield.
+    next_global_seq: u64,
+    buffer: VecDeque<StoredFrame>,
+    batch_size: usize,
+}
+
+impl AllSubState {
+    async fn refill(&mut self) {
+        let batch: VecDeque<StoredFrame> = {
+            let guard = self.store.global_index.lock().await;
+            guard
+                .range(self.next_global_seq..)
+                .take(self.batch_size)
+                .map(|(_, frame)| frame.clone())
+                .collect()
+        };
+        self.buffer = batch;
+    }
+}
+
+/// `futures::Stream` of all-streams subscription events.
+///
+/// Boxes an inner `unfold`-driven stream so the type can be named.
+/// Owns `Arc<InMemoryStore>` and is `'static` — spawnable across async
+/// boundaries. **Never returns `None`** — it blocks until new events arrive.
+pub struct InMemoryAllSubscriptionStream {
+    inner: core::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<PersistedEnvelope, InMemoryStoreError>> + Send>,
+    >,
+}
+
+impl futures::Stream for InMemoryAllSubscriptionStream {
+    type Item = Result<PersistedEnvelope, InMemoryStoreError>;
+
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl RawAllSubscription for InMemoryStore {
+    type Stream = InMemoryAllSubscriptionStream;
+    type Error = InMemoryStoreError;
+
+    async fn subscribe_all(
+        arc: &Arc<Self>,
+        from: Option<GlobalSeq>,
+    ) -> Result<InMemoryAllSubscriptionStream, InMemoryStoreError> {
+        let next_global_seq = match from {
+            None => GlobalSeq::INITIAL.as_u64(),
+            Some(g) => g
+                .next()
+                .ok_or(InMemoryStoreError::GlobalSeqOverflow)?
+                .as_u64(),
+        };
+
+        let mut state = AllSubState {
+            store: Arc::clone(arc),
+            next_global_seq,
+            buffer: VecDeque::new(),
+            batch_size: arc.batch_size().get(),
+        };
+
+        // Eagerly load catch-up events so the first poll yields without IO.
+        state.refill().await;
+
+        let unfolded = futures::stream::unfold(state, |mut s| async move {
+            loop {
+                // Yield from buffer if available.
+                if let Some(frame) = s.buffer.pop_front() {
+                    return match frame_to_envelope(&frame) {
+                        Ok(env) => {
+                            // Advance past this global_seq; checked to avoid overflow.
+                            match env.global_seq().as_u64().checked_add(1) {
+                                Some(next) => {
+                                    s.next_global_seq = next;
+                                    Some((Ok(env), s))
+                                }
+                                None => {
+                                    // global_seq is at u64::MAX — cannot advance.
+                                    Some((Err(InMemoryStoreError::GlobalSeqOverflow), s))
+                                }
+                            }
+                        }
+                        Err(e) => Some((Err(e), s)),
+                    };
+                }
+
+                // Buffer empty. Register the waiter BEFORE refilling to close
+                // the lost-wakeup race: `wake_all` uses `notify_waiters` (no
+                // stored permit) and a `Notified` only joins the waiter list
+                // when `enable()`d, so we must do that before the refill read.
+                let notify = Arc::clone(s.store.notifiers.all_notifier());
+                let notified = notify.notified();
+                tokio::pin!(notified);
+                let _ = notified.as_mut().enable();
+                s.refill().await;
+                if s.buffer.is_empty() {
+                    notified.await;
+                }
+            }
+        });
+
+        Ok(InMemoryAllSubscriptionStream {
+            inner: Box::pin(unfolded),
+        })
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod batch_config_tests {
@@ -716,6 +924,153 @@ mod bounded_read_tests {
         // Exhausted stream must keep returning None (fused), not panic or re-yield.
         assert!(stream.next().await.is_none());
         assert!(stream.next().await.is_none());
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::as_conversions,
+    reason = "test code"
+)]
+mod global_read_tests {
+    use super::*;
+    use crate::envelope::pending_envelope;
+    use futures::StreamExt;
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct Tid(String);
+    impl std::fmt::Display for Tid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+
+    fn tid(s: &str) -> Tid {
+        Tid(s.to_owned())
+    }
+
+    async fn append_one(
+        store: &InMemoryStore,
+        id: &str,
+        version: u64,
+        expected: Option<u64>,
+        payload: &[u8],
+    ) {
+        let env = pending_envelope(Version::new(version).unwrap())
+            .event_type("E")
+            .payload(payload.to_vec())
+            .unwrap()
+            .build();
+        store
+            .append(&tid(id), expected.and_then(Version::new), &[env])
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_all_yields_global_order_across_streams() {
+        let store = InMemoryStore::new();
+        // Interleave appends across two streams: a@1, b@1, a@2.
+        append_one(&store, "a", 1, None, b"a1").await;
+        append_one(&store, "b", 1, None, b"b1").await;
+        append_one(&store, "a", 2, Some(1), b"a2").await;
+
+        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = all.next().await {
+            let env = item.unwrap();
+            seen.push((env.global_seq().as_u64(), env.payload().to_vec()));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                (1, b"a1".to_vec()),
+                (2, b"b1".to_vec()),
+                (3, b"a2".to_vec()),
+            ],
+            "read_all must yield every event across streams in GlobalSeq order"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_all_from_is_inclusive_and_resumes() {
+        let store = InMemoryStore::new();
+        append_one(&store, "a", 1, None, b"a1").await;
+        append_one(&store, "a", 2, Some(1), b"a2").await;
+        append_one(&store, "a", 3, Some(2), b"a3").await;
+
+        let mut all = store.read_all(GlobalSeq::new(2).unwrap()).await.unwrap();
+        let mut seqs = Vec::new();
+        while let Some(env) = all.next().await {
+            seqs.push(env.unwrap().global_seq().as_u64());
+        }
+        assert_eq!(seqs, vec![2, 3], "from is inclusive; lower seqs excluded");
+    }
+
+    #[tokio::test]
+    async fn subscribe_all_catches_up_then_sees_live_event() {
+        use crate::subscription::RawAllSubscription;
+        use futures::StreamExt;
+
+        let store = Arc::new(InMemoryStore::new());
+        append_one(&store, "a", 1, None, b"a1").await;
+        append_one(&store, "b", 1, None, b"b1").await;
+
+        let mut sub = InMemoryStore::subscribe_all(&store, None).await.unwrap();
+        assert_eq!(sub.next().await.unwrap().unwrap().global_seq().as_u64(), 1);
+        assert_eq!(sub.next().await.unwrap().unwrap().global_seq().as_u64(), 2);
+
+        let store2 = Arc::clone(&store);
+        tokio::spawn(async move {
+            append_one(&store2, "a", 2, Some(1), b"a2").await;
+        });
+        let live = sub.next().await.unwrap().unwrap();
+        assert_eq!(live.global_seq().as_u64(), 3);
+        assert_eq!(live.payload(), b"a2");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn subscribe_all_sees_concurrent_appends_across_streams() {
+        use crate::subscription::RawAllSubscription;
+        use futures::StreamExt;
+
+        let store = Arc::new(InMemoryStore::new());
+        let mut sub = InMemoryStore::subscribe_all(&store, None).await.unwrap();
+
+        let s1 = Arc::clone(&store);
+        let s2 = Arc::clone(&store);
+        let w1 = tokio::spawn(async move {
+            for v in 1..=10 {
+                append_one(&s1, "x", v, (v > 1).then(|| v - 1), b"x").await;
+            }
+        });
+        let w2 = tokio::spawn(async move {
+            for v in 1..=10 {
+                append_one(&s2, "y", v, (v > 1).then(|| v - 1), b"y").await;
+            }
+        });
+        w1.await.unwrap();
+        w2.await.unwrap();
+
+        let mut prev = 0u64;
+        for _ in 0..20 {
+            let g = sub.next().await.unwrap().unwrap().global_seq().as_u64();
+            assert!(
+                g > prev,
+                "global_seq must be strictly increasing: {g} after {prev}"
+            );
+            prev = g;
+        }
     }
 }
 

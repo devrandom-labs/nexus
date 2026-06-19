@@ -1,5 +1,9 @@
+use crate::all_stream::FjallAllStream;
+use crate::all_subscription_stream::FjallAllSubscriptionStream;
 use crate::builder::FjallStoreBuilder;
-use crate::encoding::{decode_stream_version, encode_event_key, encode_stream_version};
+use crate::encoding::{
+    decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
+};
 use crate::error::{FjallError, reason_label};
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
@@ -9,8 +13,8 @@ use nexus_store::PendingEnvelope;
 use nexus_store::batch::BatchSize;
 use nexus_store::error::AppendError;
 use nexus_store::notify::StreamNotifiers;
-use nexus_store::store::RawEventStore;
-use nexus_store::subscription::{RawSubscription, sealed};
+use nexus_store::store::{GlobalSeq, RawEventStore};
+use nexus_store::subscription::{RawAllSubscription, RawSubscription, sealed};
 use nexus_store::wire;
 use std::path::Path;
 use std::sync::Arc;
@@ -34,6 +38,10 @@ pub struct FjallStore {
     pub(crate) db: fjall::SingleWriterTxDatabase,
     pub(crate) streams: fjall::SingleWriterTxKeyspace,
     pub(crate) events: fjall::SingleWriterTxKeyspace,
+    /// `$all` index: every event's wire frame keyed by
+    /// `[u64 BE global_seq][u64 BE version]`. Same scan-optimized config as
+    /// `events`; written in the same transaction as the primary row.
+    pub(crate) events_global: fjall::SingleWriterTxKeyspace,
     #[cfg(feature = "snapshot")]
     pub(crate) snapshots: fjall::SingleWriterTxKeyspace,
     pub(crate) global: fjall::SingleWriterTxKeyspace,
@@ -56,6 +64,7 @@ impl FjallStore {
 impl RawEventStore for FjallStore {
     type Error = FjallError;
     type Stream = FjallStream;
+    type AllStream = FjallAllStream;
 
     #[allow(
         clippy::significant_drop_tightening,
@@ -182,7 +191,10 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            tx.insert(&self.events, &key, Slice::from(frame.value));
+            let slice = Slice::from(frame.value);
+            tx.insert(&self.events, &key, slice.clone());
+            let global_key = encode_global_key(global_seq, env.version().as_u64());
+            tx.insert(&self.events_global, global_key, slice);
         }
 
         // Advance the global counter by the batch size, in the same
@@ -207,6 +219,8 @@ impl RawEventStore for FjallStore {
         // Wake only the subscribers parked on this stream, AFTER the commit
         // is durable so a woken subscriber re-reads already-visible data.
         self.notifiers.wake(id_bytes);
+        // Wake every $all subscriber parked on the store-wide notifier.
+        self.notifiers.wake_all();
 
         Ok(())
     }
@@ -220,6 +234,14 @@ impl RawEventStore for FjallStore {
             from.as_u64(),
             self.batch_size.get(),
             id.to_label(),
+        )
+    }
+
+    async fn read_all(&self, from: GlobalSeq) -> Result<Self::AllStream, Self::Error> {
+        FjallAllStream::new(
+            self.events_global.clone(),
+            from.as_u64(),
+            self.batch_size.get(),
         )
     }
 }
@@ -316,6 +338,27 @@ impl RawSubscription for FjallStore {
             inner,
             from,
             guard,
+        ))
+    }
+}
+
+impl RawAllSubscription for FjallStore {
+    type Stream = FjallAllSubscriptionStream;
+    type Error = FjallError;
+
+    async fn subscribe_all(
+        arc: &Arc<Self>,
+        from: Option<GlobalSeq>,
+    ) -> Result<FjallAllSubscriptionStream, FjallError> {
+        let start = match from {
+            None => GlobalSeq::INITIAL,
+            Some(g) => g.next().ok_or(FjallError::GlobalSeqOverflow)?,
+        };
+        let inner = arc.read_all(start).await?;
+        Ok(FjallAllSubscriptionStream::new(
+            Arc::clone(arc),
+            inner,
+            start,
         ))
     }
 }
@@ -478,6 +521,31 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn append_writes_events_global_index() {
+        let (store, _dir) = temp_store();
+        let id = tid("acct-1");
+        let env = pending_envelope(Version::new(1).unwrap())
+            .event_type("Created")
+            .payload(b"x".to_vec())
+            .unwrap()
+            .build();
+        store.append(&id, None, &[env]).await.unwrap();
+
+        // The index holds exactly one row, keyed by [global_seq=1][version=1].
+        let key = crate::encoding::encode_global_key(1, 1);
+        let got = store.events_global.inner().get(key).unwrap();
+        assert!(
+            got.is_some(),
+            "append must write an events_global index row"
+        );
+        assert_eq!(
+            store.events_global.inner().iter().count(),
+            1,
+            "events_global must contain exactly one row after one append"
+        );
+    }
+
     // ---- read_stream tests ----
 
     #[tokio::test]
@@ -617,6 +685,101 @@ mod tests {
             seen.push(item.unwrap().version().as_u64());
         }
         assert_eq!(seen, (1..=10).collect::<Vec<_>>());
+    }
+
+    // ---- read_all tests ----
+
+    #[tokio::test]
+    async fn read_all_yields_global_order_across_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
+        let a = TestId("a".to_owned());
+        let b = TestId("b".to_owned());
+
+        let mk = |v: u64, p: &[u8]| {
+            pending_envelope(Version::new(v).unwrap())
+                .event_type("E")
+                .payload(p.to_vec())
+                .unwrap()
+                .build()
+        };
+        store.append(&a, None, &[mk(1, b"a1")]).await.unwrap();
+        store.append(&b, None, &[mk(1, b"b1")]).await.unwrap();
+        store
+            .append(&a, Some(Version::new(1).unwrap()), &[mk(2, b"a2")])
+            .await
+            .unwrap();
+
+        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = all.next().await {
+            let env = item.unwrap();
+            seen.push((env.global_seq().as_u64(), env.payload().to_vec()));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                (1, b"a1".to_vec()),
+                (2, b"b1".to_vec()),
+                (3, b"a2".to_vec()),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn read_all_from_is_inclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
+        let a = TestId("a".to_owned());
+        let mk = |v: u64| {
+            #[allow(
+                clippy::as_conversions,
+                clippy::cast_possible_truncation,
+                reason = "test code: v stays within 1..=3"
+            )]
+            pending_envelope(Version::new(v).unwrap())
+                .event_type("E")
+                .payload(vec![v as u8])
+                .unwrap()
+                .build()
+        };
+        store.append(&a, None, &[mk(1)]).await.unwrap();
+        store
+            .append(&a, Some(Version::new(1).unwrap()), &[mk(2)])
+            .await
+            .unwrap();
+        store
+            .append(&a, Some(Version::new(2).unwrap()), &[mk(3)])
+            .await
+            .unwrap();
+
+        let mut all = store.read_all(GlobalSeq::new(2).unwrap()).await.unwrap();
+        let mut seqs = Vec::new();
+        while let Some(env) = all.next().await {
+            seqs.push(env.unwrap().global_seq().as_u64());
+        }
+        assert_eq!(seqs, vec![2, 3]);
+    }
+
+    #[tokio::test]
+    async fn read_all_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        let a = TestId("a".to_owned());
+        {
+            let store = FjallStore::builder(&path).open().unwrap();
+            let env = pending_envelope(Version::new(1).unwrap())
+                .event_type("E")
+                .payload(b"x".to_vec())
+                .unwrap()
+                .build();
+            store.append(&a, None, &[env]).await.unwrap();
+        }
+        let store = FjallStore::builder(&path).open().unwrap();
+        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
+        let env = all.next().await.unwrap().unwrap();
+        assert_eq!(env.global_seq().as_u64(), 1);
+        assert_eq!(env.payload(), b"x");
     }
 
     // ---- linearizability / concurrency tests ----

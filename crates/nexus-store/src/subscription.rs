@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use nexus::{Id, Version};
 
-use crate::store::Store;
+use crate::store::{GlobalSeq, Store};
 use crate::stream::EventStream;
 
 /// Sealed-trait scaffold for [`RawSubscription`].
@@ -81,6 +81,34 @@ pub trait RawSubscription: sealed::Sealed + Send + Sync + 'static {
     ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
 }
 
+/// Adapter-facing primitive for all-streams (`$all`) subscriptions.
+///
+/// The dual of [`RawSubscription`] for the store-wide [`GlobalSeq`] order:
+/// no stream id, resumes on `GlobalSeq` instead of `Version`. The
+/// user-facing [`Subscription`] struct composes this into `subscribe_all`.
+///
+/// # Contract
+///
+/// - `from: None` → start from the first event ever appended.
+/// - `from: Some(g)` → start from the event *after* `GlobalSeq` `g`.
+/// - The returned stream **never returns `None`** — it waits for new events
+///   when caught up rather than terminating.
+/// - Events are yielded in ascending `GlobalSeq` order; the sequence is
+///   monotonic but not gapless, and the cursor tolerates gaps.
+pub trait RawAllSubscription: sealed::Sealed + Send + Sync + 'static {
+    /// The cursor type — a `futures::Stream` of envelopes, `'static`.
+    type Stream: EventStream<Error = Self::Error> + 'static;
+
+    /// The error type for subscription operations.
+    type Error: core::error::Error + Send + Sync + 'static;
+
+    /// Open an all-streams subscription cursor.
+    fn subscribe_all(
+        arc: &Arc<Self>,
+        from: Option<GlobalSeq>,
+    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
+}
+
 /// User-facing subscription handle.
 ///
 /// Holds a shared reference to a [`Store<S>`] backend (one `Arc` clone)
@@ -107,7 +135,7 @@ impl<S> core::fmt::Debug for Subscription<S> {
     }
 }
 
-impl<S: RawSubscription> Subscription<S> {
+impl<S> Subscription<S> {
     /// Construct from a [`Store<S>`] handle. One `Arc::clone` per call.
     #[must_use]
     pub fn new(store: &Store<S>) -> Self {
@@ -115,8 +143,10 @@ impl<S: RawSubscription> Subscription<S> {
             store: Arc::clone(store.arc()),
         }
     }
+}
 
-    /// Open a subscription cursor.
+impl<S: RawSubscription> Subscription<S> {
+    /// Open a per-stream subscription cursor.
     ///
     /// `from: None` starts from version 1; `from: Some(v)` starts from
     /// the event *after* version `v`. The returned cursor **never returns
@@ -136,7 +166,28 @@ impl<S: RawSubscription> Subscription<S> {
         &self,
         id: &impl Id,
         from: Option<Version>,
-    ) -> Result<S::Stream, S::Error> {
+    ) -> Result<<S as RawSubscription>::Stream, <S as RawSubscription>::Error> {
         S::subscribe(&self.store, id, from).await
+    }
+}
+
+impl<S: RawAllSubscription> Subscription<S> {
+    /// Open an all-streams (`$all`) subscription cursor, ordered by
+    /// [`GlobalSeq`].
+    ///
+    /// `from: None` starts from the first event ever appended; `from:
+    /// Some(g)` starts from the event *after* `GlobalSeq` `g`. The returned
+    /// cursor **never returns `None`** — it waits for new events when caught
+    /// up.
+    ///
+    /// # Errors
+    ///
+    /// Returns `S::Error` if the adapter cannot open the cursor (e.g. an
+    /// arithmetic overflow if `from` is `Some` of the maximum `GlobalSeq`).
+    pub async fn subscribe_all(
+        &self,
+        from: Option<GlobalSeq>,
+    ) -> Result<<S as RawAllSubscription>::Stream, <S as RawAllSubscription>::Error> {
+        S::subscribe_all(&self.store, from).await
     }
 }

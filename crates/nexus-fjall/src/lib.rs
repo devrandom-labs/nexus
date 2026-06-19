@@ -59,6 +59,8 @@
     reason = "FjallError is intentionally stack-allocated (~208 bytes) for IoT targets"
 )]
 
+pub mod all_stream;
+mod all_subscription_stream;
 pub mod builder;
 pub mod encoding;
 pub mod error;
@@ -67,6 +69,8 @@ pub mod store;
 pub mod stream;
 mod subscription_stream;
 
+pub use all_stream::FjallAllStream;
+pub use all_subscription_stream::FjallAllSubscriptionStream;
 pub use builder::FjallStoreBuilder;
 pub use error::FjallError;
 pub use partition::KeyspaceConfig;

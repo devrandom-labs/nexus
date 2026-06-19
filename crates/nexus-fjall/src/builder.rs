@@ -106,6 +106,7 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
         let streams = db.keyspace("streams", || streams_opts)?;
         let events_opts = self.events_config.apply(scan_defaults());
         let events = db.keyspace("events", || events_opts)?;
+        let events_global = db.keyspace("events_global", scan_defaults)?;
 
         #[cfg(feature = "snapshot")]
         let snapshots = db.keyspace("snapshots", point_read_defaults)?;
@@ -116,6 +117,7 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
             db,
             streams,
             events,
+            events_global,
             #[cfg(feature = "snapshot")]
             snapshots,
             global,

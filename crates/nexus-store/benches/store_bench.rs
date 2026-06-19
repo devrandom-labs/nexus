@@ -141,6 +141,7 @@ enum BenchError {
 impl RawEventStore for InMemoryRawStore {
     type Error = BenchError;
     type Stream = InMemoryStream;
+    type AllStream = InMemoryStream;
 
     async fn append(
         &self,
@@ -184,6 +185,17 @@ impl RawEventStore for InMemoryRawStore {
             })
             .unwrap_or_default();
         Ok(InMemoryStream { events, pos: 0 })
+    }
+
+    async fn read_all(
+        &self,
+        _from: nexus_store::store::GlobalSeq,
+    ) -> Result<Self::AllStream, Self::Error> {
+        // InMemoryRawStore is a benchmark-only adapter that does not implement the global index.
+        Ok(InMemoryStream {
+            events: Vec::new(),
+            pos: 0,
+        })
     }
 }
 
