@@ -133,6 +133,44 @@ pub fn decode_event_key(key: &[u8]) -> Result<(&[u8], u64), DecodeError> {
     Ok((id_bytes, version))
 }
 
+/// Size of a `$all` index key: `[u64 BE global_seq][u64 BE version]`.
+pub const GLOBAL_KEY_SIZE: usize = 16;
+
+/// Encode an `events_global` key as `[u64 BE global_seq][u64 BE version]`.
+///
+/// `global_seq` alone is unique per event; `version` is carried so the
+/// read path can reconstruct a `PersistedEnvelope` (the wire-frame value
+/// does not store version — fjall keeps it in the primary event key).
+/// Big-endian encoding ensures lexicographic byte order equals numeric order.
+#[must_use]
+pub fn encode_global_key(global_seq: u64, version: u64) -> [u8; GLOBAL_KEY_SIZE] {
+    let mut buf = [0u8; GLOBAL_KEY_SIZE];
+    buf[0..8].copy_from_slice(&global_seq.to_be_bytes());
+    buf[8..16].copy_from_slice(&version.to_be_bytes());
+    buf
+}
+
+/// Decode an `events_global` key into `(global_seq, version)`.
+///
+/// # Errors
+///
+/// Returns [`DecodeError::InvalidSize`] if `key` is not exactly [`GLOBAL_KEY_SIZE`] bytes.
+pub fn decode_global_key(key: &[u8]) -> Result<(u64, u64), DecodeError> {
+    if key.len() != GLOBAL_KEY_SIZE {
+        return Err(DecodeError::InvalidSize {
+            expected: GLOBAL_KEY_SIZE,
+            actual: key.len(),
+        });
+    }
+    let global_seq = u64::from_be_bytes([
+        key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
+    ]);
+    let version = u64::from_be_bytes([
+        key[8], key[9], key[10], key[11], key[12], key[13], key[14], key[15],
+    ]);
+    Ok((global_seq, version))
+}
+
 /// Encode a stream version as `[u64 LE version]`.
 ///
 /// Little-endian encoding is used since stream metadata has no ordering requirement.
@@ -487,5 +525,29 @@ mod tests {
     #[test]
     fn meta_len_absent_constant_is_u32_max() {
         assert_eq!(META_LEN_ABSENT, u32::MAX);
+    }
+
+    // --- Global key tests ---
+
+    #[test]
+    fn global_key_roundtrips() {
+        let key = encode_global_key(42, 7);
+        let (gseq, version) = decode_global_key(&key).unwrap();
+        assert_eq!(gseq, 42);
+        assert_eq!(version, 7);
+    }
+
+    #[test]
+    fn global_keys_sort_by_global_seq_then_version() {
+        // Big-endian → lexicographic byte order equals numeric order.
+        let a = encode_global_key(1, 999);
+        let b = encode_global_key(2, 1);
+        assert!(a < b, "global_seq 1 must sort before global_seq 2");
+    }
+
+    #[test]
+    fn decode_global_key_rejects_wrong_length() {
+        assert!(decode_global_key(&[0u8; 8]).is_err());
+        assert!(decode_global_key(&[0u8; 17]).is_err());
     }
 }
