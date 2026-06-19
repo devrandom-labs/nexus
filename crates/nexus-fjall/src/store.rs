@@ -358,7 +358,7 @@ impl RawAllSubscription for FjallStore {
         Ok(FjallAllSubscriptionStream::new(
             Arc::clone(arc),
             inner,
-            start.as_u64(),
+            start,
         ))
     }
 }

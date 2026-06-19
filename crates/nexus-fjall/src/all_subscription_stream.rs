@@ -32,7 +32,7 @@ pub struct FjallAllSubscriptionStream {
 }
 
 impl FjallAllSubscriptionStream {
-    pub(crate) fn new(store: Arc<FjallStore>, inner: FjallAllStream, start: u64) -> Self {
+    pub(crate) fn new(store: Arc<FjallStore>, inner: FjallAllStream, start: GlobalSeq) -> Self {
         let state = AllSubState {
             store,
             inner,
@@ -44,8 +44,8 @@ impl FjallAllSubscriptionStream {
                 if let Some(item) = s.inner.poll_one() {
                     match item {
                         Ok(env) => {
-                            // Advance past this event; checked_add to prevent overflow.
-                            match env.global_seq().as_u64().checked_add(1) {
+                            // Advance past this event; GlobalSeq::next is checked.
+                            match env.global_seq().next() {
                                 Some(next) => s.next_global_seq = next,
                                 None => {
                                     // global_seq is at u64::MAX — cannot advance.
@@ -98,15 +98,15 @@ struct AllSubState {
     store: Arc<FjallStore>,
     inner: FjallAllStream,
     /// Next `global_seq` to scan from (inclusive). Starts at
-    /// `GlobalSeq::INITIAL.as_u64()` or `from + 1`; advanced to
-    /// `last_global_seq + 1` after each yield.
-    next_global_seq: u64,
+    /// `GlobalSeq::INITIAL` or the event after `from`; advanced past each
+    /// yielded event. Carried as a `GlobalSeq` (not `u64`) so no
+    /// sentinel-masking conversion is needed on refill.
+    next_global_seq: GlobalSeq,
 }
 
 impl AllSubState {
     async fn refill(&mut self) -> Result<(), FjallError> {
-        let from = GlobalSeq::new(self.next_global_seq).unwrap_or(GlobalSeq::INITIAL);
-        let fresh = self.store.read_all(from).await?;
+        let fresh = self.store.read_all(self.next_global_seq).await?;
         self.inner = fresh;
         Ok(())
     }
