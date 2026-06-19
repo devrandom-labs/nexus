@@ -5,7 +5,7 @@ use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::notify::{NotifyError, StreamNotifiers, SubscriptionGuard};
 use crate::store::{GlobalSeq, RawEventStore};
-use crate::subscription::{RawSubscription, sealed};
+use crate::subscription::{RawAllSubscription, RawSubscription, sealed};
 use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
 use nexus::Id;
@@ -396,6 +396,7 @@ impl RawEventStore for InMemoryStore {
         // stable byte representation (`as_ref`), matching `subscribe`.
         if should_notify {
             self.notifiers.wake(id.as_ref());
+            self.notifiers.wake_all();
         }
 
         Ok(())
@@ -664,6 +665,130 @@ impl RawSubscription for InMemoryStore {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// InMemoryAllSubscriptionStream — Arc-owning $all subscription cursor
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Inner state for the store-wide `$all` subscription's async generator.
+///
+/// Mirrors [`SubState`] but resumes on [`GlobalSeq`] instead of [`Version`],
+/// scans [`InMemoryStore::global_index`] in `GlobalSeq` order, and parks on
+/// the store-wide `all_notifier()` instead of a per-stream guard. No
+/// [`SubscriptionGuard`] is held — the `$all` notifier is permanently alive.
+struct AllSubState {
+    store: Arc<InMemoryStore>,
+    /// Next `global_seq` to scan from (inclusive). Starts at 1 (initial) or
+    /// `from + 1`; advanced to `last_global_seq + 1` after each yield.
+    next_global_seq: u64,
+    buffer: VecDeque<StoredFrame>,
+    batch_size: usize,
+}
+
+impl AllSubState {
+    async fn refill(&mut self) {
+        let batch: VecDeque<StoredFrame> = {
+            let guard = self.store.global_index.lock().await;
+            guard
+                .range(self.next_global_seq..)
+                .take(self.batch_size)
+                .map(|(_, frame)| frame.clone())
+                .collect()
+        };
+        self.buffer = batch;
+    }
+}
+
+/// `futures::Stream` of all-streams subscription events.
+///
+/// Boxes an inner `unfold`-driven stream so the type can be named.
+/// Owns `Arc<InMemoryStore>` and is `'static` — spawnable across async
+/// boundaries. **Never returns `None`** — it blocks until new events arrive.
+pub struct InMemoryAllSubscriptionStream {
+    inner: core::pin::Pin<
+        Box<dyn futures::Stream<Item = Result<PersistedEnvelope, InMemoryStoreError>> + Send>,
+    >,
+}
+
+impl futures::Stream for InMemoryAllSubscriptionStream {
+    type Item = Result<PersistedEnvelope, InMemoryStoreError>;
+
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl RawAllSubscription for InMemoryStore {
+    type Stream = InMemoryAllSubscriptionStream;
+    type Error = InMemoryStoreError;
+
+    async fn subscribe_all(
+        arc: &Arc<Self>,
+        from: Option<GlobalSeq>,
+    ) -> Result<InMemoryAllSubscriptionStream, InMemoryStoreError> {
+        let next_global_seq = match from {
+            None => GlobalSeq::INITIAL.as_u64(),
+            Some(g) => g
+                .next()
+                .ok_or(InMemoryStoreError::GlobalSeqOverflow)?
+                .as_u64(),
+        };
+
+        let mut state = AllSubState {
+            store: Arc::clone(arc),
+            next_global_seq,
+            buffer: VecDeque::new(),
+            batch_size: arc.batch_size().get(),
+        };
+
+        // Eagerly load catch-up events so the first poll yields without IO.
+        state.refill().await;
+
+        let unfolded = futures::stream::unfold(state, |mut s| async move {
+            loop {
+                // Yield from buffer if available.
+                if let Some(frame) = s.buffer.pop_front() {
+                    return match frame_to_envelope(&frame) {
+                        Ok(env) => {
+                            // Advance past this global_seq; checked to avoid overflow.
+                            match env.global_seq().as_u64().checked_add(1) {
+                                Some(next) => {
+                                    s.next_global_seq = next;
+                                    Some((Ok(env), s))
+                                }
+                                None => {
+                                    // global_seq is at u64::MAX — cannot advance.
+                                    Some((Err(InMemoryStoreError::GlobalSeqOverflow), s))
+                                }
+                            }
+                        }
+                        Err(e) => Some((Err(e), s)),
+                    };
+                }
+
+                // Buffer empty. Register the waiter BEFORE refilling to close
+                // the lost-wakeup race: `wake_all` uses `notify_waiters` (no
+                // stored permit) and a `Notified` only joins the waiter list
+                // when `enable()`d, so we must do that before the refill read.
+                let notify = Arc::clone(s.store.notifiers.all_notifier());
+                let notified = notify.notified();
+                tokio::pin!(notified);
+                let _ = notified.as_mut().enable();
+                s.refill().await;
+                if s.buffer.is_empty() {
+                    notified.await;
+                }
+            }
+        });
+
+        Ok(InMemoryAllSubscriptionStream {
+            inner: Box::pin(unfolded),
+        })
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod batch_config_tests {
@@ -890,6 +1015,62 @@ mod global_read_tests {
             seqs.push(env.unwrap().global_seq().as_u64());
         }
         assert_eq!(seqs, vec![2, 3], "from is inclusive; lower seqs excluded");
+    }
+
+    #[tokio::test]
+    async fn subscribe_all_catches_up_then_sees_live_event() {
+        use crate::subscription::RawAllSubscription;
+        use futures::StreamExt;
+
+        let store = Arc::new(InMemoryStore::new());
+        append_one(&store, "a", 1, None, b"a1").await;
+        append_one(&store, "b", 1, None, b"b1").await;
+
+        let mut sub = InMemoryStore::subscribe_all(&store, None).await.unwrap();
+        assert_eq!(sub.next().await.unwrap().unwrap().global_seq().as_u64(), 1);
+        assert_eq!(sub.next().await.unwrap().unwrap().global_seq().as_u64(), 2);
+
+        let store2 = Arc::clone(&store);
+        tokio::spawn(async move {
+            append_one(&store2, "a", 2, Some(1), b"a2").await;
+        });
+        let live = sub.next().await.unwrap().unwrap();
+        assert_eq!(live.global_seq().as_u64(), 3);
+        assert_eq!(live.payload(), b"a2");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn subscribe_all_sees_concurrent_appends_across_streams() {
+        use crate::subscription::RawAllSubscription;
+        use futures::StreamExt;
+
+        let store = Arc::new(InMemoryStore::new());
+        let mut sub = InMemoryStore::subscribe_all(&store, None).await.unwrap();
+
+        let s1 = Arc::clone(&store);
+        let s2 = Arc::clone(&store);
+        let w1 = tokio::spawn(async move {
+            for v in 1..=10 {
+                append_one(&s1, "x", v, (v > 1).then(|| v - 1), b"x").await;
+            }
+        });
+        let w2 = tokio::spawn(async move {
+            for v in 1..=10 {
+                append_one(&s2, "y", v, (v > 1).then(|| v - 1), b"y").await;
+            }
+        });
+        w1.await.unwrap();
+        w2.await.unwrap();
+
+        let mut prev = 0u64;
+        for _ in 0..20 {
+            let g = sub.next().await.unwrap().unwrap().global_seq().as_u64();
+            assert!(
+                g > prev,
+                "global_seq must be strictly increasing: {g} after {prev}"
+            );
+            prev = g;
+        }
     }
 }
 
