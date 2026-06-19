@@ -1,4 +1,5 @@
 use crate::all_stream::FjallAllStream;
+use crate::all_subscription_stream::FjallAllSubscriptionStream;
 use crate::builder::FjallStoreBuilder;
 use crate::encoding::{
     decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
@@ -13,7 +14,7 @@ use nexus_store::batch::BatchSize;
 use nexus_store::error::AppendError;
 use nexus_store::notify::StreamNotifiers;
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::subscription::{RawSubscription, sealed};
+use nexus_store::subscription::{RawAllSubscription, RawSubscription, sealed};
 use nexus_store::wire;
 use std::path::Path;
 use std::sync::Arc;
@@ -218,6 +219,8 @@ impl RawEventStore for FjallStore {
         // Wake only the subscribers parked on this stream, AFTER the commit
         // is durable so a woken subscriber re-reads already-visible data.
         self.notifiers.wake(id_bytes);
+        // Wake every $all subscriber parked on the store-wide notifier.
+        self.notifiers.wake_all();
 
         Ok(())
     }
@@ -335,6 +338,27 @@ impl RawSubscription for FjallStore {
             inner,
             from,
             guard,
+        ))
+    }
+}
+
+impl RawAllSubscription for FjallStore {
+    type Stream = FjallAllSubscriptionStream;
+    type Error = FjallError;
+
+    async fn subscribe_all(
+        arc: &Arc<Self>,
+        from: Option<GlobalSeq>,
+    ) -> Result<FjallAllSubscriptionStream, FjallError> {
+        let start = match from {
+            None => GlobalSeq::INITIAL,
+            Some(g) => g.next().ok_or(FjallError::GlobalSeqOverflow)?,
+        };
+        let inner = arc.read_all(start).await?;
+        Ok(FjallAllSubscriptionStream::new(
+            Arc::clone(arc),
+            inner,
+            start.as_u64(),
         ))
     }
 }
