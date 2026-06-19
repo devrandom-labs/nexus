@@ -1,5 +1,7 @@
 use crate::builder::FjallStoreBuilder;
-use crate::encoding::{decode_stream_version, encode_event_key, encode_stream_version};
+use crate::encoding::{
+    decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
+};
 use crate::error::{FjallError, reason_label};
 use crate::stream::FjallStream;
 use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
@@ -34,6 +36,10 @@ pub struct FjallStore {
     pub(crate) db: fjall::SingleWriterTxDatabase,
     pub(crate) streams: fjall::SingleWriterTxKeyspace,
     pub(crate) events: fjall::SingleWriterTxKeyspace,
+    /// `$all` index: every event's wire frame keyed by
+    /// `[u64 BE global_seq][u64 BE version]`. Same scan-optimized config as
+    /// `events`; written in the same transaction as the primary row.
+    pub(crate) events_global: fjall::SingleWriterTxKeyspace,
     #[cfg(feature = "snapshot")]
     pub(crate) snapshots: fjall::SingleWriterTxKeyspace,
     pub(crate) global: fjall::SingleWriterTxKeyspace,
@@ -182,7 +188,10 @@ impl RawEventStore for FjallStore {
                     reason: reason_label(&e),
                 })
             })?;
-            tx.insert(&self.events, &key, Slice::from(frame.value));
+            let slice = Slice::from(frame.value);
+            tx.insert(&self.events, &key, slice.clone());
+            let global_key = encode_global_key(global_seq, env.version().as_u64());
+            tx.insert(&self.events_global, global_key, slice);
         }
 
         // Advance the global counter by the batch size, in the same
@@ -476,6 +485,31 @@ mod tests {
             }
             other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn append_writes_events_global_index() {
+        let (store, _dir) = temp_store();
+        let id = tid("acct-1");
+        let env = pending_envelope(Version::new(1).unwrap())
+            .event_type("Created")
+            .payload(b"x".to_vec())
+            .unwrap()
+            .build();
+        store.append(&id, None, &[env]).await.unwrap();
+
+        // The index holds exactly one row, keyed by [global_seq=1][version=1].
+        let key = crate::encoding::encode_global_key(1, 1);
+        let got = store.events_global.inner().get(key).unwrap();
+        assert!(
+            got.is_some(),
+            "append must write an events_global index row"
+        );
+        assert_eq!(
+            store.events_global.inner().iter().count(),
+            1,
+            "events_global must contain exactly one row after one append"
+        );
     }
 
     // ---- read_stream tests ----
