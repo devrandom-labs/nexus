@@ -121,6 +121,14 @@ pub trait RawEventStore: Send + Sync {
     /// stream's `Item` is the envelope by value.
     type Stream: EventStream<Error = Self::Error> + 'static;
 
+    /// The stream type for an all-streams (`$all`) read.
+    ///
+    /// Owned, non-GAT, `'static` — a `futures::Stream` of
+    /// `Result<PersistedEnvelope, Self::Error>` ordered by [`GlobalSeq`],
+    /// not by `(stream, version)`. Distinct from [`Stream`](Self::Stream)
+    /// because the global order is a different physical index.
+    type AllStream: EventStream<Error = Self::Error> + 'static;
+
     /// Append events to a stream with optimistic concurrency.
     ///
     /// `expected_version` is the version the aggregate was at before
@@ -175,6 +183,27 @@ pub trait RawEventStore: Send + Sync {
         id: &impl Id,
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::Stream, Self::Error>> + Send;
+
+    /// Open a one-shot read over **all** streams, ordered by [`GlobalSeq`].
+    ///
+    /// `from` is **inclusive**: the stream yields every event with
+    /// `global_seq >= from`, in ascending `GlobalSeq` order, then terminates
+    /// with `None`. The sequence is monotonic but **not** gapless — burned
+    /// values are simply absent, and this read tolerates them by scanning a
+    /// range rather than stepping `from + 1`.
+    ///
+    /// This is the building block under an all-streams subscription; the
+    /// never-ending wait-when-caught-up behaviour is layered on top.
+    ///
+    /// # Batching
+    ///
+    /// Like [`read_stream`](Self::read_stream), an adapter materializes at
+    /// most its configured `batch_size` rows at a time, keyset-resuming on
+    /// `GlobalSeq`.
+    fn read_all(
+        &self,
+        from: GlobalSeq,
+    ) -> impl std::future::Future<Output = Result<Self::AllStream, Self::Error>> + Send;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

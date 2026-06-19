@@ -142,6 +142,7 @@ impl futures::Stream for ProbeStream {
 impl RawEventStore for ProbeStore {
     type Error = ProbeError;
     type Stream = ProbeStream;
+    type AllStream = ProbeStream;
 
     async fn append(
         &self,
@@ -191,6 +192,17 @@ impl RawEventStore for ProbeStore {
             })
             .unwrap_or_default();
         Ok(ProbeStream { events, pos: 0 })
+    }
+
+    async fn read_all(
+        &self,
+        _from: nexus_store::store::GlobalSeq,
+    ) -> Result<Self::AllStream, Self::Error> {
+        // ProbeStore is a test-only adapter that does not implement the global index.
+        Ok(ProbeStream {
+            events: Vec::new(),
+            pos: 0,
+        })
     }
 }
 
