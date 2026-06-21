@@ -11,6 +11,7 @@ use core::ops::Range;
 
 use bytes::Bytes;
 use minicbor::Decoder;
+use minicbor::data::Type;
 use thiserror::Error;
 
 use crate::envelope::PersistedEnvelope;
@@ -104,14 +105,24 @@ pub fn decode_header(bytes: &[u8]) -> Result<ChunkHeader, ChunkError> {
     })
 }
 
-/// Stub — replaced in Task 3.
+/// Wire shape of a section heading map `{0: stream_id}`.
+#[derive(minicbor::Encode, minicbor::Decode)]
+#[cbor(map)]
+struct HeadingRepr<'a> {
+    #[n(0)]
+    #[cbor(with = "minicbor::bytes")]
+    stream_id: &'a [u8],
+}
+
+/// Encode a per-stream section heading, recording the origin stream id once.
+/// Emit one before the blocks of each stream.
 ///
 /// # Errors
-///
-/// Returns [`ChunkError::Encode`] if the CBOR serialization fails (infallible
-/// in practice for the stub path).
-pub const fn encode_section_heading(_stream_id: &[u8]) -> Result<Bytes, ChunkError> {
-    Ok(Bytes::new())
+/// Returns [`ChunkError::Encode`] if minicbor serialization fails (never in
+/// practice).
+pub fn encode_section_heading(stream_id: &[u8]) -> Result<Bytes, ChunkError> {
+    let repr = HeadingRepr { stream_id };
+    Ok(Bytes::from(minicbor::to_vec(&repr)?))
 }
 
 /// Wire shape of a block body map. `global_seq` is deliberately absent —
@@ -172,10 +183,6 @@ pub fn encode_block(event: &PersistedEnvelope) -> Result<Bytes, ChunkError> {
 /// `Ok(Some(block))` = decoded (Event or Corrupt). `Ok(None)` = torn tail
 /// (end-of-input mid-item → caller stops, valid prefix). `Err(hint)` = a
 /// structural violation the caller turns into [`ChunkError::Malformed`].
-#[allow(
-    dead_code,
-    reason = "wired into decode_chunk in Task 4; called from tests now"
-)]
 fn decode_block(d: &mut Decoder<'_>) -> Result<Option<ImportBlock>, &'static str> {
     match d.array() {
         Ok(Some(2)) => {}
@@ -209,10 +216,6 @@ fn decode_block(d: &mut Decoder<'_>) -> Result<Option<ImportBlock>, &'static str
 /// field-level violation (version 0, schema 0, oversize, range overflow); the
 /// caller maps that to `Malformed`. `global_seq` is a placeholder — import
 /// ignores it.
-#[allow(
-    dead_code,
-    reason = "called by decode_block, wired into decode_chunk in Task 4"
-)]
 fn reconstruct(body: &BodyRepr<'_>) -> Option<PersistedEnvelope> {
     let version = Version::new(body.version)?;
     let schema = SchemaVersion::from_u32(body.schema_version).ok()?;
@@ -247,13 +250,51 @@ fn reconstruct(body: &BodyRepr<'_>) -> Option<PersistedEnvelope> {
     .ok()
 }
 
-/// Stub — replaced in Task 4.
+/// Decode a whole chunk into per-stream sections for
+/// [`EventImporter::import`](crate::import::EventImporter::import).
+///
+/// Walks the CBOR sequence: header first, then peek each item — a map starts a
+/// new section, an array is a block for the current section. A torn tail
+/// (end-of-input mid-item) stops cleanly and returns the valid prefix; any
+/// other structural problem is [`ChunkError::Malformed`]. A per-block crc
+/// mismatch is a non-fatal [`ImportBlock::Corrupt`], never an error.
 ///
 /// # Errors
-///
-/// Returns [`ChunkError::Malformed`] if the chunk bytes cannot be decoded.
-pub const fn decode_chunk(_bytes: &[u8]) -> Result<Vec<StreamSection>, ChunkError> {
-    Ok(Vec::new())
+/// Returns [`ChunkError::Malformed`] on a bad/unknown header, a block before
+/// any section heading, an unexpected top-level item, or a crc-valid body that
+/// fails to decode.
+pub fn decode_chunk(bytes: &[u8]) -> Result<Vec<StreamSection>, ChunkError> {
+    let mut d = Decoder::new(bytes);
+    let header: HeaderRepr = d
+        .decode()
+        .map_err(|_| ChunkError::Malformed("unreadable header"))?;
+    validate_header(header.magic, header.format_version)?;
+
+    let mut sections: Vec<StreamSection> = Vec::new();
+    while d.position() < bytes.len() {
+        match d.datatype() {
+            Ok(Type::Map) => match d.decode::<HeadingRepr>() {
+                Ok(heading) => sections.push(StreamSection {
+                    origin: Bytes::copy_from_slice(heading.stream_id),
+                    blocks: Vec::new(),
+                }),
+                Err(e) if e.is_end_of_input() => break,
+                Err(_) => return Err(ChunkError::Malformed("malformed section heading")),
+            },
+            Ok(Type::Array) => match decode_block(&mut d) {
+                Ok(Some(block)) => match sections.last_mut() {
+                    Some(section) => section.blocks.push(block),
+                    None => return Err(ChunkError::Malformed("block before section heading")),
+                },
+                Ok(None) => break,
+                Err(hint) => return Err(ChunkError::Malformed(hint)),
+            },
+            Ok(_) => return Err(ChunkError::Malformed("unexpected item type")),
+            Err(e) if e.is_end_of_input() => break,
+            Err(_) => return Err(ChunkError::Malformed("decode error")),
+        }
+    }
+    Ok(sections)
 }
 
 #[cfg(test)]
@@ -375,5 +416,90 @@ mod tests {
         let bytes = encode_header(Some(b"x")).expect("encode");
         let err = decode_header(&bytes[..bytes.len() / 2]).expect_err("truncated rejected");
         assert!(matches!(err, ChunkError::Malformed(_)));
+    }
+
+    /// Encode a full multi-stream chunk: header + per-stream heading + blocks.
+    fn encode_chunk(origin: Option<&[u8]>, streams: &[(&[u8], Vec<PersistedEnvelope>)]) -> Bytes {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&encode_header(origin).expect("header"));
+        for (stream_id, events) in streams {
+            buf.extend_from_slice(&encode_section_heading(stream_id).expect("heading"));
+            for e in events {
+                buf.extend_from_slice(&encode_block(e).expect("block"));
+            }
+        }
+        Bytes::from(buf)
+    }
+
+    #[test]
+    fn decode_chunk_round_trips_multi_stream() {
+        let a = vec![
+            persisted(1, 1, "E", None, b"a1"),
+            persisted(2, 1, "E", Some(b"m"), b"a2"),
+        ];
+        let b = vec![persisted(1, 2, "E", None, b"b1")];
+        let chunk = encode_chunk(
+            Some(b"dev-1"),
+            &[(b"task-1".as_slice(), a), (b"task-2".as_slice(), b)],
+        );
+
+        let sections = decode_chunk(&chunk).expect("decode");
+        assert_eq!(sections.len(), 2);
+
+        assert_eq!(sections[0].origin.as_ref(), b"task-1");
+        assert_eq!(sections[0].blocks.len(), 2);
+        match (&sections[0].blocks[0], &sections[0].blocks[1]) {
+            (ImportBlock::Event(e1), ImportBlock::Event(e2)) => {
+                assert_eq!(e1.version().as_u64(), 1);
+                assert_eq!(e1.payload(), b"a1");
+                assert_eq!(e2.metadata(), Some(b"m".as_slice()));
+                assert_eq!(e2.payload(), b"a2");
+            }
+            _ => panic!("expected two Event blocks"),
+        }
+
+        assert_eq!(sections[1].origin.as_ref(), b"task-2");
+        match &sections[1].blocks[0] {
+            ImportBlock::Event(e) => {
+                assert_eq!(e.schema_version(), 2);
+                assert_eq!(e.payload(), b"b1");
+            }
+            ImportBlock::Corrupt => panic!("expected Event"),
+        }
+    }
+
+    #[test]
+    fn decode_header_only_chunk_is_empty_vec() {
+        let chunk = encode_header(None).expect("header");
+        let sections = decode_chunk(&chunk).expect("decode");
+        assert!(sections.is_empty());
+    }
+
+    #[test]
+    fn decode_block_before_heading_is_malformed() {
+        let mut chunk = encode_header(None).expect("header").to_vec();
+        let event = persisted(1, 1, "E", None, b"x");
+        chunk.extend_from_slice(&encode_block(&event).expect("block"));
+        let err = decode_chunk(&chunk).expect_err("block before heading");
+        assert!(matches!(
+            err,
+            ChunkError::Malformed("block before section heading")
+        ));
+    }
+
+    #[test]
+    fn decode_empty_section_then_stream() {
+        let chunk = encode_chunk(
+            None,
+            &[
+                (b"empty".as_slice(), vec![]),
+                (b"real".as_slice(), vec![persisted(1, 1, "E", None, b"r")]),
+            ],
+        );
+        let sections = decode_chunk(&chunk).expect("decode");
+        assert_eq!(sections.len(), 2);
+        assert!(sections[0].blocks.is_empty());
+        assert_eq!(sections[0].origin.as_ref(), b"empty");
+        assert_eq!(sections[1].blocks.len(), 1);
     }
 }
