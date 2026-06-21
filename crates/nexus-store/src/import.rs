@@ -1452,4 +1452,142 @@ mod tests {
         assert_eq!(report.streams()[0].stream, tid("b"));
         assert_eq!(versions(&store, &tid("b")).await, vec![1, 2]);
     }
+
+    // ── Round-trip + idempotency (Card-1 export ↔ Card-2 import) ────────────
+
+    async fn export_section(store: &crate::testing::InMemoryStore, origin: &str) -> StreamSection {
+        use crate::export::EventExporter;
+        let blocks = store
+            .export_stream(&tid(origin), Version::INITIAL)
+            .await
+            .expect("export opens")
+            .map(|r| ImportBlock::Event(r.expect("no read error")))
+            .collect::<Vec<_>>()
+            .await;
+        section(origin, blocks)
+    }
+
+    #[tokio::test]
+    async fn export_then_import_round_trips_byte_equal_modulo_global_seq() {
+        use crate::import::EventImporter;
+        // Source store with two streams.
+        let source = crate::testing::InMemoryStore::new();
+        for n in 1..=3 {
+            source
+                .append(&tid("acct-1"), Version::new(n - 1), &[pending(n, b"a")])
+                .await
+                .expect("seed a");
+        }
+        source
+            .append(&tid("acct-2"), None, &[pending(1, b"b")])
+            .await
+            .expect("seed b");
+
+        let sections = vec![
+            export_section(&source, "acct-1").await,
+            export_section(&source, "acct-2").await,
+        ];
+
+        // Import into a FRESH store, identity routing.
+        let target = crate::testing::InMemoryStore::new();
+        // Advance the target's global_seq counter so imported events get DIFFERENT
+        // global_seqs than the source — makes the restamp observable (a bug that
+        // copied the source global_seq verbatim would now be caught).
+        target
+            .append(&tid("warmup"), None, &[pending(1, b"warmup")])
+            .await
+            .expect("warmup seed");
+        let report = target
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+        assert!(report.all_complete());
+
+        // Byte-equal modulo restamped global_seq: compare version/type/payload/
+        // metadata/schema for every event of every stream.
+        for origin in ["acct-1", "acct-2"] {
+            let src: Vec<PersistedEnvelope> = source
+                .read_stream(&tid(origin), Version::INITIAL)
+                .await
+                .expect("read")
+                .map(|r| r.expect("ok"))
+                .collect()
+                .await;
+            let dst: Vec<PersistedEnvelope> = target
+                .read_stream(&tid(origin), Version::INITIAL)
+                .await
+                .expect("read")
+                .map(|r| r.expect("ok"))
+                .collect()
+                .await;
+            assert_eq!(src.len(), dst.len(), "{origin} length");
+            for (s, d) in src.iter().zip(dst.iter()) {
+                assert_ne!(
+                    s.global_seq(),
+                    d.global_seq(),
+                    "{origin} global_seq must be restamped, not copied from source"
+                );
+                assert_eq!(s.version(), d.version(), "{origin} version");
+                assert_eq!(s.event_type(), d.event_type(), "{origin} type");
+                assert_eq!(s.payload(), d.payload(), "{origin} payload");
+                assert_eq!(s.metadata(), d.metadata(), "{origin} metadata");
+                assert_eq!(s.schema_version(), d.schema_version(), "{origin} schema");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reimport_same_chunk_is_idempotent_per_stream() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("a", vec![evt(1), evt(2), evt(3)])];
+
+        let first = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+        assert!(first.all_complete());
+
+        let second = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+        assert_eq!(
+            second.streams()[0].outcome,
+            StreamOutcome::Mismatch {
+                reached: None,
+                got: v(1)
+            }
+        );
+        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2, 3], "no dupes");
+    }
+
+    #[tokio::test]
+    async fn reimport_same_chunk_whole_chunk_aborts() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("a", vec![evt(1), evt(2)])];
+        store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect("first import ok");
+        let err = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect_err("re-import aborts");
+        match err {
+            ImportError::Aborted { stream, reason } => {
+                assert_eq!(stream, tid("a"));
+                assert_eq!(
+                    reason,
+                    AbortReason::Mismatch {
+                        expected: v(3),
+                        got: v(1)
+                    }
+                );
+            }
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2], "no dupes");
+    }
 }

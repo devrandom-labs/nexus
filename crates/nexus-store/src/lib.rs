@@ -127,7 +127,8 @@ pub use error::{AppendError, StoreError};
 pub use export::{EventExporter, StreamLister};
 #[cfg(feature = "import")]
 pub use import::{
-    AbortReason, Atomicity, EventImporter, ImportError, ImportReport, StreamOutcome, StreamReport,
+    AbortReason, Atomicity, EventImporter, ImportBlock, ImportError, ImportReport, StreamOutcome,
+    StreamReport, StreamSection,
 };
 pub use nexus::Version;
 #[cfg(feature = "projection")]
