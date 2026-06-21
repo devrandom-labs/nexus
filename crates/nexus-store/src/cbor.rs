@@ -764,6 +764,75 @@ mod tests {
         }
     }
 
+    // ── Task 10: Defensive fuzz (never-panic) + forward-compat unknown key ──
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn decode_chunk_never_panics_on_arbitrary_bytes(
+            bytes in proptest::collection::vec(any::<u8>(), 0..256),
+        ) {
+            let _ = decode_chunk(&bytes);
+        }
+
+        #[test]
+        fn decode_chunk_never_panics_on_valid_header_plus_garbage(
+            garbage in proptest::collection::vec(any::<u8>(), 0..128),
+        ) {
+            let mut v = encode_header(None).expect("header").to_vec();
+            v.extend_from_slice(&garbage);
+            let _ = decode_chunk(&v);
+        }
+    }
+
+    #[test]
+    fn body_with_unknown_extra_key_still_decodes_to_event() {
+        // Forward-compat: a future encoder adds key 5 without bumping the
+        // format version; this decoder must skip it.
+        let mut body = Vec::new();
+        {
+            let mut e = minicbor::Encoder::new(&mut body);
+            e.map(5)
+                .expect("map")
+                .u32(0)
+                .expect("k0")
+                .u64(3)
+                .expect("v0")
+                .u32(1)
+                .expect("k1")
+                .u32(1)
+                .expect("v1")
+                .u32(2)
+                .expect("k2")
+                .str("E")
+                .expect("v2")
+                .u32(4)
+                .expect("k4")
+                .bytes(b"data")
+                .expect("v4")
+                .u32(5)
+                .expect("k5")
+                .u32(999)
+                .expect("v5"); // unknown key
+        }
+        let block = BlockRepr {
+            crc: crc32c::crc32c(&body),
+            body: &body,
+        };
+        let mut chunk = encode_header(None).expect("header").to_vec();
+        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
+        let sections = decode_chunk(&chunk).expect("decode");
+        match &sections[0].blocks[0] {
+            ImportBlock::Event(e) => {
+                assert_eq!(e.version().as_u64(), 3);
+                assert_eq!(e.payload(), b"data");
+            }
+            ImportBlock::Corrupt => panic!("unknown key must be skipped, not corrupt"),
+        }
+    }
+
     // ── Task 7: Full pipeline — export → box → import ───────────────────────
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
