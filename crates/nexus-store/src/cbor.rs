@@ -502,4 +502,98 @@ mod tests {
         assert_eq!(sections[0].origin.as_ref(), b"empty");
         assert_eq!(sections[1].blocks.len(), 1);
     }
+
+    // ── Task 5: Defensive boundary — Corrupt vs Malformed ──────────────────
+
+    #[test]
+    fn flipped_body_byte_in_chunk_decodes_to_corrupt_block() {
+        let chunk = encode_chunk(
+            None,
+            &[(b"s".as_slice(), vec![persisted(1, 1, "E", None, b"hello")])],
+        );
+        let mut v = chunk.to_vec();
+        let last = v.len() - 1;
+        v[last] ^= 0xFF;
+        let sections = decode_chunk(&v).expect("framing intact");
+        assert_eq!(sections.len(), 1);
+        assert!(matches!(sections[0].blocks[0], ImportBlock::Corrupt));
+    }
+
+    #[test]
+    fn bad_magic_chunk_is_malformed() {
+        let mut v = encode_chunk(
+            None,
+            &[(b"s".as_slice(), vec![persisted(1, 1, "E", None, b"x")])],
+        )
+        .to_vec();
+        let pos = v.iter().position(|&b| b == b'n').expect("magic");
+        v[pos] = b'Z';
+        assert!(matches!(
+            decode_chunk(&v),
+            Err(ChunkError::Malformed("bad magic"))
+        ));
+    }
+
+    #[test]
+    fn unknown_format_version_is_malformed() {
+        let repr = HeaderRepr {
+            magic: MAGIC,
+            format_version: 2,
+            origin: None,
+        };
+        let bytes = minicbor::to_vec(&repr).expect("encode");
+        assert!(matches!(
+            decode_chunk(&bytes),
+            Err(ChunkError::Malformed("unknown format version"))
+        ));
+    }
+
+    #[test]
+    fn unexpected_top_level_item_is_malformed() {
+        let mut v = encode_header(None).expect("header").to_vec();
+        v.push(0x01); // CBOR uint 1 — neither map nor array
+        assert!(matches!(
+            decode_chunk(&v),
+            Err(ChunkError::Malformed("unexpected item type"))
+        ));
+    }
+
+    #[test]
+    fn crc_valid_but_body_invalid_is_malformed() {
+        // Craft a block whose body decodes to version 0 (illegal) with a
+        // MATCHING crc → proves crc-pass-body-fail => Malformed (not Corrupt).
+        let mut body = Vec::new();
+        {
+            let mut e = minicbor::Encoder::new(&mut body);
+            e.map(4)
+                .expect("map")
+                .u32(0)
+                .expect("k0")
+                .u64(0)
+                .expect("v0")
+                .u32(1)
+                .expect("k1")
+                .u32(1)
+                .expect("v1")
+                .u32(2)
+                .expect("k2")
+                .str("E")
+                .expect("v2")
+                .u32(4)
+                .expect("k4")
+                .bytes(b"")
+                .expect("v4");
+        }
+        let block = BlockRepr {
+            crc: crc32c::crc32c(&body),
+            body: &body,
+        };
+        let mut chunk = encode_header(None).expect("header").to_vec();
+        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
+        assert!(matches!(
+            decode_chunk(&chunk),
+            Err(ChunkError::Malformed(_))
+        ));
+    }
 }
