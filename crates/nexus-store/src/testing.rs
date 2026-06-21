@@ -507,6 +507,32 @@ impl RawEventStore for InMemoryStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// StreamLister — enumerate stream ids (export support, issue #145)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Enumerate the stream ids the store holds, for export.
+///
+/// Takes a single snapshot of the `streams` map under one lock (atomic — no
+/// torn view of the key set) and materializes the ids into a `stream::iter`
+/// cursor. `InMemoryStore` is a test store, so materializing all ids at once
+/// is acceptable; a real adapter (fjall, postgres) streams them lazily.
+#[cfg(feature = "export")]
+impl crate::export::StreamLister for InMemoryStore {
+    type StreamList = futures::stream::Iter<std::vec::IntoIter<Result<Bytes, InMemoryStoreError>>>;
+
+    async fn list_streams(&self) -> Result<Self::StreamList, Self::Error> {
+        let ids: Vec<Result<Bytes, InMemoryStoreError>> = {
+            let guard = self.streams.lock().await;
+            guard
+                .keys()
+                .map(|k| Ok(Bytes::copy_from_slice(k.as_bytes())))
+                .collect()
+        };
+        Ok(futures::stream::iter(ids))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // InMemorySubscriptionStream — Arc-owning subscription cursor
 // ═══════════════════════════════════════════════════════════════════════════
 

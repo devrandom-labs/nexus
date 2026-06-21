@@ -92,8 +92,6 @@ pub mod export;
 pub mod import;
 #[cfg(feature = "subscription")]
 pub mod notify;
-#[cfg(any(feature = "export", feature = "import"))]
-pub mod portable;
 #[cfg(feature = "projection")]
 pub mod projection;
 pub mod repository;
@@ -132,8 +130,6 @@ pub use import::{
     AbortReason, Atomicity, EventImporter, ImportError, ImportReport, StreamOutcome, StreamReport,
 };
 pub use nexus::Version;
-#[cfg(any(feature = "export", feature = "import"))]
-pub use portable::PortableEvent;
 #[cfg(feature = "projection")]
 pub use projection::Projector;
 pub use repository::{EventStore, Repository, ZeroCopyEventStore};

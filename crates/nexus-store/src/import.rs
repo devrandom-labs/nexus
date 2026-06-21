@@ -1,10 +1,16 @@
 //! Import contract — picky, per-stream, halt-not-skip.
 //!
-//! Import takes already-decoded [`PortableEvent`]s (the *box* — CBOR default
-//! or CESR — turns chunk bytes into them; import is box-agnostic) and places
-//! them onto caller-supplied target streams. The store's sequential-`append`
-//! version check does the hard work; import adds routing, a halt-on-trouble
-//! rule, and a per-stream report.
+//! Import takes already-decoded events (the *box* — CBOR default or CESR —
+//! turns chunk bytes into [`PersistedEnvelope`]s; import is box-agnostic) and
+//! places them onto caller-supplied target streams. The store's
+//! sequential-`append` version check does the hard work; import adds routing,
+//! a halt-on-trouble rule, and a per-stream report.
+//!
+//! Events carry no per-event stream id (export does no rewrite), so routing
+//! is driven by the **per-stream section** the box records: each section names
+//! its origin stream once, and import maps that to a target stream. The exact
+//! input shape (per-stream sections vs the provisional flat slice below) is
+//! finalized in the import-impl card; this module is the contract.
 //!
 //! Resolved semantics (issue #145 §5):
 //!
@@ -20,14 +26,14 @@
 //! - **Idempotency is a side-effect** of the version check — re-importing
 //!   already-present events is refused, with no dedup machinery.
 //!
-//! This module is the contract: the data types ([`PortableEvent`] outcomes,
+//! This module is the contract: the data types (the per-stream outcomes,
 //! the report, the error) and the [`EventImporter`] trait. The concrete
 //! ingest impl is a later card.
 
 use nexus::{Id, Version};
 use thiserror::Error;
 
-use crate::portable::PortableEvent;
+use crate::envelope::PersistedEnvelope;
 use crate::store::RawEventStore;
 
 /// Atomicity granularity for an import — a caller policy, not a format
@@ -168,26 +174,26 @@ pub enum ImportError<E, I> {
     VersionOverflow,
 }
 
-/// Place decoded [`PortableEvent`]s onto caller-routed target streams,
-/// picky per stream, halt-not-skip, under an [`Atomicity`] policy.
+/// Place decoded events onto caller-routed target streams, picky per stream,
+/// halt-not-skip, under an [`Atomicity`] policy.
 ///
-/// `route` maps a producer `stream_id` (the bytes on each [`PortableEvent`])
-/// to the receiver's target stream id `I` — this is where origin-namespacing
-/// (e.g. `task-123` → `phone:task-123`) happens; import holds no naming
-/// policy of its own.
+/// `route` maps a producer `stream_id` (recorded once per stream by the box,
+/// not carried on each event) to the receiver's target stream id `I` — this
+/// is where origin-namespacing (e.g. `task-123` → `phone:task-123`) happens;
+/// import holds no naming policy of its own.
 ///
 /// On success returns an [`ImportReport`] of per-stream outcomes (per-stream
 /// atomicity) or completes (whole-chunk). `Err` is reserved for
 /// whole-operation failures.
 ///
-/// NOTE: the precise input shape (a fallible stream surfacing per-block
-/// checksum failures vs the `&[PortableEvent]` slice here) is finalized in
-/// the import-impl card; this is the contract.
+/// NOTE: the precise input shape (per-stream sections surfacing per-block
+/// checksum failures vs the provisional `&[PersistedEnvelope]` slice here) is
+/// finalized in the import-impl card; this is the contract.
 pub trait EventImporter: RawEventStore {
     /// Import a chunk's decoded events.
     fn import<I, R>(
         &self,
-        events: &[PortableEvent],
+        events: &[PersistedEnvelope],
         route: R,
         atomicity: Atomicity,
     ) -> impl std::future::Future<Output = Result<ImportReport<I>, ImportError<Self::Error, I>>> + Send
@@ -199,7 +205,7 @@ pub trait EventImporter: RawEventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::envelope::{PendingEnvelope, PersistedEnvelope};
+    use crate::envelope::PendingEnvelope;
     use crate::error::AppendError;
     use crate::store::GlobalSeq;
     use static_assertions::assert_impl_all;
@@ -481,7 +487,7 @@ mod tests {
     impl EventImporter for NoopStore {
         fn import<I, R>(
             &self,
-            _events: &[PortableEvent],
+            _events: &[PersistedEnvelope],
             _route: R,
             _atomicity: Atomicity,
         ) -> impl std::future::Future<Output = Result<ImportReport<I>, ImportError<Self::Error, I>>> + Send
