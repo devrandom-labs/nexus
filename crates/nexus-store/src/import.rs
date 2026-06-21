@@ -585,6 +585,7 @@ mod tests {
     use crate::envelope::{PendingEnvelope, pending_envelope};
     use bytes::Bytes;
     use futures::StreamExt;
+    use proptest::prelude::*;
     use static_assertions::assert_impl_all;
     use std::error::Error as _;
     use std::sync::Arc;
@@ -1650,5 +1651,79 @@ mod tests {
             assert_eq!(*got, expected, "stream must be a gapless prefix from 1");
         }
         assert!(!final_versions.is_empty(), "some events landed");
+    }
+
+    // ── State-machine property test: PerStream import never gaps ────────────
+
+    // Model-based: a sequence of single-stream PerStream imports against one
+    // target. The model tracks the stream's next-expected version; each import
+    // offers a first version + a contiguous block count. Invariants: the
+    // reported outcome matches the model's picky rule, the stream never develops
+    // a gap, and what landed matches the report.
+    #[derive(Debug, Clone)]
+    enum Cmd {
+        // Offer `count` contiguous events starting at `first`.
+        Import { first: u64, count: u64 },
+    }
+
+    fn cmd_strategy() -> impl Strategy<Value = Cmd> {
+        // Boundary-inclusive: first ∈ {1,2,3}, count ∈ {1,2,3}.
+        (prop_oneof![Just(1u64), Just(2u64), Just(3u64)], 1u64..=3)
+            .prop_map(|(first, count)| Cmd::Import { first, count })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn state_machine_per_stream_never_gaps_and_report_matches_model(
+            cmds in proptest::collection::vec(cmd_strategy(), 1..12),
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("runtime");
+            rt.block_on(async {
+                let store = crate::testing::InMemoryStore::new();
+                let id = tid("m");
+                // Model: next expected version (1 = fresh).
+                let mut next: u64 = 1;
+
+                for cmd in cmds {
+                    let Cmd::Import { first, count } = cmd;
+                    let blocks: Vec<ImportBlock> =
+                        (first..first + count).map(evt).collect();
+                    let sections = vec![section("m", blocks)];
+                    let report = {
+                        use crate::import::EventImporter;
+                        store
+                            .import(&sections, identity_route, Atomicity::PerStream)
+                            .await
+                            .expect("import ok")
+                    };
+                    let outcome = report.streams()[0].outcome;
+
+                    if first == next {
+                        // Picky check passes: the whole contiguous run applies.
+                        let landed_last = first + count - 1;
+                        prop_assert_eq!(
+                            outcome,
+                            StreamOutcome::Complete { version: v(landed_last) }
+                        );
+                        next = landed_last + 1;
+                    } else {
+                        // Picky reject: nothing applied, model unchanged.
+                        prop_assert_eq!(
+                            outcome,
+                            StreamOutcome::Mismatch { reached: None, got: v(first) }
+                        );
+                    }
+
+                    // Invariant: the stream is ALWAYS a gapless prefix 1..next-1.
+                    let got = versions(&store, &id).await;
+                    let expected: Vec<u64> = (1..next).collect();
+                    prop_assert_eq!(got, expected);
+                }
+                Ok(())
+            })?;
+        }
     }
 }
