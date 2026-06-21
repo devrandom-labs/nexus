@@ -555,6 +555,7 @@ impl crate::import::AtomicAppend for InMemoryStore {
         // Phase 1 — validate every head and run shape; NO mutation.
         for (index, w) in writes.iter().enumerate() {
             let key = w.target.to_string();
+            // usize ≤ u64 on all supported (32/64-bit) targets; the map_err is an unreachable belt-and-braces guard, not a Rule-3 |_| discard of a meaningful error.
             let actual_raw = u64::try_from(guard.get(&key).map_or(0, Vec::len))
                 .map_err(|_| AtomicAppendError::Store(InMemoryStoreError::VersionOverflow))?;
             let expected_raw = w.expected_version.map_or(0, Version::as_u64);
@@ -596,6 +597,11 @@ impl crate::import::AtomicAppend for InMemoryStore {
             for env in &w.events {
                 let frame = encode_pending_to_frame(env, seq).map_err(|e| match e {
                     AppendError::Store(s) => AtomicAppendError::Store(s),
+                    // encode_pending_to_frame only ever returns AppendError::Store
+                    // (wire-format failure); it never does a head check and so can
+                    // never produce Conflict. Mapped defensively so the match is
+                    // exhaustive rather than relying on a private implementation
+                    // detail of encode_pending_to_frame.
                     AppendError::Conflict { .. } => {
                         AtomicAppendError::Store(InMemoryStoreError::VersionOverflow)
                     }

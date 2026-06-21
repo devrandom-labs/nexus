@@ -250,6 +250,9 @@ pub enum AtomicAppendError<E> {
 /// - Each write's `events` must be a contiguous run starting at
 ///   `expected_version + 1`. The caller (the importer's planner) guarantees
 ///   this; implementations validate defensively at their own boundary.
+/// - Targets must be **distinct** within one batch. The importer routes one
+///   section per origin, so this holds; an adapter must not silently accept
+///   two writes to the same stream in one call (it would create a gap).
 /// - On any failure, **no** write is applied.
 pub trait AtomicAppend: RawEventStore {
     /// Append every write atomically. See the trait contract.
@@ -469,11 +472,11 @@ where
     Ok(ImportReport::new(reports))
 }
 
-/// `WholeChunk` import — implemented in Task 5.
-#[allow(
-    clippy::unused_async,
-    reason = "stub; real body with .await lands in Task 5"
-)]
+/// [`WholeChunk`] import: all-or-nothing across every section. Any halt (corrupt
+/// block or internal gap) or head conflict aborts the whole chunk — nothing
+/// lands. First offender (section order, then block order) wins.
+///
+/// [`WholeChunk`]: Atomicity::WholeChunk
 async fn import_whole_chunk<S, I, R>(
     store: &S,
     sections: &[StreamSection],
@@ -484,9 +487,90 @@ where
     I: Id,
     R: Fn(&[u8]) -> I + Send,
 {
-    // Placeholder body — replaced in Task 5. Never exercised by Task 4 tests.
-    let _ = (store, sections, &route);
-    Ok(ImportReport::new(Vec::new()))
+    // Phase 1 — plan every section purely. Any halt is a hard abort here.
+    let mut writes: Vec<PlannedAppend<I>> = Vec::with_capacity(sections.len());
+    let mut firsts: Vec<Version> = Vec::with_capacity(sections.len());
+    let mut lasts: Vec<Version> = Vec::with_capacity(sections.len());
+    for section in sections {
+        let target = route(section.origin.as_ref());
+        let plan = match plan_section(section) {
+            Ok(plan) => plan,
+            Err(PlanError::VersionOverflow) => return Err(ImportError::VersionOverflow),
+        };
+        // Exhaustive: a future SectionPlan variant must be handled here (no `..`
+        // catch-all), matching import_per_stream's exhaustiveness.
+        let (first, expected_version, events, last, halt) = match plan {
+            SectionPlan::Empty => continue, // skip; no report entry
+            SectionPlan::FirstCorrupt => {
+                return Err(ImportError::Aborted {
+                    stream: target,
+                    reason: AbortReason::Corrupt,
+                });
+            }
+            SectionPlan::Run {
+                first,
+                expected_version,
+                events,
+                last,
+                halt,
+            } => (first, expected_version, events, last, halt),
+        };
+        match halt {
+            Halt::Complete => {}
+            Halt::Corrupt => {
+                return Err(ImportError::Aborted {
+                    stream: target,
+                    reason: AbortReason::Corrupt,
+                });
+            }
+            Halt::Gap { got } => {
+                let expected = last.next().ok_or(ImportError::VersionOverflow)?;
+                return Err(ImportError::Aborted {
+                    stream: target,
+                    reason: AbortReason::Mismatch { expected, got },
+                });
+            }
+        }
+        firsts.push(first);
+        lasts.push(last);
+        writes.push(PlannedAppend {
+            target,
+            expected_version,
+            events,
+        });
+    }
+
+    // Phase 2 — commit every clean run in one transaction.
+    match store.atomic_append_many(&writes).await {
+        Ok(()) => {
+            let reports = writes
+                .into_iter()
+                .zip(lasts)
+                .map(|(write, last)| StreamReport {
+                    stream: write.target,
+                    outcome: StreamOutcome::Complete { version: last },
+                })
+                .collect();
+            Ok(ImportReport::new(reports))
+        }
+        Err(AtomicAppendError::Conflict { index, actual }) => {
+            // `index` < writes.len() (== firsts.len()) by the primitive's
+            // Conflict contract; `firsts[index]` is the cached first version of
+            // the conflicting run (no events[0] indexing — honours the planner's
+            // `first` cache).
+            let got = firsts[index];
+            let stream = writes[index].target.clone();
+            let expected = match actual {
+                Some(head) => head.next().ok_or(ImportError::VersionOverflow)?,
+                None => Version::INITIAL,
+            };
+            Err(ImportError::Aborted {
+                stream,
+                reason: AbortReason::Mismatch { expected, got },
+            })
+        }
+        Err(AtomicAppendError::Store(error)) => Err(ImportError::Store(error)),
+    }
 }
 
 #[cfg(test)]
@@ -1195,5 +1279,177 @@ mod tests {
         assert!(matches!(err, ImportError::Store(_)));
         // No cross-stream rollback: section "a" stayed committed.
         assert_eq!(versions(&store.inner, &tid("a")).await, vec![1, 2]);
+    }
+
+    // ── EventImporter WholeChunk behavioral tests ────────────────────────────
+
+    #[tokio::test]
+    async fn whole_chunk_clean_commits_all_complete() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![
+            section("a", vec![evt(1), evt(2)]),
+            section("b", vec![evt(1)]),
+        ];
+        let report = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect("import ok");
+        assert!(report.all_complete());
+        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2]);
+        assert_eq!(versions(&store, &tid("b")).await, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn whole_chunk_corrupt_block_aborts_nothing_lands() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![
+            section("a", vec![evt(1), evt(2)]),               // would be fine
+            section("b", vec![evt(1), ImportBlock::Corrupt]), // bad block
+        ];
+        let err = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect_err("aborts");
+        match err {
+            ImportError::Aborted { stream, reason } => {
+                assert_eq!(stream, tid("b"));
+                assert_eq!(reason, AbortReason::Corrupt);
+            }
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+        // Atomicity: NOTHING landed — even the clean section "a" must be empty.
+        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &tid("b")).await, Vec::<u64>::new());
+    }
+
+    #[tokio::test]
+    async fn whole_chunk_internal_gap_aborts_mismatch() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("a", vec![evt(1), evt(2), evt(4)])];
+        let err = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect_err("aborts");
+        match err {
+            ImportError::Aborted { stream, reason } => {
+                assert_eq!(stream, tid("a"));
+                assert_eq!(
+                    reason,
+                    AbortReason::Mismatch {
+                        expected: v(3),
+                        got: v(4)
+                    }
+                );
+            }
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
+    }
+
+    #[tokio::test]
+    async fn whole_chunk_head_conflict_aborts_mismatch() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        for n in 1..=2 {
+            store
+                .append(&tid("a"), Version::new(n - 1), &[pending(n, b"seed")])
+                .await
+                .expect("seed");
+        }
+        let sections = vec![section("a", vec![evt(1), evt(2)])];
+        let err = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect_err("aborts");
+        match err {
+            ImportError::Aborted { stream, reason } => {
+                assert_eq!(stream, tid("a"));
+                // store head 2 → wanted v3 next; offered v1.
+                assert_eq!(
+                    reason,
+                    AbortReason::Mismatch {
+                        expected: v(3),
+                        got: v(1)
+                    }
+                );
+            }
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2], "unchanged");
+    }
+
+    #[tokio::test]
+    async fn whole_chunk_first_block_corrupt_aborts() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("a", vec![ImportBlock::Corrupt])];
+        let err = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect_err("aborts");
+        assert!(matches!(
+            err,
+            ImportError::Aborted { ref stream, reason: AbortReason::Corrupt } if *stream == tid("a")
+        ));
+    }
+
+    #[tokio::test]
+    async fn whole_chunk_conflict_on_later_section_reports_that_section() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        // Pre-seed "b" to v1 so the SECOND write conflicts (index 1), while "a"
+        // (index 0) would be fine — exercises index > 0 in the Conflict arm.
+        store
+            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .await
+            .expect("seed");
+        let sections = vec![
+            section("a", vec![evt(1), evt(2)]),
+            section("b", vec![evt(1)]),
+        ];
+        let err = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect_err("aborts");
+        match err {
+            ImportError::Aborted { stream, reason } => {
+                assert_eq!(
+                    stream,
+                    tid("b"),
+                    "must report the conflicting SECOND section"
+                );
+                // "b" head is 1 → wanted v2 next; offered v1.
+                assert_eq!(
+                    reason,
+                    AbortReason::Mismatch {
+                        expected: v(2),
+                        got: v(1)
+                    }
+                );
+            }
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+        // All-or-nothing: the clean section "a" must NOT have landed.
+        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &tid("b")).await, vec![1], "unchanged");
+    }
+
+    #[tokio::test]
+    async fn whole_chunk_empty_section_skipped_others_commit() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("empty", vec![]), section("b", vec![evt(1), evt(2)])];
+        let report = store
+            .import(&sections, identity_route, Atomicity::WholeChunk)
+            .await
+            .expect("import ok");
+        assert!(report.all_complete());
+        // The empty section produces NO report entry; only "b".
+        assert_eq!(report.streams().len(), 1);
+        assert_eq!(report.streams()[0].stream, tid("b"));
+        assert_eq!(versions(&store, &tid("b")).await, vec![1, 2]);
     }
 }
