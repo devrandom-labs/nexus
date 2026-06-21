@@ -587,6 +587,8 @@ mod tests {
     use futures::StreamExt;
     use static_assertions::assert_impl_all;
     use std::error::Error as _;
+    use std::sync::Arc;
+    use tokio::sync::Barrier;
 
     fn v(n: u64) -> Version {
         Version::new(n).expect("test version must be nonzero")
@@ -1589,5 +1591,64 @@ mod tests {
             other => panic!("expected Aborted, got {other:?}"),
         }
         assert_eq!(versions(&store, &tid("a")).await, vec![1, 2], "no dupes");
+    }
+
+    // ── Linearizability: concurrent import vs direct writer (CLAUDE rule 7 §4) ─
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn per_stream_import_concurrent_with_writer_surfaces_conflict_no_torn_stream() {
+        use crate::import::EventImporter;
+        // Two actors race to populate the SAME fresh target stream from v1:
+        // a direct writer (append v1..=N) and an importer (a v1..=N section).
+        // Exactly one wins the v1 slot; the other must surface a Mismatch (a
+        // conflict, never a silent retry — CLAUDE rule 5). The stream must end
+        // as a gapless prefix from v1, never torn.
+        let store = Arc::new(crate::testing::InMemoryStore::new());
+        let n = 50u64;
+        let barrier = Arc::new(Barrier::new(2));
+
+        let writer_store = Arc::clone(&store);
+        let writer_barrier = Arc::clone(&barrier);
+        let writer = tokio::spawn(async move {
+            writer_barrier.wait().await;
+            for vn in 1..=n {
+                // Conflicts are expected once the importer wins; ignore them.
+                let _ = writer_store
+                    .append(&tid("race"), Version::new(vn - 1), &[pending(vn, b"w")])
+                    .await;
+            }
+        });
+
+        let importer_store = Arc::clone(&store);
+        let importer_barrier = Arc::clone(&barrier);
+        let importer = tokio::spawn(async move {
+            importer_barrier.wait().await;
+            let blocks: Vec<ImportBlock> = (1..=n).map(evt).collect();
+            let sections = vec![section("race", blocks)];
+            importer_store
+                .import(&sections, identity_route, Atomicity::PerStream)
+                .await
+                .expect("import returns Ok (conflicts are per-stream outcomes)")
+        });
+
+        writer.await.expect("writer task");
+        let report = importer.await.expect("importer task");
+
+        // The importer's outcome is either Complete (it won v1) or Mismatch
+        // (the writer won) — never a partial/torn application.
+        let outcome = report.streams().first().map(|s| s.outcome);
+        match outcome {
+            Some(
+                StreamOutcome::Complete { .. } | StreamOutcome::Mismatch { reached: None, .. },
+            ) => {}
+            other => panic!("unexpected importer outcome: {other:?}"),
+        }
+
+        // Whatever the interleaving, the final stream is a gapless prefix from 1.
+        let final_versions = versions(&store, &tid("race")).await;
+        for (expected, got) in (1u64..).zip(final_versions.iter()) {
+            assert_eq!(*got, expected, "stream must be a gapless prefix from 1");
+        }
+        assert!(!final_versions.is_empty(), "some events landed");
     }
 }
