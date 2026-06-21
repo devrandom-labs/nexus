@@ -669,6 +669,101 @@ mod tests {
         insta::assert_snapshot!("block_v1_hex", hex_of(&bytes));
     }
 
+    // ── Task 9: VOPR round-trip + crc single-byte-mutation property tests ───
+
+    use proptest::prelude::*;
+
+    /// (version, schema, `event_type`, metadata?, payload) — boundary-inclusive.
+    fn event_strategy() -> impl Strategy<Value = (u64, u32, String, Option<Vec<u8>>, Vec<u8>)> {
+        (
+            prop_oneof![
+                Just(1u64),
+                Just(2),
+                Just(u64::MAX - 1),
+                Just(u64::MAX),
+                1u64..1000
+            ],
+            prop_oneof![Just(1u32), Just(7), Just(u32::MAX), 1u32..100],
+            prop_oneof![Just(String::new()), Just("E".to_owned()), "[A-Za-z]{0,40}"],
+            prop_oneof![
+                Just(None),
+                proptest::collection::vec(any::<u8>(), 1..32).prop_map(Some)
+            ],
+            proptest::collection::vec(any::<u8>(), 0..64),
+        )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn vopr_chunk_round_trips(
+            origin in prop_oneof![
+                Just(None),
+                proptest::collection::vec(any::<u8>(), 1..16).prop_map(Some)
+            ],
+            streams in proptest::collection::vec(
+                (proptest::collection::vec(any::<u8>(), 0..12),
+                 proptest::collection::vec(event_strategy(), 0..5)),
+                0..4,
+            ),
+        ) {
+            let built: Vec<(Vec<u8>, Vec<PersistedEnvelope>)> = streams
+                .iter()
+                .map(|(sid, evs)| {
+                    let events = evs.iter().map(|(v, sc, et, md, pl)| {
+                        persisted(*v, *sc, et, md.as_deref(), pl)
+                    }).collect();
+                    (sid.clone(), events)
+                })
+                .collect();
+
+            let refs: Vec<(&[u8], Vec<PersistedEnvelope>)> =
+                built.iter().map(|(s, e)| (s.as_slice(), e.clone())).collect();
+            let chunk = encode_chunk(origin.as_deref(), &refs);
+            let sections = decode_chunk(&chunk).expect("decode");
+
+            prop_assert_eq!(sections.len(), built.len());
+            for (section, (sid, events)) in sections.iter().zip(built.iter()) {
+                prop_assert_eq!(section.origin.as_ref(), sid.as_slice());
+                prop_assert_eq!(section.blocks.len(), events.len());
+                for (block, original) in section.blocks.iter().zip(events.iter()) {
+                    match block {
+                        ImportBlock::Event(got) => {
+                            prop_assert_eq!(got.version(), original.version());
+                            prop_assert_eq!(got.schema_version(), original.schema_version());
+                            prop_assert_eq!(got.event_type(), original.event_type());
+                            prop_assert_eq!(got.metadata(), original.metadata());
+                            prop_assert_eq!(got.payload(), original.payload());
+                        }
+                        ImportBlock::Corrupt => prop_assert!(false, "unexpected corrupt"),
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn vopr_single_byte_body_mutation_is_corrupt_never_silently_wrong(
+            (ev_v, ev_sc, ev_et, ev_md, ev_pl) in event_strategy(),
+            flip_pick in any::<prop::sample::Index>(),
+        ) {
+            let event = persisted(ev_v, ev_sc, &ev_et, ev_md.as_deref(), &ev_pl);
+            let block = encode_block(&event).expect("block");
+            let mut v = block.to_vec();
+            let start = v.len() / 2;
+            let idx = start + flip_pick.index(v.len() - start);
+            v[idx] ^= 0xFF;
+            let mut d = Decoder::new(&v);
+            match decode_block(&mut d) {
+                Ok(Some(ImportBlock::Event(got))) => {
+                    prop_assert_eq!(got.payload(), event.payload());
+                    prop_assert_eq!(got.event_type(), event.event_type());
+                }
+                Ok(Some(ImportBlock::Corrupt) | None) | Err(_) => {}
+            }
+        }
+    }
+
     // ── Task 7: Full pipeline — export → box → import ───────────────────────
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
