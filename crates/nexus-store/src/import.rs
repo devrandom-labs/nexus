@@ -8,9 +8,8 @@
 //!
 //! Events carry no per-event stream id (export does no rewrite), so routing
 //! is driven by the **per-stream section** the box records: each section names
-//! its origin stream once, and import maps that to a target stream. The exact
-//! input shape (per-stream sections vs the provisional flat slice below) is
-//! finalized in the import-impl card; this module is the contract.
+//! its origin stream once, and import maps that to a target stream via the
+//! caller-supplied `route` closure.
 //!
 //! Resolved semantics (issue #145 §5):
 //!
@@ -30,6 +29,7 @@
 //! the report, the error) and the [`EventImporter`] trait. The concrete
 //! ingest impl is a later card.
 
+use bytes::Bytes;
 use nexus::{Id, Version};
 use thiserror::Error;
 
@@ -174,6 +174,30 @@ pub enum ImportError<E, I> {
     VersionOverflow,
 }
 
+/// One origin stream's events, as decoded by the backup box (Card 3).
+///
+/// The origin stream id is recorded **once** per section (export stamps no
+/// per-event id); the importer maps it to a target via the `route` closure.
+#[derive(Debug, Clone)]
+pub struct StreamSection {
+    /// The origin stream id, exactly as the box recorded it.
+    pub origin: Bytes,
+    /// The section's blocks, in version order as the box laid them down.
+    pub blocks: Vec<ImportBlock>,
+}
+
+/// One block within a [`StreamSection`].
+#[derive(Debug, Clone)]
+pub enum ImportBlock {
+    /// A block whose per-block checksum passed and decoded to an event.
+    Event(PersistedEnvelope),
+    /// A block whose per-block checksum **failed**. Carries nothing: a failed
+    /// checksum means the decoded header — including its version — cannot be
+    /// trusted, which is exactly why [`StreamOutcome::Corrupt`] omits the
+    /// version.
+    Corrupt,
+}
+
 /// One planned per-stream write for [`AtomicAppend::atomic_append_many`].
 ///
 /// `events` is a contiguous, version-preserving run; `expected_version` is the
@@ -237,23 +261,20 @@ pub trait AtomicAppend: RawEventStore {
 /// Place decoded events onto caller-routed target streams, picky per stream,
 /// halt-not-skip, under an [`Atomicity`] policy.
 ///
-/// `route` maps a producer `stream_id` (recorded once per stream by the box,
-/// not carried on each event) to the receiver's target stream id `I` — this
-/// is where origin-namespacing (e.g. `task-123` → `phone:task-123`) happens;
-/// import holds no naming policy of its own.
+/// Input is per-stream [`StreamSection`]s carrying [`ImportBlock`]s. Each
+/// section's origin stream id (recorded once by the box — export stamps no
+/// per-event id) is mapped to the receiver's target stream id `I` by `route`
+/// (e.g. `task-123` → `phone:task-123`); import holds no naming policy of its
+/// own.
 ///
 /// On success returns an [`ImportReport`] of per-stream outcomes (per-stream
 /// atomicity) or completes (whole-chunk). `Err` is reserved for
 /// whole-operation failures.
-///
-/// NOTE: the precise input shape (per-stream sections surfacing per-block
-/// checksum failures vs the provisional `&[PersistedEnvelope]` slice here) is
-/// finalized in the import-impl card; this is the contract.
-pub trait EventImporter: RawEventStore {
-    /// Import a chunk's decoded events.
+pub trait EventImporter: RawEventStore + AtomicAppend {
+    /// Import per-stream sections onto caller-routed target streams.
     fn import<I, R>(
         &self,
-        events: &[PersistedEnvelope],
+        sections: &[StreamSection],
         route: R,
         atomicity: Atomicity,
     ) -> impl std::future::Future<Output = Result<ImportReport<I>, ImportError<Self::Error, I>>> + Send
@@ -272,8 +293,6 @@ pub trait EventImporter: RawEventStore {
 mod tests {
     use super::*;
     use crate::envelope::{PendingEnvelope, pending_envelope};
-    use crate::error::AppendError;
-    use crate::store::GlobalSeq;
     use bytes::Bytes;
     use futures::StreamExt;
     use static_assertions::assert_impl_all;
@@ -506,68 +525,6 @@ mod tests {
         };
         assert!(aborted.source().is_none());
     }
-
-    // ── EventImporter trait: associated-type / supertrait surface compiles ───
-    //
-    // No behavioral test — the concrete ingest impl is a later card (import
-    // card). This tiny no-op impl exists ONLY to pin the frozen trait surface:
-    // it forces `import`'s exact signature (generic `I: Id`, `R: Fn(&[u8]) -> I
-    // + Send`, the `Send` future, the `ImportReport`/`ImportError` return
-    // shape) and the `RawEventStore` supertrait to compile. The import card
-    // will replace this scaffold with the real impl (and its behavioral tests).
-
-    #[derive(Debug, Error)]
-    #[error("noop")]
-    struct NoopError;
-
-    struct NoopStore;
-
-    impl RawEventStore for NoopStore {
-        type Error = NoopError;
-        type Stream = futures::stream::Empty<Result<PersistedEnvelope, NoopError>>;
-        type AllStream = futures::stream::Empty<Result<PersistedEnvelope, NoopError>>;
-
-        fn append(
-            &self,
-            _id: &impl Id,
-            _expected_version: Option<Version>,
-            _envelopes: &[PendingEnvelope],
-        ) -> impl std::future::Future<Output = Result<(), AppendError<NoopError>>> + Send {
-            std::future::ready(Ok(()))
-        }
-
-        fn read_stream(
-            &self,
-            _id: &impl Id,
-            _from: Version,
-        ) -> impl std::future::Future<Output = Result<Self::Stream, NoopError>> + Send {
-            std::future::ready(Ok(futures::stream::empty()))
-        }
-
-        fn read_all(
-            &self,
-            _from: GlobalSeq,
-        ) -> impl std::future::Future<Output = Result<Self::AllStream, NoopError>> + Send {
-            std::future::ready(Ok(futures::stream::empty()))
-        }
-    }
-
-    impl EventImporter for NoopStore {
-        fn import<I, R>(
-            &self,
-            _events: &[PersistedEnvelope],
-            _route: R,
-            _atomicity: Atomicity,
-        ) -> impl std::future::Future<Output = Result<ImportReport<I>, ImportError<Self::Error, I>>> + Send
-        where
-            I: Id,
-            R: Fn(&[u8]) -> I + Send,
-        {
-            std::future::ready(Ok(ImportReport::new(Vec::new())))
-        }
-    }
-
-    assert_impl_all!(NoopStore: EventImporter, RawEventStore);
 
     // ── AtomicAppend helpers and tests ───────────────────────────────────────
 
