@@ -34,6 +34,7 @@ use nexus::{Id, Version};
 use thiserror::Error;
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
+use crate::error::AppendError;
 use crate::store::RawEventStore;
 
 /// Atomicity granularity for an import — a caller policy, not a format
@@ -270,6 +271,10 @@ pub trait AtomicAppend: RawEventStore {
 /// On success returns an [`ImportReport`] of per-stream outcomes (per-stream
 /// atomicity) or completes (whole-chunk). `Err` is reserved for
 /// whole-operation failures.
+///
+/// [`Atomicity::PerStream`] is best-effort per stream: a store failure stops
+/// the import and surfaces an error, but sections already committed are not
+/// rolled back. Empty sections produce no report entry.
 pub trait EventImporter: RawEventStore + AtomicAppend {
     /// Import per-stream sections onto caller-routed target streams.
     fn import<I, R>(
@@ -288,11 +293,6 @@ pub trait EventImporter: RawEventStore + AtomicAppend {
 // =============================================================================
 
 /// Where a section's contiguous run stopped.
-#[allow(
-    dead_code,
-    reason = "variants and fields read by the EventImporter impls in tasks 4–5; \
-              added here in task 3 for TDD ordering"
-)]
 #[derive(Debug)]
 enum Halt {
     /// Every block in the section was consumed.
@@ -304,11 +304,6 @@ enum Halt {
 }
 
 /// The store-independent plan for one [`StreamSection`].
-#[allow(
-    dead_code,
-    reason = "variants and fields read by the EventImporter impls in tasks 4–5; \
-              added here in task 3 for TDD ordering"
-)]
 #[derive(Debug)]
 enum SectionPlan {
     /// No blocks — nothing to do, no report entry.
@@ -344,11 +339,6 @@ enum PlanError {
 
 /// Build a section's plan: decode the first block, accumulate the longest
 /// contiguous run, and record why it stopped. Pure — no store access.
-#[allow(
-    dead_code,
-    reason = "called by the EventImporter blanket impls in tasks 4–5; \
-              added here in task 3 for TDD ordering"
-)]
 fn plan_section(section: &StreamSection) -> Result<SectionPlan, PlanError> {
     let mut blocks = section.blocks.iter();
     let Some(first_block) = blocks.next() else {
@@ -392,6 +382,111 @@ fn plan_section(section: &StreamSection) -> Result<SectionPlan, PlanError> {
         last,
         halt,
     })
+}
+
+// =============================================================================
+// Blanket EventImporter impl
+// =============================================================================
+
+impl<S: RawEventStore + AtomicAppend> EventImporter for S {
+    async fn import<I, R>(
+        &self,
+        sections: &[StreamSection],
+        route: R,
+        atomicity: Atomicity,
+    ) -> Result<ImportReport<I>, ImportError<Self::Error, I>>
+    where
+        I: Id,
+        R: Fn(&[u8]) -> I + Send,
+    {
+        match atomicity {
+            Atomicity::PerStream => import_per_stream(self, sections, route).await,
+            Atomicity::WholeChunk => import_whole_chunk(self, sections, route).await,
+        }
+    }
+}
+
+/// `PerStream` import: each section its own `append` transaction. A bad block
+/// stops only its stream; the rest commit. Always returns `Ok(report)` unless
+/// a genuine store error or version overflow occurs.
+///
+/// On `Err(ImportError::Store)` or `Err(ImportError::VersionOverflow)`,
+/// sections already appended remain committed — `PerStream` performs no
+/// cross-stream rollback, and the partial report is discarded with the error.
+///
+/// An empty section (no blocks) produces no `StreamReport` entry; a caller
+/// correlating sections to report entries must not assume positional
+/// correspondence.
+async fn import_per_stream<S, I, R>(
+    store: &S,
+    sections: &[StreamSection],
+    route: R,
+) -> Result<ImportReport<I>, ImportError<S::Error, I>>
+where
+    S: RawEventStore,
+    I: Id,
+    R: Fn(&[u8]) -> I + Send,
+{
+    let mut reports = Vec::with_capacity(sections.len());
+    for section in sections {
+        let target = route(section.origin.as_ref());
+        let plan = match plan_section(section) {
+            Ok(plan) => plan,
+            Err(PlanError::VersionOverflow) => return Err(ImportError::VersionOverflow),
+        };
+        let outcome = match plan {
+            SectionPlan::Empty => continue,
+            SectionPlan::FirstCorrupt => StreamOutcome::Corrupt { reached: None },
+            SectionPlan::Run {
+                first,
+                expected_version,
+                events,
+                last,
+                halt,
+            } => match store.append(&target, expected_version, &events).await {
+                Ok(()) => match halt {
+                    Halt::Complete => StreamOutcome::Complete { version: last },
+                    Halt::Corrupt => StreamOutcome::Corrupt {
+                        reached: Some(last),
+                    },
+                    Halt::Gap { got } => StreamOutcome::Mismatch {
+                        reached: Some(last),
+                        got,
+                    },
+                },
+                Err(AppendError::Conflict { .. }) => StreamOutcome::Mismatch {
+                    reached: None,
+                    got: first,
+                },
+                Err(AppendError::Store(error)) => return Err(ImportError::Store(error)),
+            },
+        };
+        reports.push(StreamReport {
+            stream: target,
+            outcome,
+        });
+    }
+    Ok(ImportReport::new(reports))
+}
+
+/// `WholeChunk` import — implemented in Task 5.
+#[allow(
+    clippy::unused_async,
+    reason = "stub; real body with .await lands in Task 5"
+)]
+async fn import_whole_chunk<S, I, R>(
+    store: &S,
+    sections: &[StreamSection],
+    route: R,
+) -> Result<ImportReport<I>, ImportError<S::Error, I>>
+where
+    S: RawEventStore + AtomicAppend,
+    I: Id,
+    R: Fn(&[u8]) -> I + Send,
+{
+    // Placeholder body — replaced in Task 5. Never exercised by Task 4 tests.
+    let _ = (store, sections, &route);
+    Ok(ImportReport::new(Vec::new()))
 }
 
 #[cfg(test)]
@@ -874,5 +969,231 @@ mod tests {
             }
             other => panic!("expected Run, got {other:?}"),
         }
+    }
+
+    // ── EventImporter PerStream behavioral tests ─────────────────────────────
+
+    fn identity_route(origin: &[u8]) -> Tid {
+        Tid(String::from_utf8(origin.to_vec()).expect("utf8 origin"))
+    }
+
+    async fn versions(store: &crate::testing::InMemoryStore, id: &Tid) -> Vec<u64> {
+        store
+            .read_stream(id, Version::INITIAL)
+            .await
+            .expect("read opens")
+            .map(|r| r.expect("no read error").version().as_u64())
+            .collect()
+            .await
+    }
+
+    #[tokio::test]
+    async fn per_stream_clean_multi_stream_all_complete() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![
+            section("a", vec![evt(1), evt(2), evt(3)]),
+            section("b", vec![evt(1), evt(2)]),
+        ];
+        let report = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+
+        assert!(report.all_complete());
+        assert_eq!(report.streams().len(), 2);
+        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2, 3]);
+        assert_eq!(versions(&store, &tid("b")).await, vec![1, 2]);
+        assert_eq!(
+            report.streams()[0].outcome,
+            StreamOutcome::Complete { version: v(3) }
+        );
+    }
+
+    #[tokio::test]
+    async fn per_stream_partial_overlap_is_picky_rejected() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        for n in 1..=3 {
+            store
+                .append(&tid("a"), Version::new(n - 1), &[pending(n, b"seed")])
+                .await
+                .expect("seed");
+        }
+        let sections = vec![section("a", vec![evt(2), evt(3), evt(4), evt(5)])];
+        let report = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+
+        assert_eq!(
+            report.streams()[0].outcome,
+            StreamOutcome::Mismatch {
+                reached: None,
+                got: v(2)
+            }
+        );
+        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn per_stream_internal_gap_applies_prefix_then_halts() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("a", vec![evt(1), evt(2), evt(4)])];
+        let report = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+
+        assert_eq!(
+            report.streams()[0].outcome,
+            StreamOutcome::Mismatch {
+                reached: Some(v(2)),
+                got: v(4)
+            }
+        );
+        assert_eq!(
+            versions(&store, &tid("a")).await,
+            vec![1, 2],
+            "v4 held back"
+        );
+    }
+
+    #[tokio::test]
+    async fn per_stream_mid_section_corrupt_applies_prefix_then_corrupt() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section(
+            "a",
+            vec![evt(1), evt(2), ImportBlock::Corrupt, evt(3)],
+        )];
+        let report = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+
+        assert_eq!(
+            report.streams()[0].outcome,
+            StreamOutcome::Corrupt {
+                reached: Some(v(2))
+            }
+        );
+        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn per_stream_first_block_corrupt_reaches_none() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("a", vec![ImportBlock::Corrupt, evt(1)])];
+        let report = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+        assert_eq!(
+            report.streams()[0].outcome,
+            StreamOutcome::Corrupt { reached: None }
+        );
+        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
+    }
+
+    #[tokio::test]
+    async fn per_stream_empty_chunk_is_empty_report() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let report = store
+            .import(&[], identity_route, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+        assert!(report.streams().is_empty());
+        assert!(report.all_complete());
+    }
+
+    #[tokio::test]
+    async fn per_stream_version_overflow_surfaces_error() {
+        use crate::import::EventImporter;
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![section("a", vec![evt(u64::MAX), evt(1)])];
+        let err = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect_err("overflow");
+        assert!(matches!(err, ImportError::VersionOverflow));
+    }
+
+    // ── FailingAppendStore — test-only store for exercising Store-error arm ──
+
+    /// Test-only store that delegates to `InMemoryStore` but fails `append`
+    /// (with a Store error) for one target stream — the only way to exercise
+    /// `import_per_stream`'s `AppendError::Store` arm, which `InMemoryStore`
+    /// alone cannot produce.
+    struct FailingAppendStore {
+        inner: crate::testing::InMemoryStore,
+        fail_on: String,
+    }
+
+    impl crate::store::RawEventStore for FailingAppendStore {
+        type Error = crate::testing::InMemoryStoreError;
+        type Stream = crate::testing::InMemoryStream;
+        type AllStream = crate::testing::InMemoryStream;
+
+        async fn append(
+            &self,
+            id: &impl nexus::Id,
+            expected_version: Option<Version>,
+            envelopes: &[crate::envelope::PendingEnvelope],
+        ) -> Result<(), AppendError<Self::Error>> {
+            if id.to_string() == self.fail_on {
+                return Err(AppendError::Store(
+                    crate::testing::InMemoryStoreError::VersionOverflow,
+                ));
+            }
+            self.inner.append(id, expected_version, envelopes).await
+        }
+
+        async fn read_stream(
+            &self,
+            id: &impl nexus::Id,
+            from: Version,
+        ) -> Result<Self::Stream, Self::Error> {
+            self.inner.read_stream(id, from).await
+        }
+
+        async fn read_all(
+            &self,
+            from: crate::store::GlobalSeq,
+        ) -> Result<Self::AllStream, Self::Error> {
+            self.inner.read_all(from).await
+        }
+    }
+
+    impl crate::import::AtomicAppend for FailingAppendStore {
+        async fn atomic_append_many<I: nexus::Id>(
+            &self,
+            writes: &[crate::import::PlannedAppend<I>],
+        ) -> Result<(), crate::import::AtomicAppendError<Self::Error>> {
+            self.inner.atomic_append_many(writes).await
+        }
+    }
+
+    #[tokio::test]
+    async fn per_stream_store_error_propagates_and_keeps_prior_commits() {
+        use crate::import::EventImporter;
+        let store = FailingAppendStore {
+            inner: crate::testing::InMemoryStore::new(),
+            fail_on: "b".to_owned(),
+        };
+        let sections = vec![
+            section("a", vec![evt(1), evt(2)]), // commits
+            section("b", vec![evt(1)]),         // append fails with Store
+        ];
+        let err = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect_err("store error must surface");
+        assert!(matches!(err, ImportError::Store(_)));
+        // No cross-stream rollback: section "a" stayed committed.
+        assert_eq!(versions(&store.inner, &tid("a")).await, vec![1, 2]);
     }
 }
