@@ -283,6 +283,8 @@ const fn check_range(range: &Range<u32>, len: usize) -> Result<(), EnvelopeError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::envelope::PersistedEnvelope;
+    use crate::store::GlobalSeq;
     use proptest::prelude::*;
     use static_assertions::assert_impl_all;
 
@@ -576,6 +578,32 @@ mod tests {
     }
 
     #[test]
+    fn event_type_cap_uses_range_length_not_endpoint_sum() {
+        // Mutation-testing pin (cargo-mutants surfaced this gap): the cap check
+        // is on `event_type_range.end - event_type_range.start`, NOT `+`. Every
+        // other test starts the event_type range at 0, where `end - 0 == end +
+        // 0`, so none can tell the operators apart. Here start > 0 and the
+        // length (end - start = 30_000) is WITHIN the cap, while the endpoint
+        // sum (end + start = 110_000) EXCEEDS it — so a `- → +` mutant would
+        // wrongly reject this valid event, and the `.expect` below catches it.
+        let start: u32 = 40_000;
+        let end: u32 = 70_000;
+        let buf_len = usize::try_from(end).expect("70_000 fits usize");
+        let value = Bytes::from(vec![b'A'; buf_len]);
+        let event = PortableEvent::try_new(
+            Bytes::from_static(b"sid"),
+            Version::INITIAL,
+            value,
+            SchemaVersion::INITIAL,
+            start..end,
+            0..0,
+            None,
+        )
+        .expect("event_type length 30_000 is within MAX_EVENT_TYPE_LEN (65_535)");
+        assert_eq!(event.event_type().len(), 30_000);
+    }
+
+    #[test]
     fn rejects_empty_metadata_range_with_some() {
         let value = Bytes::from_static(b"TYPEpayload");
         let err = PortableEvent::try_new(
@@ -720,6 +748,11 @@ mod tests {
     // buffer is itself > 4 GiB. The cap is mirrored from the `Metadata`
     // newtype (see value.rs, which makes the same impracticality note for the
     // 4 GiB boundary). Covered structurally, not by allocation.
+    //
+    // cargo-mutants confirms this empirically: the `> → ==` and `> → >=`
+    // mutants on the metadata-cap comparison both SURVIVE — not a test gap but
+    // equivalent mutants, since no feasible input reaches that branch. They are
+    // the only two unkillable mutants in this file and are expected.
 
     // ── stream_id carried verbatim; global_seq structurally absent ──────────
 
@@ -943,6 +976,147 @@ mod tests {
                 prop_assert!(event.metadata().is_none());
                 prop_assert!(event.metadata_bytes().is_none());
                 prop_assert!(event.metadata_value().is_none());
+            }
+        }
+    }
+
+    // ── Differential oracle: PortableEvent ≡ PersistedEnvelope validation ────
+    //
+    // The module header claims PortableEvent is "a faithful copy of
+    // PersistedEnvelope's representation" minus global_seq plus stream_id —
+    // the two validators are literal copies. PersistedEnvelope is therefore a
+    // ready-made oracle: for the SAME (value, ranges, schema, version) both
+    // must accept/reject identically, reject with the same error variant, and
+    // expose byte-identical event_type/payload/metadata/schema/version. If a
+    // future edit drifts one validator from the other, this test breaks.
+
+    /// Arbitrary `u32` range over (and past) a ~256-byte buffer: includes
+    /// in-bounds, at-boundary, inverted (start > end), and past-end cases.
+    fn arbitrary_range() -> impl Strategy<Value = Range<u32>> {
+        (0u32..=260, 0u32..=260).prop_map(|(start, end)| start..end)
+    }
+
+    fn arbitrary_optional_range() -> impl Strategy<Value = Option<Range<u32>>> {
+        prop_oneof![Just(None), arbitrary_range().prop_map(Some)]
+    }
+
+    proptest! {
+        #[test]
+        fn matches_persisted_envelope_accept_reject_and_views(
+            value_bytes in proptest::collection::vec(any::<u8>(), 0..256),
+            event_type_range in arbitrary_range(),
+            payload_range in arbitrary_range(),
+            metadata_range in arbitrary_optional_range(),
+            version_raw in boundary_u64(),
+            schema_raw in boundary_u32_nonzero(),
+        ) {
+            let version = v(version_raw);
+            let schema = sv(schema_raw);
+            let value = Bytes::from(value_bytes);
+            let global_seq = GlobalSeq::new(1).expect("nonzero");
+
+            let portable = PortableEvent::try_new(
+                Bytes::from_static(b"sid"),
+                version,
+                value.clone(),
+                schema,
+                event_type_range.clone(),
+                payload_range.clone(),
+                metadata_range.clone(),
+            );
+            let persisted = PersistedEnvelope::try_new(
+                version,
+                global_seq,
+                value,
+                schema,
+                event_type_range,
+                payload_range,
+                metadata_range,
+            );
+
+            // Accept/reject parity.
+            prop_assert_eq!(portable.is_ok(), persisted.is_ok());
+
+            match (portable, persisted) {
+                (Ok(p), Ok(q)) => {
+                    prop_assert_eq!(p.event_type(), q.event_type());
+                    prop_assert_eq!(p.payload(), q.payload());
+                    prop_assert_eq!(p.metadata(), q.metadata());
+                    prop_assert_eq!(p.schema_version(), q.schema_version());
+                    prop_assert_eq!(p.version(), q.version());
+                }
+                (Err(p), Err(q)) => {
+                    // Same failure domain (EnvelopeError carries a non-Eq
+                    // Utf8Error, so compare by discriminant).
+                    prop_assert_eq!(
+                        std::mem::discriminant(&p),
+                        std::mem::discriminant(&q),
+                    );
+                }
+                _ => prop_assert!(false, "accept/reject parity already checked"),
+            }
+        }
+    }
+
+    // ── Adversarial robustness: try_new is fed UNTRUSTED decoder output ──────
+    //
+    // import.rs's header: the box decoder turns untrusted chunk bytes into
+    // PortableEvents via try_new. So try_new must be panic-free for ANY
+    // (value, ranges) and either return Ok or a KNOWN EnvelopeError — never a
+    // panic, and (critically) never an Ok whose unsafe accessors are unsound.
+    // The exhaustive Err match has no catch-all, so a new variant is a compile
+    // error here — pinning the rejection surface.
+
+    proptest! {
+        #[test]
+        fn try_new_never_panics_and_accepted_events_have_sound_accessors(
+            stream_id in proptest::collection::vec(any::<u8>(), 0..32),
+            value_bytes in proptest::collection::vec(any::<u8>(), 0..256),
+            event_type_range in arbitrary_range(),
+            payload_range in arbitrary_range(),
+            metadata_range in arbitrary_optional_range(),
+            version_raw in boundary_u64(),
+            schema_raw in boundary_u32_nonzero(),
+        ) {
+            let result = PortableEvent::try_new(
+                Bytes::from(stream_id),
+                v(version_raw),
+                Bytes::from(value_bytes),
+                sv(schema_raw),
+                event_type_range,
+                payload_range,
+                metadata_range,
+            );
+
+            match result {
+                Ok(event) => {
+                    // Every accessor must be callable without panic/UB. The
+                    // event_type() / *_value() paths run `unsafe`
+                    // from_utf8_unchecked / from_validated_bytes — under Miri
+                    // this proves their preconditions held for fuzzed input.
+                    let et = event.event_type();
+                    prop_assert!(std::str::from_utf8(et.as_bytes()).is_ok());
+                    let _ = event.payload();
+                    let _ = event.metadata();
+                    let _ = event.event_type_value();
+                    let _ = event.payload_value();
+                    let _ = event.metadata_value();
+                    let _ = event.event_type_bytes();
+                    let _ = event.payload_bytes();
+                    let _ = event.metadata_bytes();
+                }
+                Err(err) => {
+                    // Exhaustive — no `_` arm. A new EnvelopeError variant must
+                    // be classified here, not silently absorbed.
+                    match err {
+                        EnvelopeError::RangeOutOfBounds { .. }
+                        | EnvelopeError::InvalidUtf8 { .. }
+                        | EnvelopeError::EventTypeRangeTooLong { .. }
+                        | EnvelopeError::MetadataRangeTooLong { .. }
+                        | EnvelopeError::MetadataRangeEmpty
+                        | EnvelopeError::Value(_) => {}
+                    }
+                }
             }
         }
     }
