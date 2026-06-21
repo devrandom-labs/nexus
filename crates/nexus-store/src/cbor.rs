@@ -596,4 +596,48 @@ mod tests {
             Err(ChunkError::Malformed(_))
         ));
     }
+
+    // ── Task 6: Lifecycle — incremental append / truncation / valid prefix ──
+
+    /// The cumulative byte length after the header + heading + first N blocks.
+    fn prefix_len_after_n_blocks(
+        stream_id: &[u8],
+        events: &[PersistedEnvelope],
+        n: usize,
+    ) -> usize {
+        let mut len = encode_header(None).expect("header").len();
+        len += encode_section_heading(stream_id).expect("heading").len();
+        for e in events.iter().take(n) {
+            len += encode_block(e).expect("block").len();
+        }
+        len
+    }
+
+    #[test]
+    fn every_block_boundary_prefix_is_valid() {
+        let events: Vec<_> = (1..=4).map(|v| persisted(v, 1, "E", None, b"p")).collect();
+        let chunk = encode_chunk(None, &[(b"s".as_slice(), events.clone())]);
+        for n in 0..=events.len() {
+            let cut = prefix_len_after_n_blocks(b"s", &events, n);
+            let sections = decode_chunk(&chunk[..cut]).expect("prefix valid");
+            let got = sections.first().map_or(0, |s| s.blocks.len());
+            assert_eq!(got, n, "prefix after {n} blocks must decode to {n} blocks");
+        }
+    }
+
+    #[test]
+    fn torn_final_block_is_dropped_earlier_survive() {
+        let events: Vec<_> = (1..=3)
+            .map(|v| persisted(v, 1, "E", None, b"payload"))
+            .collect();
+        let chunk = encode_chunk(None, &[(b"s".as_slice(), events)]);
+        let sections = decode_chunk(&chunk[..chunk.len() - 1]).expect("valid prefix");
+        assert_eq!(sections[0].blocks.len(), 2, "torn 3rd block dropped");
+        assert!(matches!(sections[0].blocks[0], ImportBlock::Event(_)));
+    }
+
+    #[test]
+    fn empty_input_is_malformed_header() {
+        assert!(matches!(decode_chunk(&[]), Err(ChunkError::Malformed(_))));
+    }
 }
