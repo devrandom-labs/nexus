@@ -83,6 +83,8 @@
 
 pub mod batch;
 pub mod builder;
+#[cfg(feature = "cbor")]
+pub mod cbor;
 pub mod codec;
 pub mod envelope;
 pub mod error;
@@ -113,6 +115,11 @@ pub use batch::{BatchSize, BatchSizeError, DEFAULT_BATCH, MAX_BATCH};
 #[cfg(feature = "snapshot")]
 pub use builder::WithSnapshot;
 pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
+#[cfg(feature = "cbor")]
+pub use cbor::{
+    ChunkError, ChunkHeader, decode_chunk, decode_header, encode_block, encode_header,
+    encode_section_heading,
+};
 #[cfg(feature = "json")]
 pub use codec::serde::json::{Json, JsonCodec};
 #[cfg(feature = "serde")]
