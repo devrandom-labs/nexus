@@ -552,12 +552,22 @@ impl crate::import::AtomicAppend for InMemoryStore {
 
         let mut guard = self.streams.lock().await;
 
-        // Phase 1 — validate every head and run shape; NO mutation.
+        // Phase 1 — validate every head and run shape against the RUNNING
+        // per-target head; NO mutation. Tracking prior same-batch writes to a
+        // target makes a non-injective route (two writes → one stream) conflict
+        // here instead of concatenating into a corrupt, non-monotonic stream
+        // (honours the AtomicAppend distinct-targets contract).
+        let mut projected: HashMap<String, u64> = HashMap::new();
         for (index, w) in writes.iter().enumerate() {
             let key = w.target.to_string();
-            // usize ≤ u64 on all supported (32/64-bit) targets; the map_err is an unreachable belt-and-braces guard, not a Rule-3 |_| discard of a meaningful error.
-            let actual_raw = u64::try_from(guard.get(&key).map_or(0, Vec::len))
-                .map_err(|_| AtomicAppendError::Store(InMemoryStoreError::VersionOverflow))?;
+            let actual_raw = match projected.get(&key) {
+                Some(&head) => head,
+                // usize ≤ u64 on all supported (32/64-bit) targets; the map_err
+                // is an unreachable belt-and-braces guard, not a Rule-3 |_|
+                // discard of a meaningful error.
+                None => u64::try_from(guard.get(&key).map_or(0, Vec::len))
+                    .map_err(|_| AtomicAppendError::Store(InMemoryStoreError::VersionOverflow))?,
+            };
             let expected_raw = w.expected_version.map_or(0, Version::as_u64);
             if actual_raw != expected_raw {
                 return Err(AtomicAppendError::Conflict {
@@ -566,10 +576,8 @@ impl crate::import::AtomicAppend for InMemoryStore {
                 });
             }
             // Defensive (CLAUDE: each crate validates at its own boundary): the
-            // run must be strictly sequential from expected+1. The importer's
-            // planner guarantees this; a violation here is a caller bug, mapped
-            // to a Conflict on the offending write. A running counter avoids any
-            // index→u64 conversion (Rule 2).
+            // run must be strictly sequential from expected+1. A running counter
+            // avoids any index→u64 conversion (Rule 2).
             let mut want = expected_raw.checked_add(1);
             for env in &w.events {
                 let Some(want_version) = want else {
@@ -585,6 +593,13 @@ impl crate::import::AtomicAppend for InMemoryStore {
                 }
                 want = want_version.checked_add(1);
             }
+            // Advance this target's projected head by the run just validated, so
+            // a later same-target write in this batch conflicts above.
+            let new_head = w
+                .events
+                .last()
+                .map_or(actual_raw, |last| last.version().as_u64());
+            projected.insert(key, new_head);
         }
 
         // Phase 2 — assign global_seqs and stage frames (still no store mutation).

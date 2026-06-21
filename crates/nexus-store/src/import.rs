@@ -250,9 +250,10 @@ pub enum AtomicAppendError<E> {
 /// - Each write's `events` must be a contiguous run starting at
 ///   `expected_version + 1`. The caller (the importer's planner) guarantees
 ///   this; implementations validate defensively at their own boundary.
-/// - Targets must be **distinct** within one batch. The importer routes one
-///   section per origin, so this holds; an adapter must not silently accept
-///   two writes to the same stream in one call (it would create a gap).
+/// - Each write is validated against the target's **running** head, including
+///   prior writes to the same target in this batch. A non-injective route (two
+///   writes to one stream) therefore surfaces as [`AtomicAppendError::Conflict`]
+///   on the second write — never a silently concatenated, gap-creating stream.
 /// - On any failure, **no** write is applied.
 pub trait AtomicAppend: RawEventStore {
     /// Append every write atomically. See the trait contract.
@@ -1454,6 +1455,61 @@ mod tests {
         assert_eq!(report.streams().len(), 1);
         assert_eq!(report.streams()[0].stream, tid("b"));
         assert_eq!(versions(&store, &tid("b")).await, vec![1, 2]);
+    }
+
+    // ── Defensive boundary: non-injective route (two origins → one target) ────
+
+    #[tokio::test]
+    async fn whole_chunk_non_injective_route_aborts_no_corruption() {
+        use crate::import::EventImporter;
+        // A non-injective route maps BOTH origin sections to the same target.
+        // WholeChunk must abort with nothing landed — never a [1,2,1,2] stream.
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![
+            section("o1", vec![evt(1), evt(2)]),
+            section("o2", vec![evt(1), evt(2)]),
+        ];
+        let to_same = |_origin: &[u8]| tid("T");
+        let err = store
+            .import(&sections, to_same, Atomicity::WholeChunk)
+            .await
+            .expect_err("non-injective route must abort");
+        assert!(matches!(err, ImportError::Aborted { .. }));
+        // All-or-nothing + no corruption: T is empty, definitely not [1,2,1,2].
+        assert_eq!(versions(&store, &tid("T")).await, Vec::<u64>::new());
+    }
+
+    #[tokio::test]
+    async fn per_stream_non_injective_route_second_rejected_no_corruption() {
+        use crate::import::EventImporter;
+        // PerStream: the first section commits the target; the second (same
+        // target) is picky-rejected — the stream is [1,2], never [1,2,1,2].
+        let store = crate::testing::InMemoryStore::new();
+        let sections = vec![
+            section("o1", vec![evt(1), evt(2)]),
+            section("o2", vec![evt(1), evt(2)]),
+        ];
+        let to_same = |_origin: &[u8]| tid("T");
+        let report = store
+            .import(&sections, to_same, Atomicity::PerStream)
+            .await
+            .expect("import ok");
+        assert_eq!(
+            versions(&store, &tid("T")).await,
+            vec![1, 2],
+            "no [1,2,1,2] corruption — second section rejected, not appended"
+        );
+        assert_eq!(
+            report.streams()[0].outcome,
+            StreamOutcome::Complete { version: v(2) }
+        );
+        assert_eq!(
+            report.streams()[1].outcome,
+            StreamOutcome::Mismatch {
+                reached: None,
+                got: v(1)
+            }
+        );
     }
 
     // ── Round-trip + idempotency (Card-1 export ↔ Card-2 import) ────────────
