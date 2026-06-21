@@ -172,10 +172,6 @@ impl PendingEnvelope {
     /// because every field of a `PersistedEnvelope` was validated at its own
     /// construction. Used by the importer to re-append exported events.
     #[cfg(feature = "import")]
-    #[allow(
-        dead_code,
-        reason = "called by the import planner (task 2+); added here in task 1 for TDD ordering"
-    )]
     #[must_use]
     pub(crate) fn from_persisted(persisted: &PersistedEnvelope) -> Self {
         Self {

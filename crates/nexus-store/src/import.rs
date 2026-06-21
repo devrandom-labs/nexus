@@ -283,6 +283,117 @@ pub trait EventImporter: RawEventStore + AtomicAppend {
         R: Fn(&[u8]) -> I + Send;
 }
 
+// =============================================================================
+// Per-section planner — pure, no store access
+// =============================================================================
+
+/// Where a section's contiguous run stopped.
+#[allow(
+    dead_code,
+    reason = "variants and fields read by the EventImporter impls in tasks 4–5; \
+              added here in task 3 for TDD ordering"
+)]
+#[derive(Debug)]
+enum Halt {
+    /// Every block in the section was consumed.
+    Complete,
+    /// Stopped at a corrupt block.
+    Corrupt,
+    /// Stopped at a version discontinuity; `got` is the offending version.
+    Gap { got: Version },
+}
+
+/// The store-independent plan for one [`StreamSection`].
+#[allow(
+    dead_code,
+    reason = "variants and fields read by the EventImporter impls in tasks 4–5; \
+              added here in task 3 for TDD ordering"
+)]
+#[derive(Debug)]
+enum SectionPlan {
+    /// No blocks — nothing to do, no report entry.
+    Empty,
+    /// The first block was corrupt — nothing can be appended.
+    FirstCorrupt,
+    /// A contiguous run to append, and how it ended.
+    ///
+    /// `(expected_version, events)` become a [`PlannedAppend`] once `route`
+    /// resolves the target (whole-chunk path).
+    Run {
+        /// The run's first version. Cached (not `events[0].version()`) so the
+        /// consumer maps a store conflict to `got` without indexing/unwrap on
+        /// the non-empty run.
+        first: Version,
+        /// The head the target must be at (`None` = fresh).
+        expected_version: Option<Version>,
+        /// The run, rebuilt as write-path envelopes (always non-empty).
+        events: Vec<PendingEnvelope>,
+        /// The run's last version (where the stream lands on success). Cached
+        /// so the consumer needs no `events.last()` unwrap.
+        last: Version,
+        /// Why the run stopped.
+        halt: Halt,
+    },
+}
+
+/// Planner failure — a stream version overflowed `u64` (NOT a conflict).
+#[derive(Debug)]
+enum PlanError {
+    VersionOverflow,
+}
+
+/// Build a section's plan: decode the first block, accumulate the longest
+/// contiguous run, and record why it stopped. Pure — no store access.
+#[allow(
+    dead_code,
+    reason = "called by the EventImporter blanket impls in tasks 4–5; \
+              added here in task 3 for TDD ordering"
+)]
+fn plan_section(section: &StreamSection) -> Result<SectionPlan, PlanError> {
+    let mut blocks = section.blocks.iter();
+    let Some(first_block) = blocks.next() else {
+        return Ok(SectionPlan::Empty);
+    };
+    let first_event = match first_block {
+        ImportBlock::Corrupt => return Ok(SectionPlan::FirstCorrupt),
+        ImportBlock::Event(event) => event,
+    };
+
+    let first = first_event.version();
+    // expected head = first - 1; first == 1 → None (fresh stream). Checked.
+    let expected_version = first.as_u64().checked_sub(1).and_then(Version::new);
+
+    let mut events = vec![PendingEnvelope::from_persisted(first_event)];
+    let mut last = first;
+    let halt = loop {
+        let Some(block) = blocks.next() else {
+            break Halt::Complete;
+        };
+        let event = match block {
+            ImportBlock::Corrupt => break Halt::Corrupt,
+            ImportBlock::Event(event) => event,
+        };
+        // Only reached when a successor block exists; a run ending at u64::MAX
+        // with no successor completes above without ever calling next().
+        let expected_next = last.next().ok_or(PlanError::VersionOverflow)?;
+        if event.version() != expected_next {
+            break Halt::Gap {
+                got: event.version(),
+            };
+        }
+        events.push(PendingEnvelope::from_persisted(event));
+        last = event.version();
+    };
+
+    Ok(SectionPlan::Run {
+        first,
+        expected_version,
+        events,
+        last,
+        halt,
+    })
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -611,5 +722,157 @@ mod tests {
         // Atomicity: NOTHING landed — "a" must still be empty.
         assert_eq!(head_len(&store, &tid("a")).await, 0, "rolled back");
         assert_eq!(head_len(&store, &tid("b")).await, 1, "unchanged");
+    }
+
+    // ── per-section planner ──────────────────────────────────────────────────
+
+    fn persisted(version: u64, payload: &[u8]) -> PersistedEnvelope {
+        use crate::store::GlobalSeq;
+        use crate::value::SchemaVersion;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"E");
+        buf.extend_from_slice(payload);
+        let et_end = 1u32;
+        let pl_end = et_end + u32::try_from(payload.len()).expect("payload fits u32");
+        PersistedEnvelope::try_new(
+            v(version),
+            GlobalSeq::new(version).expect("nonzero"), // arbitrary; import ignores global_seq
+            Bytes::from(buf),
+            SchemaVersion::INITIAL,
+            0..et_end,
+            et_end..pl_end,
+            None,
+        )
+        .expect("valid persisted envelope")
+    }
+
+    fn evt(version: u64) -> ImportBlock {
+        ImportBlock::Event(persisted(version, b"p"))
+    }
+
+    fn section(origin: &str, blocks: Vec<ImportBlock>) -> StreamSection {
+        StreamSection {
+            origin: Bytes::copy_from_slice(origin.as_bytes()),
+            blocks,
+        }
+    }
+
+    #[test]
+    fn plan_empty_section_is_empty() {
+        assert!(matches!(
+            plan_section(&section("s", vec![])),
+            Ok(SectionPlan::Empty)
+        ));
+    }
+
+    #[test]
+    fn plan_first_block_corrupt_is_first_corrupt() {
+        let s = section("s", vec![ImportBlock::Corrupt, evt(1)]);
+        assert!(matches!(plan_section(&s), Ok(SectionPlan::FirstCorrupt)));
+    }
+
+    #[test]
+    fn plan_contiguous_run_from_one_is_complete() {
+        let s = section("s", vec![evt(1), evt(2), evt(3)]);
+        let plan = plan_section(&s).expect("plans");
+        match plan {
+            SectionPlan::Run {
+                first,
+                expected_version,
+                last,
+                halt,
+                events,
+            } => {
+                assert_eq!(first, v(1));
+                assert_eq!(expected_version, None); // first == 1 → fresh stream
+                assert_eq!(last, v(3));
+                assert_eq!(events.len(), 3);
+                assert!(matches!(halt, Halt::Complete));
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_run_from_midstream_sets_expected_to_first_minus_one() {
+        let s = section("s", vec![evt(3), evt(4)]);
+        match plan_section(&s).expect("plans") {
+            SectionPlan::Run {
+                first,
+                expected_version,
+                last,
+                halt,
+                ..
+            } => {
+                assert_eq!(first, v(3));
+                assert_eq!(expected_version, Some(v(2)));
+                assert_eq!(last, v(4));
+                assert!(matches!(halt, Halt::Complete));
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_internal_gap_halts_with_got() {
+        // v3,v4,v6 → run [3,4], halt at the gap (got = 6).
+        let s = section("s", vec![evt(3), evt(4), evt(6)]);
+        match plan_section(&s).expect("plans") {
+            SectionPlan::Run {
+                last, halt, events, ..
+            } => {
+                assert_eq!(last, v(4));
+                assert_eq!(events.len(), 2);
+                assert!(matches!(halt, Halt::Gap { got } if got == v(6)));
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_internal_corrupt_halts_corrupt() {
+        let s = section("s", vec![evt(1), evt(2), ImportBlock::Corrupt, evt(3)]);
+        match plan_section(&s).expect("plans") {
+            SectionPlan::Run {
+                last, halt, events, ..
+            } => {
+                assert_eq!(last, v(2));
+                assert_eq!(events.len(), 2);
+                assert!(matches!(halt, Halt::Corrupt));
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_overflow_building_run_errors() {
+        // last == u64::MAX with a following block forces prev.next() overflow.
+        let s = section("s", vec![evt(u64::MAX), evt(1)]);
+        assert!(matches!(plan_section(&s), Err(PlanError::VersionOverflow)));
+    }
+
+    #[test]
+    fn plan_run_ending_at_u64_max_with_no_successor_completes() {
+        // Complement of plan_overflow_building_run_errors: a run that ENDS at
+        // u64::MAX with NO following block must complete — `last.next()` is never
+        // called, so no spurious VersionOverflow. Guards against a refactor that
+        // moves the overflow check to fire unconditionally.
+        let s = section("s", vec![evt(u64::MAX)]);
+        match plan_section(&s).expect("plans") {
+            SectionPlan::Run {
+                first,
+                expected_version,
+                events,
+                last,
+                halt,
+            } => {
+                assert_eq!(first, v(u64::MAX));
+                assert_eq!(expected_version, Some(v(u64::MAX - 1)));
+                assert_eq!(events.len(), 1);
+                assert_eq!(last, v(u64::MAX));
+                assert!(matches!(halt, Halt::Complete));
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
     }
 }
