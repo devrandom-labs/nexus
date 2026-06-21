@@ -533,6 +533,109 @@ impl crate::export::StreamLister for InMemoryStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// AtomicAppend — cross-stream atomic commit (import support, issue #145)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Commit several per-stream runs in one atomic critical section.
+///
+/// Holds the `streams` lock for the whole operation — validate every write's
+/// head first (no mutation), then encode + apply all — so a half-write is
+/// unrepresentable and no concurrent `append` can interleave. Mirrors
+/// `append`'s lock order (`streams` → `next_global_seq` → `global_index`).
+#[cfg(feature = "import")]
+impl crate::import::AtomicAppend for InMemoryStore {
+    async fn atomic_append_many<I: Id>(
+        &self,
+        writes: &[crate::import::PlannedAppend<I>],
+    ) -> Result<(), crate::import::AtomicAppendError<Self::Error>> {
+        use crate::import::AtomicAppendError;
+
+        let mut guard = self.streams.lock().await;
+
+        // Phase 1 — validate every head and run shape; NO mutation.
+        for (index, w) in writes.iter().enumerate() {
+            let key = w.target.to_string();
+            let actual_raw = u64::try_from(guard.get(&key).map_or(0, Vec::len))
+                .map_err(|_| AtomicAppendError::Store(InMemoryStoreError::VersionOverflow))?;
+            let expected_raw = w.expected_version.map_or(0, Version::as_u64);
+            if actual_raw != expected_raw {
+                return Err(AtomicAppendError::Conflict {
+                    index,
+                    actual: Version::new(actual_raw),
+                });
+            }
+            // Defensive (CLAUDE: each crate validates at its own boundary): the
+            // run must be strictly sequential from expected+1. The importer's
+            // planner guarantees this; a violation here is a caller bug, mapped
+            // to a Conflict on the offending write. A running counter avoids any
+            // index→u64 conversion (Rule 2).
+            let mut want = expected_raw.checked_add(1);
+            for env in &w.events {
+                let Some(want_version) = want else {
+                    return Err(AtomicAppendError::Store(
+                        InMemoryStoreError::VersionOverflow,
+                    ));
+                };
+                if env.version().as_u64() != want_version {
+                    return Err(AtomicAppendError::Conflict {
+                        index,
+                        actual: Version::new(actual_raw),
+                    });
+                }
+                want = want_version.checked_add(1);
+            }
+        }
+
+        // Phase 2 — assign global_seqs and stage frames (still no store mutation).
+        let mut counter = self.next_global_seq.lock().await;
+        let mut seq = *counter;
+        let mut staged_streams: Vec<(String, Vec<StoredFrame>)> = Vec::with_capacity(writes.len());
+        let mut staged_global: Vec<(u64, StoredFrame)> = Vec::new();
+        for w in writes {
+            let mut frames = Vec::with_capacity(w.events.len());
+            for env in &w.events {
+                let frame = encode_pending_to_frame(env, seq).map_err(|e| match e {
+                    AppendError::Store(s) => AtomicAppendError::Store(s),
+                    AppendError::Conflict { .. } => {
+                        AtomicAppendError::Store(InMemoryStoreError::VersionOverflow)
+                    }
+                })?;
+                staged_global.push((seq.as_u64(), frame.clone()));
+                frames.push(frame);
+                seq = seq.next().ok_or(AtomicAppendError::Store(
+                    InMemoryStoreError::GlobalSeqOverflow,
+                ))?;
+            }
+            staged_streams.push((w.target.to_string(), frames));
+        }
+        *counter = seq;
+        drop(counter);
+
+        // Phase 3 — commit: global index first, then per-stream (same critical
+        // section, streams lock still held throughout).
+        {
+            let mut gidx = self.global_index.lock().await;
+            for (s, frame) in &staged_global {
+                gidx.insert(*s, frame.clone());
+            }
+        }
+        for (key, frames) in staged_streams {
+            guard.entry(key).or_default().extend(frames);
+        }
+        drop(guard);
+
+        // Wake subscribers parked on each touched stream + the $all notifier.
+        for w in writes {
+            if !w.events.is_empty() {
+                self.notifiers.wake(w.target.as_ref());
+            }
+        }
+        self.notifiers.wake_all();
+        Ok(())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // InMemorySubscriptionStream — Arc-owning subscription cursor
 // ═══════════════════════════════════════════════════════════════════════════
 

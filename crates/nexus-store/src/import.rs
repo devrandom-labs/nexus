@@ -33,7 +33,7 @@
 use nexus::{Id, Version};
 use thiserror::Error;
 
-use crate::envelope::PersistedEnvelope;
+use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::store::RawEventStore;
 
 /// Atomicity granularity for an import — a caller policy, not a format
@@ -174,6 +174,66 @@ pub enum ImportError<E, I> {
     VersionOverflow,
 }
 
+/// One planned per-stream write for [`AtomicAppend::atomic_append_many`].
+///
+/// `events` is a contiguous, version-preserving run; `expected_version` is the
+/// head the target stream must currently be at (`None` = the stream must be
+/// fresh). Built by the importer's per-section planner.
+#[derive(Debug, Clone)]
+pub struct PlannedAppend<I> {
+    /// The resolved target stream id.
+    pub target: I,
+    /// The version the target must currently be at (`None` = fresh stream).
+    pub expected_version: Option<Version>,
+    /// The contiguous run to append, in version order (always non-empty).
+    pub events: Vec<PendingEnvelope>,
+}
+
+/// Failure of an [`AtomicAppend::atomic_append_many`] transaction.
+///
+/// `Conflict` is the cross-stream picky check: write `index`'s
+/// `expected_version` did not match the target's actual head (`actual`). The
+/// whole transaction is rolled back — nothing landed. `Store` is an
+/// adapter-level failure. Distinct domains, distinct variants (CLAUDE rule 3).
+#[derive(Debug, Error)]
+pub enum AtomicAppendError<E> {
+    /// Write at `index` had a head mismatch; `actual` is the target's real head.
+    #[error("atomic append conflict at write {index}: actual head {actual:?}")]
+    Conflict {
+        index: usize,
+        actual: Option<Version>,
+    },
+    /// Adapter-level failure (I/O, encoding, global-seq overflow, …).
+    #[error("atomic append store error: {0}")]
+    Store(#[source] E),
+}
+
+/// Adapter capability: commit several per-stream runs in **one** atomic
+/// transaction.
+///
+/// Either every run lands or none do. This is the primitive
+/// [`Atomicity::WholeChunk`] needs and that [`RawEventStore::append`]
+/// (per-stream only) cannot provide. Adapters implement it with a real
+/// transaction (fjall cross-partition `write_tx`, postgres `BEGIN..COMMIT`,
+/// `InMemoryStore` its single mutex).
+///
+/// # Contract
+///
+/// - For each write, the target's actual head must equal `expected_version`,
+///   else the whole transaction aborts with [`AtomicAppendError::Conflict`]
+///   carrying that write's `index` and the target's real head.
+/// - Each write's `events` must be a contiguous run starting at
+///   `expected_version + 1`. The caller (the importer's planner) guarantees
+///   this; implementations validate defensively at their own boundary.
+/// - On any failure, **no** write is applied.
+pub trait AtomicAppend: RawEventStore {
+    /// Append every write atomically. See the trait contract.
+    fn atomic_append_many<I: Id>(
+        &self,
+        writes: &[PlannedAppend<I>],
+    ) -> impl std::future::Future<Output = Result<(), AtomicAppendError<Self::Error>>> + Send;
+}
+
 /// Place decoded events onto caller-routed target streams, picky per stream,
 /// halt-not-skip, under an [`Atomicity`] policy.
 ///
@@ -203,11 +263,19 @@ pub trait EventImporter: RawEventStore {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code asserts exact values"
+)]
 mod tests {
     use super::*;
-    use crate::envelope::PendingEnvelope;
+    use crate::envelope::{PendingEnvelope, pending_envelope};
     use crate::error::AppendError;
     use crate::store::GlobalSeq;
+    use bytes::Bytes;
+    use futures::StreamExt;
     use static_assertions::assert_impl_all;
     use std::error::Error as _;
 
@@ -500,4 +568,91 @@ mod tests {
     }
 
     assert_impl_all!(NoopStore: EventImporter, RawEventStore);
+
+    // ── AtomicAppend helpers and tests ───────────────────────────────────────
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct Tid(String);
+    impl std::fmt::Display for Tid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+    fn tid(s: &str) -> Tid {
+        Tid(s.to_owned())
+    }
+
+    fn pending(ver: u64, payload: &[u8]) -> PendingEnvelope {
+        pending_envelope(v(ver))
+            .event_type("E")
+            .payload(Bytes::copy_from_slice(payload))
+            .expect("valid payload")
+            .build()
+    }
+
+    fn planned(target: &str, expected: Option<u64>, versions: &[u64]) -> PlannedAppend<Tid> {
+        PlannedAppend {
+            target: tid(target),
+            expected_version: expected.and_then(Version::new),
+            events: versions.iter().map(|n| pending(*n, b"p")).collect(),
+        }
+    }
+
+    async fn head_len(store: &crate::testing::InMemoryStore, id: &Tid) -> usize {
+        store
+            .read_stream(id, Version::INITIAL)
+            .await
+            .expect("read opens")
+            .filter_map(|r| async move { r.ok() })
+            .count()
+            .await
+    }
+
+    #[tokio::test]
+    async fn atomic_append_many_commits_all_writes() {
+        use crate::import::AtomicAppend;
+        let store = crate::testing::InMemoryStore::new();
+        let writes = vec![planned("a", None, &[1, 2]), planned("b", None, &[1])];
+        store.atomic_append_many(&writes).await.expect("commits");
+        assert_eq!(head_len(&store, &tid("a")).await, 2);
+        assert_eq!(head_len(&store, &tid("b")).await, 1);
+    }
+
+    #[tokio::test]
+    async fn atomic_append_many_rolls_back_all_on_one_conflict() {
+        use crate::import::AtomicAppend;
+        let store = crate::testing::InMemoryStore::new();
+        // Pre-seed "b" to v1 so the second write (expecting fresh) conflicts.
+        store
+            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .await
+            .expect("seed");
+
+        let writes = vec![
+            planned("a", None, &[1, 2]), // would be fine alone
+            planned("b", None, &[1]),    // conflicts: "b" is already at v1
+        ];
+        let err = store
+            .atomic_append_many(&writes)
+            .await
+            .expect_err("must conflict");
+        match err {
+            AtomicAppendError::Conflict { index, actual } => {
+                assert_eq!(index, 1);
+                assert_eq!(actual, Version::new(1));
+            }
+            AtomicAppendError::Store(_) => panic!("expected Conflict, got Store"),
+        }
+        // Atomicity: NOTHING landed — "a" must still be empty.
+        assert_eq!(head_len(&store, &tid("a")).await, 0, "rolled back");
+        assert_eq!(head_len(&store, &tid("b")).await, 1, "unchanged");
+    }
 }

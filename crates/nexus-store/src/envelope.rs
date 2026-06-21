@@ -163,6 +163,29 @@ impl PendingEnvelope {
     pub const fn schema_version_value(&self) -> SchemaVersion {
         self.schema_version
     }
+
+    /// Rebuild a write-path envelope from a read-path one.
+    ///
+    /// Reuses the [`PersistedEnvelope`]'s already-validated value newtypes
+    /// (one Arc share each — zero copy, no re-validation) and **drops
+    /// `global_seq`**: the store stamps a fresh one on append. Infallible,
+    /// because every field of a `PersistedEnvelope` was validated at its own
+    /// construction. Used by the importer to re-append exported events.
+    #[cfg(feature = "import")]
+    #[allow(
+        dead_code,
+        reason = "called by the import planner (task 2+); added here in task 1 for TDD ordering"
+    )]
+    #[must_use]
+    pub(crate) fn from_persisted(persisted: &PersistedEnvelope) -> Self {
+        Self {
+            version: persisted.version(),
+            event_type: persisted.event_type_value(),
+            schema_version: persisted.schema_version_value(),
+            payload: persisted.payload_value(),
+            metadata: persisted.metadata_value(),
+        }
+    }
 }
 
 // =============================================================================
@@ -586,6 +609,12 @@ const fn check_range(range: &Range<u32>, len: usize) -> Result<(), EnvelopeError
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code asserts exact values"
+)]
 mod tests {
     use super::*;
     use crate::value::MAX_EVENT_TYPE_LEN;
@@ -821,6 +850,41 @@ mod tests {
         .expect("valid");
 
         assert!(env.metadata_value().is_none());
+    }
+
+    #[cfg(feature = "import")]
+    #[test]
+    fn from_persisted_preserves_fields_drops_global_seq_zero_copy() {
+        // A read-path envelope at version 7, global_seq 99, schema 3, with meta.
+        let value = Bytes::from_static(b"TYPEpayloadmeta");
+        let persisted = PersistedEnvelope::try_new(
+            Version::new(7).expect("nonzero"),
+            crate::store::GlobalSeq::new(99).expect("nonzero"),
+            value,
+            crate::value::SchemaVersion::from_u32(3).expect("nonzero"),
+            0..4,
+            4..11,
+            Some(11..15),
+        )
+        .expect("valid");
+
+        let pending = PendingEnvelope::from_persisted(&persisted);
+
+        // Every field carried verbatim (global_seq has no home on the write path).
+        assert_eq!(pending.version(), persisted.version());
+        assert_eq!(pending.event_type(), "TYPE");
+        assert_eq!(pending.payload(), b"payload");
+        assert_eq!(pending.metadata(), Some(b"meta".as_slice()));
+        assert_eq!(pending.schema_version(), 3);
+
+        // Zero-copy: the rebuilt payload aliases the same backing allocation.
+        assert!(
+            std::ptr::eq(
+                pending.payload_bytes().as_ptr(),
+                persisted.payload().as_ptr()
+            ),
+            "from_persisted must reuse the Arc-shared payload, not deep-copy",
+        );
     }
 }
 
