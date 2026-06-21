@@ -306,6 +306,11 @@ pub fn decode_chunk(bytes: &[u8]) -> Result<Vec<StreamSection>, ChunkError> {
 )]
 mod tests {
     use super::*;
+    use crate::envelope::pending_envelope;
+    use crate::import::{Atomicity, EventImporter};
+    use crate::store::RawEventStore;
+    use crate::testing::InMemoryStore;
+    use futures::StreamExt;
 
     /// Build a `PersistedEnvelope` directly: backing buffer = [`event_type` | metadata? | payload].
     fn persisted(
@@ -639,5 +644,92 @@ mod tests {
     #[test]
     fn empty_input_is_malformed_header() {
         assert!(matches!(decode_chunk(&[]), Err(ChunkError::Malformed(_))));
+    }
+
+    // ── Task 7: Full pipeline — export → box → import ───────────────────────
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct Tid(String);
+
+    impl core::fmt::Display for Tid {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+
+    #[cfg(feature = "testing")]
+    #[tokio::test]
+    async fn export_box_import_round_trip_byte_equal_modulo_global_seq() {
+        // Seed a source store with two streams.
+        let src = InMemoryStore::new();
+        for (sid, count) in [("task-1", 3u64), ("task-2", 2)] {
+            for v in 1..=count {
+                let pe = pending_envelope(Version::new(v).expect("nonzero"))
+                    .event_type("E")
+                    .payload(format!("{sid}-{v}").into_bytes())
+                    .expect("valid payload")
+                    .build();
+                src.append(
+                    &Tid(sid.into()),
+                    Version::new(v - 1),
+                    core::slice::from_ref(&pe),
+                )
+                .await
+                .expect("append");
+            }
+        }
+
+        // Export → box-encode into one chunk.
+        let mut chunk = encode_header(Some(b"src")).expect("header").to_vec();
+        for sid in ["task-1", "task-2"] {
+            chunk.extend_from_slice(&encode_section_heading(sid.as_bytes()).expect("heading"));
+            let mut s = src
+                .read_stream(&Tid(sid.into()), Version::INITIAL)
+                .await
+                .expect("read");
+            while let Some(item) = s.next().await {
+                let e = item.expect("no read error");
+                chunk.extend_from_slice(&encode_block(&e).expect("block"));
+            }
+        }
+
+        // Box-decode → import into a fresh store under origin-namespaced ids.
+        let sections = decode_chunk(&chunk).expect("decode");
+        let dst = InMemoryStore::new();
+        let route = |origin: &[u8]| Tid(format!("src:{}", String::from_utf8_lossy(origin)));
+        let report = dst
+            .import(&sections, route, Atomicity::PerStream)
+            .await
+            .expect("import");
+        assert!(report.all_complete());
+
+        // Verify byte-equality of payloads/versions modulo global_seq.
+        for sid in ["task-1", "task-2"] {
+            let target = Tid(format!("src:{sid}"));
+            let got: Vec<(u64, Vec<u8>)> = dst
+                .read_stream(&target, Version::INITIAL)
+                .await
+                .expect("read")
+                .map(|r| {
+                    let e = r.expect("no err");
+                    (e.version().as_u64(), e.payload().to_vec())
+                })
+                .collect()
+                .await;
+            let expected: Vec<(u64, Vec<u8>)> = (1..=if sid == "task-1" { 3u64 } else { 2 })
+                .map(|v| (v, format!("{sid}-{v}").into_bytes()))
+                .collect();
+            assert_eq!(got, expected, "stream {sid} round-trips");
+        }
     }
 }
