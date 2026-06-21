@@ -684,12 +684,25 @@ mod tests {
                 1u64..1000
             ],
             prop_oneof![Just(1u32), Just(7), Just(u32::MAX), 1u32..100],
-            prop_oneof![Just(String::new()), Just("E".to_owned()), "[A-Za-z]{0,40}"],
+            // event_type spanning CBOR text-string length bands: inline (<24),
+            // 1-byte length (24..=255), 2-byte length (256..).
+            prop_oneof![
+                Just(String::new()),
+                Just("E".to_owned()),
+                "[A-Za-z]{0,40}",
+                Just("z".repeat(300)),
+            ],
+            // metadata: None, the 1-byte band, and the 2-byte band.
             prop_oneof![
                 Just(None),
-                proptest::collection::vec(any::<u8>(), 1..32).prop_map(Some)
+                proptest::collection::vec(any::<u8>(), 1..32).prop_map(Some),
+                proptest::collection::vec(any::<u8>(), 256..400).prop_map(Some),
             ],
-            proptest::collection::vec(any::<u8>(), 0..64),
+            // payload spanning inline / 1-byte / 2-byte length bands.
+            prop_oneof![
+                proptest::collection::vec(any::<u8>(), 0..64),
+                proptest::collection::vec(any::<u8>(), 256..512),
+            ],
         )
     }
 
@@ -918,5 +931,184 @@ mod tests {
                 .collect();
             assert_eq!(got, expected, "stream {sid} round-trips");
         }
+    }
+
+    // ── #2: CBOR length-form boundaries (deterministic) ──────────────────────
+    // CBOR encodes a byte/text-string length with a different prefix per size
+    // band: inline (<24), 1-byte (24..=255), 2-byte (256..=65535), 4-byte
+    // (65536..). A bug mishandling one band is invisible until a value lands in
+    // it; exercise each band explicitly through encode_block → decode.
+
+    #[test]
+    fn box_round_trips_every_payload_length_band() {
+        for size in [0usize, 23, 24, 255, 256, 1024, 65536] {
+            let payload = vec![0xABu8; size];
+            let event = persisted(1, 1, "E", None, &payload);
+            let bytes = encode_block(&event).expect("encode");
+            match decode_one_block(&bytes) {
+                ImportBlock::Event(got) => {
+                    assert_eq!(got.payload().len(), size, "payload size {size} length");
+                    assert_eq!(got.payload(), payload.as_slice(), "payload {size} bytes");
+                }
+                ImportBlock::Corrupt => panic!("payload size {size} must round-trip"),
+            }
+        }
+    }
+
+    #[test]
+    fn box_round_trips_event_type_at_2byte_band_and_max() {
+        for et_len in [256usize, crate::value::MAX_EVENT_TYPE_LEN] {
+            let et = "a".repeat(et_len);
+            let event = persisted(1, 1, &et, Some(b"m"), b"p");
+            let bytes = encode_block(&event).expect("encode");
+            match decode_one_block(&bytes) {
+                ImportBlock::Event(got) => {
+                    assert_eq!(got.event_type().len(), et_len, "event_type len {et_len}");
+                    assert_eq!(got.event_type(), et);
+                    assert_eq!(got.metadata(), Some(b"m".as_slice()));
+                }
+                ImportBlock::Corrupt => panic!("event_type len {et_len} must round-trip"),
+            }
+        }
+    }
+
+    #[test]
+    fn box_round_trips_metadata_at_2byte_band() {
+        let meta = vec![0x07u8; 300];
+        let event = persisted(1, 1, "E", Some(&meta), b"p");
+        match decode_one_block(&encode_block(&event).expect("encode")) {
+            ImportBlock::Event(got) => assert_eq!(got.metadata(), Some(meta.as_slice())),
+            ImportBlock::Corrupt => panic!("metadata 2-byte band must round-trip"),
+        }
+    }
+
+    // ── #3: defensive decode branches, asserted by specific outcome ──────────
+    // These branches were previously exercised only by the never-panic fuzz,
+    // which asserts no crash but not WHICH result. Pin the exact outcomes.
+
+    #[test]
+    fn decode_block_rejects_indefinite_array() {
+        // 0x9f = indefinite-length array. Never emitted; must be rejected, not
+        // hang or panic. (Reached via decode_block directly; decode_chunk peeks
+        // ArrayIndef as a distinct type and rejects it before calling here.)
+        let mut d = Decoder::new(&[0x9fu8]);
+        assert!(matches!(
+            decode_block(&mut d),
+            Err("indefinite-length block array")
+        ));
+    }
+
+    #[test]
+    fn decode_block_rejects_wrong_arity() {
+        // A 3-element array violates the exactly-2 block shape.
+        let mut buf = Vec::new();
+        {
+            let mut e = minicbor::Encoder::new(&mut buf);
+            e.array(3).expect("array header");
+        }
+        let mut d = Decoder::new(&buf);
+        assert!(matches!(
+            decode_block(&mut d),
+            Err("block array must have exactly 2 elements")
+        ));
+    }
+
+    #[test]
+    fn indefinite_array_at_top_level_is_malformed() {
+        // decode_chunk peeks Type::ArrayIndef (not Array) → unexpected item type.
+        let mut chunk = encode_header(None).expect("header").to_vec();
+        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        chunk.push(0x9f); // array(*) indefinite
+        chunk.push(0xff); // break
+        assert!(matches!(
+            decode_chunk(&chunk),
+            Err(ChunkError::Malformed("unexpected item type"))
+        ));
+    }
+
+    #[test]
+    fn torn_mid_heading_stops_at_valid_prefix() {
+        // One complete section, then a heading truncated mid stream-id. The
+        // complete section survives; the torn heading yields no section (it is a
+        // valid-prefix stop, not Malformed).
+        let chunk = encode_chunk(
+            None,
+            &[(b"done".as_slice(), vec![persisted(1, 1, "E", None, b"x")])],
+        );
+        let mut v = chunk.to_vec();
+        let heading = encode_section_heading(b"truncated-stream-id").expect("heading");
+        v.extend_from_slice(&heading[..heading.len() - 4]); // drop 4 id bytes
+        let sections = decode_chunk(&v).expect("valid prefix");
+        assert_eq!(sections.len(), 1, "torn heading produces no section");
+        assert_eq!(sections[0].origin.as_ref(), b"done");
+        assert_eq!(sections[0].blocks.len(), 1);
+    }
+
+    #[test]
+    fn header_missing_magic_key_is_malformed() {
+        // A 1-entry map carrying only format_version (key 1), no magic (key 0):
+        // a missing required field, distinct from a corrupted magic value.
+        let mut bytes = Vec::new();
+        {
+            let mut e = minicbor::Encoder::new(&mut bytes);
+            e.map(1)
+                .expect("map")
+                .u32(1)
+                .expect("k1")
+                .u32(1)
+                .expect("v1");
+        }
+        assert!(matches!(
+            decode_header(&bytes),
+            Err(ChunkError::Malformed(_))
+        ));
+        assert!(matches!(
+            decode_chunk(&bytes),
+            Err(ChunkError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn crc_valid_body_with_empty_metadata_is_malformed() {
+        // metadata present but empty violates the Metadata non-empty invariant;
+        // reconstruct → try_new rejects the empty range → Malformed (with a
+        // matching crc, proving the rejection is at reconstruction, not crc).
+        let mut body = Vec::new();
+        {
+            let mut e = minicbor::Encoder::new(&mut body);
+            e.map(5)
+                .expect("map")
+                .u32(0)
+                .expect("k0")
+                .u64(1)
+                .expect("v0")
+                .u32(1)
+                .expect("k1")
+                .u32(1)
+                .expect("v1")
+                .u32(2)
+                .expect("k2")
+                .str("E")
+                .expect("v2")
+                .u32(3)
+                .expect("k3")
+                .bytes(b"")
+                .expect("v3") // empty metadata
+                .u32(4)
+                .expect("k4")
+                .bytes(b"p")
+                .expect("v4");
+        }
+        let block = BlockRepr {
+            crc: crc32c::crc32c(&body),
+            body: &body,
+        };
+        let mut chunk = encode_header(None).expect("header").to_vec();
+        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
+        assert!(matches!(
+            decode_chunk(&chunk),
+            Err(ChunkError::Malformed(_))
+        ));
     }
 }
