@@ -646,6 +646,29 @@ mod tests {
         assert!(matches!(decode_chunk(&[]), Err(ChunkError::Malformed(_))));
     }
 
+    // ── Task 8: Golden-byte insta snapshots ─────────────────────────────────
+
+    fn hex_of(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn golden_header_bytes() {
+        let bytes = encode_header(Some(b"dev")).expect("header");
+        insta::assert_snapshot!("header_with_origin_hex", hex_of(&bytes));
+    }
+
+    #[test]
+    fn golden_block_bytes() {
+        let event = persisted(1, 1, "E", None, b"hi");
+        let bytes = encode_block(&event).expect("block");
+        insta::assert_snapshot!("block_v1_hex", hex_of(&bytes));
+    }
+
     // ── Task 7: Full pipeline — export → box → import ───────────────────────
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
