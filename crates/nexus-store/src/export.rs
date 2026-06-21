@@ -384,6 +384,15 @@ mod tests {
         let id = tid("race");
         let n = 200u64;
 
+        // Seed v1 BEFORE the race. Without this, the exporter can open and drain
+        // the stream before the writer commits its first event — a valid but
+        // empty prefix — making the `!exported.is_empty()` check below flaky
+        // (it raced pass-on-one-trigger, fail-on-another on identical commits).
+        // With v1 already committed, the exporter is guaranteed a non-empty
+        // prefix, so that assertion is a real, falsifiable guarantee rather than
+        // a timing coin-flip. The writer races 2..=n.
+        append_one(&store, &id, 1, b"payload-1").await;
+
         let barrier = Arc::new(Barrier::new(2));
 
         let writer_store = Arc::clone(&store);
@@ -391,7 +400,7 @@ mod tests {
         let writer_barrier = Arc::clone(&barrier);
         let writer = tokio::spawn(async move {
             writer_barrier.wait().await;
-            for v in 1..=n {
+            for v in 2..=n {
                 append_one(
                     &writer_store,
                     &writer_id,
@@ -422,10 +431,11 @@ mod tests {
             assert_eq!(e.payload(), format!("payload-{expected}").as_bytes());
         }
         // We may not have raced the full N in, but every event we saw is a
-        // valid, ordered prefix — and the final state has all N.
+        // valid, ordered prefix — and v1 was seeded before the race, so the
+        // exporter must have seen at least it.
         assert!(
             !exported.is_empty(),
-            "exporter saw at least the early prefix"
+            "exporter must see at least the seeded v1"
         );
     }
 
