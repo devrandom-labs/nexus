@@ -74,6 +74,7 @@ use foldhash::fast::RandomState;
 use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::sync::Notify;
+use tokio::sync::watch;
 
 /// Errors produced by [`StreamNotifiers`].
 #[derive(Debug, Error)]
@@ -114,6 +115,11 @@ pub struct StreamNotifiers {
     /// subscriber genuinely wants every event, so there is no thundering
     /// herd to avoid here — unlike the per-stream `map`.
     all: Arc<Notify>,
+    /// Store-wide `$all` generation counter, bumped on every [`wake_all`]. A
+    /// `watch` channel alongside [`all`](Self::all): the `Notify` rouses parked
+    /// tasks, this exposes a monotone (wrapping) generation a cursor can read
+    /// and compare to detect a missed wake without parking.
+    all_gen: watch::Sender<u64>,
 }
 
 impl Default for StreamNotifiers {
@@ -121,6 +127,7 @@ impl Default for StreamNotifiers {
         Self {
             map: Mutex::default(),
             all: Arc::new(Notify::new()),
+            all_gen: watch::Sender::new(0),
         }
     }
 }
@@ -128,6 +135,11 @@ impl Default for StreamNotifiers {
 #[derive(Debug)]
 struct Entry {
     notify: Arc<Notify>,
+    /// Per-stream generation counter, bumped on every [`wake`] for this stream.
+    /// The `watch` analogue of [`notify`](Self::notify): the `Notify` rouses
+    /// parked tasks, this exposes a monotone (wrapping) generation a cursor can
+    /// read and compare to detect a missed wake without parking.
+    gen_tx: watch::Sender<u64>,
     /// Number of live [`SubscriptionGuard`]s for this stream.
     subscribers: usize,
 }
@@ -153,6 +165,7 @@ impl StreamNotifiers {
         let mut map = self.map.lock();
         let entry = map.entry(key.clone()).or_insert_with(|| Entry {
             notify: Arc::new(Notify::new()),
+            gen_tx: watch::Sender::new(0),
             subscribers: 0,
         });
         entry.subscribers = entry
@@ -179,7 +192,10 @@ impl StreamNotifiers {
         // no need for.
         let maybe_notify = {
             let map = self.map.lock();
-            map.get(stream).map(|entry| Arc::clone(&entry.notify))
+            map.get(stream).map(|entry| {
+                entry.gen_tx.send_modify(|g| *g = g.wrapping_add(1));
+                Arc::clone(&entry.notify)
+            })
         };
         if let Some(notify) = maybe_notify {
             notify.notify_waiters();
@@ -192,6 +208,7 @@ impl StreamNotifiers {
     /// committed, so a woken `$all` subscriber re-reads visible data. A no-op
     /// when no `$all` subscriber is parked.
     pub fn wake_all(&self) {
+        self.all_gen.send_modify(|g| *g = g.wrapping_add(1));
         self.all.notify_waiters();
     }
 
@@ -201,6 +218,26 @@ impl StreamNotifiers {
     #[must_use]
     pub const fn all_notifier(&self) -> &Arc<Notify> {
         &self.all
+    }
+
+    /// Current per-stream wake generation for `stream`, or `0` when the stream
+    /// has no live entry. Bumped by every [`wake`](Self::wake); a cursor reads
+    /// it to detect a wake that arrived between two reads. Wrapping, so compare
+    /// for inequality, not ordering.
+    #[must_use]
+    pub fn generation(&self, stream: &[u8]) -> u64 {
+        self.map
+            .lock()
+            .get(stream)
+            .map_or(0, |e| *e.gen_tx.borrow())
+    }
+
+    /// Current store-wide `$all` wake generation. Bumped by every
+    /// [`wake_all`](Self::wake_all). Wrapping, so compare for inequality, not
+    /// ordering.
+    #[must_use]
+    pub fn all_generation(&self) -> u64 {
+        *self.all_gen.borrow()
     }
 
     /// Number of streams with at least one live subscriber. Diagnostics only.
@@ -554,5 +591,27 @@ mod tests {
             drop(guard);
             assert_eq!(reg.active_streams(), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn wake_increments_stream_generation() {
+        let reg = StreamNotifiers::new();
+        let _guard = reg.subscribe(b"s1").unwrap();
+        let before = reg.generation(b"s1");
+        reg.wake(b"s1");
+        let after = reg.generation(b"s1");
+        assert_eq!(
+            after,
+            before + 1,
+            "wake must bump the stream generation by 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_all_increments_all_generation() {
+        let reg = StreamNotifiers::new();
+        let before = reg.all_generation();
+        reg.wake_all();
+        assert_eq!(reg.all_generation(), before + 1);
     }
 }
