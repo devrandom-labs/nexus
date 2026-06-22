@@ -507,6 +507,156 @@ impl RawEventStore for InMemoryStore {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// StreamLister — enumerate stream ids (export support, issue #145)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Enumerate the stream ids the store holds, for export.
+///
+/// Takes a single snapshot of the `streams` map under one lock (atomic — no
+/// torn view of the key set) and materializes the ids into a `stream::iter`
+/// cursor. `InMemoryStore` is a test store, so materializing all ids at once
+/// is acceptable; a real adapter (fjall, postgres) streams them lazily.
+#[cfg(feature = "export")]
+impl crate::export::StreamLister for InMemoryStore {
+    type StreamList = futures::stream::Iter<std::vec::IntoIter<Result<Bytes, InMemoryStoreError>>>;
+
+    async fn list_streams(&self) -> Result<Self::StreamList, Self::Error> {
+        let ids: Vec<Result<Bytes, InMemoryStoreError>> = {
+            let guard = self.streams.lock().await;
+            guard
+                .keys()
+                .map(|k| Ok(Bytes::copy_from_slice(k.as_bytes())))
+                .collect()
+        };
+        Ok(futures::stream::iter(ids))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AtomicAppend — cross-stream atomic commit (import support, issue #145)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Commit several per-stream runs in one atomic critical section.
+///
+/// Holds the `streams` lock for the whole operation — validate every write's
+/// head first (no mutation), then encode + apply all — so a half-write is
+/// unrepresentable and no concurrent `append` can interleave. Mirrors
+/// `append`'s lock order (`streams` → `next_global_seq` → `global_index`).
+#[cfg(feature = "import")]
+impl crate::import::AtomicAppend for InMemoryStore {
+    async fn atomic_append_many<I: Id>(
+        &self,
+        writes: &[crate::import::PlannedAppend<I>],
+    ) -> Result<(), crate::import::AtomicAppendError<Self::Error>> {
+        use crate::import::AtomicAppendError;
+
+        let mut guard = self.streams.lock().await;
+
+        // Phase 1 — validate every head and run shape against the RUNNING
+        // per-target head; NO mutation. Tracking prior same-batch writes to a
+        // target makes a non-injective route (two writes → one stream) conflict
+        // here instead of concatenating into a corrupt, non-monotonic stream
+        // (honours the AtomicAppend distinct-targets contract).
+        let mut projected: HashMap<String, u64> = HashMap::new();
+        for (index, w) in writes.iter().enumerate() {
+            let key = w.target.to_string();
+            let actual_raw = match projected.get(&key) {
+                Some(&head) => head,
+                // usize ≤ u64 on all supported (32/64-bit) targets; the map_err
+                // is an unreachable belt-and-braces guard, not a Rule-3 |_|
+                // discard of a meaningful error.
+                None => u64::try_from(guard.get(&key).map_or(0, Vec::len))
+                    .map_err(|_| AtomicAppendError::Store(InMemoryStoreError::VersionOverflow))?,
+            };
+            let expected_raw = w.expected_version.map_or(0, Version::as_u64);
+            if actual_raw != expected_raw {
+                return Err(AtomicAppendError::Conflict {
+                    index,
+                    actual: Version::new(actual_raw),
+                });
+            }
+            // Defensive (CLAUDE: each crate validates at its own boundary): the
+            // run must be strictly sequential from expected+1. A running counter
+            // avoids any index→u64 conversion (Rule 2).
+            let mut want = expected_raw.checked_add(1);
+            for env in &w.events {
+                let Some(want_version) = want else {
+                    return Err(AtomicAppendError::Store(
+                        InMemoryStoreError::VersionOverflow,
+                    ));
+                };
+                if env.version().as_u64() != want_version {
+                    return Err(AtomicAppendError::Conflict {
+                        index,
+                        actual: Version::new(actual_raw),
+                    });
+                }
+                want = want_version.checked_add(1);
+            }
+            // Advance this target's projected head by the run just validated, so
+            // a later same-target write in this batch conflicts above.
+            let new_head = w
+                .events
+                .last()
+                .map_or(actual_raw, |last| last.version().as_u64());
+            projected.insert(key, new_head);
+        }
+
+        // Phase 2 — assign global_seqs and stage frames (still no store mutation).
+        let mut counter = self.next_global_seq.lock().await;
+        let mut seq = *counter;
+        let mut staged_streams: Vec<(String, Vec<StoredFrame>)> = Vec::with_capacity(writes.len());
+        let mut staged_global: Vec<(u64, StoredFrame)> = Vec::new();
+        for w in writes {
+            let mut frames = Vec::with_capacity(w.events.len());
+            for env in &w.events {
+                let frame = encode_pending_to_frame(env, seq).map_err(|e| match e {
+                    AppendError::Store(s) => AtomicAppendError::Store(s),
+                    // encode_pending_to_frame only ever returns AppendError::Store
+                    // (wire-format failure); it never does a head check and so can
+                    // never produce Conflict. Mapped defensively so the match is
+                    // exhaustive rather than relying on a private implementation
+                    // detail of encode_pending_to_frame.
+                    AppendError::Conflict { .. } => {
+                        AtomicAppendError::Store(InMemoryStoreError::VersionOverflow)
+                    }
+                })?;
+                staged_global.push((seq.as_u64(), frame.clone()));
+                frames.push(frame);
+                seq = seq.next().ok_or(AtomicAppendError::Store(
+                    InMemoryStoreError::GlobalSeqOverflow,
+                ))?;
+            }
+            staged_streams.push((w.target.to_string(), frames));
+        }
+        *counter = seq;
+        drop(counter);
+
+        // Phase 3 — commit: global index first, then per-stream (same critical
+        // section, streams lock still held throughout).
+        {
+            let mut gidx = self.global_index.lock().await;
+            for (s, frame) in &staged_global {
+                gidx.insert(*s, frame.clone());
+            }
+        }
+        for (key, frames) in staged_streams {
+            guard.entry(key).or_default().extend(frames);
+        }
+        drop(guard);
+
+        // Wake subscribers parked on each touched stream + the $all notifier.
+        for w in writes {
+            if !w.events.is_empty() {
+                self.notifiers.wake(w.target.as_ref());
+            }
+        }
+        self.notifiers.wake_all();
+        Ok(())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // InMemorySubscriptionStream — Arc-owning subscription cursor
 // ═══════════════════════════════════════════════════════════════════════════
 

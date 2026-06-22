@@ -86,6 +86,10 @@ pub mod builder;
 pub mod codec;
 pub mod envelope;
 pub mod error;
+#[cfg(feature = "export")]
+pub mod export;
+#[cfg(feature = "import")]
+pub mod import;
 #[cfg(feature = "subscription")]
 pub mod notify;
 #[cfg(feature = "projection")]
@@ -119,6 +123,13 @@ pub use envelope::{
 };
 pub use error::LoadWithError;
 pub use error::{AppendError, StoreError};
+#[cfg(feature = "export")]
+pub use export::{EventExporter, StreamLister};
+#[cfg(feature = "import")]
+pub use import::{
+    AbortReason, Atomicity, EventImporter, ImportBlock, ImportError, ImportReport, StreamOutcome,
+    StreamReport, StreamSection,
+};
 pub use nexus::Version;
 #[cfg(feature = "projection")]
 pub use projection::Projector;
