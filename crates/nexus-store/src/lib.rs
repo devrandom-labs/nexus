@@ -108,6 +108,8 @@ pub mod subscription;
 pub mod testing;
 pub mod upcasting;
 pub mod value;
+#[cfg(feature = "subscription")]
+pub mod wake;
 pub mod wire;
 
 pub use arrayvec::ArrayString;
@@ -159,3 +161,5 @@ pub use subscription::Subscription;
 pub use testing::InMemoryStoreError;
 pub use upcasting::EventMorsel;
 pub use value::{EventType, Metadata, Payload, SchemaVersion, ValueError};
+#[cfg(feature = "subscription")]
+pub use wake::{WakeRegistration, WakeSource};
