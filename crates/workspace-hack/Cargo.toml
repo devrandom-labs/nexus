@@ -27,7 +27,7 @@ once_cell = { version = "1" }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "rc", "result", "std"] }
-syn = { version = "2", features = ["extra-traits", "full"] }
+syn = { version = "2", features = ["extra-traits", "full", "visit"] }
 trybuild = { version = "1", default-features = false, features = ["diff"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 

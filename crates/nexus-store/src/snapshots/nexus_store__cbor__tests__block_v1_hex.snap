@@ -1,0 +1,5 @@
+---
+source: crates/nexus-store/src/cbor.rs
+expression: hex_of(&bytes)
+---
+82 1a cf f9 cc 83 4c a4 00 01 01 01 02 61 45 04 42 68 69

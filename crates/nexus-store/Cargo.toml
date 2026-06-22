@@ -38,15 +38,21 @@ rkyv = ["dep:rkyv"]
 # feature now would emit `unexpected_cfgs` warnings that fail clippy
 # `--deny warnings`. See deviations doc.
 futures-bridge = []
+# Default CBOR backup box (issue #145, Card 3). Implies export+import; the
+# inverse never holds (Agency enables export/import and brings its own CESR box,
+# pulling no CBOR).
+cbor = ["import", "export", "dep:minicbor", "dep:crc32c"]
 
 [dependencies]
 aligned-vec = { workspace = true }
 arrayvec = { workspace = true }
 bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true }
+crc32c = { workspace = true, optional = true }
 foldhash = { workspace = true, optional = true }
 futures = { workspace = true }
 futures-core = { workspace = true }
+minicbor = { workspace = true, features = ["derive"], optional = true }
 nexus = { version = "0.1.0", path = "../nexus" }
 parking_lot = { workspace = true, optional = true }
 rkyv = { workspace = true, optional = true }
@@ -59,7 +65,8 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [dev-dependencies]
 criterion = { workspace = true }
 futures = { workspace = true }
-nexus-store = { path = ".", features = ["testing", "export", "import"] }
+insta = { workspace = true }
+nexus-store = { path = ".", features = ["testing", "export", "import", "cbor"] }
 nexus-store-testing = { version = "0.1.0", path = "../nexus-store-testing" }
 proptest = { workspace = true }
 serde = { workspace = true }
