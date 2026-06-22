@@ -119,7 +119,7 @@ pub struct StreamNotifiers {
     /// `watch` channel alongside [`all`](Self::all): the `Notify` rouses parked
     /// tasks, this exposes a monotone (wrapping) generation a cursor can read
     /// and compare to detect a missed wake without parking.
-    all_gen: watch::Sender<u64>,
+    all_gen_tx: watch::Sender<u64>,
 }
 
 impl Default for StreamNotifiers {
@@ -127,7 +127,7 @@ impl Default for StreamNotifiers {
         Self {
             map: Mutex::default(),
             all: Arc::new(Notify::new()),
-            all_gen: watch::Sender::new(0),
+            all_gen_tx: watch::Sender::new(0),
         }
     }
 }
@@ -136,9 +136,10 @@ impl Default for StreamNotifiers {
 struct Entry {
     notify: Arc<Notify>,
     /// Per-stream generation counter, bumped on every [`wake`] for this stream.
-    /// The `watch` analogue of [`notify`](Self::notify): the `Notify` rouses
-    /// parked tasks, this exposes a monotone (wrapping) generation a cursor can
-    /// read and compare to detect a missed wake without parking.
+    /// The `watch` generation counterpart to the [`notify`](Self::notify)
+    /// field: the `Notify` rouses parked tasks, this exposes a monotone
+    /// (wrapping) generation a cursor can read and compare to detect a missed
+    /// wake without parking.
     gen_tx: watch::Sender<u64>,
     /// Number of live [`SubscriptionGuard`]s for this stream.
     subscribers: usize,
@@ -208,7 +209,7 @@ impl StreamNotifiers {
     /// committed, so a woken `$all` subscriber re-reads visible data. A no-op
     /// when no `$all` subscriber is parked.
     pub fn wake_all(&self) {
-        self.all_gen.send_modify(|g| *g = g.wrapping_add(1));
+        self.all_gen_tx.send_modify(|g| *g = g.wrapping_add(1));
         self.all.notify_waiters();
     }
 
@@ -224,6 +225,12 @@ impl StreamNotifiers {
     /// has no live entry. Bumped by every [`wake`](Self::wake); a cursor reads
     /// it to detect a wake that arrived between two reads. Wrapping, so compare
     /// for inequality, not ordering.
+    ///
+    /// The `0`-for-absent-stream return is unambiguous in practice: a
+    /// subscription cursor reads this only while holding its own live
+    /// [`SubscriptionGuard`], so its entry is guaranteed present and a genuine
+    /// generation of `0` (the entry's initial value) cannot be confused with
+    /// the absent-stream `0`.
     #[must_use]
     pub fn generation(&self, stream: &[u8]) -> u64 {
         self.map
@@ -237,7 +244,7 @@ impl StreamNotifiers {
     /// ordering.
     #[must_use]
     pub fn all_generation(&self) -> u64 {
-        *self.all_gen.borrow()
+        *self.all_gen_tx.borrow()
     }
 
     /// Number of streams with at least one live subscriber. Diagnostics only.
@@ -613,5 +620,33 @@ mod tests {
         let before = reg.all_generation();
         reg.wake_all();
         assert_eq!(reg.all_generation(), before + 1);
+    }
+
+    /// Waking one stream bumps only its generation, not another's.
+    #[tokio::test]
+    async fn generations_are_independent_per_stream() {
+        let reg = StreamNotifiers::new();
+        let _a = reg.subscribe(b"a").unwrap();
+        let _b = reg.subscribe(b"b").unwrap();
+        let a_before = reg.generation(b"a");
+        let b_before = reg.generation(b"b");
+        reg.wake(b"a");
+        assert_eq!(
+            reg.generation(b"a"),
+            a_before + 1,
+            "wake(a) must bump a's generation"
+        );
+        assert_eq!(
+            reg.generation(b"b"),
+            b_before,
+            "wake(a) must not touch b's generation"
+        );
+    }
+
+    /// A never-subscribed stream reports generation 0.
+    #[tokio::test]
+    async fn generation_of_unknown_stream_is_zero() {
+        let reg = StreamNotifiers::new();
+        assert_eq!(reg.generation(b"never"), 0);
     }
 }
