@@ -1,333 +1,399 @@
-# nexus-fjall refactor: cursor unification + lazy-Iter correction
+# nexus refactor: extract the subscription loop to nexus-store; fjall keeps only fjall
 
 - **Date:** 2026-06-22
-- **Status:** Design approved, pending spec review
+- **Status:** Design in progress, pending spec review
 - **Branch:** `refactor/fjall-cursor-unification`
-- **Scope:** Approach 2 — structural unification + the lazy-`Iter` correction + rule-fix cleanups + encapsulation. Stable-equivalent Rust features only (no nightly TAIT / `gen`).
+- **Scope:** Cross-crate. Extract the common catch-up-then-tail subscription machinery into
+  `nexus-store`; reduce `nexus-fjall` to the irreducibly-fjall parts; plus the rule-fix
+  cleanups in fjall. Stable-equivalent Rust features only (no nightly TAIT / `gen`).
+
+## 0. Guiding principle (the whole point of this refactor)
+
+`nexus-fjall` is **only the fjall implementation**. Any interface or behavior that is
+common across storage adapters MUST live in `nexus-store`; `nexus-fjall` is left holding
+only what is irreducibly fjall — its on-disk key byte layout, its `fjall::Slice` decode,
+its transactions, its `fjall::Iter`.
+
+The test for every type/function touched: *would a postgres adapter author write this same
+code?* If yes, it is common → `nexus-store`. If it names `fjall::Iter`, `fjall::Slice`, or
+the on-disk key bytes, it is fjall's.
+
+This is not speculative generality. A postgres adapter is a real, named consumer
+(`project_api_freeze_hardening`: "write postgres adapter before freezing the contract").
+Extracting the common interface now is exactly how we get the 1.0 contract right with the
+second adapter in view, rather than discovering the abstraction was fjall-shaped after the
+freeze.
 
 ## 1. Motivation
 
-`nexus-fjall` grew by copy-paste-and-tweak. The crate expresses **two** behaviors —
-a *bounded keyset-scan cursor* and a *live-tailing subscription cursor* — but each is
-written **twice**, once for a single stream (keyed by `Version`) and once for `$all`
-(keyed by `GlobalSeq`):
+`nexus-fjall` grew by copy-paste-and-tweak and currently holds **two** classes of code
+that violate the principle in §0:
 
-| Behavior | single-stream copy | `$all` copy |
-|---|---|---|
-| bounded scan cursor | `stream.rs` `FjallStream` | `all_stream.rs` `FjallAllStream` |
-| live subscription cursor | `subscription_stream.rs` | `all_subscription_stream.rs` |
+**(a) Common machinery hand-rolled inside the adapter.** The catch-up-then-live-tail
+subscription loop — drain a bounded scan, register the waiter, reopen, park on a notifier —
+is written **twice** in fjall (`subscription_stream.rs` for per-stream, keyed by `Version`;
+`all_subscription_stream.rs` for `$all`, keyed by `GlobalSeq`), each carrying the same
+subtle lost-wakeup discipline. None of this is fjall-specific: it is the universal
+event-store read pattern (EventStoreDB `$all`, the Kafka consumer fetch loop, Postgres
+logical replication all factor it identically — see §2.5). A postgres adapter would
+re-hand-roll the identical loop and re-risk the identical lost-wakeup bug. **It belongs in
+`nexus-store`.**
 
-The two bounded cursors are byte-for-byte the same shape (`VecDeque<(Slice,Slice)>` +
-`keyspace` + cursor + `batch_size` + `done` + `poisoned`, identical `refill()` /
-`poll_one()` / `impl Stream`). They differ only in (a) scan-key encoding and (b) how a
-row decodes into a `PersistedEnvelope`. The two live cursors are likewise identical
-`futures::stream::unfold` loops carrying the same hard-won "register the waiter before
-refill" lost-wakeup discipline — duplicated, so it must be kept correct in two places.
+**(b) fjall's own bounded-cursor duplication.** The bounded scan cursor is also written
+twice (`stream.rs` `FjallStream`, `all_stream.rs` `FjallAllStream`) — identical
+`VecDeque<(Slice,Slice)>` + `refill()` + `poll_one()` shape, differing only in key-byte
+encoding and `Slice` decode. This *is* fjall-specific (it touches `fjall::Iter`/`Slice`), so
+it is collapsed **inside fjall** via a fjall-private strategy — it does not go to store.
 
-Alongside the duplication, several details contradict the project's own
-`CLAUDE.md` rules (enumerated in §4–§6).
+Alongside both, several details contradict the project's own `CLAUDE.md` rules (§5).
 
 ## 2. Research findings (primary-sourced)
 
-Per `CLAUDE.md` rule 0, every claim below cites a source.
+Per `CLAUDE.md` rule 0, every claim cites a source.
 
 ### 2.1 fjall's `range()` is already a lazy streaming cursor
 
-Read from the installed source (`fjall 3.1.4` → `lsm-tree 3.1.4`,
+Read from installed source (`fjall 3.1.4` → `lsm-tree 3.1.4`,
 `~/.cargo/registry/src/.../fjall-3.1.4/`):
 
-- `Keyspace::range<K, R>(&self, range: R) -> fjall::Iter`
-  (`fjall-3.1.4/src/keyspace/mod.rs:444`).
-- `fjall::Iter` is `{ iter: Box<dyn DoubleEndedIterator<Item = lsm_tree::IterGuardImpl> + Send + 'static>, nonce: SnapshotNonce }`
-  (`fjall-3.1.4/src/iter.rs:7-20`) — **no lifetime parameter; fully owned; `Send + 'static`.**
+- `Keyspace::range<K, R>(&self, range: R) -> fjall::Iter` (`src/keyspace/mod.rs:444`).
+- `fjall::Iter` = `{ iter: Box<dyn DoubleEndedIterator<Item = lsm_tree::IterGuardImpl> + Send + 'static>, nonce: SnapshotNonce }`
+  (`src/iter.rs:7-20`) — **no lifetime parameter; fully owned; `Send + 'static`.** It can be
+  stored in a struct and driven as a `Stream`.
 - The inner iterator is `lsm_tree`'s `TreeIter` (`lsm-tree-3.1.4/src/range.rs:99-235`): a
-  `self_cell` over a pinned `SuperVersion` + a k-way `Merger`/`MvccStream`. `next()`
-  advances the merge by one element and pulls the next LSM block from disk only when a
-  reader's current block drains.
+  `self_cell` over a pinned `SuperVersion` + a k-way `Merger`/`MvccStream`; `next()` pulls
+  the next LSM block from disk only when the current one drains.
 
-**Implication:** `range()` holds a cursor over LSM blocks; it does **not** materialize
-rows. The adapter's `VecDeque` + `take(batch_size)` + re-scan-with-advanced-key loop is
-**redundant as a memory bound** — a single owned `Iter` streams the same rows with
-bounded memory.
+**Implication:** `range()` holds a block cursor; it does not materialize rows. fjall's
+`VecDeque` + `take(batch_size)` + re-scan loop is **redundant as a memory bound** — a single
+owned `Iter` streams with bounded memory.
 
-**The one real reason to close+reopen a scan:** a held `Iter` pins the GC watermark via
-its `SnapshotNonce` for its whole lifetime; fjall's docs warn to "keep iterators /
-transactions short-lived" (`fjall-3.1.4/src/readable.rs:9-15`,
-`src/snapshot.rs:9-15`). So periodically reopening the scan is justified **only** for the
-never-ending subscription cursor (to let GC advance), **not** for a bounded one-shot
-read. The current comments mis-attribute the loop to memory bounding.
+**The one real reason to close+reopen a scan:** a held `Iter` pins the GC watermark via its
+`SnapshotNonce` for its lifetime; fjall docs warn to keep iterators short-lived
+(`src/readable.rs:9-15`, `src/snapshot.rs:9-15`). So periodically reopening is justified
+**only** for a never-ending subscription (to let GC advance), not for a bounded one-shot
+read. Current fjall comments mis-attribute the loop to memory bounding.
 
-### 2.2 Bounded reads gain snapshot consistency (one behavior change)
+### 2.2 Bounded reads gain snapshot consistency (behavior change)
 
-Today each `refill()` opens a *fresh* `range`, so a long read can observe appends that
-land mid-scan. A single owned `Iter` pins one `SnapshotNonce`, so a bounded read becomes
-**repeatable-read / point-in-time consistent** as of when the read began. This is the
-stronger event-store semantic and is consistent with keyset-resume correctness
-(use-the-index-luke, "No Offset": keyset is "not sensitive to concurrent changes in lower
-values"; https://use-the-index-luke.com/no-offset).
+Today each `refill()` opens a fresh `range`, so a long read can observe appends landing
+mid-scan. A single owned `Iter` pins one `SnapshotNonce`, so a bounded read becomes
+**repeatable-read / point-in-time consistent** as of read start — the stronger event-store
+semantic, and consistent with keyset-resume correctness (use-the-index-luke, "No Offset":
+keyset is "not sensitive to concurrent changes in lower values";
+https://use-the-index-luke.com/no-offset).
 
 ### 2.3 Other fjall APIs
 
-- `Snapshot` / `read_tx()` give a consistent cross-keyspace `Readable` view
-  (`fjall-3.1.4/src/readable.rs:12-301`, `src/tx/single_writer/mod.rs:78-80`). The
-  adapter's writes already share one `write_tx`; no multi-partition *read* currently
-  spans two bare `get()` calls, so rule 1 is satisfied. (Confirm during implementation.)
-- `WriteTransaction::fetch_update` / `update_fetch`
-  (`fjall-3.1.4/src/tx/single_writer/write_tx.rs:181,240`) do atomic single-key RMW in a
-  closure. **Evaluated and rejected** for the `GlobalSeq` counter: the loop needs the
-  counter value *during* per-event assignment, not a read-write-once. A running `u64`
-  counter is clearer (§4).
-- No user-facing auto-increment/sequence exists — the store-global `GlobalSeq` counter is
-  necessary and correct (internal `SeqNo` is the engine's MVCC clock, not a substitute).
-- `is_empty()` is O(log n); `len()` is O(n) and docs warn against `len()==0`
-  (`fjall-3.1.4/src/keyspace/mod.rs:539-575`). Use `is_empty()` if emptiness is ever
-  checked.
-- fjall 3 terminology: container = `Database`, column family = `Keyspace`. The adapter's
-  "partition" = a fjall `Keyspace`. No rename forced; new docs should use 3.x terms.
+- `Snapshot`/`read_tx()` give a consistent cross-keyspace `Readable` view
+  (`src/readable.rs:12-301`, `src/tx/single_writer/mod.rs:78-80`). fjall's writes already
+  share one `write_tx`; confirm no multi-partition *read* spans two bare `get()` (rule 1).
+- `WriteTransaction::fetch_update`/`update_fetch` (`src/tx/single_writer/write_tx.rs:181,240`):
+  atomic single-key RMW. **Evaluated and rejected** for the `GlobalSeq` counter — the loop
+  needs the counter value during per-event assignment; a running `u64` counter is clearer.
+- No user-facing auto-increment/sequence exists; the store-global `GlobalSeq` counter is
+  necessary and correct.
+- `is_empty()` O(log n) vs `len()` O(n); docs warn against `len()==0`
+  (`src/keyspace/mod.rs:539-575`). Use `is_empty()` if emptiness is ever checked.
+- fjall 3 terminology: container = `Database`, column family = `Keyspace`.
 
 ### 2.4 Rust language features (toolchain: edition 2024, ~1.96 nightly)
 
-- **AFIT / RPITIT** stable since 1.75
-  (https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits/). The store traits
-  already use native `async fn`; nothing to win, nothing to change.
-- **`async gen` blocks** — the natural `unfold` replacement — are **not usable**: pre-RFC,
-  double-gated (`gen_blocks` + `async_iterator`), and blocked on a stable std
-  `AsyncIterator` (https://github.com/rust-lang/rust/issues/117078,
-  https://areweasyncyet.rs/). `futures::Stream` stays.
-- **TAIT** (`type_alias_impl_trait`, https://github.com/rust-lang/rust/issues/63063)
-  could name the `unfold` type to drop the `Box<dyn Stream>`, but it is nightly and the
-  project has documented incremental-build ICE history. **Rejected** for this refactor;
-  the live cursor keeps `Pin<Box<dyn Stream + Send>>` (one heap alloc *per subscription*,
-  not per poll).
-- Stable wins to adopt: edition-2024 RPIT capture rules + `+ use<>` (1.82) let us delete
-  any legacy lifetime-capture tricks.
+- **RPIT / RPITIT** stable since 1.75
+  (https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits/). This is what makes the
+  design **zero-cost with no `Box<dyn>` on stable**:
+  - `Subscription::subscribe(..) -> impl Stream<Item=…> + Send` (RPIT) hides the `unfold`
+    state-machine type — there is no associated `Stream` type to name, so no boxing. This is
+    only possible *because* the extraction deletes the associated-type `RawSubscription`
+    trait (§1); the old design boxed precisely to name that associated type.
+  - `WakeSource::arm(..) -> impl Future<Output=()> + Send + 'static` (RPITIT) hides the wait
+    future — no `type Wait` associated type to box. RPITIT method futures are not
+    `dyn`-compatible, which is fine: `WakeSource` is only ever a generic bound, never `dyn`.
+- **`async gen` blocks** — not usable (pre-RFC; blocked on stable std `AsyncIterator`;
+  https://github.com/rust-lang/rust/issues/117078). `futures::Stream` stays.
+- **TAIT not needed.** It was the nightly fallback for naming the `unfold` type; RPIT/RPITIT
+  achieve the same zero-cost result on stable, so no nightly feature (and no ICE risk) is
+  taken on.
+- Edition-2024 RPIT capture + `+ use<>` (1.82) — used to control exactly which generics the
+  `impl Stream` return captures; delete legacy lifetime tricks.
 
 ### 2.5 The abstraction boundary (prior art)
 
 EventStoreDB `$all`, the Kafka consumer fetch loop, and Postgres logical replication all
-factor catch-up-then-tail identically: a **monotonic `Position` type** + a
-**`fetch(after: Position, limit) -> batch`** function; live-tailing is the same fetch
-re-issued when the batch is empty, differing only in the "wait for more" step
+factor catch-up-then-tail identically: a **monotonic `Position`** + a
+**`fetch(after) -> batch`** + a **"wait for more"** step that differs only in mechanism
+(in-process notify vs server push / `LISTEN`)
 (https://docs-next.eventstore.com/clients/rust/catch-up-subscriptions/;
 https://www.confluent.io/blog/kafka-producer-and-consumer-internals-4-consumer-fetch-requests/;
-https://www.postgresql.org/docs/current/protocol-replication.html). redb and fjall both
-prove the "one scan-iterator type, key-layout-in-a-trait" pattern
-(https://docs.rs/redb/latest/redb/struct.Table.html). Keyset resume must be **strict
-greater-than / gap-tolerant** (the `GlobalSeq` is monotonic-but-gapped; gap *detection*
-must not be built on it — https://arxiv.org/pdf/2210.12955).
+https://www.postgresql.org/docs/current/protocol-replication.html). This is precisely the
+seam we cut: `nexus-store` owns the loop + the `Position`-keyed fetch (already `RawEventStore`)
++ the wake interface; the adapter supplies the fetch impl and the wake mechanism. Keyset
+resume must be **strict greater-than / gap-tolerant** (the `GlobalSeq` is monotonic-but-
+gapped; gap *detection* must not be built on it — https://arxiv.org/pdf/2210.12955).
 
-This is exactly the shape we extract: an associated `Position` type + keyset bound
-encoders + a row decoder, in one trait, with two compile-time impls (so monomorphization
-is bounded and the hot path stays branch-free — associated types, not fn-pointers or
-enum-dispatch).
+### 2.6 Lost-wakeup-safe wake, expressed generically
+
+The fjall cursors close the lost-wakeup race with `tokio::sync::Notify` +
+`Notified::enable()` before the read (`StreamNotifiers` module docs,
+`crates/nexus-store/src/notify.rs:44-67`). `enable()` requires `Pin<&mut Notified>`, which
+only the holder of the pinned future can call — so it **cannot be hidden behind a clean
+adapter trait** without leaking tokio. The generic, leak-free equivalent is a
+**generation / seen-version** wake: the receiver tracks the last version it saw and waits
+for the value to change. `tokio::sync::watch::Receiver::changed()` is exactly this and is
+lost-wakeup-safe by construction (it compares against the receiver's own last-seen version),
+and its wait future is `'static` (https://docs.rs/tokio/latest/tokio/sync/watch/). This is
+the mechanism the `WakeSource` in-process impl will use, and the contract a postgres impl
+satisfies via `LISTEN/NOTIFY` + a position high-water mark.
 
 ## 3. Design
 
-### 3.1 File layout (9 source files → 7)
+### 3.1 `nexus-store` — the extracted common machinery
+
+New / changed in `nexus-store`:
+
+**`WakeSource` trait (new).** The pluggable "wait until there may be new events" interface.
+Adapter-agnostic; no fjall/tokio types in the signatures.
+
+```rust
+/// Adapter-provided wake mechanism for live subscriptions. Lets the generic
+/// subscription cursor park until new events may exist instead of polling.
+/// In-process adapters use the provided StreamNotifiers impl; distributed
+/// adapters (postgres) implement this over LISTEN/NOTIFY or replication.
+///
+/// Only ever used as a generic bound (never `dyn`), so `arm` returns an
+/// RPITIT future — no associated `Wait` type, no boxing.
+pub trait WakeSource: Send + Sync + 'static {
+    /// Arm a lost-wakeup-safe wait for events on `stream` (None = $all).
+    ///
+    /// CONTRACT: the returned future captures a "seen version" at the moment
+    /// `arm` is called; awaiting it resolves once a wake is delivered *after*
+    /// that point. A wake delivered between `arm` and the await is therefore
+    /// NOT lost. Spurious wakes are permitted (the cursor re-scans and re-arms).
+    /// The future is owned (`'static`) — e.g. an `async move` over a cloned
+    /// `watch::Receiver` — so it carries no borrow of `self`.
+    fn arm(&self, stream: Option<&[u8]>) -> impl Future<Output = ()> + Send + 'static;
+
+    /// Signal that new events for `stream` (and $all) are durably committed.
+    /// MUST be called by the adapter *after* commit.
+    fn wake(&self, stream: &[u8]);
+}
+```
+
+**`StreamNotifiers` becomes the in-process `WakeSource` impl.** It already lives in
+`nexus-store` (`src/notify.rs`). It is evolved from `Notify` + `enable()` to a
+generation/`watch`-based mechanism so `arm()` can return a `'static`, lost-wakeup-safe
+`Wait` future with no `enable()` leakage (§2.6). This is a self-contained internal change to
+`notify.rs` with its own test coverage; the public wake/subscribe surface is preserved or
+adjusted minimally. **Risk-noted** (see §6) — `StreamNotifiers` was carefully tuned (#176).
+
+**`Catchup` trait (new, store-side seam).** To write the loop body *once* while keeping it
+zero-cost, the loop is generic over a `Catchup` that fuses "bounded scan after a position"
+(`RawEventStore`) and "arm a wait" (`WakeSource`) for one target. Two compile-time impls —
+per-stream and `$all` — so the one source loop monomorphizes into two branch-free state
+machines. No runtime `dyn`, no enum-of-streams.
+
+```rust
+pub(crate) trait Catchup: Send {
+    type Position: Copy + Send;
+    type Scan: Stream<Item = Result<PersistedEnvelope, Self::Error>> + Send;
+    type Error: core::error::Error + Send + Sync + 'static;
+    fn read_after(&self, pos: Self::Position)
+        -> impl Future<Output = Result<Self::Scan, Self::Error>> + Send;     // RawEventStore
+    fn arm(&self) -> impl Future<Output = ()> + Send + 'static;              // WakeSource
+    fn position_of(env: &PersistedEnvelope) -> Self::Position;
+    fn start(from: Option<Self::Position>) -> Self::Position;
+}
+// StreamCatchup<S> { store: Arc<S>, id }  — Scan = S::Stream,    arm = store.arm(Some(id))
+// AllCatchup<S>    { store: Arc<S> }       — Scan = S::AllStream, arm = store.arm(None)
+// both for S: RawEventStore + WakeSource
+```
+
+**The generic loop (new).** One function `fn live<C: Catchup>(c: C, from) -> impl Stream<…> + Send`,
+the single copy of the catch-up-then-tail state machine. RPIT hides the `unfold` type — no Box:
+
+```text
+live(c, from) -> impl Stream:                 // body: futures::stream::unfold(...)
+  let mut pos = C::start(from);
+  loop {
+    let mut scan = c.read_after(pos).await?;   // bounded scan
+    let mut n = 0;
+    while let Some(env) = scan.next().await {
+      pos = C::position_of(&env); yield env;
+      if (n += 1) == CATCHUP_CHUNK { break }   // drop+reopen to release the GC nonce
+    }
+    let caught_up = scan exhausted (not chunk-break);
+    drop(scan);
+    if caught_up {
+      let wait = c.arm();                       // arm BEFORE the confirming re-scan
+      let mut probe = c.read_after(pos).await?;
+      if probe.next().await.is_none() { wait.await }  // park only if truly empty
+      // else: loop; next iteration drains from pos
+    }
+  }
+```
+
+- `CATCHUP_CHUNK` is a `nexus-store` `const` (proposed 1024): the reopen granularity that
+  bounds how long any single adapter scan (and its GC nonce) is held during a large backlog.
+  The *only* surviving role of the old fjall `batch_size`, now owned by the layer that owns
+  the loop.
+- The lost-wakeup discipline (arm-before-confirm-rescan) exists in exactly one place, for
+  every adapter, forever.
+
+**`Subscription<S>` becomes a blanket builder, returning `impl Stream`.** For
+`S: RawEventStore + WakeSource`:
+
+```rust
+pub fn subscribe(&self, id: &impl Id, from: Option<Version>)
+    -> impl Stream<Item = Result<PersistedEnvelope, S::Error>> + Send + use<S>;
+pub fn subscribe_all(&self, from: Option<GlobalSeq>)
+    -> impl Stream<Item = Result<PersistedEnvelope, S::Error>> + Send + use<S>;
+```
+
+Both build the right `Catchup` and return `live(..)`. They are **infallible** (not `async`,
+no `Result`): a scan-open failure surfaces as the first `Err` item in the stream, so errors
+flow through one uniform channel. The adapter-implemented `RawSubscription` /
+`RawAllSubscription` traits are **deleted** — adapters no longer write a subscribe method.
+
+**`RawEventStore` gains nothing new conceptually** — `read_stream(id, from)` /
+`read_all(from)` already are the bounded `Position`-keyed catch-up scan the `Catchup` impls
+call.
+
+### 3.2 `nexus-fjall` — only fjall
+
+After extraction, `nexus-fjall` source:
 
 ```
-store.rs        FjallStore struct + RawEventStore + RawSubscription + RawAllSubscription
-                impls. append() decomposed into named steps.
-scan.rs    NEW  ScanStrategy trait; StreamScan + GlobalScan impls; the ONE bounded
-                ScanCursor<S> (impl futures::Stream).
-live.rs    NEW  the ONE LiveCursor<S> + Park policy. Replaces subscription_stream.rs and
-                all_subscription_stream.rs. Holds the single copy of the
-                enable-before-refill lost-wakeup loop. OwnedStreamId moves here.
-wire_key.rs     (renamed from encoding.rs) keys only: event key, global key, stream
-                version codecs. decode_event_value stays (real production read path).
+store.rs        FjallStore + RawEventStore + WakeSource impls. append() decomposed (§5).
+                WakeSource forwards to the held StreamNotifiers; append wakes after commit.
+scan.rs    NEW  fjall-PRIVATE ScanStrategy trait + StreamScan/GlobalScan impls + the ONE
+                bounded ScanCursor<S> (wraps a single lazy fjall::Iter, impl Stream).
+wire_key.rs     (renamed encoding.rs) keys only: event key, global key, stream version.
+                decode_event_value stays (real production read path).
 snapshot.rs     snapshot value codec (feature = "snapshot"), pulled out of encoding.rs.
-builder.rs      batch_size field + setter removed; otherwise unchanged.
+builder.rs      batch_size field + setter REMOVED.
 partition.rs    unchanged.
 error.rs        DecodeError loses the fake-sentinel branch (§5).
 ```
 
-Deleted: `stream.rs`, `all_stream.rs`, `subscription_stream.rs`,
-`all_subscription_stream.rs`.
+**Deleted from fjall:** `stream.rs`, `all_stream.rs`, `subscription_stream.rs`,
+`all_subscription_stream.rs`. The first two collapse into `scan.rs`; the last two are gone
+entirely — that loop now lives in `nexus-store`.
 
-### 3.2 `ScanStrategy` — the varying part, extracted once
+**fjall-private `ScanStrategy`** (`pub(crate)`, never exported): the only varying parts of
+fjall's *own* bounded scan.
 
 ```rust
-/// The part of a keyset scan that differs between the per-stream and $all
-/// reads: the resume position type, the keyset bound encoding, and how a
-/// stored row decodes into a PersistedEnvelope.
 pub(crate) trait ScanStrategy: Send {
-    /// Resume cursor type. `Version` for a single stream, `GlobalSeq` for $all.
-    type Position: Copy + Send + 'static;
-
-    /// Keyset lower bound key for a scan starting at (inclusive) `from`.
-    /// "Strictly after P" is expressed by the caller passing `P.next()`.
-    fn lower_key(&self, from: Self::Position) -> Vec<u8>;
-
-    /// Keyset upper bound key (end of this strategy's key range).
+    type Position: Copy + Send + 'static;                 // Version | GlobalSeq
+    fn lower_key(&self, from: Self::Position) -> Vec<u8>; // fjall key bytes
     fn upper_key(&self) -> Vec<u8>;
-
-    /// Decode one (key, value) row into an envelope, mapping every malformed
-    /// shape to a typed FjallError. Owns the per-strategy validation
-    /// (per-stream label; $all global_seq cross-check).
     fn decode(&self, key: &Slice, value: Slice) -> Result<PersistedEnvelope, FjallError>;
-
-    /// Resume position to scan after, given the last yielded envelope.
-    fn advance(env: &PersistedEnvelope) -> Self::Position;
 }
 ```
+- `StreamScan { id, label }` → `Position = Version`; event-key codec; today's `decode_row`.
+- `GlobalScan` → `Position = GlobalSeq`; global-key codec; today's `decode_global_row`
+  (keeps the global_seq key-vs-frame cross-check, rule 4).
 
-Two impls:
+**`ScanCursor<S>`** wraps one lazy `fjall::Iter` from `keyspace.range(lower..=upper)` and
+maps each `Guard` through `strategy.decode`. No `VecDeque`, no `refill`, no `batch_size`, no
+`done`. `read_stream`/`read_all` return `ScanCursor<StreamScan>` / `ScanCursor<GlobalScan>`,
+which remain the `RawEventStore::Stream` / `::AllStream` associated types.
 
-- `StreamScan { id: OwnedStreamId, label: ArrayString<64> }` — `Position = Version`; keys
-  via the event-key codec; `decode` = today's `decode_row`; `advance` = `env.version()`.
-- `GlobalScan` — `Position = GlobalSeq`; keys via the global-key codec; `decode` =
-  today's `decode_global_row` (keeps the global_seq key-vs-frame cross-check, rule 4);
-  `advance` = `env.global_seq()`.
+**`WakeSource` for `FjallStore`**: `arm`/`wake` forward to the `Arc<StreamNotifiers>` it
+already holds; `append` calls `wake` after the durable commit (as it does today).
 
-The shared envelope-construction tail (`PersistedEnvelope::try_new` + error mapping) is a
-free helper used by both `decode` impls.
+### 3.3 `append` decomposition + arithmetic rule fixes (fjall)
 
-`Vec<u8>` keys: one small allocation per *scan open* (not per row), off the hot path.
-Acceptable; a stack `ArrayVec`/`Id::BYTE_LEN`-bounded optimization is a possible
-follow-up, not part of this refactor.
+Split `append` into `read_current_version` / `check_optimistic` / `validate_sequential` /
+write-loop; drop `#[allow(clippy::too_many_lines)]`. The three
+`u64::try_from(i).unwrap_or(u64::MAX)` sentinels (rule 2 violations) are deleted by using
+running `u64` counters advanced with `checked_add(1)` — no `usize -> u64` cast remains and
+the `batch_len` computation disappears.
 
-### 3.3 `ScanCursor<S>` — the one bounded cursor
-
-```rust
-pub struct ScanCursor<S: ScanStrategy> {
-    iter: fjall::Iter,        // single lazy LSM cursor; pins one snapshot nonce
-    strategy: S,
-    poisoned: bool,           // once an error is yielded, subsequent polls -> None
-    #[cfg(debug_assertions)]
-    prev: Option<S::Position>,// monotonicity assertion (debug only)
-}
-```
-
-- Built by `read_stream`/`read_all`: `keyspace.range(lower..=upper)` once, then map each
-  `Guard` through `strategy.decode`.
-- No `VecDeque`, no `refill()`, no `batch_size`, no `done` (the `Iter` returns `None`).
-- `impl futures::Stream` synchronously (`Poll::Ready(self.poll_one())`), preserving the
-  current model. On `decode` error: poison and yield the error once.
-
-`read_stream` / `read_all` return `ScanCursor<StreamScan>` / `ScanCursor<GlobalScan>`.
-These remain the `RawEventStore::Stream` / `::AllStream` associated types.
-
-### 3.4 `LiveCursor<S>` + `Park` — the one live cursor
-
-```rust
-/// Where a caught-up live cursor parks for the next wake.
-pub(crate) trait Park: Send {
-    fn notifier(&self) -> &Arc<tokio::sync::Notify>;
-}
-struct StreamPark { guard: SubscriptionGuard }    // per-stream wake entry; reaped on drop
-struct AllPark    { all: Arc<tokio::sync::Notify> } // store-wide $all notifier
-```
-
-`LiveCursor::new<S, P>(store, strategy, park, start)` builds the **single** `unfold` loop:
-
-```text
-loop {
-  if let Some(item) = scan.next() { advance `start`; yield item }   // drain current chunk
-  // chunk drained: register the waiter BEFORE reopening (lost-wakeup discipline)
-  let notify = Arc::clone(park.notifier());
-  let notified = notify.notified(); pin!(notified); notified.enable();
-  scan = ScanCursor::open(store, &strategy, start);                 // reopen from resume pos
-  if scan.is_empty() { notified.await }                             // truly caught up: park
-}
-```
-
-- During catch-up the cursor reopens its `ScanCursor` every **`CATCHUP_CHUNK`** rows (an
-  internal `const` — see §3.6) so it does not pin the GC watermark across an unbounded
-  backlog. Reopening releases the prior `Iter`'s nonce.
-- Return type stays `Pin<Box<dyn futures::Stream<Item = Result<PersistedEnvelope, FjallError>> + Send>>`
-  (TAIT rejected, §2.4). One heap alloc per subscription.
-- The enable-before-refill comment + reasoning now live in exactly one place.
-
-`StreamPark` carries the `SubscriptionGuard` (keeps the per-stream wake entry registered,
-reaped on drop); `AllPark` parks on the always-present store-wide notifier.
-
-### 3.5 `append` decomposition + arithmetic rule fixes
-
-`append` splits into named private steps on `FjallStore`:
-
-- `read_current_version(&tx, id) -> Result<u64, AppendError>` — point-read + corrupt
-  handling (returns 0 for a new stream).
-- `check_optimistic(current, expected, id) -> Result<(), AppendError>` — the OCC check.
-- `validate_sequential(current, envelopes, id) -> Result<(), AppendError>` — sequential
-  version validation.
-- the write loop.
-
-Drop `#[allow(clippy::too_many_lines)]`. The three
-`u64::try_from(i).unwrap_or(u64::MAX)` sentinels (rule 2 violations) are **deleted** by
-switching from enumerate-index arithmetic to running `u64` counters advanced with
-`checked_add(1)` — there is no `usize -> u64` cast left, and the `batch_len` computation
-disappears (`new_global` is simply the last assigned `global_seq`).
-
-### 3.6 `batch_size` removed from the public API
-
-- Remove the `batch_size` field and `.batch_size(...)` setter from `FjallStoreBuilder`.
-- The live cursor's catch-up chunk becomes an internal `const CATCHUP_CHUNK: usize`
-  (proposed 1024) in `live.rs`. Documented as the GC-release / wakeup-latency granularity.
-- Bounded reads ignore chunking entirely (single lazy `Iter`).
-- `BatchSize` (from `nexus-store`) is no longer referenced by the fjall builder. (It may
-  still be used elsewhere; this refactor only stops fjall from exposing it.)
-
-### 3.7 Encoding cohesion, fake error, encapsulation
+### 3.4 Encoding cohesion, fake error, encapsulation (fjall)
 
 - **Fake sentinel removed:** `decode_event_value`'s
-  `InvalidSize { expected: usize::MAX, actual: 0 }` guard (the unreachable `u32 -> usize`
-  branch) is deleted along with its redundant UTF-8 pre-check — `PersistedEnvelope::try_new`
-  already validates `event_type` UTF-8. `decode_event_value` then returns the decoded
-  offsets directly from `wire::decode_frame`.
-- **`pub mod` leakage fixed:** `lib.rs` switches to private `mod` declarations + a curated
-  `pub use` exposing only the real public surface: `FjallStore`, `FjallStoreBuilder`,
-  `FjallError`, `KeyspaceConfig`, and the cursor types named in public return positions
-  (`ScanCursor<StreamScan>`, `ScanCursor<GlobalScan>`, and the two live-cursor types — or
-  type aliases for them).
+  `InvalidSize { expected: usize::MAX, actual: 0 }` guard and its redundant UTF-8 pre-check
+  are deleted (`PersistedEnvelope::try_new` already validates `event_type` UTF-8).
+- **`pub mod` leakage fixed:** `lib.rs` switches to private `mod` + curated `pub use` of only
+  the real public surface (`FjallStore`, `FjallStoreBuilder`, `FjallError`, `KeyspaceConfig`,
+  and the `ScanCursor` read-stream types named in public return positions).
 - **Test-only `encode_event_value` deleted:** it is `pub` production code consumed only by
-  tests and benches (`append` itself uses `wire::encode_frame`). Its callers migrate to
-  the real `wire::encode_frame` + `nexus_store::value` newtype path. This also fixes the
-  benches to measure production code (rule 8).
+  tests/benches (`append` uses `wire::encode_frame`). Callers migrate to the real
+  `wire::encode_frame` + `nexus_store::value` path; this also makes the benches measure
+  production code (rule 8).
 
-## 4. Behavior changes (call out explicitly)
+### 3.5 `batch_size` removed from the fjall public API
+
+The `batch_size` field + `.batch_size(...)` setter leave `FjallStoreBuilder`. Memory
+bounding is now the lazy `Iter`'s job; catch-up chunking is `nexus-store`'s `CATCHUP_CHUNK`.
+
+## 4. Behavior changes (explicit)
 
 1. **Bounded reads are now snapshot-consistent** (repeatable-read as of read start) instead
-   of picking up concurrent appends mid-scan (§2.2). Stronger semantic; the
-   linearizability test still passes (it asserts gap-free/monotonic + a fresh post-join
-   read sees all).
-2. **`batch_size` is removed from `FjallStoreBuilder`** (public API change; acceptable
-   pre-1.0). Catch-up chunking is internal.
+   of observing concurrent appends mid-scan (§2.2). Stronger semantic; the linearizability
+   test still passes (asserts gap-free/monotonic + a fresh post-join read sees all).
+2. **`batch_size` removed from `FjallStoreBuilder`** (public API change; acceptable pre-1.0).
+3. **`RawSubscription` / `RawAllSubscription` deleted** from `nexus-store`'s adapter surface,
+   replaced by the `RawEventStore + WakeSource` blanket builder (contract change on the
+   freeze surface — intentional, done with postgres in view per §0).
+4. **`Subscription::subscribe` / `subscribe_all` signature change**: from
+   `async fn(..) -> Result<S::Stream, S::Error>` to a synchronous
+   `fn(..) -> impl Stream<Item = Result<…, S::Error>> + Send` (zero-cost RPIT, no `Box`).
+   Errors move in-band (first `Err` item) instead of at construction.
+5. **`StreamNotifiers` internal mechanism** changes (Notify+enable → generation/watch) so
+   `arm` can return an owned `'static` future. No change to its "wake routing per stream,
+   reaped at zero" contract.
 
-No on-disk wire-format change. No change to `RawEventStore` / `RawSubscription` trait
-contracts.
+No on-disk wire-format change.
 
 ## 5. Testing impact
 
-- Existing bounded-read "pagination across refills" tests (`read_yields_all_across_refills`,
-  `read_terminates_at_exact_batch_boundary`, `read_from_midpoint_resumes_across_refills`,
-  `read_reopened_store_recovers_all_across_refills`) lose their `batch_size(4)` knob. They
-  become plain full-read correctness tests (still valid; the lazy `Iter` makes "refills" an
-  implementation detail with nothing to page). Keep them, drop the knob.
-- The live-cursor catch-up re-open cycles were exercised by tiny `batch_size`. To keep
-  exercising multiple reopen cycles cheaply with a fixed internal `CATCHUP_CHUNK`, seed
-  past the constant (e.g. `CATCHUP_CHUNK + a few` events) in the relevant subscription
-  tests. The existing `subscription_drains_many_batches_then_sees_live_event` keeps its
-  intent by seeding `> CATCHUP_CHUNK`.
-- New / retained coverage in the mandatory 4 categories (`CLAUDE.md` rule 7):
-  - **Sequence/Protocol:** open scan → drain → reopen (live) → park → wake → drain.
-  - **Lifecycle:** write/close/reopen recovery (retained); snapshot-consistency of a long
-    bounded read across a concurrent append.
-  - **Defensive boundary:** corrupt key / corrupt value / global_seq mismatch per strategy
-    (`decode` impls) — retained, routed through the unified `ScanStrategy::decode`.
-  - **Linearizability:** the concurrent reader/writer test, now asserting snapshot
-    consistency (gap-free monotonic prefix) under a single `Iter`.
-- `ScanStrategy::decode` unit-tested directly per impl with hand-built rows (preserves the
-  current `decode_row` / `decode_global_row` unit tests).
+- The fjall subscription-cursor tests (`subscription_drains_many_batches...`,
+  `subscribe_all_catches_up...`) move with the loop into `nexus-store`, retargeted at the
+  generic `LiveCursor` driven by `InMemoryStore` (which gains a `WakeSource` impl) — so the
+  loop is tested once, adapter-independently. fjall keeps an integration-level subscription
+  smoke test proving its `RawEventStore + WakeSource` wiring drives the store-side loop.
+- fjall bounded-read "pagination across refills" tests lose their `batch_size(4)` knob and
+  become plain full-read correctness tests (the lazy `Iter` makes refills an implementation
+  detail). Keep them; drop the knob.
+- The generic loop's catch-up reopen cycles are exercised by seeding `> CATCHUP_CHUNK`
+  events against `InMemoryStore`.
+- Mandatory 4 categories (`CLAUDE.md` rule 7):
+  - **Sequence/Protocol:** drain → reopen → arm → park → wake → drain, in `nexus-store`.
+  - **Lifecycle:** write/close/reopen recovery (fjall); long bounded read is
+    snapshot-consistent across a concurrent append (fjall).
+  - **Defensive boundary:** corrupt key / value / global_seq mismatch per fjall
+    `ScanStrategy::decode`; `WakeSource` lost-wakeup race (store, multi-thread).
+  - **Linearizability:** concurrent reader/writer (fjall) asserting snapshot consistency;
+    `WakeSource` concurrent arm/wake-not-lost test (store, ported from the current
+    `concurrent_wake_is_not_lost`).
+- `ScanStrategy::decode` unit-tested per impl with hand-built rows (preserves the current
+  `decode_row`/`decode_global_row` tests).
 
-## 6. Out of scope / follow-ups
+## 6. Risks
 
-- Stack-allocated (`ArrayVec`) scan keys instead of `Vec<u8>` per scan-open.
-- Migrating bulk import/export (#145/#220) to `Keyspace::start_ingestion`.
-- TAIT to drop the live cursor's `Box<dyn>` (revisit when stable).
-- Switching to `OptimisticTxDatabase` (would add fjall's `Conflict` as a retryable source;
-  explicitly *not* wanted — `CLAUDE.md` rule 5 keeps conflicts surfaced, not retried).
+- **`StreamNotifiers` mechanism change** is the load-bearing risk. The current
+  enable-before-read design was a deliberate lost-wakeup fix (#176). The generation/`watch`
+  replacement must be proven lost-wakeup-safe with the ported multi-thread concurrency test
+  *before* the generic loop depends on it. Mitigation: change `notify.rs` + its tests as the
+  first phase, in isolation, and only then build the loop on it.
+- **Deleting `RawSubscription`/`RawAllSubscription`** touches the 1.0 freeze surface and any
+  external adapter stubs. Acceptable per §0 (intentional, postgres-driven), but it is a
+  breaking contract change to call out in the changelog.
+- Holding one `fjall::Iter` across a `CATCHUP_CHUNK`-bounded drain pins the GC nonce for that
+  chunk only; `CATCHUP_CHUNK` trades GC-pressure vs reopen overhead. 1024 is a starting
+  point, tunable later if profiling shows pressure.
 
-## 7. Open questions
+## 7. Out of scope / follow-ups
 
-None outstanding. `batch_size` removal and the snapshot-consistency behavior change were
+- Stack-allocated (`ArrayVec`) fjall scan keys instead of `Vec<u8>` per scan-open.
+- Bulk import/export (#145/#220) via `Keyspace::start_ingestion`.
+- A postgres `WakeSource` impl (the consumer that validates this extraction; separate repo
+  / milestone).
+
+## 8. Open questions
+
+None outstanding. `batch_size` removal, the snapshot-consistency change, and placing the
+loop + wake interface in `nexus-store` (deleting the adapter subscription traits) were
 decided during design.
