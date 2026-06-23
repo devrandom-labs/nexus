@@ -153,12 +153,167 @@ impl ScanStrategy for GlobalScan {
     }
 }
 
+/// A bounded read cursor over a single lazy `fjall::Iter`.
+///
+/// `fjall::Keyspace::range` returns a lazy k-way-merge cursor over LSM blocks
+/// (it pulls the next block from disk only when the current one drains), so a
+/// single `Iter` already bounds memory — no batching/refill needed. Holding it
+/// pins one consistent snapshot for the read's duration (repeatable-read).
+pub struct ScanCursor<S: ScanStrategy> {
+    iter: fjall::Iter,
+    strategy: S,
+    /// Once an error is yielded the cursor is poisoned: subsequent polls return
+    /// `None` rather than silently skipping corrupt rows.
+    poisoned: bool,
+}
+
+impl<S: ScanStrategy> ScanCursor<S> {
+    /// Open a bounded scan from `from` (inclusive). Fallible only because the
+    /// keyset bound keys may fail to encode (e.g. an over-long id).
+    pub fn open(
+        keyspace: &fjall::SingleWriterTxKeyspace,
+        strategy: S,
+        from: S::Position,
+    ) -> Result<Self, FjallError> {
+        let lower = strategy.lower_key(from)?;
+        let upper = strategy.upper_key()?;
+        let iter = keyspace.inner().range(lower..=upper);
+        Ok(Self {
+            iter,
+            strategy,
+            poisoned: false,
+        })
+    }
+
+    fn poll_one(&mut self) -> Option<Result<PersistedEnvelope, FjallError>> {
+        if self.poisoned {
+            return None;
+        }
+        let guard = self.iter.next()?;
+        let (key, value) = match guard.into_inner() {
+            Ok(kv) => kv,
+            Err(e) => {
+                self.poisoned = true;
+                return Some(Err(FjallError::Io(e)));
+            }
+        };
+        match self.strategy.decode(&key, value) {
+            Ok(env) => Some(Ok(env)),
+            Err(e) => {
+                self.poisoned = true;
+                Some(Err(e))
+            }
+        }
+    }
+}
+
+impl<S: ScanStrategy + Unpin> futures::Stream for ScanCursor<S> {
+    type Item = Result<PersistedEnvelope, FjallError>;
+
+    fn poll_next(
+        self: core::pin::Pin<&mut Self>,
+        _cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        core::task::Poll::Ready(self.get_mut().poll_one())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 #[allow(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
     use crate::encoding::encode_event_value;
+    use crate::store::FjallStore;
+    use crate::store::batch_test_helpers::{Tid, store_with_batch, tid};
+    use futures::StreamExt;
+    use nexus::Id;
+    use nexus_store::envelope::pending_envelope;
+    use nexus_store::store::RawEventStore;
+
+    async fn append_versions(
+        store: &FjallStore,
+        id: &Tid,
+        versions: std::ops::RangeInclusive<u64>,
+    ) {
+        for v in versions {
+            let env = pending_envelope(Version::new(v).unwrap())
+                .event_type("E")
+                .payload(format!("v{v}").into_bytes())
+                .unwrap()
+                .build();
+            store.append(id, Version::new(v - 1), &[env]).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn scan_cursor_yields_rows_in_order() {
+        let (store, _dir) = store_with_batch(4);
+        let id = tid("s");
+        append_versions(&store, &id, 1..=3).await;
+
+        let cursor = ScanCursor::open(
+            &store.events,
+            StreamScan {
+                id: OwnedStreamId::from_id(&id),
+                label: id.to_label(),
+            },
+            Version::INITIAL,
+        )
+        .unwrap();
+
+        let versions: Vec<u64> = cursor
+            .map(|item| item.unwrap().version().as_u64())
+            .collect()
+            .await;
+        assert_eq!(versions, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn scan_cursor_opens_from_midpoint() {
+        let (store, _dir) = store_with_batch(4);
+        let id = tid("s");
+        append_versions(&store, &id, 1..=5).await;
+
+        let cursor = ScanCursor::open(
+            &store.events,
+            StreamScan {
+                id: OwnedStreamId::from_id(&id),
+                label: id.to_label(),
+            },
+            Version::new(3).unwrap(),
+        )
+        .unwrap();
+
+        let versions: Vec<u64> = cursor
+            .map(|item| item.unwrap().version().as_u64())
+            .collect()
+            .await;
+        assert_eq!(versions, vec![3, 4, 5]);
+    }
+
+    #[tokio::test]
+    async fn scan_cursor_global_yields_ascending_global_seq() {
+        let (store, _dir) = store_with_batch(4);
+        let a = tid("a");
+        let b = tid("b");
+
+        // Interleave appends across two streams so global_seq order differs
+        // from per-stream version order.
+        append_versions(&store, &a, 1..=1).await; // global_seq 1
+        append_versions(&store, &b, 1..=1).await; // global_seq 2
+        append_versions(&store, &a, 2..=2).await; // global_seq 3
+        append_versions(&store, &b, 2..=2).await; // global_seq 4
+
+        let cursor =
+            ScanCursor::open(&store.events_global, GlobalScan, GlobalSeq::INITIAL).unwrap();
+
+        let seqs: Vec<u64> = cursor
+            .map(|item| item.unwrap().global_seq().as_u64())
+            .collect()
+            .await;
+        assert_eq!(seqs, vec![1, 2, 3, 4]);
+    }
 
     fn stream_scan(id_bytes: &[u8], label: &str) -> StreamScan {
         StreamScan {
