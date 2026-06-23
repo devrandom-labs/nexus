@@ -242,6 +242,12 @@ impl StreamNotifiers {
     ///
     /// MUST be called *after* the corresponding event(s) are durably committed,
     /// so that a woken subscriber re-reads already-visible data.
+    ///
+    /// On the production `$all` path an adapter typically calls `wake(id)` then
+    /// [`wake_all`](Self::wake_all) per append, so `all_gen_tx` is bumped twice.
+    /// This is benign: the generation is compared for inequality and spurious
+    /// wakes are permitted. The redundancy goes away when the legacy
+    /// [`Notify`]/[`wake_all`](Self::wake_all) path is removed in a later phase.
     pub fn wake(&self, stream: &[u8]) {
         // Clone the `Arc` out under the lock, then release it before waking, so
         // woken subscribers don't immediately contend on the map lock they have
@@ -392,10 +398,13 @@ pub struct WakeReg {
 impl WakeRegistration for WakeReg {
     fn arm(&self) -> impl Future<Output = ()> + Send + 'static {
         let mut rx = self.rx.clone();
-        // Mark the current generation as seen AT ARM TIME, so only a *future*
-        // bump (a `wake` after this point) resolves `changed()`. A wake that
-        // lands between `arm` and the await still bumps the generation, so it
-        // is observed — never lost.
+        // The clone alone is insufficient: a freshly cloned `watch::Receiver`
+        // inherits the sender's version as of the clone, which may predate this
+        // `arm` call. `mark_unchanged()` narrows the captured-version point to
+        // the exact instant `arm` is called, making the contract's "seen-version
+        // at arm() time" precise and closing the clone→mark window — so only a
+        // *future* bump (a `wake` after this point) resolves `changed()`, and a
+        // wake landing between `arm` and the await is observed, never lost.
         rx.mark_unchanged();
         async move {
             // `Err` only if every sender has been dropped; treat that as a

@@ -113,4 +113,22 @@ mod tests {
         let reg = StreamNotifiers::new();
         arm_and_wake(reg.as_ref()).await;
     }
+
+    /// Dropping a per-stream `WakeReg` reaps the entry through the guard chain.
+    #[tokio::test]
+    async fn dropping_registration_reaps_entry() {
+        let reg = StreamNotifiers::new();
+        let registration = reg.register(Some(b"s")).unwrap();
+        assert_eq!(
+            reg.active_streams(),
+            1,
+            "register(Some) must create one entry"
+        );
+        drop(registration);
+        assert_eq!(
+            reg.active_streams(),
+            0,
+            "dropping the registration must reap the entry"
+        );
+    }
 }
