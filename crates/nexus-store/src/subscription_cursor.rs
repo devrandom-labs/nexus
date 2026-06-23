@@ -19,6 +19,8 @@ use crate::catchup::Catchup;
 /// Reopen granularity: drop + reopen the bounded scan every `CATCHUP_CHUNK`
 /// delivered rows during catch-up, so one adapter scan (and the GC watermark
 /// it may pin) is never held across an unbounded backlog.
+// pub (not pub(crate)) to satisfy clippy::redundant_pub_crate inside a
+// pub(crate) module.
 pub const CATCHUP_CHUNK: usize = 1024;
 
 /// Live-loop state threaded through [`futures::stream::unfold`].
@@ -37,11 +39,30 @@ struct LiveState<C: Catchup> {
 /// The returned stream NEVER yields `None`: once caught up it parks on
 /// [`Catchup::arm`] and resumes when a wake lands. Bound it with `take(..)` if
 /// a finite prefix is wanted.
+///
+/// # On error
+///
+/// Adapter errors — both a failure to open a scan ([`Catchup::read_from`]) and
+/// a failing scan item — are surfaced as `Err` stream items. The cursor does
+/// **not** terminate on an error and does **not** back off: the next poll
+/// reopens a scan from the last *successfully delivered* position. A delivered
+/// event is therefore never re-delivered, but a *persistent* error is
+/// re-surfaced on every subsequent poll (there is no internal retry budget or
+/// dead-letter). Consumers MUST stop consuming on `Err` (e.g. via
+/// [`futures::TryStreamExt`]); recovery policy (dead-letter / rebuild) is the
+/// consumer's concern. This matches the "never returns `None`" subscription
+/// contract — the stream end is the consumer's decision, not the cursor's.
+// pub (not pub(crate)) to satisfy clippy::redundant_pub_crate inside a
+// pub(crate) module.
 pub fn live<C: Catchup + 'static>(
     c: C,
     from: Option<C::Position>,
 ) -> impl futures::Stream<Item = Result<PersistedEnvelope, C::Error>> + Send
 where
+    // `StreamExt::next` requires `Unpin`, and the scan is held by-value across
+    // awaits in the `unfold` state — so the scan must be `Unpin`. Placed
+    // locally on this fn rather than on the `Catchup` trait to avoid
+    // over-constraining the seam.
     C::Scan: Unpin,
 {
     let state = LiveState {
@@ -70,6 +91,8 @@ where
             }
 
             // (2) Drain one item.
+            // Unreachable: phase (1) just guaranteed an open scan. Defensive
+            // only — never taken in practice.
             let Some(scan) = s.scan.as_mut() else {
                 continue;
             };
@@ -128,9 +151,9 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
-    use crate::catchup::{OwnedSubId, StreamCatchup};
+    use crate::catchup::{AllCatchup, Catchup, OwnedSubId, StreamCatchup};
     use crate::envelope::pending_envelope;
-    use crate::store::RawEventStore;
+    use crate::store::{GlobalSeq, RawEventStore};
     use crate::testing::InMemoryStore;
 
     const MUST_DELIVER: Duration = Duration::from_secs(5);
@@ -228,6 +251,162 @@ mod tests {
         assert_eq!(
             versions, expected,
             "chunk-reopen must deliver 1..=total with no duplicate and no gap"
+        );
+    }
+
+    /// The same loop drives `$all` (GlobalSeq order). Catch-up must interleave
+    /// two streams by `global_seq`, and a post-subscribe append to *either*
+    /// stream must reach the parked cursor live (the `$all` wake path).
+    #[tokio::test]
+    async fn all_catchup_yields_global_order_then_live_append() {
+        let store = Arc::new(InMemoryStore::new());
+        // Interleave across two streams so global_seq spans both: a@1, b@1, a@2.
+        seed_range(&store, &OwnedSubId::new(b"a"), 1, 1).await;
+        seed_range(&store, &OwnedSubId::new(b"b"), 1, 1).await;
+        // a@2 builds on a's head (expected version 1).
+        let env = pending_envelope(Version::new(2).unwrap())
+            .event_type("E")
+            .payload(b"e".to_vec())
+            .unwrap()
+            .build();
+        store
+            .append(&OwnedSubId::new(b"a"), Version::new(1), &[env])
+            .await
+            .unwrap();
+
+        let catchup = AllCatchup::new(Arc::clone(&store)).unwrap();
+        let cursor = live(catchup, None);
+        tokio::pin!(cursor);
+
+        // Catch-up: ascending global_seq across both streams.
+        let mut seqs = Vec::new();
+        for _ in 0..3 {
+            let env = timeout(MUST_DELIVER, cursor.next())
+                .await
+                .expect("catch-up event must arrive")
+                .expect("stream never ends")
+                .unwrap();
+            seqs.push(env.global_seq().as_u64());
+        }
+        assert_eq!(
+            seqs,
+            vec![1, 2, 3],
+            "$all catch-up must deliver every stream's events in GlobalSeq order"
+        );
+
+        // Live: append to stream `b` after the cursor parked — must wake it.
+        let writer = Arc::clone(&store);
+        let appender = tokio::spawn(async move {
+            let env = pending_envelope(Version::new(2).unwrap())
+                .event_type("E")
+                .payload(b"e".to_vec())
+                .unwrap()
+                .build();
+            writer
+                .append(&OwnedSubId::new(b"b"), Version::new(1), &[env])
+                .await
+                .unwrap();
+        });
+
+        let live_env = timeout(MUST_DELIVER, cursor.next())
+            .await
+            .expect("live append must wake the parked $all cursor")
+            .expect("stream never ends")
+            .unwrap();
+        assert_eq!(
+            live_env.global_seq().as_u64(),
+            4,
+            "$all live tail must deliver the post-subscribe append at global_seq 4"
+        );
+        appender.await.unwrap();
+    }
+
+    // ── Error propagation ────────────────────────────────────────────────────
+
+    /// A test-only error so the mock `Catchup`'s scan can fail. `InMemoryStore`
+    /// reads never fail, so the only way to exercise the loop's error path is to
+    /// inject a failing dependency at the `Catchup` seam. The SUT under test is
+    /// `live`; this is a failing dependency, NOT a reimplementation of the loop.
+    #[derive(Debug)]
+    struct BoomError;
+
+    impl core::fmt::Display for BoomError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("boom")
+        }
+    }
+
+    impl std::error::Error for BoomError {}
+
+    /// A `Catchup` whose scan yields one `Ok(env)` then one `Err(BoomError)`.
+    /// The scan never exhausts before the `Err`, so `arm` is never reached by
+    /// the test; it returns a ready future for completeness. The `Ok` envelope
+    /// is a real [`PersistedEnvelope`] read back from an [`InMemoryStore`] (not
+    /// fabricated), so only the error is synthetic.
+    struct FailingCatchup {
+        ok_env: PersistedEnvelope,
+    }
+
+    impl Catchup for FailingCatchup {
+        type Position = GlobalSeq;
+        type Scan = futures::stream::Iter<std::vec::IntoIter<Result<PersistedEnvelope, BoomError>>>;
+        type Error = BoomError;
+
+        fn read_from(
+            &self,
+            _from: GlobalSeq,
+        ) -> impl core::future::Future<Output = Result<Self::Scan, Self::Error>> + Send {
+            // One Ok then one Err — the loop must surface both, in order.
+            let scan = futures::stream::iter(vec![Ok(self.ok_env.clone()), Err(BoomError)]);
+            core::future::ready(Ok(scan))
+        }
+
+        fn arm(&self) -> impl core::future::Future<Output = ()> + Send + 'static {
+            core::future::ready(())
+        }
+
+        fn position_of(env: &PersistedEnvelope) -> GlobalSeq {
+            env.global_seq()
+        }
+
+        fn next_pos(resume: Option<GlobalSeq>) -> Option<GlobalSeq> {
+            resume.map_or(Some(GlobalSeq::INITIAL), GlobalSeq::next)
+        }
+    }
+
+    /// An adapter scan item error is surfaced as an `Err` stream item, in order
+    /// after the preceding `Ok`. The loop neither swallows the error nor
+    /// terminates the stream on it.
+    #[tokio::test]
+    async fn scan_item_error_is_surfaced_in_order() {
+        // Read back a real PersistedEnvelope to feed the mock's Ok item.
+        let store = Arc::new(InMemoryStore::new());
+        seed_range(&store, &OwnedSubId::new(b"s"), 1, 1).await;
+        let ok_env = store
+            .read_all(GlobalSeq::INITIAL)
+            .await
+            .unwrap()
+            .next()
+            .await
+            .expect("seeded event must be present")
+            .unwrap();
+
+        let cursor = live(FailingCatchup { ok_env }, None);
+        tokio::pin!(cursor);
+
+        let first = timeout(MUST_DELIVER, cursor.next())
+            .await
+            .expect("first item must arrive")
+            .expect("stream never ends");
+        assert!(first.is_ok(), "first item is the Ok event, got {first:?}");
+
+        let second = timeout(MUST_DELIVER, cursor.next())
+            .await
+            .expect("error item must arrive")
+            .expect("stream never ends");
+        assert!(
+            second.is_err(),
+            "scan error must be surfaced as Err, got {second:?}"
         );
     }
 }
