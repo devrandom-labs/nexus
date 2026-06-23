@@ -231,7 +231,7 @@ mod tests {
     use super::*;
     use crate::encoding::encode_event_value;
     use crate::store::FjallStore;
-    use crate::store::batch_test_helpers::{Tid, store_with_batch, tid};
+    use crate::store::read_test_helpers::{Tid, temp_store, tid};
     use futures::StreamExt;
     use nexus::Id;
     use nexus_store::envelope::pending_envelope;
@@ -254,7 +254,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_cursor_yields_rows_in_order() {
-        let (store, _dir) = store_with_batch(4);
+        let (store, _dir) = temp_store();
         let id = tid("s");
         append_versions(&store, &id, 1..=3).await;
 
@@ -277,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_cursor_opens_from_midpoint() {
-        let (store, _dir) = store_with_batch(4);
+        let (store, _dir) = temp_store();
         let id = tid("s");
         append_versions(&store, &id, 1..=5).await;
 
@@ -300,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn scan_cursor_global_yields_ascending_global_seq() {
-        let (store, _dir) = store_with_batch(4);
+        let (store, _dir) = temp_store();
         let a = tid("a");
         let b = tid("b");
 

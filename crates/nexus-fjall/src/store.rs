@@ -322,7 +322,7 @@ impl WakeSource for FjallStore {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
-pub(crate) mod batch_test_helpers {
+pub(crate) mod read_test_helpers {
     use super::*;
     use nexus_store::envelope::pending_envelope;
 
@@ -346,10 +346,9 @@ pub(crate) mod batch_test_helpers {
         Tid(s.to_owned())
     }
 
-    // `n` is retained for call-site readability of the seeded count vs the
-    // historical batch boundary; the cursor is now lazy (one `fjall::Iter`) and
-    // reads the whole range, so there is no batch knob to set.
-    pub fn store_with_batch(_n: usize) -> (FjallStore, tempfile::TempDir) {
+    // Opens a default store. The cursor is a single lazy `fjall::Iter` that
+    // reads the whole range, so there is no batch knob to configure.
+    pub fn temp_store() -> (FjallStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
         (store, dir)
@@ -564,12 +563,12 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
-    // ---- bounded-read (batch pagination) tests ----
+    // ---- bounded-read tests (single lazy Iter, no pagination) ----
 
     #[tokio::test]
-    async fn read_yields_all_across_refills() {
-        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
-        let (store, _dir) = store_with_batch(4);
+    async fn read_yields_all_rows_in_order() {
+        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
+        let (store, _dir) = temp_store();
         let id = btid("s");
         seed(&store, &id, 14).await;
         let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
@@ -581,11 +580,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_terminates_at_exact_batch_boundary() {
-        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
-        let (store, _dir) = store_with_batch(4);
+    async fn read_terminates_at_end_of_stream() {
+        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
+        let (store, _dir) = temp_store();
         let id = btid("s");
-        seed(&store, &id, 8).await; // exactly 2 full batches
+        seed(&store, &id, 8).await;
         let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
         let mut count = 0u64;
         while let Some(item) = futures::StreamExt::next(&mut stream).await {
@@ -596,9 +595,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_from_midpoint_resumes_across_refills() {
-        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
-        let (store, _dir) = store_with_batch(3);
+    async fn read_from_midpoint() {
+        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
+        let (store, _dir) = temp_store();
         let id = btid("s");
         seed(&store, &id, 10).await;
         let mut stream = store
@@ -613,7 +612,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_reopened_store_recovers_all_across_refills() {
+    async fn read_reopened_store_recovers_all() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
         let id = tid("s");
@@ -740,17 +739,17 @@ mod tests {
     )]
     #[tokio::test]
     async fn reader_sees_monotonic_gapfree_while_writer_appends() {
-        use crate::store::batch_test_helpers::{seed, store_with_batch, tid as btid};
+        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
         use std::sync::Arc as StdArc;
         use tokio::sync::Barrier;
 
-        let (raw_store, _dir) = store_with_batch(4);
+        let (raw_store, _dir) = temp_store();
         let store = StdArc::new(raw_store);
         let id = btid("s");
         seed(&store, &id, 4).await;
 
         // Force the writer and reader to start together so the reader's
-        // pagination genuinely races concurrent appends.
+        // lazy scan genuinely races concurrent appends.
         let barrier = StdArc::new(Barrier::new(2));
 
         let writer = StdArc::clone(&store);
@@ -788,7 +787,7 @@ mod tests {
         handle.await.unwrap();
 
         // Deterministic completeness check: after all writes commit, a fresh
-        // paginating read must yield every event 1..=20 in order.
+        // lazy scan must yield every event 1..=20 in order.
         let mut full = store.read_stream(&id, Version::INITIAL).await.unwrap();
         let mut seen = Vec::new();
         while let Some(item) = futures::StreamExt::next(&mut full).await {

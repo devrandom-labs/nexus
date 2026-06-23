@@ -121,6 +121,12 @@ pub trait RawEventStore: Send + Sync {
     /// `Result<PersistedEnvelope, Self::Error>`. The owned-`Bytes`
     /// envelope means cursors don't need to lend per-record; the
     /// stream's `Item` is the envelope by value.
+    ///
+    /// Note: the subscription path ([`Subscription::subscribe`]) requires the
+    /// stream be `Unpin`. No bound is imposed here, but all shipped adapters
+    /// (`ScanCursor`, `InMemoryStream`) satisfy it.
+    ///
+    /// [`Subscription::subscribe`]: crate::subscription::Subscription::subscribe
     type Stream: EventStream<Error = Self::Error> + 'static;
 
     /// The stream type for an all-streams (`$all`) read.
@@ -129,6 +135,12 @@ pub trait RawEventStore: Send + Sync {
     /// `Result<PersistedEnvelope, Self::Error>` ordered by [`GlobalSeq`],
     /// not by `(stream, version)`. Distinct from [`Stream`](Self::Stream)
     /// because the global order is a different physical index.
+    ///
+    /// Note: the subscription path ([`Subscription::subscribe`]) requires the
+    /// stream be `Unpin`. No bound is imposed here, but all shipped adapters
+    /// (`ScanCursor`, `InMemoryStream`) satisfy it.
+    ///
+    /// [`Subscription::subscribe`]: crate::subscription::Subscription::subscribe
     type AllStream: EventStream<Error = Self::Error> + 'static;
 
     /// Append events to a stream with optimistic concurrency.

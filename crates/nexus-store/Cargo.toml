@@ -14,7 +14,7 @@ categories = ["data-structures"]
 # Per-stream subscription wake path (`notify` module). Pulls `tokio` (for its
 # `Notify` sync primitive), `foldhash` (fast hot-path hasher), and `parking_lot`
 # (sync `Mutex` lockable from the drop-guard's `Drop`). Adapter crates that
-# implement `RawSubscription` enable this; pure event-sourcing users
+# implement `WakeSource` enable this; pure event-sourcing users
 # (repository/codec/wire only) build with no tokio dependency at all.
 subscription = ["dep:tokio", "dep:foldhash", "dep:parking_lot"]
 # `testing` ships `InMemoryStore`, whose subscription cursor uses the wake
