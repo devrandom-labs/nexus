@@ -4,14 +4,9 @@
 //! subscription cursor monomorphize into two branch-free state machines — no
 //! `dyn`, no boxing.
 //!
-//! This module is additive scaffolding: the seam is defined here but consumed
-//! only by the single generic live loop (a follow-up task). Until that loop
-//! lands, the trait, both impls, and their accessors have no in-crate caller —
-//! hence the module-wide `dead_code` allow.
-#![allow(
-    dead_code,
-    reason = "additive seam consumed by the not-yet-wired generic live loop"
-)]
+//! The seam is consumed by the single generic live loop in
+//! [`subscription_cursor`](crate::subscription_cursor), which the user-facing
+//! [`Subscription`](crate::Subscription) assembles per call site.
 
 use core::future::Future;
 use std::sync::Arc;

@@ -5,13 +5,14 @@
 //!
 //! ## Lifetime note
 //!
-//! `FjallStream` is owned (eagerly loads events into a `Vec<Slice>`) but the
-//! `Slice`s reference fjall keyspace storage that becomes invalid when the
-//! `FjallStore` or its on-disk directory drops. The conformance suite calls
-//! `make_stream` and uses the returned stream after the closure returns, so
-//! we wrap the stream alongside its owning store and `TempDir` in
-//! [`OwnedFjallStream`]. The wrapper delegates `EventStream::next` and keeps
-//! the underlying resources alive for the lifetime of the stream.
+//! `read_stream` returns a `ScanCursor` holding a live `fjall::Iter` over the
+//! keyspace; that iterator becomes invalid when the `FjallStore` or its on-disk
+//! directory drops. The conformance suite calls `make_stream` and uses the
+//! returned stream after the closure returns, so we wrap the stream alongside
+//! its owning store and `TempDir` in [`OwnedFjallStream`] (generic over the
+//! opaque cursor type, which `nexus-fjall` does not export). The wrapper
+//! delegates `poll_next` and keeps the underlying resources alive for the
+//! stream's lifetime.
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 #![allow(clippy::expect_used, reason = "tests")]
@@ -20,7 +21,7 @@
 use std::num::NonZeroU32;
 
 use nexus::{Id, Version};
-use nexus_fjall::{FjallError, FjallStore, FjallStream};
+use nexus_fjall::{FjallError, FjallStore};
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::{PersistedEnvelope, pending_envelope};
 use nexus_store::store::RawEventStore;
@@ -46,17 +47,21 @@ impl Id for StreamName {
     const BYTE_LEN: usize = 0;
 }
 
-/// A `FjallStream` plus the `FjallStore` and `TempDir` it depends on. The
-/// inner stream's owned slices reference data that becomes invalid when the
-/// keyspace closes or the on-disk dir is cleaned up, so we keep both alive
-/// for the stream's lifetime.
-struct OwnedFjallStream {
-    inner: FjallStream,
+/// The `read_stream` cursor plus the `FjallStore` and `TempDir` it depends on.
+/// The cursor holds a live `fjall::Iter` referencing data that becomes invalid
+/// when the keyspace closes or the on-disk dir is cleaned up, so we keep both
+/// alive for the stream's lifetime. Generic over the opaque cursor type (the
+/// concrete `ScanCursor<StreamScan>` is not exported by `nexus-fjall`).
+struct OwnedFjallStream<St> {
+    inner: St,
     _store: FjallStore,
     _tempdir: tempfile::TempDir,
 }
 
-impl futures::Stream for OwnedFjallStream {
+impl<St> futures::Stream for OwnedFjallStream<St>
+where
+    St: futures::Stream<Item = Result<PersistedEnvelope, FjallError>> + Unpin,
+{
     type Item = Result<PersistedEnvelope, FjallError>;
 
     fn poll_next(

@@ -89,10 +89,8 @@ async fn subscribe_catchup_then_live() {
     append_one(&store, &id, 2, Version::new(1), "E2").await;
 
     // Subscribe from the beginning (None = start from version 1).
-    let mut stream = Subscription::new(&store)
-        .subscribe(&id, None)
-        .await
-        .unwrap();
+    let stream = Subscription::new(&store).subscribe(&id, None).unwrap();
+    futures::pin_mut!(stream);
 
     // Read catch-up event 1.
     let env1 = timeout(TIMEOUT, stream.next())
@@ -137,10 +135,10 @@ async fn subscribe_from_checkpoint() {
     append_one(&store, &id, 3, Version::new(2), "E3").await;
 
     // Subscribe from version 2 (should yield events AFTER version 2, i.e., event 3).
-    let mut stream = Subscription::new(&store)
+    let stream = Subscription::new(&store)
         .subscribe(&id, Some(Version::new(2).unwrap()))
-        .await
         .unwrap();
+    futures::pin_mut!(stream);
 
     let env = timeout(TIMEOUT, stream.next())
         .await
@@ -166,10 +164,8 @@ async fn drop_and_resubscribe() {
 
     // Subscribe, read event, note checkpoint version, drop.
     let checkpoint = {
-        let mut sub_stream = Subscription::new(&store)
-            .subscribe(&id, None)
-            .await
-            .unwrap();
+        let sub_stream = Subscription::new(&store).subscribe(&id, None).unwrap();
+        futures::pin_mut!(sub_stream);
         let first_env = timeout(TIMEOUT, sub_stream.next())
             .await
             .unwrap()
@@ -184,10 +180,10 @@ async fn drop_and_resubscribe() {
     append_one(&store, &id, 3, Version::new(2), "E3").await;
 
     // Re-subscribe from saved checkpoint.
-    let mut stream = Subscription::new(&store)
+    let stream = Subscription::new(&store)
         .subscribe(&id, Some(checkpoint))
-        .await
         .unwrap();
+    futures::pin_mut!(stream);
 
     // Should get events 2 and 3 (after the checkpoint).
     let env2 = timeout(TIMEOUT, stream.next())
@@ -224,10 +220,8 @@ async fn write_close_reopen_subscribe() {
     // Phase 2: Reopen and subscribe — verify all events via catch-up.
     {
         let store = Store::new(FjallStore::builder(&db_path).open().unwrap());
-        let mut stream = Subscription::new(&store)
-            .subscribe(&id, None)
-            .await
-            .unwrap();
+        let stream = Subscription::new(&store).subscribe(&id, None).unwrap();
+        futures::pin_mut!(stream);
 
         let env1 = timeout(TIMEOUT, stream.next())
             .await
@@ -257,10 +251,8 @@ async fn subscribe_to_nonexistent_stream_waits() {
     let store = Store::new(store);
     let id = TestId::new("ghost-stream");
 
-    let mut stream = Subscription::new(&store)
-        .subscribe(&id, None)
-        .await
-        .unwrap();
+    let stream = Subscription::new(&store).subscribe(&id, None).unwrap();
+    futures::pin_mut!(stream);
 
     // next() should block because the stream doesn't exist yet.
     let result = tokio::time::timeout(Duration::from_millis(50), stream.next()).await;
@@ -290,10 +282,10 @@ async fn subscribe_from_beyond_head() {
     append_one(&store, &id, 2, Version::new(1), "E2").await;
 
     // Subscribe from version 5 — beyond the current head.
-    let mut stream = Subscription::new(&store)
+    let stream = Subscription::new(&store)
         .subscribe(&id, Some(Version::new(5).unwrap()))
-        .await
         .unwrap();
+    futures::pin_mut!(stream);
 
     // Should block — no events at version 6+.
     let result = tokio::time::timeout(Duration::from_millis(50), stream.next()).await;
@@ -326,10 +318,8 @@ async fn concurrent_append_and_subscribe() {
     let id = TestId::new("concurrent-stream");
     let event_count: u64 = 50;
 
-    let mut stream = Subscription::new(&store)
-        .subscribe(&id, None)
-        .await
-        .unwrap();
+    let stream = Subscription::new(&store).subscribe(&id, None).unwrap();
+    futures::pin_mut!(stream);
 
     // Spawn a task that appends events sequentially.
     let writer_store = store.clone();
@@ -379,10 +369,8 @@ async fn append_during_catchup_no_loss() {
         append_one(&store, &id, i, expected, "Prepop").await;
     }
 
-    let mut stream = Subscription::new(&store)
-        .subscribe(&id, None)
-        .await
-        .unwrap();
+    let stream = Subscription::new(&store).subscribe(&id, None).unwrap();
+    futures::pin_mut!(stream);
 
     // Read first 5 events (mid-catch-up).
     for expected_v in 1..=5u64 {
@@ -416,8 +404,9 @@ async fn multiple_subscribers_same_stream() {
 
     // Two subscribers to the same stream.
     let sub = Subscription::new(&store);
-    let mut sub1 = sub.subscribe(&id, None).await.unwrap();
-    let mut sub2 = sub.subscribe(&id, None).await.unwrap();
+    let sub1 = sub.subscribe(&id, None).unwrap();
+    let sub2 = sub.subscribe(&id, None).unwrap();
+    futures::pin_mut!(sub1, sub2);
 
     // Append one event.
     append_one(&store, &id, 1, None, "SharedEvent").await;
@@ -453,9 +442,6 @@ async fn subscription_cursor_is_static() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
     let id = TestId::new("s-1");
-    let sub = Subscription::new(&store)
-        .subscribe(&id, None)
-        .await
-        .unwrap();
+    let sub = Subscription::new(&store).subscribe(&id, None).unwrap();
     assert_static(&sub);
 }

@@ -2,14 +2,8 @@
 //! Returned as `impl Stream` (RPIT) — no `Box<dyn>`. Holds the only copy of
 //! the arm-before-confirm-rescan lost-wakeup discipline, for every adapter.
 //!
-//! This module is additive: the loop is defined here but not yet wired into the
-//! public [`Subscription`](crate::Subscription) (a follow-up task). Until then
-//! it has no non-test in-crate caller — hence the module-wide `dead_code` allow,
-//! matching the [`catchup`](crate::catchup) seam it consumes.
-#![allow(
-    dead_code,
-    reason = "additive live loop not yet wired into the public Subscription"
-)]
+//! The user-facing [`Subscription`](crate::Subscription) assembles this loop
+//! per call site over the [`catchup`](crate::catchup) seam.
 
 use futures::StreamExt;
 
@@ -142,6 +136,12 @@ where
 
 #[cfg(all(test, feature = "testing"))]
 #[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(clippy::shadow_reuse, reason = "test code: env rebinds per loop turn")]
+#[allow(
+    clippy::shadow_unrelated,
+    reason = "test code: env rebinds per loop turn"
+)]
+#[allow(clippy::doc_markdown, reason = "test code: prose doc comments")]
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;

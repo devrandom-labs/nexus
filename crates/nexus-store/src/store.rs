@@ -86,7 +86,9 @@ impl<S> Store<S> {
     ///
     /// `pub(crate)` so the subscription module can pull the `Arc` out for
     /// [`Subscription::new`](crate::subscription::Subscription::new) without
-    /// leaking `Arc` to library users.
+    /// leaking `Arc` to library users. Only the `subscription` feature needs
+    /// it, so it is gated to avoid a dead-code warning otherwise.
+    #[cfg(feature = "subscription")]
     #[must_use]
     pub(crate) const fn arc(&self) -> &Arc<S> {
         &self.inner

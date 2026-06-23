@@ -1,21 +1,17 @@
-use crate::all_stream::FjallAllStream;
-use crate::all_subscription_stream::FjallAllSubscriptionStream;
 use crate::builder::FjallStoreBuilder;
 use crate::encoding::{
     decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
 };
 use crate::error::{FjallError, reason_label};
-use crate::stream::FjallStream;
+use crate::scan::{GlobalScan, ScanCursor, StreamScan};
 use crate::subscription_id::OwnedStreamId;
-use crate::subscription_stream::FjallSubscriptionStream;
 use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
-use nexus_store::batch::BatchSize;
 use nexus_store::error::AppendError;
-use nexus_store::notify::StreamNotifiers;
+use nexus_store::notify::{NotifyError, StreamNotifiers, WakeReg};
 use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::subscription::{RawAllSubscription, RawSubscription, sealed};
+use nexus_store::wake::WakeSource;
 use nexus_store::wire;
 use std::path::Path;
 use std::sync::Arc;
@@ -50,8 +46,6 @@ pub struct FjallStore {
     /// `append` calls `wake(X)`, rousing only the subscribers parked on
     /// `X` rather than every subscriber in the store.
     pub(crate) notifiers: Arc<StreamNotifiers>,
-    /// Maximum event rows materialized per read batch / refill.
-    pub(crate) batch_size: BatchSize,
 }
 
 impl FjallStore {
@@ -64,8 +58,8 @@ impl FjallStore {
 
 impl RawEventStore for FjallStore {
     type Error = FjallError;
-    type Stream = FjallStream;
-    type AllStream = FjallAllStream;
+    type Stream = ScanCursor<StreamScan>;
+    type AllStream = ScanCursor<GlobalScan>;
 
     #[allow(
         clippy::significant_drop_tightening,
@@ -228,22 +222,19 @@ impl RawEventStore for FjallStore {
 
     async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
         // A single bounded range scan; a nonexistent stream simply yields an
-        // empty first batch (done), so no separate existence check is needed.
-        FjallStream::new(
-            self.events.clone(),
-            OwnedStreamId::from_id(id),
-            from.as_u64(),
-            self.batch_size.get(),
-            id.to_label(),
+        // empty range, so no separate existence check is needed.
+        ScanCursor::open(
+            &self.events,
+            StreamScan {
+                id: OwnedStreamId::from_id(id),
+                label: id.to_label(),
+            },
+            from,
         )
     }
 
     async fn read_all(&self, from: GlobalSeq) -> Result<Self::AllStream, Self::Error> {
-        FjallAllStream::new(
-            self.events_global.clone(),
-            from.as_u64(),
-            self.batch_size.get(),
-        )
+        ScanCursor::open(&self.events_global, GlobalScan, from)
     }
 }
 
@@ -307,60 +298,25 @@ mod snapshot_impl {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RawSubscription impl
+// WakeSource impl — adapter-pluggable live wake for the generic subscription
+// loop assembled in `nexus_store::subscription::Subscription`.
 // ═══════════════════════════════════════════════════════════════════════════
 
-impl sealed::Sealed for FjallStore {}
+/// Delegates wake-routing to the store's [`StreamNotifiers`]. `append` already
+/// wakes the registry (per-stream + `$all`) after a durable commit, so a
+/// registration armed before a concurrent append is roused once that append's
+/// events are visible.
+impl WakeSource for FjallStore {
+    type Registration = WakeReg;
+    type Error = NotifyError;
 
-impl RawSubscription for FjallStore {
-    type Stream = FjallSubscriptionStream;
-    type Error = FjallError;
-
-    async fn subscribe(
-        arc: &Arc<Self>,
-        id: &impl Id,
-        from: Option<Version>,
-    ) -> Result<FjallSubscriptionStream, FjallError> {
-        let start = match from {
-            None => Version::INITIAL,
-            Some(v) => v.next().ok_or(FjallError::VersionOverflow)?,
-        };
-        // Register the per-stream wake guard before the catch-up read, so the
-        // map entry is live for any concurrent append's `wake`. The cursor
-        // holds it for its whole life; dropping the cursor reaps the entry.
-        let guard = arc.notifiers.subscribe(id.as_ref())?;
-        let owned_id = OwnedStreamId::from_id(id);
-        let label = id.to_label();
-        let inner = arc.read_stream(&owned_id, start).await?;
-        Ok(FjallSubscriptionStream::new(
-            Arc::clone(arc),
-            owned_id,
-            label,
-            inner,
-            from,
-            guard,
-        ))
+    fn register(&self, stream: Option<&[u8]>) -> Result<Self::Registration, Self::Error> {
+        self.notifiers.register(stream)
     }
-}
 
-impl RawAllSubscription for FjallStore {
-    type Stream = FjallAllSubscriptionStream;
-    type Error = FjallError;
-
-    async fn subscribe_all(
-        arc: &Arc<Self>,
-        from: Option<GlobalSeq>,
-    ) -> Result<FjallAllSubscriptionStream, FjallError> {
-        let start = match from {
-            None => GlobalSeq::INITIAL,
-            Some(g) => g.next().ok_or(FjallError::GlobalSeqOverflow)?,
-        };
-        let inner = arc.read_all(start).await?;
-        Ok(FjallAllSubscriptionStream::new(
-            Arc::clone(arc),
-            inner,
-            start,
-        ))
+    fn wake(&self, stream: &[u8]) {
+        self.notifiers.wake(stream);
+        self.notifiers.wake_all();
     }
 }
 
@@ -368,7 +324,6 @@ impl RawAllSubscription for FjallStore {
 #[allow(clippy::unwrap_used, reason = "test code")]
 pub(crate) mod batch_test_helpers {
     use super::*;
-    use nexus_store::batch::BatchSize;
     use nexus_store::envelope::pending_envelope;
 
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -391,12 +346,12 @@ pub(crate) mod batch_test_helpers {
         Tid(s.to_owned())
     }
 
-    pub fn store_with_batch(n: usize) -> (FjallStore, tempfile::TempDir) {
+    // `n` is retained for call-site readability of the seeded count vs the
+    // historical batch boundary; the cursor is now lazy (one `fjall::Iter`) and
+    // reads the whole range, so there is no batch knob to set.
+    pub fn store_with_batch(_n: usize) -> (FjallStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let store = FjallStore::builder(dir.path().join("db"))
-            .batch_size(BatchSize::new(n).unwrap())
-            .open()
-            .unwrap();
+        let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
         (store, dir)
     }
 
@@ -659,15 +614,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_reopened_store_recovers_all_across_refills() {
-        use nexus_store::batch::BatchSize;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
         let id = tid("s");
         {
-            let store = FjallStore::builder(&path)
-                .batch_size(BatchSize::new(4).unwrap())
-                .open()
-                .unwrap();
+            let store = FjallStore::builder(&path).open().unwrap();
             for v in 1..=10u64 {
                 let env = make_envelope(v, "E", b"payload");
                 store
@@ -676,10 +627,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let store = FjallStore::builder(&path)
-            .batch_size(BatchSize::new(4).unwrap())
-            .open()
-            .unwrap();
+        let store = FjallStore::builder(&path).open().unwrap();
         let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
         let mut seen = Vec::new();
         while let Some(item) = futures::StreamExt::next(&mut stream).await {

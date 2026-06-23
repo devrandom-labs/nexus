@@ -3,10 +3,6 @@
 //! reads — the keyset bound bytes and how a stored row decodes into a
 //! [`PersistedEnvelope`]. NOT exported; no other adapter shares fjall's on-disk
 //! key layout, so this stays inside `nexus-fjall`.
-#![allow(
-    dead_code,
-    reason = "additive scaffolding: the unified bounded cursor that drives ScanStrategy lands in the following task; the old stream.rs/all_stream.rs cursors stay live until then"
-)]
 
 use arrayvec::ArrayString;
 use bytes::Bytes;

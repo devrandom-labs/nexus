@@ -1,9 +1,10 @@
 //! Embedded LSM-tree event store adapter for `nexus-store`, backed by
 //! [`fjall`](https://docs.rs/fjall).
 //!
-//! [`FjallStore`] implements the three storage traits the kernel depends
-//! on: [`nexus_store::RawEventStore`] (byte-level `append` +
-//! `read_stream`), [`nexus_store::Subscription`] (catch-up + live tail),
+//! [`FjallStore`] implements the storage traits the kernel depends on:
+//! [`nexus_store::RawEventStore`] (byte-level `append` + `read_stream` +
+//! `read_all`), [`nexus_store::WakeSource`](nexus_store::wake::WakeSource)
+//! (the live wake the generic [`nexus_store::Subscription`] loop parks on),
 //! and — under the `snapshot` feature —
 //! [`nexus_store::SnapshotStore<Vec<u8>, Version>`].
 //!
@@ -33,14 +34,14 @@
 //!
 //! # Read path is `futures::Stream`
 //!
-//! [`FjallStream`] and [`FjallSubscriptionStream`] are concrete
-//! `impl futures::Stream<Item = Result<PersistedEnvelope, FjallError>>`
-//! types — no GAT lending cursor, no bespoke combinator trait. Consumers
-//! get the full [`futures::StreamExt`] / `TryStreamExt` combinator
-//! surface for free. The subscription stream uses
-//! [`futures::stream::unfold`] for its notify/refill loop and re-reads
-//! the underlying store when caught up (rather than terminating) so
-//! `from: None` = beginning and `from: Some(v)` = strictly-after `v`.
+//! `read_stream` / `read_all` return a `ScanCursor` — a concrete
+//! `impl futures::Stream<Item = Result<PersistedEnvelope, FjallError>>` over
+//! one lazy `fjall::Iter` (no GAT lending cursor, no bespoke combinator
+//! trait). Consumers get the full [`futures::StreamExt`] / `TryStreamExt`
+//! combinator surface for free. The catch-up-then-live-tail subscription loop
+//! is assembled generically in `nexus_store` over `RawEventStore` +
+//! [`WakeSource`](nexus_store::wake::WakeSource); fjall ships only those two
+//! pieces, not a bespoke subscription cursor.
 //!
 //! # Wire format
 //!
@@ -59,23 +60,15 @@
     reason = "FjallError is intentionally stack-allocated (~208 bytes) for IoT targets"
 )]
 
-pub mod all_stream;
-mod all_subscription_stream;
 pub mod builder;
 pub mod encoding;
 pub mod error;
 mod partition;
 mod scan;
 pub mod store;
-pub mod stream;
 mod subscription_id;
-mod subscription_stream;
 
-pub use all_stream::FjallAllStream;
-pub use all_subscription_stream::FjallAllSubscriptionStream;
 pub use builder::FjallStoreBuilder;
 pub use error::FjallError;
 pub use partition::KeyspaceConfig;
 pub use store::FjallStore;
-pub use stream::FjallStream;
-pub use subscription_stream::FjallSubscriptionStream;

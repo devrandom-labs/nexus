@@ -1,6 +1,7 @@
 //! Private module: the `pub` items below are crate-local by containment (no
-//! external API leak). It exists so both the live cursors and the new `scan.rs`
-//! share [`OwnedStreamId`].
+//! external API leak). It exists so the per-stream `scan.rs` strategy has an
+//! owned [`OwnedStreamId`] satisfying the [`Id`] `'static` bound across the
+//! re-reads the generic subscription loop performs.
 
 use nexus::Id;
 
