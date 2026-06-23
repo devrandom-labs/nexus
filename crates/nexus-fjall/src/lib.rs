@@ -65,8 +65,10 @@ pub mod builder;
 pub mod encoding;
 pub mod error;
 mod partition;
+mod scan;
 pub mod store;
 pub mod stream;
+mod subscription_id;
 mod subscription_stream;
 
 pub use all_stream::FjallAllStream;

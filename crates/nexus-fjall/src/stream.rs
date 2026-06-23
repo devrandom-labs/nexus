@@ -9,7 +9,7 @@ use nexus_store::PersistedEnvelope;
 
 use crate::encoding::{decode_event_key, decode_event_value, encode_event_key};
 use crate::error::{FjallError, reason_label};
-use crate::subscription_stream::OwnedStreamId;
+use crate::subscription_id::OwnedStreamId;
 
 /// Decode one stored `(key, value)` row into a [`PersistedEnvelope`].
 ///

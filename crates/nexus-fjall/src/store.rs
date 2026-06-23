@@ -6,7 +6,8 @@ use crate::encoding::{
 };
 use crate::error::{FjallError, reason_label};
 use crate::stream::FjallStream;
-use crate::subscription_stream::{FjallSubscriptionStream, OwnedStreamId};
+use crate::subscription_id::OwnedStreamId;
+use crate::subscription_stream::FjallSubscriptionStream;
 use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
