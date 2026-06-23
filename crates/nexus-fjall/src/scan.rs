@@ -170,6 +170,13 @@ pub struct ScanCursor<S: ScanStrategy> {
 impl<S: ScanStrategy> ScanCursor<S> {
     /// Open a bounded scan from `from` (inclusive). Fallible only because the
     /// keyset bound keys may fail to encode (e.g. an over-long id).
+    ///
+    /// The snapshot is taken **at `open` time**, not at first poll: the returned
+    /// cursor reads a consistent point-in-time view as of `open`, so events
+    /// appended after `open()` but before/while polling are **not** observed.
+    /// Long-lived use therefore pins the GC watermark — a bounded read completes
+    /// promptly, but a never-ending subscription must open a **fresh**
+    /// [`ScanCursor`] per refill rather than hold one for its whole life.
     pub fn open(
         keyspace: &fjall::SingleWriterTxKeyspace,
         strategy: S,
@@ -207,6 +214,9 @@ impl<S: ScanStrategy> ScanCursor<S> {
     }
 }
 
+// `get_mut()` in `poll_next` requires `Self: Unpin`; `fjall::Iter` is already
+// `Unpin`, so `S` is the only field that isn't `Unpin` by default — hence the
+// `S: Unpin` bound (also relied on by the generic live loop in `nexus-store`).
 impl<S: ScanStrategy + Unpin> futures::Stream for ScanCursor<S> {
     type Item = Result<PersistedEnvelope, FjallError>;
 
