@@ -25,7 +25,7 @@ use crate::subscription_id::OwnedStreamId;
 /// drive both the per-stream and `$all` reads.
 pub trait ScanStrategy: Send {
     /// The position the scan opens from ([`Version`] for a stream, [`GlobalSeq`] for `$all`).
-    type Position: Copy + Send + 'static;
+    type Position: Copy + Send;
     /// Keyset lower bound (inclusive) for opening at `from`.
     fn lower_key(&self, from: Self::Position) -> Result<Vec<u8>, FjallError>;
     /// Keyset upper bound (inclusive) — the end of this strategy's key range.
@@ -52,7 +52,7 @@ pub struct GlobalScan;
 /// the key; it appears verbatim in the error fields.
 fn build_envelope(
     bytes_value: Bytes,
-    decoded: &DecodedEvent,
+    decoded: DecodedEvent,
     raw_version: u64,
     stream_id: ArrayString<64>,
 ) -> Result<PersistedEnvelope, FjallError> {
@@ -70,9 +70,9 @@ fn build_envelope(
         global_seq,
         bytes_value,
         decoded.schema_version,
-        decoded.event_type_range.clone(),
-        decoded.payload_range.clone(),
-        decoded.metadata_range.clone(),
+        decoded.event_type_range,
+        decoded.payload_range,
+        decoded.metadata_range,
     )
     .map_err(|source| FjallError::EnvelopeCorrupt {
         stream_id,
@@ -112,7 +112,7 @@ impl ScanStrategy for StreamScan {
             version: Some(version),
         })?;
 
-        build_envelope(bytes_value, &decoded, version, self.label)
+        build_envelope(bytes_value, decoded, version, self.label)
     }
 }
 
@@ -149,7 +149,7 @@ impl ScanStrategy for GlobalScan {
             });
         }
 
-        build_envelope(bytes_value, &decoded, version_raw, ArrayString::new())
+        build_envelope(bytes_value, decoded, version_raw, ArrayString::new())
     }
 }
 

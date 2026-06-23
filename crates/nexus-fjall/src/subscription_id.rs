@@ -1,3 +1,7 @@
+//! Private module: the `pub` items below are crate-local by containment (no
+//! external API leak). It exists so both the live cursors and the new `scan.rs`
+//! share [`OwnedStreamId`].
+
 use nexus::Id;
 
 /// Owned byte-key wrapper to satisfy the [`Id`] trait's `'static` bound
