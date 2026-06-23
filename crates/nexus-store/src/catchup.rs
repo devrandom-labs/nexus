@@ -78,6 +78,9 @@ impl AsRef<[u8]> for OwnedSubId {
 }
 
 impl Id for OwnedSubId {
+    // `OwnedSubId` is variable-length, so it has no fixed `BYTE_LEN`. The
+    // in-process wake path never reads this constant, so it is `0` by the
+    // established workspace convention for variable-length ids.
     const BYTE_LEN: usize = 0;
 }
 

@@ -169,6 +169,12 @@ pub trait RawEventStore: Send + Sync {
     /// Events are yielded one at a time as a `futures::Stream` of
     /// owned [`PersistedEnvelope`](crate::envelope::PersistedEnvelope)s.
     ///
+    /// `from` is **inclusive**: the stream yields every event with
+    /// `version >= from`, in ascending `Version` order, then terminates with
+    /// `None`. This matches [`read_all`](Self::read_all)'s `from` semantics;
+    /// the catchup seam relies on this inclusivity to resume without skipping
+    /// the boundary event.
+    ///
     /// # Batching
     ///
     /// An adapter materializes at most its configured `batch_size` rows at a
