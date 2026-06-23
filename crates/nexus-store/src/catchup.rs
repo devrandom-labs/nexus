@@ -33,10 +33,10 @@ pub trait Catchup: Send {
     /// The scan/wait error type.
     type Error: core::error::Error + Send + Sync + 'static;
 
-    /// Open a bounded scan resuming at `pos`.
-    fn read_after(
+    /// Open a bounded scan of events from `from` INCLUSIVE.
+    fn read_from(
         &self,
-        pos: Self::Position,
+        from: Self::Position,
     ) -> impl Future<Output = Result<Self::Scan, Self::Error>> + Send;
 
     /// Arm a wait for new events. The returned future is `'static` and
@@ -46,11 +46,16 @@ pub trait Catchup: Send {
     /// The position of an envelope this target yields.
     fn position_of(env: &PersistedEnvelope) -> Self::Position;
 
-    /// The position the first scan starts at, given a resume point.
+    /// The next INCLUSIVE read position given the last-delivered position
+    /// (`None` = nothing delivered / subscribe from the beginning).
     ///
-    /// `None` = from the beginning; `Some(p)` = the position *after* `p`
-    /// (strict greater-than / keyset resume).
-    fn start(from: Option<Self::Position>) -> Self::Position;
+    /// Applied uniformly by the live loop for both the initial open and every
+    /// reopen: `None` resolves to the first position; `Some(v)` resolves to the
+    /// position strictly *after* `v` (`v.next()`), giving strict-after resume
+    /// with no duplicate of the last-delivered event. Returns `None` only on
+    /// overflow (the last-delivered position was the maximum, so no further
+    /// event can exist).
+    fn next_pos(resume: Option<Self::Position>) -> Option<Self::Position>;
 }
 
 /// Owned id satisfying [`Id`]'s `'static` bound across reopened scans.
@@ -109,11 +114,11 @@ impl<S: RawEventStore + WakeSource> Catchup for StreamCatchup<S> {
     type Scan = <S as RawEventStore>::Stream;
     type Error = <S as RawEventStore>::Error;
 
-    fn read_after(
+    fn read_from(
         &self,
-        pos: Version,
+        from: Version,
     ) -> impl Future<Output = Result<Self::Scan, Self::Error>> + Send {
-        self.store.read_stream(&self.id, pos)
+        self.store.read_stream(&self.id, from)
     }
 
     fn arm(&self) -> impl Future<Output = ()> + Send + 'static {
@@ -124,12 +129,11 @@ impl<S: RawEventStore + WakeSource> Catchup for StreamCatchup<S> {
         env.version()
     }
 
-    fn start(from: Option<Version>) -> Version {
-        // Start the scan at the event AFTER `from` (strict greater-than /
-        // keyset resume); `None` = from the first event. On `Version::MAX`
-        // overflow, stay at MAX (the scan is simply empty — overflow
-        // correctness is the loop's concern, kept total here).
-        from.map_or(Version::INITIAL, |v| v.next().unwrap_or(v))
+    fn next_pos(resume: Option<Version>) -> Option<Version> {
+        // `read_from` is INCLUSIVE; resume strictly after the last-delivered
+        // version so it is not re-read. `None` = from the first event;
+        // `None` out = overflow at `Version::MAX` (no further event possible).
+        resume.map_or(Some(Version::INITIAL), Version::next)
     }
 }
 
@@ -155,11 +159,11 @@ impl<S: RawEventStore + WakeSource> Catchup for AllCatchup<S> {
     type Scan = <S as RawEventStore>::AllStream;
     type Error = <S as RawEventStore>::Error;
 
-    fn read_after(
+    fn read_from(
         &self,
-        pos: GlobalSeq,
+        from: GlobalSeq,
     ) -> impl Future<Output = Result<Self::Scan, Self::Error>> + Send {
-        self.store.read_all(pos)
+        self.store.read_all(from)
     }
 
     fn arm(&self) -> impl Future<Output = ()> + Send + 'static {
@@ -170,11 +174,12 @@ impl<S: RawEventStore + WakeSource> Catchup for AllCatchup<S> {
         env.global_seq()
     }
 
-    fn start(from: Option<GlobalSeq>) -> GlobalSeq {
-        // `read_all`'s `from` is INCLUSIVE, so resume at the position AFTER
-        // `from`. `None` = from the first global position. On overflow, stay
-        // at MAX (the scan is simply empty).
-        from.map_or(GlobalSeq::INITIAL, |g| g.next().unwrap_or(g))
+    fn next_pos(resume: Option<GlobalSeq>) -> Option<GlobalSeq> {
+        // `read_all`'s `from` is INCLUSIVE; resume strictly after the
+        // last-delivered position so it is not re-read. `None` = from the first
+        // global position; `None` out = overflow at the maximum (no further
+        // event possible).
+        resume.map_or(Some(GlobalSeq::INITIAL), GlobalSeq::next)
     }
 }
 
@@ -206,13 +211,138 @@ mod tests {
         }
 
         let catchup = StreamCatchup::new(Arc::clone(&store), b"s").unwrap();
-        let scan = catchup.read_after(Version::INITIAL).await.unwrap();
+        let rf = <StreamCatchup<InMemoryStore> as Catchup>::next_pos(None).unwrap();
+        let scan = catchup.read_from(rf).await.unwrap();
         let versions: Vec<u64> = scan.map(|r| r.unwrap().version().as_u64()).collect().await;
 
         assert_eq!(
             versions,
             vec![1, 2, 3],
             "per-stream catchup must yield versions 1,2,3 in order"
+        );
+    }
+
+    /// `next_pos` is the single resume transition: beginning, strict-after, and
+    /// overflow-as-`None` for the per-stream [`Version`] key.
+    #[test]
+    fn version_next_pos_transition() {
+        type C = StreamCatchup<InMemoryStore>;
+
+        assert_eq!(
+            <C as Catchup>::next_pos(None),
+            Some(Version::INITIAL),
+            "None resumes from the first version"
+        );
+
+        let v = Version::new(7).unwrap();
+        assert_eq!(
+            <C as Catchup>::next_pos(Some(v)),
+            v.next(),
+            "Some(v) resumes strictly after v (v.next())"
+        );
+        assert_eq!(
+            <C as Catchup>::next_pos(Some(v)),
+            Version::new(8),
+            "Some(7) resolves to Some(8)"
+        );
+
+        let max = Version::new(u64::MAX).unwrap();
+        assert_eq!(
+            <C as Catchup>::next_pos(Some(max)),
+            None,
+            "overflow at MAX surfaces as None, never pinned to MAX"
+        );
+    }
+
+    /// `next_pos` is the single resume transition for the `$all` [`GlobalSeq`]
+    /// key: beginning, strict-after, and overflow-as-`None`.
+    #[test]
+    fn global_seq_next_pos_transition() {
+        type C = AllCatchup<InMemoryStore>;
+
+        assert_eq!(
+            <C as Catchup>::next_pos(None),
+            Some(GlobalSeq::INITIAL),
+            "None resumes from the first global position"
+        );
+
+        let g = GlobalSeq::new(7).unwrap();
+        assert_eq!(
+            <C as Catchup>::next_pos(Some(g)),
+            g.next(),
+            "Some(g) resumes strictly after g (g.next())"
+        );
+        assert_eq!(
+            <C as Catchup>::next_pos(Some(g)),
+            GlobalSeq::new(8),
+            "Some(7) resolves to Some(8)"
+        );
+
+        let max = GlobalSeq::new(u64::MAX).unwrap();
+        assert_eq!(
+            <C as Catchup>::next_pos(Some(max)),
+            None,
+            "overflow at MAX surfaces as None, never pinned to MAX"
+        );
+    }
+
+    /// Reopen seam: after draining [1,2,3], the reopen position derived from the
+    /// last-delivered event must NOT re-deliver event 3. This is the exact
+    /// duplicate the old inclusive-`read_after` + `position_of` loop produced.
+    #[tokio::test]
+    async fn reopen_does_not_redeliver_last_event() {
+        let store = Arc::new(InMemoryStore::new());
+        let id = OwnedSubId::new(b"s");
+
+        for v in 1u64..=3 {
+            let env = pending_envelope(Version::new(v).unwrap())
+                .event_type("E")
+                .payload(b"e".to_vec())
+                .unwrap()
+                .build();
+            store
+                .append(&id, Version::new(v - 1), &[env])
+                .await
+                .unwrap();
+        }
+
+        let catchup = StreamCatchup::new(Arc::clone(&store), b"s").unwrap();
+
+        // Initial open: next_pos(None) -> INITIAL, drain [1,2,3].
+        let rf = <StreamCatchup<InMemoryStore> as Catchup>::next_pos(None).unwrap();
+        let first: Vec<PersistedEnvelope> = catchup
+            .read_from(rf)
+            .await
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        let versions: Vec<u64> = first.iter().map(|e| e.version().as_u64()).collect();
+        assert_eq!(versions, vec![1, 2, 3], "initial drain yields 1,2,3");
+
+        // Reopen: derive the next read position from the LAST delivered event.
+        let last = first.last().unwrap();
+        let reopen =
+            <StreamCatchup<InMemoryStore> as Catchup>::next_pos(Some(
+                StreamCatchup::<InMemoryStore>::position_of(last),
+            ))
+            .unwrap();
+        assert_eq!(
+            reopen,
+            Version::new(4).unwrap(),
+            "reopen position is 4, not 3"
+        );
+
+        let second: Vec<u64> = catchup
+            .read_from(reopen)
+            .await
+            .unwrap()
+            .map(|r| r.unwrap().version().as_u64())
+            .collect()
+            .await;
+        assert!(
+            second.is_empty(),
+            "reopen must NOT re-deliver event 3 (got {second:?})"
         );
     }
 }
