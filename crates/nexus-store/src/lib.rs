@@ -106,6 +106,8 @@ pub mod state;
 pub mod store;
 pub mod stream;
 pub mod subscription;
+#[cfg(feature = "subscription")]
+pub(crate) mod subscription_cursor;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod upcasting;
