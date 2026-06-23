@@ -83,6 +83,8 @@
 
 pub mod batch;
 pub mod builder;
+#[cfg(feature = "subscription")]
+pub(crate) mod catchup;
 #[cfg(feature = "cbor")]
 pub mod cbor;
 pub mod codec;
