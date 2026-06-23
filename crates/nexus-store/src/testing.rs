@@ -3,9 +3,10 @@
 use crate::batch::BatchSize;
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::notify::{NotifyError, StreamNotifiers, SubscriptionGuard};
+use crate::notify::{NotifyError, StreamNotifiers, SubscriptionGuard, WakeReg};
 use crate::store::{GlobalSeq, RawEventStore};
 use crate::subscription::{RawAllSubscription, RawSubscription, sealed};
+use crate::wake::WakeSource;
 use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
 use nexus::Id;
@@ -503,6 +504,30 @@ impl RawEventStore for InMemoryStore {
         Ok(InMemoryStream {
             inner: Box::pin(futures::StreamExt::fuse(unfolded)),
         })
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WakeSource — adapter-pluggable wake for the generic subscription loop
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Delegates wake-routing to the store's inner [`StreamNotifiers`], so the
+/// generic subscription loop can be tested against `InMemoryStore`.
+///
+/// `append` already wakes the registry after a successful in-memory commit
+/// (per-stream + `$all`), so a registration armed before a concurrent append
+/// is roused once that append's events are visible.
+impl WakeSource for InMemoryStore {
+    type Registration = WakeReg;
+    type Error = NotifyError;
+
+    fn register(&self, stream: Option<&[u8]>) -> Result<Self::Registration, Self::Error> {
+        self.notifiers.register(stream)
+    }
+
+    fn wake(&self, stream: &[u8]) {
+        self.notifiers.wake(stream);
+        self.notifiers.wake_all();
     }
 }
 
@@ -1291,5 +1316,52 @@ mod bounded_subscription_tests {
         });
         let live = sub.next().await.unwrap().unwrap();
         assert_eq!(live.version().as_u64(), 41);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(clippy::expect_used, reason = "test code")]
+mod wake_source_tests {
+    use super::*;
+    use crate::envelope::pending_envelope;
+    use crate::wake::{WakeRegistration, WakeSource};
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+    struct Tid(String);
+    impl std::fmt::Display for Tid {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+    impl AsRef<[u8]> for Tid {
+        fn as_ref(&self) -> &[u8] {
+            self.0.as_bytes()
+        }
+    }
+    impl nexus::Id for Tid {
+        const BYTE_LEN: usize = 0;
+    }
+
+    /// An `append` to a stream must wake a per-stream registration armed before
+    /// the append — proving `InMemoryStore`'s `WakeSource` impl routes through
+    /// the same `StreamNotifiers` that `append` wakes after a commit.
+    #[tokio::test]
+    async fn inmemory_wakes_registration_on_append() {
+        let store = InMemoryStore::new();
+        let id = Tid("s".into());
+        let reg = WakeSource::register(&store, Some(id.as_ref())).unwrap();
+        let wait = reg.arm();
+        let env = pending_envelope(Version::INITIAL)
+            .event_type("E")
+            .payload(b"x".to_vec())
+            .unwrap()
+            .build();
+        store.append(&id, None, &[env]).await.unwrap();
+        timeout(Duration::from_secs(5), wait)
+            .await
+            .expect("append must wake the registration");
     }
 }
