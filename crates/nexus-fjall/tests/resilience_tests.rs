@@ -161,17 +161,18 @@ async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
 // CATEGORY A: Version Arithmetic Overflow (THE BIG ONE)
 // ============================================================================
 
-/// BUG FOUND: store.rs line 109 uses unchecked u64 addition:
-///     `let expected_env_version = current_version + 1 + i_u64;`
-/// If `current_version` is near `u64::MAX`, this overflows.
-/// In debug mode: panic. In release mode: silent wrap to 0.
-///
-/// This test proves the arithmetic WILL overflow.
+/// The sequential-version check in `append` advances a running counter
+/// (`expected_version_seq`) via `checked_add(1)` once per envelope, starting
+/// from `current_version + 1`. This test documents the boundary arithmetic:
+/// for a stream whose current version sits near `u64::MAX`, the position the
+/// counter would reach after `i` advances overflows. The real `append` path is
+/// unreachable here (you cannot append `u64::MAX` events), so this verifies the
+/// checked arithmetic that guards that boundary in isolation.
 #[test]
 fn attack_version_overflow_in_sequential_check() {
-    // store.rs line 109: current_version + 1 + i_u64
-    // If current_version = u64::MAX - 2 and i_u64 = 2:
-    //   (u64::MAX - 2) + 1 + 2 = u64::MAX + 1 = OVERFLOW
+    // Running counter seeded at current_version + 1, advanced once per
+    // envelope. With current_version = u64::MAX - 2, the third advance
+    // (i = 2) would reach u64::MAX + 1 = OVERFLOW.
     let current_version: u64 = u64::MAX - 2;
     let i: u64 = 2;
     let result = current_version
@@ -179,7 +180,7 @@ fn attack_version_overflow_in_sequential_check() {
         .and_then(|v| v.checked_add(i));
     assert!(
         result.is_none(),
-        "BUG CONFIRMED: version arithmetic at store.rs:109 overflows \
+        "BUG CONFIRMED: running-counter version arithmetic overflows \
          when current_version={current_version}, i={i}"
     );
 }
@@ -187,8 +188,8 @@ fn attack_version_overflow_in_sequential_check() {
 /// Prove that even i=0 overflows when `current_version` = `u64::MAX`
 #[test]
 fn attack_version_overflow_at_exact_max() {
-    // current_version = u64::MAX, i = 0
-    // (u64::MAX) + 1 + 0 = OVERFLOW on the first addition
+    // current_version = u64::MAX: seeding the running counter at
+    // current_version + 1 overflows on the very first advance.
     let current_version: u64 = u64::MAX;
     let result = current_version.checked_add(1);
     assert!(
@@ -209,18 +210,18 @@ fn attack_new_version_computation_overflow() {
 }
 
 /// Exhaustive boundary check: for which (`current_version`, `batch_size`) pairs
-/// does the version arithmetic in store.rs:109 overflow?
+/// does the sequential-version check in `append` overflow?
 #[test]
 fn attack_version_overflow_boundary_exhaustive() {
-    // The formula: current_version + 1 + i for i in 0..batch_size
-    // Maximum i is batch_size - 1
-    // Overflow happens when: current_version + 1 + (batch_size - 1) > u64::MAX
-    // i.e., current_version + batch_size > u64::MAX
-    // i.e., current_version > u64::MAX - batch_size
+    // The running counter starts at current_version + 1 and is advanced
+    // batch_size times, reaching current_version + batch_size for the last
+    // envelope. Overflow happens when current_version + batch_size > u64::MAX,
+    // i.e. current_version > u64::MAX - batch_size.
 
     for batch_size in 1u64..=10 {
         let threshold = u64::MAX - batch_size;
-        // At threshold: current_version + 1 + (batch_size - 1) = u64::MAX → OK
+        // At threshold: counter seeded at current_version + 1, advanced
+        // batch_size - 1 more times, lands on u64::MAX → OK
         let ok_result = threshold
             .checked_add(1)
             .and_then(|v| v.checked_add(batch_size - 1));

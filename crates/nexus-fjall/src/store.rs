@@ -177,7 +177,7 @@ impl RawEventStore for FjallStore {
                     .checked_add(1)
                     .ok_or_else(|| AppendError::Conflict {
                         stream_id: id.to_label(),
-                        expected: Version::new(expected_version_seq),
+                        expected: Version::new(current_version),
                         actual: Some(env.version()),
                     })?;
         }
