@@ -52,12 +52,6 @@ pub const STREAM_VERSION_SIZE: usize = 8;
 #[cfg(test)]
 pub const EVENT_VALUE_HEADER_SIZE: usize = wire::HEADER_FIXED_SIZE;
 
-/// Sentinel value for `meta_len` indicating no metadata.
-///
-/// Re-exported from [`wire::META_LEN_ABSENT`].
-#[cfg(test)]
-pub const META_LEN_ABSENT: u32 = wire::META_LEN_ABSENT;
-
 /// Compute the total size of an event key for a given ID length.
 ///
 /// Format: `[u16 BE id_len][id_bytes][u64 BE version]`.
@@ -258,11 +252,10 @@ mod tests {
     use proptest::prelude::*;
 
     /// Build a wire-frame event-value row via the REAL production encoder
-    /// ([`wire::encode_frame`] + the [`nexus_store::value`] newtypes). Replaces
-    /// the former adapter-local `encode_event_value` wrapper for in-crate
-    /// white-box tests: it exercises the exact byte layout the read path
-    /// (`decode_event_value`) consumes, surfacing the same [`EncodeError`]
-    /// mapping the production append path would.
+    /// ([`wire::encode_frame`] + the [`nexus_store::value`] newtypes) for
+    /// in-crate white-box codec tests: it exercises the exact byte layout the
+    /// read path (`decode_event_value`) consumes, surfacing the same
+    /// [`EncodeError`] mapping the production append path would.
     ///
     /// # Errors
     ///
@@ -465,11 +458,6 @@ mod tests {
         assert_eq!(decoded.schema_version.get(), 1);
         assert!(decoded.metadata_range.is_none());
         assert_eq!(decoded.payload_range.end, decoded.payload_range.start);
-    }
-
-    #[test]
-    fn meta_len_absent_constant_is_u32_max() {
-        assert_eq!(META_LEN_ABSENT, u32::MAX);
     }
 
     // --- Global key tests ---
@@ -752,6 +740,11 @@ mod tests {
 
     // --- Wire-format byte snapshots (insta) ---
     // (relocated from tests/snapshot_wire_format.rs)
+    //
+    // The golden `.snap` files (crates/nexus-fjall/src/snapshots/) were
+    // hand-verified against the wire-format spec. cargo-insta is not in the nix
+    // dev shell, so they are maintained by hand; when the wire format changes,
+    // regenerate them with `cargo insta review`.
 
     fn hex_dump(bytes: &[u8]) -> String {
         bytes
