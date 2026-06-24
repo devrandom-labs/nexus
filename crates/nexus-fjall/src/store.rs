@@ -54,6 +54,73 @@ impl FjallStore {
     pub fn builder(path: impl AsRef<Path>) -> FjallStoreBuilder {
         FjallStoreBuilder::new(path)
     }
+
+    /// Point-read the current version counter for `id` from the `streams`
+    /// partition within `tx`. Returns `0` for a stream that does not yet exist.
+    fn read_current_version(
+        &self,
+        tx: &fjall::SingleWriterWriteTx<'_>,
+        id: &impl Id,
+    ) -> Result<u64, AppendError<FjallError>> {
+        tx.get(&self.streams, id.as_ref())
+            .map_err(|e| AppendError::Store(FjallError::Io(e)))?
+            .map_or(Ok(0), |version_bytes| {
+                decode_stream_version(&version_bytes).map_err(|_| {
+                    AppendError::Store(FjallError::CorruptMeta {
+                        stream_id: id.to_label(),
+                    })
+                })
+            })
+    }
+
+    /// Optimistic-concurrency check: the caller's `expected` version must match
+    /// the stream's `current` version. `current == 0` denotes a new stream, for
+    /// which `expected` must be `None`.
+    fn check_optimistic(
+        current: u64,
+        expected: Option<Version>,
+        id: &impl Id,
+    ) -> Result<(), AppendError<FjallError>> {
+        if current == 0 {
+            // New stream: expected_version must be None.
+            return if expected.is_some() {
+                Err(AppendError::Conflict {
+                    stream_id: id.to_label(),
+                    expected,
+                    actual: None,
+                })
+            } else {
+                Ok(())
+            };
+        }
+        if current != expected.map_or(0, Version::as_u64) {
+            return Err(AppendError::Conflict {
+                stream_id: id.to_label(),
+                expected,
+                actual: Version::new(current),
+            });
+        }
+        Ok(())
+    }
+
+    /// Point-read the store-global sequence counter (monotonic, shared across
+    /// all streams) from the `global` partition within `tx`. Absent key = `0`.
+    fn read_current_global(
+        &self,
+        tx: &fjall::SingleWriterWriteTx<'_>,
+        id: &impl Id,
+    ) -> Result<u64, AppendError<FjallError>> {
+        tx.get(&self.global, GLOBAL_SEQ_KEY)
+            .map_err(|e| AppendError::Store(FjallError::Io(e)))?
+            .map_or(Ok(0), |bytes| {
+                let raw: [u8; 8] = bytes.as_ref().try_into().map_err(|_| {
+                    AppendError::Store(FjallError::CorruptMeta {
+                        stream_id: id.to_label(),
+                    })
+                })?;
+                Ok(u64::from_le_bytes(raw))
+            })
+    }
 }
 
 impl RawEventStore for FjallStore {
@@ -65,10 +132,6 @@ impl RawEventStore for FjallStore {
         clippy::significant_drop_tightening,
         reason = "tx must be held across concurrency check + inserts + commit"
     )]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "transaction scope requires sequential steps in one function"
-    )]
     async fn append(
         &self,
         id: &impl Id,
@@ -76,42 +139,14 @@ impl RawEventStore for FjallStore {
         envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
         let id_bytes = id.as_ref();
-        let expected_raw = expected_version.map_or(0, Version::as_u64);
 
         // Version check BEFORE empty-batch early return. An empty append
         // with a stale expected_version signals a stale caller — report the
         // conflict even though no data would be written.
         let mut tx = self.db.write_tx();
 
-        let current_version = if let Some(version_bytes) = tx
-            .get(&self.streams, id_bytes)
-            .map_err(|e| AppendError::Store(FjallError::Io(e)))?
-        {
-            let current_version = decode_stream_version(&version_bytes).map_err(|_| {
-                AppendError::Store(FjallError::CorruptMeta {
-                    stream_id: id.to_label(),
-                })
-            })?;
-            // Optimistic concurrency check.
-            if current_version != expected_raw {
-                return Err(AppendError::Conflict {
-                    stream_id: id.to_label(),
-                    expected: expected_version,
-                    actual: Version::new(current_version),
-                });
-            }
-            current_version
-        } else {
-            // New stream: expected_version must be None.
-            if expected_version.is_some() {
-                return Err(AppendError::Conflict {
-                    stream_id: id.to_label(),
-                    expected: expected_version,
-                    actual: None,
-                });
-            }
-            0
-        };
+        let current_version = self.read_current_version(&tx, id)?;
+        Self::check_optimistic(current_version, expected_version, id)?;
 
         // Empty batch: version was checked (or new stream with None), no work to do.
         if envelopes.is_empty() {
@@ -119,50 +154,44 @@ impl RawEventStore for FjallStore {
         }
 
         // Validate envelope versions are sequential from current_version + 1.
-        // Uses checked arithmetic to prevent overflow near u64::MAX.
-        for (i, env) in envelopes.iter().enumerate() {
-            let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
-            let expected_env_version = current_version
+        // A running counter advanced by checked_add(1) avoids any usize -> u64
+        // cast and guards against overflow near u64::MAX.
+        let mut expected_version_seq =
+            current_version
                 .checked_add(1)
-                .and_then(|v| v.checked_add(i_u64))
                 .ok_or_else(|| AppendError::Conflict {
                     stream_id: id.to_label(),
                     expected: Version::new(current_version),
-                    actual: Some(env.version()),
+                    actual: Some(envelopes[0].version()),
                 })?;
-            if env.version().as_u64() != expected_env_version {
+        for env in envelopes {
+            if env.version().as_u64() != expected_version_seq {
                 return Err(AppendError::Conflict {
                     stream_id: id.to_label(),
-                    expected: Version::new(expected_env_version),
+                    expected: Version::new(expected_version_seq),
                     actual: Some(env.version()),
                 });
             }
+            expected_version_seq =
+                expected_version_seq
+                    .checked_add(1)
+                    .ok_or_else(|| AppendError::Conflict {
+                        stream_id: id.to_label(),
+                        expected: Version::new(expected_version_seq),
+                        actual: Some(env.version()),
+                    })?;
         }
 
         // Read the current store-global sequence counter (monotonic, shared
         // across all streams). Absent key = no events appended yet.
-        let current_global = match tx
-            .get(&self.global, GLOBAL_SEQ_KEY)
-            .map_err(|e| AppendError::Store(FjallError::Io(e)))?
-        {
-            Some(bytes) => {
-                let raw: [u8; 8] = bytes.as_ref().try_into().map_err(|_| {
-                    AppendError::Store(FjallError::CorruptMeta {
-                        stream_id: id.to_label(),
-                    })
-                })?;
-                u64::from_le_bytes(raw)
-            }
-            None => 0,
-        };
+        let current_global = self.read_current_global(&tx, id)?;
 
         // Write each envelope into the events partition, stamping each with
-        // the next GlobalSeq. The sequence is monotonic; gaps are permitted.
-        for (i, env) in envelopes.iter().enumerate() {
-            let i_u64 = u64::try_from(i).unwrap_or(u64::MAX);
-            let global_seq = current_global
+        // the next GlobalSeq via a running counter (monotonic; gaps permitted).
+        let mut global_seq = current_global;
+        for env in envelopes {
+            global_seq = global_seq
                 .checked_add(1)
-                .and_then(|v| v.checked_add(i_u64))
                 .ok_or(AppendError::Store(FjallError::GlobalSeqOverflow))?;
 
             let key = encode_event_key(id_bytes, env.version().as_u64()).map_err(|e| {
@@ -192,13 +221,11 @@ impl RawEventStore for FjallStore {
             tx.insert(&self.events_global, global_key, slice);
         }
 
-        // Advance the global counter by the batch size, in the same
-        // transaction as the event writes — counter and events commit together.
-        let batch_len = u64::try_from(envelopes.len()).unwrap_or(u64::MAX);
-        let new_global = current_global
-            .checked_add(batch_len)
-            .ok_or(AppendError::Store(FjallError::GlobalSeqOverflow))?;
-        tx.insert(&self.global, GLOBAL_SEQ_KEY, new_global.to_le_bytes());
+        // Advance the global counter to the last assigned GlobalSeq, in the
+        // same transaction as the event writes — counter and events commit
+        // together. The write loop ran at least once (non-empty batch checked
+        // above), so `global_seq` holds the last assigned value.
+        tx.insert(&self.global, GLOBAL_SEQ_KEY, global_seq.to_le_bytes());
 
         // Update stream version.
         let new_version = envelopes
