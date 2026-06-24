@@ -86,7 +86,9 @@ impl<S> Store<S> {
     ///
     /// `pub(crate)` so the subscription module can pull the `Arc` out for
     /// [`Subscription::new`](crate::subscription::Subscription::new) without
-    /// leaking `Arc` to library users.
+    /// leaking `Arc` to library users. Only the `subscription` feature needs
+    /// it, so it is gated to avoid a dead-code warning otherwise.
+    #[cfg(feature = "subscription")]
     #[must_use]
     pub(crate) const fn arc(&self) -> &Arc<S> {
         &self.inner
@@ -119,6 +121,12 @@ pub trait RawEventStore: Send + Sync {
     /// `Result<PersistedEnvelope, Self::Error>`. The owned-`Bytes`
     /// envelope means cursors don't need to lend per-record; the
     /// stream's `Item` is the envelope by value.
+    ///
+    /// Note: the subscription path ([`Subscription::subscribe`]) requires the
+    /// stream be `Unpin`. No bound is imposed here, but all shipped adapters
+    /// (`ScanCursor`, `InMemoryStream`) satisfy it.
+    ///
+    /// [`Subscription::subscribe`]: crate::subscription::Subscription::subscribe
     type Stream: EventStream<Error = Self::Error> + 'static;
 
     /// The stream type for an all-streams (`$all`) read.
@@ -127,6 +135,12 @@ pub trait RawEventStore: Send + Sync {
     /// `Result<PersistedEnvelope, Self::Error>` ordered by [`GlobalSeq`],
     /// not by `(stream, version)`. Distinct from [`Stream`](Self::Stream)
     /// because the global order is a different physical index.
+    ///
+    /// Note: the subscription path ([`Subscription::subscribe`]) requires the
+    /// stream be `Unpin`. No bound is imposed here, but all shipped adapters
+    /// (`ScanCursor`, `InMemoryStream`) satisfy it.
+    ///
+    /// [`Subscription::subscribe`]: crate::subscription::Subscription::subscribe
     type AllStream: EventStream<Error = Self::Error> + 'static;
 
     /// Append events to a stream with optimistic concurrency.
@@ -169,15 +183,23 @@ pub trait RawEventStore: Send + Sync {
     /// Events are yielded one at a time as a `futures::Stream` of
     /// owned [`PersistedEnvelope`](crate::envelope::PersistedEnvelope)s.
     ///
+    /// `from` is **inclusive**: the stream yields every event with
+    /// `version >= from`, in ascending `Version` order, then terminates with
+    /// `None`. This matches [`read_all`](Self::read_all)'s `from` semantics;
+    /// the catchup seam relies on this inclusivity to resume without skipping
+    /// the boundary event.
+    ///
     /// # Batching
     ///
-    /// An adapter materializes at most its configured `batch_size` rows at a
-    /// time and refills the next batch internally as the cursor drains, by
-    /// keyset resume on the stream version. This is invisible to callers:
-    /// `next()` has the same contract regardless of how the events are
-    /// chunked, and the stream returns `None` once the persisted stream is
-    /// exhausted. The bound caps resident memory so a large stream cannot be
-    /// loaded all at once.
+    /// An adapter **may** chunk or paginate internally (e.g. materialize a
+    /// fixed number of rows at a time and keyset-resume on the stream version
+    /// as the cursor drains) but is **not** required to — bounding resident
+    /// memory is the adapter's concern. Whatever it does is invisible to
+    /// callers: `next()` yields events in ascending `Version` order from `from`
+    /// (inclusive) and returns `None` once the persisted stream is exhausted,
+    /// regardless of how the events are chunked. Memory is bounded by the
+    /// adapter's implementation — fjall, for instance, uses a single lazy LSM
+    /// cursor rather than fixed-size batches.
     fn read_stream(
         &self,
         id: &impl Id,
@@ -197,9 +219,12 @@ pub trait RawEventStore: Send + Sync {
     ///
     /// # Batching
     ///
-    /// Like [`read_stream`](Self::read_stream), an adapter materializes at
-    /// most its configured `batch_size` rows at a time, keyset-resuming on
-    /// `GlobalSeq`.
+    /// Like [`read_stream`](Self::read_stream), an adapter **may** chunk or
+    /// paginate internally (e.g. keyset-resume on `GlobalSeq`) but is **not**
+    /// required to. The externally-observable contract is unchanged: events
+    /// are yielded in ascending `GlobalSeq` order from `from` (inclusive),
+    /// the stream terminates with `None` when caught up, and resident memory
+    /// is bounded by the adapter's implementation.
     fn read_all(
         &self,
         from: GlobalSeq,

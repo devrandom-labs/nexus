@@ -19,7 +19,6 @@ use bytes::Bytes;
 use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
-use nexus_fjall::encoding::{META_LEN_ABSENT, decode_event_value};
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 
@@ -144,39 +143,8 @@ async fn none_metadata_roundtrips_as_none() {
     assert!(read.metadata_bytes().is_none());
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 4. Defensive boundary: decoder rejects `meta_len` exceeding the buffer
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn decoder_rejects_meta_len_exceeding_buffer() {
-    // Manually build a value that *claims* meta_len = 100 but only 10 bytes
-    // of metadata/payload follow. The decoder must reject rather than read
-    // past the buffer end.
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&1u64.to_le_bytes()); // global_seq
-    buf.extend_from_slice(&1u32.to_le_bytes()); // schema_version
-    buf.extend_from_slice(&1u16.to_le_bytes()); // event_type_len = 1
-    buf.extend_from_slice(&100u32.to_le_bytes()); // meta_len = 100 (LIE)
-    buf.push(b'X'); // event_type (1 byte)
-    buf.extend_from_slice(&[0u8; 10]); // only 10 bytes follow — not 100
-
-    let bytes_buf = Bytes::from(buf);
-    let err = decode_event_value(&bytes_buf).expect_err("must reject");
-    assert!(
-        matches!(
-            err,
-            nexus_fjall::encoding::DecodeError::Wire(
-                nexus_store::wire::DecodeError::MetadataTruncated { meta_len: 100, .. }
-            )
-        ),
-        "expected Wire(MetadataTruncated {{ meta_len: 100, .. }}), got {err:?}",
-    );
-}
-
-#[test]
-fn meta_len_absent_sentinel_is_u32_max() {
-    // Regression guard — if `META_LEN_ABSENT` ever drifts from `u32::MAX`
-    // the persisted on-disk layout silently changes meaning.
-    assert_eq!(META_LEN_ABSENT, u32::MAX);
-}
+// The defensive-boundary white-box tests (decoder rejects corrupt `meta_len`,
+// and the `META_LEN_ABSENT == u32::MAX` regression guard) reach the now-private
+// `wire_key` codec and live in-crate in `wire_key::tests`
+// (`decoder_rejects_meta_len_exceeding_buffer`,
+// `meta_len_absent_constant_is_u32_max`).

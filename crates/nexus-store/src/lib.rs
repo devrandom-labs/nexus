@@ -26,10 +26,11 @@
 //!   [`Store<S>`](crate::store::Store) shared handle, and [`GlobalSeq`]
 //!   (store-wide monotonic-but-gappy stamp).
 //! - [`subscription`] — user-facing [`Subscription<S>`] struct (built
-//!   via `Subscription::new(&store)`); adapter-facing
-//!   [`RawSubscription`](crate::subscription::RawSubscription) trait
-//!   (sealed via [`sealed::Sealed`](crate::subscription::sealed::Sealed),
-//!   intentionally not re-exported at the crate root).
+//!   via `Subscription::new(&store)`). Its `subscribe` / `subscribe_all`
+//!   methods assemble the generic catch-up-then-live-tail loop from
+//!   [`RawEventStore`] + [`WakeSource`](crate::wake::WakeSource); there is
+//!   no adapter-facing subscription trait. The returned cursor is `!Unpin`
+//!   (consumers `pin!` it).
 //! - [`stream`] — [`EventStream`] marker trait over
 //!   `futures::Stream<Item = Result<PersistedEnvelope, _>>`. The marker
 //!   carries no methods of its own — every combinator comes from
@@ -83,6 +84,8 @@
 
 pub mod batch;
 pub mod builder;
+#[cfg(feature = "subscription")]
+pub(crate) mod catchup;
 #[cfg(feature = "cbor")]
 pub mod cbor;
 pub mod codec;
@@ -103,11 +106,16 @@ pub mod snapshot;
 pub mod state;
 pub mod store;
 pub mod stream;
+#[cfg(feature = "subscription")]
 pub mod subscription;
+#[cfg(feature = "subscription")]
+pub(crate) mod subscription_cursor;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod upcasting;
 pub mod value;
+#[cfg(feature = "subscription")]
+pub mod wake;
 pub mod wire;
 
 pub use arrayvec::ArrayString;
@@ -154,8 +162,11 @@ pub use state::{
 };
 pub use store::{GlobalSeq, RawEventStore, Store};
 pub use stream::EventStream;
+#[cfg(feature = "subscription")]
 pub use subscription::Subscription;
 #[cfg(feature = "testing")]
 pub use testing::InMemoryStoreError;
 pub use upcasting::EventMorsel;
 pub use value::{EventType, Metadata, Payload, SchemaVersion, ValueError};
+#[cfg(feature = "subscription")]
+pub use wake::{WakeRegistration, WakeSource};

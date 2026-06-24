@@ -17,7 +17,8 @@ use std::num::NonZeroU32;
 use futures::StreamExt;
 use nexus::{DomainEvent, Id, Version};
 use nexus_store::state::{PersistTrigger, SnapshotStore};
-use nexus_store::subscription::RawSubscription;
+use nexus_store::store::RawEventStore;
+use nexus_store::wake::WakeSource;
 use nexus_store::{Decode, Projector, Subscription};
 
 /// Run a projection loop until `shutdown` resolves or the stream errors.
@@ -50,8 +51,8 @@ pub async fn run_projection<I, S, SS, P, EC, Trig>(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     I: Id + Clone + Send + Sync,
-    S: RawSubscription,
-    S::Stream: Send + Unpin,
+    S: RawEventStore + WakeSource,
+    <S as RawEventStore>::Stream: Unpin,
     SS: SnapshotStore<P::State, Version> + Send + Sync,
     P: Projector + Send + Sync,
     P::State: Send,
@@ -64,8 +65,10 @@ where
         None => (projector.initial(), None),
     };
 
-    // 2. Subscribe from the checkpoint.
-    let mut stream = subscription.subscribe(&id, checkpoint).await?;
+    // 2. Subscribe from the checkpoint. The cursor is `!Unpin` (the generic
+    //    live loop's `unfold`), so pin it before polling.
+    let stream = subscription.subscribe(&id, checkpoint)?;
+    tokio::pin!(stream);
 
     // 3. Drive until shutdown or stream end.
     let mut pending: Option<Version> = None;

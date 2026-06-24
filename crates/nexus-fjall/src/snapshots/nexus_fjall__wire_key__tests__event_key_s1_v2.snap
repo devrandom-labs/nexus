@@ -1,0 +1,5 @@
+---
+source: crates/nexus-fjall/src/wire_key.rs
+expression: hex_dump(&encoded)
+---
+00 02 73 31 00 00 00 00 00 00 00 02

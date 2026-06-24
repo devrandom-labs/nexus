@@ -43,14 +43,9 @@
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
-use bytes::Bytes;
 use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
-use nexus_fjall::encoding::{
-    decode_event_key, decode_event_value, decode_stream_version, encode_event_key,
-    encode_event_value, encode_stream_version,
-};
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
@@ -84,20 +79,6 @@ fn tid(s: &str) -> TestId {
 
 fn leak(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
-}
-
-/// Decode an event value from a `Vec<u8>` buffer and extract all fields as
-/// concrete values — for use in encoding-layer tests only.
-/// Returns `(global_seq, schema_version, event_type_string, payload_vec)`.
-fn decode_ev_slices(buf: &[u8]) -> (u64, u32, String, Vec<u8>) {
-    let b = Bytes::copy_from_slice(buf);
-    let d = decode_event_value(&b).unwrap();
-    let et =
-        std::str::from_utf8(&b[d.event_type_range.start as usize..d.event_type_range.end as usize])
-            .unwrap()
-            .to_owned();
-    let pl = b[d.payload_range.start as usize..d.payload_range.end as usize].to_vec();
-    (d.global_seq, d.schema_version.get(), et, pl)
 }
 
 fn temp_store() -> (FjallStore, tempfile::TempDir) {
@@ -259,141 +240,6 @@ fn evil_payload_strategy() -> impl Strategy<Value = Vec<u8>> {
         // Null bytes everywhere
         Just(vec![0; 10_000]),
     ]
-}
-
-// ============================================================================
-// CATEGORY 1: Encoding Attack Surface (proptest)
-// ============================================================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
-
-    /// For any (id_bytes, version) pair, encode_event_key -> decode_event_key is identity.
-    #[test]
-    fn attack_encoding_event_key_round_trip_any_values(
-        id_bytes in prop::collection::vec(any::<u8>(), 0..200),
-        version in any::<u64>(),
-    ) {
-        let encoded = encode_event_key(&id_bytes, version).unwrap();
-        let (decoded_id, decoded_version) = decode_event_key(&encoded).unwrap();
-        prop_assert_eq!(decoded_id, id_bytes.as_slice(), "id_bytes round-trip failed");
-        prop_assert_eq!(decoded_version, version, "version round-trip failed");
-    }
-
-    /// For any u64, encode_stream_version -> decode_stream_version is identity.
-    #[test]
-    fn attack_encoding_stream_version_round_trip_any_values(
-        version in any::<u64>(),
-    ) {
-        let encoded = encode_stream_version(version);
-        let decoded = decode_stream_version(&encoded).unwrap();
-        prop_assert_eq!(decoded, version, "version round-trip failed");
-    }
-
-    /// For any (u64, u32, String, Vec<u8>) tuple where event_type.len() <= u16::MAX,
-    /// encode_event_value -> decode_event_value is identity.
-    #[test]
-    fn attack_encoding_event_value_round_trip_any_data(
-        global_seq in any::<u64>(),
-        schema_ver in any::<u32>(),
-        event_type in "[a-zA-Z_][a-zA-Z0-9_]{0,200}",
-        payload in prop::collection::vec(any::<u8>(), 0..1024),
-    ) {
-        let mut buf = Vec::new();
-        encode_event_value(&mut buf, global_seq, schema_ver, &event_type, None, &payload).unwrap();
-        let (dec_gs, dec_sv, dec_et, dec_payload) = decode_ev_slices(&buf);
-        prop_assert_eq!(dec_gs, global_seq, "global_seq round-trip failed");
-        prop_assert_eq!(dec_sv, schema_ver, "schema_version round-trip failed");
-        prop_assert_eq!(dec_et, event_type, "event_type round-trip failed");
-        prop_assert_eq!(dec_payload, payload.as_slice(), "payload round-trip failed");
-    }
-
-    /// For any a < b (u64), encode_event_key(id, a) < encode_event_key(id, b).
-    #[test]
-    fn attack_encoding_event_key_byte_ordering(
-        id_bytes in prop::collection::vec(any::<u8>(), 0..50),
-        a in 0..u64::MAX,
-    ) {
-        let b = a + 1;
-        let key_a = encode_event_key(&id_bytes, a).unwrap();
-        let key_b = encode_event_key(&id_bytes, b).unwrap();
-        prop_assert!(key_a < key_b,
-            "version ordering violated for same ID");
-    }
-
-    /// For IDs with different length prefixes, shorter ID sorts before longer.
-    #[test]
-    fn attack_encoding_event_key_length_prefix_ordering(
-        base in prop::collection::vec(any::<u8>(), 1..50),
-        extra in prop::collection::vec(any::<u8>(), 1..10),
-        version in any::<u64>(),
-    ) {
-        let mut longer = base.clone();
-        longer.extend_from_slice(&extra);
-        let key_short = encode_event_key(&base, version).unwrap();
-        let key_long = encode_event_key(&longer, version).unwrap();
-        // Shorter length prefix (u16 BE) sorts before longer
-        prop_assert!(key_short < key_long,
-            "length prefix ordering violated: shorter ID must sort before longer");
-    }
-}
-
-/// Evil event type strings — the encoding must handle them or reject them cleanly.
-#[test]
-fn attack_encoding_event_value_evil_event_types() {
-    let evil_types: Vec<(&str, &str)> = vec![
-        ("", "empty string"),
-        ("日本語🔥", "Unicode with emoji"),
-        ("\0\0\0", "null bytes"),
-        ("   \t\n  ", "whitespace only"),
-        ("../../../etc/passwd", "path traversal"),
-        ("'; DROP TABLE events; --", "SQL injection"),
-        ("\u{200B}", "zero-width space"),
-        ("\u{FEFF}BOM", "byte order mark prefix"),
-    ];
-
-    let mut buf = Vec::new();
-    for (evil_type, description) in &evil_types {
-        let result = encode_event_value(&mut buf, 1, 1, evil_type, None, b"test");
-        match result {
-            Ok(()) => {
-                let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-                assert_eq!(gs, 1, "global_seq corrupted for: {}", description);
-                assert_eq!(sv, 1, "schema_version corrupted for: {}", description);
-                assert_eq!(
-                    decoded_type, *evil_type,
-                    "event_type corrupted for: {}",
-                    description
-                );
-                assert_eq!(payload, b"test", "payload corrupted for: {}", description);
-            }
-            Err(_) => {
-                // Rejection is also acceptable — document it
-                println!(
-                    "Encoding rejected evil event type '{}' ({})",
-                    evil_type, description
-                );
-            }
-        }
-    }
-
-    // Very long string near u16::MAX bytes
-    let long_type = "a".repeat(usize::from(u16::MAX));
-    let result = encode_event_value(&mut buf, 1, 1, &long_type, None, b"x");
-    assert!(
-        result.is_ok(),
-        "event_type at exactly u16::MAX bytes must be accepted"
-    );
-    let (_, _, decoded, _) = decode_ev_slices(&buf);
-    assert_eq!(decoded.len(), usize::from(u16::MAX));
-
-    // One byte over u16::MAX must be rejected
-    let too_long_type = "a".repeat(usize::from(u16::MAX) + 1);
-    let result = encode_event_value(&mut buf, 1, 1, &too_long_type, None, b"x");
-    assert!(
-        result.is_err(),
-        "event_type exceeding u16::MAX bytes must be rejected"
-    );
 }
 
 // ============================================================================

@@ -38,11 +38,9 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
-use nexus_fjall::encoding::{EncodeError, decode_event_value, encode_event_value};
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
@@ -71,19 +69,6 @@ impl nexus::Id for TestId {
 }
 fn tid(s: &str) -> TestId {
     TestId(s.to_owned())
-}
-
-/// Decode an event value from a byte slice and return concrete `(gs, sv, event_type, payload)`.
-/// For use in encoding-layer tests only.
-fn decode_ev_slices(buf: &[u8]) -> (u64, u32, String, Vec<u8>) {
-    let b = Bytes::copy_from_slice(buf);
-    let d = decode_event_value(&b).unwrap();
-    let et =
-        std::str::from_utf8(&b[d.event_type_range.start as usize..d.event_type_range.end as usize])
-            .unwrap()
-            .to_owned();
-    let pl = b[d.payload_range.start as usize..d.payload_range.end as usize].to_vec();
-    (d.global_seq, d.schema_version.get(), et, pl)
 }
 
 fn leak(s: &str) -> &'static str {
@@ -161,17 +146,18 @@ async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
 // CATEGORY A: Version Arithmetic Overflow (THE BIG ONE)
 // ============================================================================
 
-/// BUG FOUND: store.rs line 109 uses unchecked u64 addition:
-///     `let expected_env_version = current_version + 1 + i_u64;`
-/// If `current_version` is near `u64::MAX`, this overflows.
-/// In debug mode: panic. In release mode: silent wrap to 0.
-///
-/// This test proves the arithmetic WILL overflow.
+/// The sequential-version check in `append` advances a running counter
+/// (`expected_version_seq`) via `checked_add(1)` once per envelope, starting
+/// from `current_version + 1`. This test documents the boundary arithmetic:
+/// for a stream whose current version sits near `u64::MAX`, the position the
+/// counter would reach after `i` advances overflows. The real `append` path is
+/// unreachable here (you cannot append `u64::MAX` events), so this verifies the
+/// checked arithmetic that guards that boundary in isolation.
 #[test]
 fn attack_version_overflow_in_sequential_check() {
-    // store.rs line 109: current_version + 1 + i_u64
-    // If current_version = u64::MAX - 2 and i_u64 = 2:
-    //   (u64::MAX - 2) + 1 + 2 = u64::MAX + 1 = OVERFLOW
+    // Running counter seeded at current_version + 1, advanced once per
+    // envelope. With current_version = u64::MAX - 2, the third advance
+    // (i = 2) would reach u64::MAX + 1 = OVERFLOW.
     let current_version: u64 = u64::MAX - 2;
     let i: u64 = 2;
     let result = current_version
@@ -179,7 +165,7 @@ fn attack_version_overflow_in_sequential_check() {
         .and_then(|v| v.checked_add(i));
     assert!(
         result.is_none(),
-        "BUG CONFIRMED: version arithmetic at store.rs:109 overflows \
+        "BUG CONFIRMED: running-counter version arithmetic overflows \
          when current_version={current_version}, i={i}"
     );
 }
@@ -187,8 +173,8 @@ fn attack_version_overflow_in_sequential_check() {
 /// Prove that even i=0 overflows when `current_version` = `u64::MAX`
 #[test]
 fn attack_version_overflow_at_exact_max() {
-    // current_version = u64::MAX, i = 0
-    // (u64::MAX) + 1 + 0 = OVERFLOW on the first addition
+    // current_version = u64::MAX: seeding the running counter at
+    // current_version + 1 overflows on the very first advance.
     let current_version: u64 = u64::MAX;
     let result = current_version.checked_add(1);
     assert!(
@@ -209,18 +195,18 @@ fn attack_new_version_computation_overflow() {
 }
 
 /// Exhaustive boundary check: for which (`current_version`, `batch_size`) pairs
-/// does the version arithmetic in store.rs:109 overflow?
+/// does the sequential-version check in `append` overflow?
 #[test]
 fn attack_version_overflow_boundary_exhaustive() {
-    // The formula: current_version + 1 + i for i in 0..batch_size
-    // Maximum i is batch_size - 1
-    // Overflow happens when: current_version + 1 + (batch_size - 1) > u64::MAX
-    // i.e., current_version + batch_size > u64::MAX
-    // i.e., current_version > u64::MAX - batch_size
+    // The running counter starts at current_version + 1 and is advanced
+    // batch_size times, reaching current_version + batch_size for the last
+    // envelope. Overflow happens when current_version + batch_size > u64::MAX,
+    // i.e. current_version > u64::MAX - batch_size.
 
     for batch_size in 1u64..=10 {
         let threshold = u64::MAX - batch_size;
-        // At threshold: current_version + 1 + (batch_size - 1) = u64::MAX → OK
+        // At threshold: counter seeded at current_version + 1, advanced
+        // batch_size - 1 more times, lands on u64::MAX → OK
         let ok_result = threshold
             .checked_add(1)
             .and_then(|v| v.checked_add(batch_size - 1));
@@ -684,121 +670,6 @@ async fn attack_concurrent_append_same_stream_conflict() {
     let sid_val = tid("contested-stream");
     let count = count_events(&store, &sid_val).await;
     assert_eq!(count, 1, "contested stream should have exactly 1 event");
-}
-
-// ============================================================================
-// CATEGORY I: Encoding Boundary Attacks
-// ============================================================================
-
-#[test]
-fn attack_encoding_event_type_exactly_u16_max_bytes() {
-    let event_type = "a".repeat(usize::from(u16::MAX));
-    let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 7, 1, &event_type, None, b"payload");
-    assert!(
-        result.is_ok(),
-        "event type at exactly u16::MAX bytes should succeed"
-    );
-
-    let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-    assert_eq!(gs, 7);
-    assert_eq!(sv, 1);
-    assert_eq!(decoded_type.len(), usize::from(u16::MAX));
-    assert_eq!(payload, b"payload");
-}
-
-#[test]
-fn attack_encoding_event_type_one_over_u16_max() {
-    let event_type = "a".repeat(usize::from(u16::MAX) + 1);
-    let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 1, 1, &event_type, None, b"payload");
-    assert!(
-        result.is_err(),
-        "event type over u16::MAX must fail with EncodeError"
-    );
-}
-
-#[test]
-fn attack_encoding_empty_event_type() {
-    let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 3, 1, "", None, b"payload");
-    assert!(
-        result.is_ok(),
-        "empty event type should encode successfully"
-    );
-
-    let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-    assert_eq!(gs, 3);
-    assert_eq!(sv, 1);
-    assert_eq!(decoded_type, "");
-    assert_eq!(payload, b"payload");
-}
-
-#[test]
-fn attack_encoding_empty_payload() {
-    let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 5, 1, "Test", None, b"");
-    assert!(result.is_ok(), "empty payload should encode successfully");
-
-    let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-    assert_eq!(gs, 5);
-    assert_eq!(sv, 1);
-    assert_eq!(decoded_type, "Test");
-    assert!(payload.is_empty());
-}
-
-#[test]
-fn attack_encoding_null_bytes_in_payload() {
-    let evil_payload = b"\x00\x00\x00\x00\x00";
-    let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 1, "Test", None, evil_payload).unwrap();
-    let (_, _, _, payload) = decode_ev_slices(&buf);
-    assert_eq!(payload, evil_payload, "null bytes in payload must survive");
-}
-
-#[test]
-fn attack_encoding_schema_version_boundaries() {
-    // schema_version = 0 must be rejected at the encoding layer — the
-    // wire builder ([`wire::encode_frame`]) and `PersistedEnvelope::try_new`
-    // both reject 0, restoring write/read symmetry (CLAUDE.md §3, §4).
-    let mut buf = Vec::new();
-    let result = encode_event_value(&mut buf, 1, 0, "Test", None, b"data");
-    match result {
-        Err(EncodeError::Value(nexus_store::value::ValueError::SchemaVersionZero)) => {}
-        other => panic!("expected Value(SchemaVersionZero) at encoding layer, got {other:?}"),
-    }
-
-    // schema_version = 1 is the minimum valid value and must round-trip.
-    buf.clear();
-    encode_event_value(&mut buf, 1, 1, "Test", None, b"data").unwrap();
-    let (_, sv, _, _) = decode_ev_slices(&buf);
-    assert_eq!(sv, 1, "schema_version=1 must round-trip");
-
-    // schema_version = u32::MAX is the upper boundary and must round-trip.
-    buf.clear();
-    encode_event_value(&mut buf, 1, u32::MAX, "Test", None, b"data").unwrap();
-    let (_, sv, _, _) = decode_ev_slices(&buf);
-    assert_eq!(
-        sv,
-        u32::MAX,
-        "schema_version=u32::MAX must round-trip in encoding layer"
-    );
-}
-
-#[test]
-fn attack_encoding_large_payload() {
-    // 1MB payload
-    let large = vec![0xABu8; 1_048_576];
-    let mut buf = Vec::new();
-    encode_event_value(&mut buf, 1, 1, "Big", None, &large).unwrap();
-    let (_, _, _, payload) = decode_ev_slices(&buf);
-    assert_eq!(
-        payload.len(),
-        1_048_576,
-        "1MB payload must survive encoding"
-    );
-    assert_eq!(payload[0], 0xAB);
-    assert_eq!(payload[1_048_575], 0xAB);
 }
 
 // ============================================================================

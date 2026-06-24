@@ -1,129 +1,55 @@
-//! Subscription primitive: concrete user-facing struct + adapter trait.
+//! Subscription primitive: the user-facing handle that builds the generic
+//! catch-up-then-live-tail loop.
 //!
 //! Users construct [`Subscription::new`] from a [`Store<S>`] and call
-//! [`Subscription::subscribe`] to obtain a `futures::Stream` cursor that
-//! **never terminates** — when caught up, it waits for new events rather
-//! than yielding `None`. Users never name or touch [`Arc`].
+//! [`Subscription::subscribe`] / [`Subscription::subscribe_all`] to obtain a
+//! `futures::Stream` cursor that **never terminates** — when caught up, it
+//! waits for new events rather than yielding `None`. Users never name or touch
+//! [`Arc`].
+//!
+//! # Shape
+//!
+//! `subscribe`/`subscribe_all` are **synchronous**: wake-registration can fail,
+//! so they return `Result<impl Stream, _>` eagerly; read errors stream in-band
+//! as `Err` items (see [`live`]). The returned stream is `!Unpin` (it is the
+//! `futures::stream::unfold` of the live loop), so consumers MUST `pin!` it
+//! before polling — the zero-cost (no-`Box`) tradeoff.
 //!
 //! # Adapter authoring
 //!
-//! Adapters implement [`RawSubscription`] on their bare store type (e.g.
-//! `FjallStore`, [`InMemoryStore`](crate::testing::InMemoryStore)), not on
-//! `Arc<Store>`. The orphan rule otherwise forbids
-//! `impl Subscription for Arc<FjallStore>` in `nexus-fjall` (both
-//! `Subscription` and `Arc` foreign to that crate). Delegating through a
-//! trait whose `Self` is the bare store type is the standard escape; the
-//! user-facing [`Subscription`] struct composes this trait into the
-//! external API.
-//!
-//! # Sealing
-//!
-//! [`RawSubscription`] is sealed via a `pub` super-trait [`sealed::Sealed`].
-//! The `Sealed` trait is reachable from any crate (so adapter crates can
-//! implement it), but neither it nor [`RawSubscription`] is re-exported at
-//! the crate root. The signal is documentary, not structural: library
-//! users grep `Subscription` and find the user-facing struct; adapter
-//! authors who need the primitive import the qualified path
-//! `nexus_store::subscription::RawSubscription`.
+//! There is no adapter-facing subscription trait. An adapter need only
+//! implement [`RawEventStore`] (the bounded scans) and
+//! [`WakeSource`](crate::wake::WakeSource) (the live wake); the generic loop is
+//! assembled here from [`StreamCatchup`] / [`AllCatchup`] + [`live`], one
+//! monomorphized state machine per call site.
 
-use core::future::Future;
 use std::sync::Arc;
 
 use nexus::{Id, Version};
 
-use crate::store::{GlobalSeq, Store};
-use crate::stream::EventStream;
-
-/// Sealed-trait scaffold for [`RawSubscription`].
-///
-/// `Sealed` is `pub` so external adapter crates can implement it on their
-/// own store types, but the module containing it is intentionally
-/// not re-exported at the crate root — see the module-level docs.
-pub mod sealed {
-    /// Super-trait that gates [`RawSubscription`](super::RawSubscription)
-    /// implementations. Adapter authors `impl sealed::Sealed for
-    /// MyStore {}` alongside the `RawSubscription` impl.
-    pub trait Sealed {}
-}
-
-/// Adapter-facing primitive for subscriptions.
-///
-/// Implementors expose a `subscribe` associated function (not a method —
-/// the first argument is `&Arc<Self>`, not a self-receiver, so the
-/// returned cursor can clone the Arc internally and outlive the call).
-///
-/// The user-facing [`Subscription`] struct composes this trait into the
-/// public API. Library users never name `RawSubscription`.
-///
-/// # Contract
-///
-/// - `from: None` → start from the first event in the stream (version 1).
-/// - `from: Some(v)` → start from the event *after* version `v`.
-/// - The returned stream **never returns `None`** — it waits for new events
-///   when caught up rather than terminating.
-/// - Events are yielded with monotonically increasing versions.
-pub trait RawSubscription: sealed::Sealed + Send + Sync + 'static {
-    /// The cursor type — a `futures::Stream` of envelopes, `'static`.
-    type Stream: EventStream<Error = Self::Error> + 'static;
-
-    /// The error type for subscription operations.
-    type Error: core::error::Error + Send + Sync + 'static;
-
-    /// Open a subscription cursor.
-    ///
-    /// The first parameter is `&Arc<Self>` (not a self-receiver) so the
-    /// adapter can clone the Arc inside and give the returned cursor its
-    /// own owned reference to the store.
-    fn subscribe(
-        arc: &Arc<Self>,
-        id: &impl Id,
-        from: Option<Version>,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
-}
-
-/// Adapter-facing primitive for all-streams (`$all`) subscriptions.
-///
-/// The dual of [`RawSubscription`] for the store-wide [`GlobalSeq`] order:
-/// no stream id, resumes on `GlobalSeq` instead of `Version`. The
-/// user-facing [`Subscription`] struct composes this into `subscribe_all`.
-///
-/// # Contract
-///
-/// - `from: None` → start from the first event ever appended.
-/// - `from: Some(g)` → start from the event *after* `GlobalSeq` `g`.
-/// - The returned stream **never returns `None`** — it waits for new events
-///   when caught up rather than terminating.
-/// - Events are yielded in ascending `GlobalSeq` order; the sequence is
-///   monotonic but not gapless, and the cursor tolerates gaps.
-pub trait RawAllSubscription: sealed::Sealed + Send + Sync + 'static {
-    /// The cursor type — a `futures::Stream` of envelopes, `'static`.
-    type Stream: EventStream<Error = Self::Error> + 'static;
-
-    /// The error type for subscription operations.
-    type Error: core::error::Error + Send + Sync + 'static;
-
-    /// Open an all-streams subscription cursor.
-    fn subscribe_all(
-        arc: &Arc<Self>,
-        from: Option<GlobalSeq>,
-    ) -> impl Future<Output = Result<Self::Stream, Self::Error>> + Send;
-}
+use crate::PersistedEnvelope;
+use crate::catchup::{AllCatchup, StreamCatchup};
+use crate::store::{GlobalSeq, RawEventStore, Store};
+use crate::subscription_cursor::live;
+use crate::wake::WakeSource;
 
 /// User-facing subscription handle.
 ///
-/// Holds a shared reference to a [`Store<S>`] backend (one `Arc` clone)
-/// and exposes a single async method [`subscribe`](Self::subscribe). Cheap
-/// to construct; no `Arc` ever appears in user code.
+/// Holds a shared reference to a [`Store<S>`] backend (one `Arc` clone) and
+/// exposes [`subscribe`](Self::subscribe) / [`subscribe_all`](Self::subscribe_all).
+/// Cheap to construct; no `Arc` ever appears in user code.
 ///
 /// # Example
 ///
 /// ```ignore
+/// use std::pin::pin;
+/// use futures::StreamExt;
 /// use nexus_store::{Store, Subscription};
 ///
 /// let store = Store::new(FjallStore::builder("path").open()?);
-/// let cursor = Subscription::new(&store)
-///     .subscribe(&account_id, None)
-///     .await?;
+/// let cursor = Subscription::new(&store).subscribe(&account_id, None)?;
+/// let mut cursor = pin!(cursor);
+/// while let Some(item) = cursor.next().await { /* ... */ }
 /// ```
 pub struct Subscription<S> {
     store: Arc<S>,
@@ -145,49 +71,60 @@ impl<S> Subscription<S> {
     }
 }
 
-impl<S: RawSubscription> Subscription<S> {
-    /// Open a per-stream subscription cursor.
+impl<S: RawEventStore + WakeSource> Subscription<S> {
+    /// Open a per-stream catch-up + live-tail cursor.
     ///
-    /// `from: None` starts from version 1; `from: Some(v)` starts from
-    /// the event *after* version `v`. The returned cursor **never returns
-    /// `None`** — it waits for new events when caught up.
-    ///
-    /// Catch-up is bounded: the cursor materializes at most the adapter's
-    /// configured `batch_size` events per refill, paginating by keyset resume
-    /// until caught up, then waits for new events. A slow consumer never forces
-    /// the whole backlog into memory at once.
+    /// `from: None` starts from version 1; `from: Some(v)` starts from the
+    /// event *strictly after* version `v`. The returned stream **never returns
+    /// `None`** — it waits for new events when caught up — and is `!Unpin`, so
+    /// `pin!` it before polling.
     ///
     /// # Errors
     ///
-    /// Returns `S::Error` if the adapter cannot open the cursor (e.g. an
-    /// I/O failure while seeking to the start position, or an arithmetic
-    /// overflow if `from` is `Some(Version::MAX)`).
-    pub async fn subscribe(
+    /// `<S as WakeSource>::Error` if wake-registration fails. Read errors are
+    /// surfaced as `Err` items in the stream (see [`live`]).
+    pub fn subscribe<I: Id>(
         &self,
-        id: &impl Id,
+        id: &I,
         from: Option<Version>,
-    ) -> Result<<S as RawSubscription>::Stream, <S as RawSubscription>::Error> {
-        S::subscribe(&self.store, id, from).await
+    ) -> Result<
+        impl futures::Stream<Item = Result<PersistedEnvelope, <S as RawEventStore>::Error>>
+        + Send
+        + use<S, I>,
+        <S as WakeSource>::Error,
+    >
+    where
+        <S as RawEventStore>::Stream: Unpin,
+    {
+        let catchup = StreamCatchup::new(Arc::clone(&self.store), id.as_ref())?;
+        Ok(live(catchup, from))
     }
-}
 
-impl<S: RawAllSubscription> Subscription<S> {
-    /// Open an all-streams (`$all`) subscription cursor, ordered by
-    /// [`GlobalSeq`].
+    /// Open an all-streams (`$all`) catch-up + live-tail cursor in
+    /// [`GlobalSeq`] order.
     ///
-    /// `from: None` starts from the first event ever appended; `from:
-    /// Some(g)` starts from the event *after* `GlobalSeq` `g`. The returned
-    /// cursor **never returns `None`** — it waits for new events when caught
-    /// up.
+    /// `from: None` starts from the first event ever appended; `from: Some(g)`
+    /// starts from the event *strictly after* `GlobalSeq` `g`. The returned
+    /// stream **never returns `None`** and is `!Unpin`, so `pin!` it before
+    /// polling.
     ///
     /// # Errors
     ///
-    /// Returns `S::Error` if the adapter cannot open the cursor (e.g. an
-    /// arithmetic overflow if `from` is `Some` of the maximum `GlobalSeq`).
-    pub async fn subscribe_all(
+    /// `<S as WakeSource>::Error` if wake-registration fails. Read errors are
+    /// surfaced as `Err` items in the stream (see [`live`]).
+    pub fn subscribe_all(
         &self,
         from: Option<GlobalSeq>,
-    ) -> Result<<S as RawAllSubscription>::Stream, <S as RawAllSubscription>::Error> {
-        S::subscribe_all(&self.store, from).await
+    ) -> Result<
+        impl futures::Stream<Item = Result<PersistedEnvelope, <S as RawEventStore>::Error>>
+        + Send
+        + use<S>,
+        <S as WakeSource>::Error,
+    >
+    where
+        <S as RawEventStore>::AllStream: Unpin,
+    {
+        let catchup = AllCatchup::new(Arc::clone(&self.store))?;
+        Ok(live(catchup, from))
     }
 }

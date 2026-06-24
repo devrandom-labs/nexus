@@ -68,12 +68,16 @@
 //! [`Notify::notify_waiters`]: tokio::sync::Notify::notify_waiters
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::future::Future;
+use std::sync::{Arc, Weak};
 
 use foldhash::fast::RandomState;
 use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::sync::Notify;
+use tokio::sync::watch;
+
+use crate::wake::{WakeRegistration, WakeSource};
 
 /// Errors produced by [`StreamNotifiers`].
 #[derive(Debug, Error)]
@@ -114,20 +118,31 @@ pub struct StreamNotifiers {
     /// subscriber genuinely wants every event, so there is no thundering
     /// herd to avoid here — unlike the per-stream `map`.
     all: Arc<Notify>,
-}
-
-impl Default for StreamNotifiers {
-    fn default() -> Self {
-        Self {
-            map: Mutex::default(),
-            all: Arc::new(Notify::new()),
-        }
-    }
+    /// Store-wide `$all` generation counter, bumped on every [`wake_all`]. A
+    /// `watch` channel alongside [`all`](Self::all): the `Notify` rouses parked
+    /// tasks, this exposes a monotone (wrapping) generation a cursor can read
+    /// and compare to detect a missed wake without parking.
+    all_gen_tx: watch::Sender<u64>,
+    /// A `Weak` back-reference to the `Arc<Self>` this lives in, set at
+    /// construction via [`Arc::new_cyclic`]. The [`WakeSource::register`] trait
+    /// method takes `&self` (its receiver is fixed by the trait), yet must
+    /// build a [`SubscriptionGuard`] that owns an `Arc<StreamNotifiers>` for
+    /// the drop-guard back-channel. Upgrading this `Weak` recovers that `Arc`
+    /// without changing the trait signature. The upgrade always succeeds while
+    /// any strong reference exists, which is guaranteed for the duration of any
+    /// `register` call (the caller holds one).
+    weak_self: Weak<Self>,
 }
 
 #[derive(Debug)]
 struct Entry {
     notify: Arc<Notify>,
+    /// Per-stream generation counter, bumped on every [`wake`] for this stream.
+    /// The `watch` generation counterpart to the [`notify`](Self::notify)
+    /// field: the `Notify` rouses parked tasks, this exposes a monotone
+    /// (wrapping) generation a cursor can read and compare to detect a missed
+    /// wake without parking.
+    gen_tx: watch::Sender<u64>,
     /// Number of live [`SubscriptionGuard`]s for this stream.
     subscribers: usize,
 }
@@ -136,7 +151,12 @@ impl StreamNotifiers {
     /// Create an empty registry behind an `Arc`.
     #[must_use]
     pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+        Arc::new_cyclic(|weak_self| Self {
+            map: Mutex::default(),
+            all: Arc::new(Notify::new()),
+            all_gen_tx: watch::Sender::new(0),
+            weak_self: Weak::clone(weak_self),
+        })
     }
 
     /// Register interest in `stream`, returning a guard that keeps the stream's
@@ -153,6 +173,7 @@ impl StreamNotifiers {
         let mut map = self.map.lock();
         let entry = map.entry(key.clone()).or_insert_with(|| Entry {
             notify: Arc::new(Notify::new()),
+            gen_tx: watch::Sender::new(0),
             subscribers: 0,
         });
         entry.subscribers = entry
@@ -161,11 +182,59 @@ impl StreamNotifiers {
             .ok_or(NotifyError::SubscriberOverflow)?;
         let notify = Arc::clone(&entry.notify);
         drop(map);
-        Ok(SubscriptionGuard {
-            registry: Arc::clone(self),
+        Ok(self.make_guard(key, notify))
+    }
+
+    /// Construct a [`SubscriptionGuard`] from already-registered entry data.
+    ///
+    /// Builds *only* the guard struct (a `Weak` back-reference + key + notify);
+    /// it does **not** touch the subscriber count. Callers MUST have already
+    /// incremented the entry's `subscribers` under the map lock exactly once;
+    /// the guard's `Drop` will decrement exactly once via [`release`].
+    ///
+    /// Takes `&self` (not `&Arc<Self>`) so it is reachable from the
+    /// [`WakeSource::register`] trait method, whose receiver is fixed at
+    /// `&self`. The `Weak` is cloned from [`weak_self`](Self::weak_self).
+    fn make_guard(&self, key: Box<[u8]>, notify: Arc<Notify>) -> SubscriptionGuard {
+        SubscriptionGuard {
+            registry: Weak::clone(&self.weak_self),
             key,
             notify,
-        })
+        }
+    }
+
+    /// Register interest in `stream`, returning the drop-guard plus a `watch`
+    /// receiver on the stream's per-stream generation. The receiver resolves
+    /// `changed()` on every subsequent [`wake`](Self::wake) of this stream.
+    ///
+    /// A single map-lock critical section does insert-or-get, the *one*
+    /// subscriber increment, the receiver clone, and (via [`make_guard`]) the
+    /// guard build — so the subscriber count is incremented exactly once, never
+    /// double-counted.
+    ///
+    /// # Errors
+    ///
+    /// [`NotifyError::SubscriberOverflow`] if the live-subscriber count for the
+    /// stream would overflow `usize` (unreachable in practice).
+    fn register_entry(
+        &self,
+        stream: &[u8],
+    ) -> Result<(SubscriptionGuard, watch::Receiver<u64>), NotifyError> {
+        let key: Box<[u8]> = Box::from(stream);
+        let mut map = self.map.lock();
+        let entry = map.entry(key.clone()).or_insert_with(|| Entry {
+            notify: Arc::new(Notify::new()),
+            gen_tx: watch::Sender::new(0),
+            subscribers: 0,
+        });
+        entry.subscribers = entry
+            .subscribers
+            .checked_add(1)
+            .ok_or(NotifyError::SubscriberOverflow)?;
+        let notify = Arc::clone(&entry.notify);
+        let rx = entry.gen_tx.subscribe();
+        drop(map);
+        Ok((self.make_guard(key, notify), rx))
     }
 
     /// Wake every task currently parked on `stream`. No-op when the stream has
@@ -173,17 +242,32 @@ impl StreamNotifiers {
     ///
     /// MUST be called *after* the corresponding event(s) are durably committed,
     /// so that a woken subscriber re-reads already-visible data.
+    ///
+    /// On the production `$all` path an adapter typically calls `wake(id)` then
+    /// [`wake_all`](Self::wake_all) per append, so `all_gen_tx` is bumped twice.
+    /// This is benign: the generation is compared for inequality and spurious
+    /// wakes are permitted. The redundancy goes away when the legacy
+    /// [`Notify`]/[`wake_all`](Self::wake_all) path is removed in a later phase.
     pub fn wake(&self, stream: &[u8]) {
         // Clone the `Arc` out under the lock, then release it before waking, so
         // woken subscribers don't immediately contend on the map lock they have
         // no need for.
         let maybe_notify = {
             let map = self.map.lock();
-            map.get(stream).map(|entry| Arc::clone(&entry.notify))
+            map.get(stream).map(|entry| {
+                entry.gen_tx.send_modify(|g| *g = g.wrapping_add(1));
+                Arc::clone(&entry.notify)
+            })
         };
         if let Some(notify) = maybe_notify {
             notify.notify_waiters();
         }
+        // A per-stream commit is also an `$all` event, so bump the `$all` watch
+        // generation. This rouses a [`WakeReg`] armed on `$all` (which watches
+        // `all_gen_tx`) without touching the legacy `$all` `Notify` — parking
+        // on [`all_notifier`](Self::all_notifier) stays driven solely by
+        // [`wake_all`](Self::wake_all), preserving that path's behaviour.
+        self.all_gen_tx.send_modify(|g| *g = g.wrapping_add(1));
     }
 
     /// Wake every task parked on the store-wide `$all` notifier.
@@ -192,6 +276,7 @@ impl StreamNotifiers {
     /// committed, so a woken `$all` subscriber re-reads visible data. A no-op
     /// when no `$all` subscriber is parked.
     pub fn wake_all(&self) {
+        self.all_gen_tx.send_modify(|g| *g = g.wrapping_add(1));
         self.all.notify_waiters();
     }
 
@@ -201,6 +286,32 @@ impl StreamNotifiers {
     #[must_use]
     pub const fn all_notifier(&self) -> &Arc<Notify> {
         &self.all
+    }
+
+    /// Current per-stream wake generation for `stream`, or `0` when the stream
+    /// has no live entry. Bumped by every [`wake`](Self::wake); a cursor reads
+    /// it to detect a wake that arrived between two reads. Wrapping, so compare
+    /// for inequality, not ordering.
+    ///
+    /// The `0`-for-absent-stream return is unambiguous in practice: a
+    /// subscription cursor reads this only while holding its own live
+    /// [`SubscriptionGuard`], so its entry is guaranteed present and a genuine
+    /// generation of `0` (the entry's initial value) cannot be confused with
+    /// the absent-stream `0`.
+    #[must_use]
+    pub fn generation(&self, stream: &[u8]) -> u64 {
+        self.map
+            .lock()
+            .get(stream)
+            .map_or(0, |e| *e.gen_tx.borrow())
+    }
+
+    /// Current store-wide `$all` wake generation. Bumped by every
+    /// [`wake_all`](Self::wake_all). Wrapping, so compare for inequality, not
+    /// ordering.
+    #[must_use]
+    pub fn all_generation(&self) -> u64 {
+        *self.all_gen_tx.borrow()
     }
 
     /// Number of streams with at least one live subscriber. Diagnostics only.
@@ -237,7 +348,13 @@ impl StreamNotifiers {
 /// state so it drops exactly when the cursor is dropped (e.g. on passivation).
 #[derive(Debug)]
 pub struct SubscriptionGuard {
-    registry: Arc<StreamNotifiers>,
+    /// A `Weak` (not `Arc`) back-reference to the owning registry. `Weak`
+    /// because the guard is built from `&self` (so the [`WakeSource::register`]
+    /// trait method, whose receiver is `&self`, can construct it), and because
+    /// a guard must not keep the whole registry alive on its own. On drop it
+    /// upgrades to run [`release`]; if the registry is already gone the reap is
+    /// a no-op (there is nothing left to decrement).
+    registry: Weak<StreamNotifiers>,
     key: Box<[u8]>,
     notify: Arc<Notify>,
 }
@@ -258,7 +375,76 @@ impl SubscriptionGuard {
 
 impl Drop for SubscriptionGuard {
     fn drop(&mut self) {
-        self.registry.release(&self.key);
+        // Upgrade to run the reap. `None` means the registry was already
+        // dropped, in which case its map (and this entry) is already gone —
+        // nothing to decrement.
+        if let Some(registry) = self.registry.upgrade() {
+            registry.release(&self.key);
+        }
+    }
+}
+
+/// In-process registration: a `watch` receiver on the target's generation,
+/// plus (for a per-stream target) the drop-guard that reaps the entry.
+///
+/// For an `$all` target there is no entry to reap (the `$all` notifier is
+/// permanently alive), so `_guard` is `None`.
+#[derive(Debug)]
+pub struct WakeReg {
+    rx: watch::Receiver<u64>,
+    _guard: Option<SubscriptionGuard>,
+}
+
+impl WakeRegistration for WakeReg {
+    fn arm(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut rx = self.rx.clone();
+        // The clone alone is insufficient: a freshly cloned `watch::Receiver`
+        // inherits the sender's version as of the clone, which may predate this
+        // `arm` call. `mark_unchanged()` narrows the captured-version point to
+        // the exact instant `arm` is called, making the contract's "seen-version
+        // at arm() time" precise and closing the clone→mark window — so only a
+        // *future* bump (a `wake` after this point) resolves `changed()`, and a
+        // wake landing between `arm` and the await is observed, never lost.
+        rx.mark_unchanged();
+        async move {
+            // `Err` only if every sender has been dropped; treat that as a
+            // (final) wake so the parked task makes progress rather than
+            // hanging.
+            let _ = rx.changed().await;
+        }
+    }
+}
+
+impl WakeSource for StreamNotifiers {
+    type Registration = WakeReg;
+    type Error = NotifyError;
+
+    fn register(&self, stream: Option<&[u8]>) -> Result<WakeReg, NotifyError> {
+        match stream {
+            None => Ok(WakeReg {
+                rx: self.all_gen_tx.subscribe(),
+                _guard: None,
+            }),
+            Some(s) => {
+                let (guard, rx) = self.register_entry(s)?;
+                Ok(WakeReg {
+                    rx,
+                    _guard: Some(guard),
+                })
+            }
+        }
+    }
+
+    fn wake(&self, stream: &[u8]) {
+        // A per-stream commit is also an `$all` event. The inherent
+        // [`wake`](StreamNotifiers::wake) already does both bumps: the
+        // per-stream generation+`Notify` AND the `$all` watch generation that a
+        // [`WakeReg`] armed on `$all` watches. Delegate to it so the trait and
+        // inherent paths are behaviourally identical and there is a single
+        // source of truth for the wake effect. The inherent method shadows this
+        // trait method at unqualified call sites; the explicit `<Self>` path
+        // selects the inherent one without recursing.
+        <Self>::wake(self, stream);
     }
 }
 
@@ -554,5 +740,55 @@ mod tests {
             drop(guard);
             assert_eq!(reg.active_streams(), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn wake_increments_stream_generation() {
+        let reg = StreamNotifiers::new();
+        let _guard = reg.subscribe(b"s1").unwrap();
+        let before = reg.generation(b"s1");
+        reg.wake(b"s1");
+        let after = reg.generation(b"s1");
+        assert_eq!(
+            after,
+            before + 1,
+            "wake must bump the stream generation by 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_all_increments_all_generation() {
+        let reg = StreamNotifiers::new();
+        let before = reg.all_generation();
+        reg.wake_all();
+        assert_eq!(reg.all_generation(), before + 1);
+    }
+
+    /// Waking one stream bumps only its generation, not another's.
+    #[tokio::test]
+    async fn generations_are_independent_per_stream() {
+        let reg = StreamNotifiers::new();
+        let _a = reg.subscribe(b"a").unwrap();
+        let _b = reg.subscribe(b"b").unwrap();
+        let a_before = reg.generation(b"a");
+        let b_before = reg.generation(b"b");
+        reg.wake(b"a");
+        assert_eq!(
+            reg.generation(b"a"),
+            a_before + 1,
+            "wake(a) must bump a's generation"
+        );
+        assert_eq!(
+            reg.generation(b"b"),
+            b_before,
+            "wake(a) must not touch b's generation"
+        );
+    }
+
+    /// A never-subscribed stream reports generation 0.
+    #[tokio::test]
+    async fn generation_of_unknown_stream_is_zero() {
+        let reg = StreamNotifiers::new();
+        assert_eq!(reg.generation(b"never"), 0);
     }
 }

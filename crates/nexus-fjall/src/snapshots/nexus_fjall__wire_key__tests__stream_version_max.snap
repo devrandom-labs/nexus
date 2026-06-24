@@ -1,0 +1,5 @@
+---
+source: crates/nexus-fjall/src/wire_key.rs
+expression: hex_dump(&encoded)
+---
+ff ff ff ff ff ff ff ff
