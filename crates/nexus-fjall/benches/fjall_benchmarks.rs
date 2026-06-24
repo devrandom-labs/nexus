@@ -11,12 +11,10 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
-use nexus_fjall::wire_key::{
-    decode_event_key, decode_event_value, decode_stream_version, encode_event_key,
-    encode_event_value, encode_stream_version,
-};
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
+use nexus_store::value::{EventType, Payload, SchemaVersion};
+use nexus_store::wire;
 use std::fmt;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -71,41 +69,37 @@ fn payload(size: usize) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Encoding benchmarks (pure computation, no I/O)
+// 1. Wire-frame encoding benchmarks (pure computation, no I/O)
+//
+// Measures the REAL production value encoder/decoder
+// (`nexus_store::wire::encode_frame` / `decode_frame`) that `FjallStore::append`
+// and the read cursor drive — not an adapter-local test wrapper (CLAUDE.md
+// rule 8). The fjall key codecs (`encode_event_key`, `encode_stream_version`)
+// are crate-private; their cost is exercised end-to-end by the `append_*` and
+// `read_stream` benchmarks below.
 // ---------------------------------------------------------------------------
+
+fn build_frame_value(event_type: &str, p: &[u8]) -> Bytes {
+    let sv = SchemaVersion::from_u32(1).unwrap();
+    let et = EventType::from_bytes(Bytes::copy_from_slice(event_type.as_bytes())).unwrap();
+    let pl = Payload::from_bytes(Bytes::copy_from_slice(p)).unwrap();
+    wire::encode_frame(1, sv, &et, &pl, None).unwrap().value
+}
 
 fn encoding_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("encoding");
 
-    group.bench_function("encode_event_key", |b| {
-        b.iter(|| encode_event_key(b"stream-42", 100).unwrap());
-    });
-
-    let key = encode_event_key(b"stream-42", 100).unwrap();
-    group.bench_function("decode_event_key", |b| {
-        b.iter(|| decode_event_key(&key).unwrap());
-    });
-
-    group.bench_function("encode_stream_version", |b| {
-        b.iter(|| encode_stream_version(999));
-    });
-
-    let ver = encode_stream_version(999);
-    group.bench_function("decode_stream_version", |b| {
-        b.iter(|| decode_stream_version(&ver).unwrap());
-    });
+    let sv = SchemaVersion::from_u32(1).unwrap();
+    let et = EventType::from_bytes(Bytes::from_static(b"BenchEvent")).unwrap();
 
     for &(label, size) in &[
         ("small_64B", SMALL_PAYLOAD),
         ("medium_1KB", MEDIUM_PAYLOAD),
         ("large_64KB", LARGE_PAYLOAD),
     ] {
-        let p = payload(size);
-        group.bench_with_input(BenchmarkId::new("encode_event_value", label), &p, |b, p| {
-            let mut buf = Vec::with_capacity(size + 64);
-            b.iter(|| {
-                encode_event_value(&mut buf, 1, 1, "BenchEvent", None, p).unwrap();
-            });
+        let pl = Payload::from_bytes(Bytes::from(payload(size))).unwrap();
+        group.bench_with_input(BenchmarkId::new("encode_frame", label), &pl, |b, pl| {
+            b.iter(|| wire::encode_frame(1, sv, &et, pl, None).unwrap());
         });
     }
 
@@ -114,15 +108,12 @@ fn encoding_benchmarks(c: &mut Criterion) {
         ("medium_1KB", MEDIUM_PAYLOAD),
         ("large_64KB", LARGE_PAYLOAD),
     ] {
-        let p = payload(size);
-        let mut buf = Vec::new();
-        encode_event_value(&mut buf, 1, 1, "BenchEvent", None, &p).unwrap();
-        let encoded = Bytes::from(buf);
+        let encoded = build_frame_value("BenchEvent", &payload(size));
         group.bench_with_input(
-            BenchmarkId::new("decode_event_value", label),
+            BenchmarkId::new("decode_frame", label),
             &encoded,
             |b, encoded| {
-                b.iter(|| decode_event_value(encoded).unwrap());
+                b.iter(|| wire::decode_frame(encoded.as_ref()).unwrap());
             },
         );
     }
@@ -132,16 +123,14 @@ fn encoding_benchmarks(c: &mut Criterion) {
         ("medium_1KB", MEDIUM_PAYLOAD),
         ("large_64KB", LARGE_PAYLOAD),
     ] {
-        let p = payload(size);
+        let pl = Payload::from_bytes(Bytes::from(payload(size))).unwrap();
         group.bench_with_input(
             BenchmarkId::new("encode_decode_roundtrip", label),
-            &p,
-            |b, p| {
-                let mut raw = Vec::with_capacity(size + 64);
+            &pl,
+            |b, pl| {
                 b.iter(|| {
-                    encode_event_value(&mut raw, 1, 1, "BenchEvent", None, p).unwrap();
-                    let b_bytes = Bytes::copy_from_slice(&raw);
-                    decode_event_value(&b_bytes).unwrap();
+                    let frame = wire::encode_frame(1, sv, &et, pl, None).unwrap();
+                    wire::decode_frame(frame.value.as_ref()).unwrap();
                 });
             },
         );

@@ -231,11 +231,26 @@ mod tests {
     use super::*;
     use crate::store::FjallStore;
     use crate::store::read_test_helpers::{Tid, temp_store, tid};
-    use crate::wire_key::encode_event_value;
     use futures::StreamExt;
     use nexus::Id;
     use nexus_store::envelope::pending_envelope;
     use nexus_store::store::RawEventStore;
+    use nexus_store::value::{EventType, Payload, SchemaVersion};
+    use nexus_store::wire;
+
+    /// Build a wire-frame event-value row via the real production encoder
+    /// (`wire::encode_frame` + the `nexus_store::value` newtypes), for the
+    /// row-decode tests below. `schema_version` is always 1 and there is no
+    /// metadata — the cases this test mod exercises.
+    fn test_row_value(global_seq: u64, event_type: &str, payload: &[u8]) -> Vec<u8> {
+        let sv = SchemaVersion::from_u32(1).unwrap();
+        let et = EventType::from_bytes(Bytes::copy_from_slice(event_type.as_bytes())).unwrap();
+        let pl = Payload::from_bytes(Bytes::copy_from_slice(payload)).unwrap();
+        wire::encode_frame(global_seq, sv, &et, &pl, None)
+            .unwrap()
+            .value
+            .to_vec()
+    }
 
     async fn append_versions(
         store: &FjallStore,
@@ -352,15 +367,13 @@ mod tests {
 
     fn row(id: &[u8], version: u64, global_seq: u64, et: &str, payload: &[u8]) -> (Slice, Slice) {
         let key = encode_event_key(id, version).unwrap();
-        let mut val = Vec::new();
-        encode_event_value(&mut val, global_seq, 1, et, None, payload).unwrap();
+        let val = test_row_value(global_seq, et, payload);
         (Slice::from(key), Slice::from(val))
     }
 
     fn global_row(global_seq: u64, version: u64, et: &str, payload: &[u8]) -> (Slice, Slice) {
         let key = encode_global_key(global_seq, version);
-        let mut val = Vec::new();
-        encode_event_value(&mut val, global_seq, 1, et, None, payload).unwrap();
+        let val = test_row_value(global_seq, et, payload);
         (Slice::from(&key[..]), Slice::from(val))
     }
 
@@ -430,8 +443,7 @@ mod tests {
     fn global_decode_rejects_global_seq_mismatch() {
         // Key says global_seq 99, value frame says 42 → corruption.
         let key = encode_global_key(99, 7);
-        let mut val = Vec::new();
-        encode_event_value(&mut val, 42, 1, "E", None, b"x").unwrap();
+        let val = test_row_value(42, "E", b"x");
         let err = GlobalScan
             .decode(&Slice::from(&key[..]), Slice::from(val))
             .unwrap_err();

@@ -1,6 +1,0 @@
----
-source: crates/nexus-fjall/tests/snapshot_wire_format.rs
-assertion_line: 58
-expression: hex_dump(&key_foo_v100)
----
-00 03 66 6f 6f 00 00 00 00 00 00 00 64

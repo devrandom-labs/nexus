@@ -1,0 +1,5 @@
+---
+source: crates/nexus-fjall/src/wire_key.rs
+expression: hex_dump(&encoded)
+---
+00 06 66 6f 6f 62 61 72 00 00 00 00 00 00 00 01
