@@ -1,10 +1,10 @@
 use crate::builder::FjallStoreBuilder;
-use crate::encoding::{
-    decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
-};
 use crate::error::{FjallError, reason_label};
 use crate::scan::{GlobalScan, ScanCursor, StreamScan};
 use crate::subscription_id::OwnedStreamId;
+use crate::wire_key::{
+    decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
+};
 use fjall::{Readable, Slice};
 use nexus::{Id, Version};
 use nexus_store::PendingEnvelope;
@@ -272,7 +272,7 @@ impl RawEventStore for FjallStore {
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
     use super::{FjallError, FjallStore, Id, Version};
-    use crate::encoding::{decode_snapshot_value, encode_snapshot_value};
+    use crate::snapshot::{decode_snapshot_value, encode_snapshot_value};
     use nexus_store::state::SnapshotStore;
     use std::num::NonZeroU32;
 
@@ -515,7 +515,7 @@ mod tests {
         store.append(&id, None, &[env]).await.unwrap();
 
         // The index holds exactly one row, keyed by [global_seq=1][version=1].
-        let key = crate::encoding::encode_global_key(1, 1);
+        let key = crate::wire_key::encode_global_key(1, 1);
         let got = store.events_global.inner().get(key).unwrap();
         assert!(
             got.is_some(),

@@ -19,7 +19,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use nexus::{Id, Version};
 use nexus_fjall::FjallStore;
-use nexus_fjall::encoding::{META_LEN_ABSENT, decode_event_value};
+use nexus_fjall::wire_key::{META_LEN_ABSENT, decode_event_value};
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 
@@ -166,7 +166,7 @@ fn decoder_rejects_meta_len_exceeding_buffer() {
     assert!(
         matches!(
             err,
-            nexus_fjall::encoding::DecodeError::Wire(
+            nexus_fjall::wire_key::DecodeError::Wire(
                 nexus_store::wire::DecodeError::MetadataTruncated { meta_len: 100, .. }
             )
         ),

@@ -11,7 +11,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
-use nexus_fjall::encoding::{
+use nexus_fjall::wire_key::{
     decode_event_key, decode_event_value, decode_stream_version, encode_event_key,
     encode_event_value, encode_stream_version,
 };

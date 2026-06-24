@@ -10,12 +10,12 @@ use fjall::Slice;
 use nexus::Version;
 use nexus_store::{GlobalSeq, PersistedEnvelope};
 
-use crate::encoding::{
+use crate::error::{FjallError, reason_label};
+use crate::subscription_id::OwnedStreamId;
+use crate::wire_key::{
     DecodedEvent, decode_event_key, decode_event_value, decode_global_key, encode_event_key,
     encode_global_key,
 };
-use crate::error::{FjallError, reason_label};
-use crate::subscription_id::OwnedStreamId;
 
 /// The differing parts of a bounded keyset scan, factored so one cursor can
 /// drive both the per-stream and `$all` reads.
@@ -229,9 +229,9 @@ impl<S: ScanStrategy + Unpin> futures::Stream for ScanCursor<S> {
 #[allow(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
-    use crate::encoding::encode_event_value;
     use crate::store::FjallStore;
     use crate::store::read_test_helpers::{Tid, temp_store, tid};
+    use crate::wire_key::encode_event_value;
     use futures::StreamExt;
     use nexus::Id;
     use nexus_store::envelope::pending_envelope;
@@ -397,7 +397,7 @@ mod tests {
         // the `event_type` bytes in place (same length) with invalid UTF-8.
         let (k, v) = row(b"user-1", 7, 42, "ABC", b"data");
         let mut raw = v.to_vec();
-        let et_start = crate::encoding::EVENT_VALUE_HEADER_SIZE;
+        let et_start = crate::wire_key::EVENT_VALUE_HEADER_SIZE;
         // 0xFF is never a valid UTF-8 byte; keep the 3-byte length intact.
         raw[et_start] = 0xFF;
         raw[et_start + 1] = 0xFE;

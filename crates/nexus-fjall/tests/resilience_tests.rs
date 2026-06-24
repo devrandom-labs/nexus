@@ -42,7 +42,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
-use nexus_fjall::encoding::{EncodeError, decode_event_value, encode_event_value};
+use nexus_fjall::wire_key::{EncodeError, decode_event_value, encode_event_value};
 use nexus_store::PendingEnvelope;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;

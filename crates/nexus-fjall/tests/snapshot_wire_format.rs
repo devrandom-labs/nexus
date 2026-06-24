@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "test code")]
 #![allow(clippy::expect_used, reason = "test code")]
 
-use nexus_fjall::encoding::{
+use nexus_fjall::wire_key::{
     EncodeError, encode_event_key, encode_event_value, encode_stream_version,
 };
 
