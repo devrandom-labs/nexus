@@ -390,6 +390,33 @@ mod tests {
     }
 
     #[test]
+    fn stream_decode_rejects_non_utf8_event_type() {
+        // `decode_event_value` no longer UTF-8-validates `event_type`; the
+        // read path's `PersistedEnvelope::try_new` does, surfacing it as
+        // `FjallError::EnvelopeCorrupt`. Build a valid frame, then overwrite
+        // the `event_type` bytes in place (same length) with invalid UTF-8.
+        let (k, v) = row(b"user-1", 7, 42, "ABC", b"data");
+        let mut raw = v.to_vec();
+        let et_start = crate::encoding::EVENT_VALUE_HEADER_SIZE;
+        // 0xFF is never a valid UTF-8 byte; keep the 3-byte length intact.
+        raw[et_start] = 0xFF;
+        raw[et_start + 1] = 0xFE;
+        raw[et_start + 2] = 0xFF;
+        let corrupt = Slice::from(raw);
+
+        let scan = stream_scan(b"user-1", "user-1");
+        match scan.decode(&k, corrupt).unwrap_err() {
+            FjallError::EnvelopeCorrupt {
+                stream_id, version, ..
+            } => {
+                assert_eq!(stream_id.as_str(), "user-1");
+                assert_eq!(version, 7);
+            }
+            other => panic!("expected EnvelopeCorrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn global_decode_yields_envelope() {
         let (k, v) = global_row(42, 7, "Created", b"data");
         let env = GlobalScan.decode(&k, v).unwrap();

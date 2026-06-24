@@ -10,9 +10,6 @@ pub enum DecodeError {
     #[error("value too short: need at least {min} bytes, got {actual}")]
     ValueTooShort { min: usize, actual: usize },
 
-    #[error("invalid UTF-8 in event type")]
-    InvalidUtf8(#[source] std::str::Utf8Error),
-
     #[error("metadata range exceeds buffer (meta_len={meta_len}, total={total})")]
     MetadataOutOfBounds { meta_len: u32, total: usize },
 
@@ -254,32 +251,18 @@ pub fn encode_event_value(
 /// Decode an event value via [`wire::decode_frame`].
 ///
 /// Returns the existing [`DecodedEvent`] shape used by fjall's cursor code,
-/// populated from the wire-format header fields and offsets. Validates that
-/// the `event_type` bytes are UTF-8 (an additional check beyond
-/// `wire::decode_frame`).
+/// populated from the wire-format header fields and offsets. The
+/// `event_type` bytes are **not** UTF-8-validated here: the read path's
+/// [`PersistedEnvelope::try_new`][nexus_store::PersistedEnvelope::try_new]
+/// validates them downstream and surfaces a non-UTF-8 `event_type` as
+/// `EnvelopeError::InvalidUtf8` (mapped to `FjallError::EnvelopeCorrupt`),
+/// so a redundant pre-check here would only duplicate that guarantee.
 ///
 /// # Errors
 ///
 /// - [`DecodeError::Wire`] if the wire-format decoder rejects the value.
-/// - [`DecodeError::InvalidUtf8`] if `event_type` bytes are not valid UTF-8.
 pub fn decode_event_value(value: &bytes::Bytes) -> Result<DecodedEvent, DecodeError> {
     let decoded = wire::decode_frame(value.as_ref()).map_err(DecodeError::Wire)?;
-
-    // UTF-8 validation of event_type at decode (PersistedEnvelope::try_new
-    // also validates; this gives early error before envelope construction).
-    let et_start = usize::try_from(decoded.offsets.event_type.start).map_err(|_| {
-        DecodeError::InvalidSize {
-            expected: usize::MAX,
-            actual: 0,
-        }
-    })?;
-    let et_end =
-        usize::try_from(decoded.offsets.event_type.end).map_err(|_| DecodeError::InvalidSize {
-            expected: usize::MAX,
-            actual: 0,
-        })?;
-    let et_slice = &value[et_start..et_end];
-    std::str::from_utf8(et_slice).map_err(DecodeError::InvalidUtf8)?;
 
     Ok(DecodedEvent {
         global_seq: decoded.global_seq,
