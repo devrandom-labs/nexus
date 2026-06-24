@@ -7,15 +7,10 @@
 use crate::wire_key::DecodeError;
 
 /// Size of the snapshot value header: `[u32 LE schema_version][u64 BE version]`.
-pub(crate) const SNAPSHOT_VALUE_HEADER_SIZE: usize = 12;
+const SNAPSHOT_VALUE_HEADER_SIZE: usize = 12;
 
 /// Encode a snapshot value as `[u32 LE schema_version][u64 BE version][payload]`.
-pub(crate) fn encode_snapshot_value(
-    buf: &mut Vec<u8>,
-    schema_version: u32,
-    version: u64,
-    payload: &[u8],
-) {
+pub fn encode_snapshot_value(buf: &mut Vec<u8>, schema_version: u32, version: u64, payload: &[u8]) {
     buf.clear();
     buf.reserve(SNAPSHOT_VALUE_HEADER_SIZE + payload.len());
     buf.extend_from_slice(&schema_version.to_le_bytes());
@@ -28,7 +23,7 @@ pub(crate) fn encode_snapshot_value(
 /// # Errors
 ///
 /// Returns [`DecodeError::ValueTooShort`] if value is shorter than the header.
-pub(crate) fn decode_snapshot_value(value: &[u8]) -> Result<(u32, u64, &[u8]), DecodeError> {
+pub fn decode_snapshot_value(value: &[u8]) -> Result<(u32, u64, &[u8]), DecodeError> {
     if value.len() < SNAPSHOT_VALUE_HEADER_SIZE {
         return Err(DecodeError::ValueTooShort {
             min: SNAPSHOT_VALUE_HEADER_SIZE,

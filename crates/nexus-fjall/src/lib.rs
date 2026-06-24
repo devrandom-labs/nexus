@@ -50,8 +50,8 @@
 //! `Bytes` buffer the cursor hands out — the wire-format invariant that
 //! zero-copy decoders (rkyv, flatbuffers, `#[repr(C)]` POD) rely on for
 //! sound `&T` reads. Encoding/decoding of the *key* (stream id + version)
-//! lives in [`wire_key`]; the *value* layout is owned entirely by
-//! [`nexus_store::wire`].
+//! lives in the crate-private `wire_key` module; the *value* layout is owned
+//! entirely by [`nexus_store::wire`].
 //!
 //! [`GlobalSeq`]: nexus_store::store::GlobalSeq
 
@@ -65,10 +65,10 @@ pub mod error;
 mod partition;
 mod scan;
 #[cfg(feature = "snapshot")]
-pub mod snapshot;
+mod snapshot;
 pub mod store;
 mod subscription_id;
-pub mod wire_key;
+mod wire_key;
 
 pub use builder::FjallStoreBuilder;
 pub use error::FjallError;
