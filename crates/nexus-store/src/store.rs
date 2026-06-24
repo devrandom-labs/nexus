@@ -191,13 +191,15 @@ pub trait RawEventStore: Send + Sync {
     ///
     /// # Batching
     ///
-    /// An adapter materializes at most its configured `batch_size` rows at a
-    /// time and refills the next batch internally as the cursor drains, by
-    /// keyset resume on the stream version. This is invisible to callers:
-    /// `next()` has the same contract regardless of how the events are
-    /// chunked, and the stream returns `None` once the persisted stream is
-    /// exhausted. The bound caps resident memory so a large stream cannot be
-    /// loaded all at once.
+    /// An adapter **may** chunk or paginate internally (e.g. materialize a
+    /// fixed number of rows at a time and keyset-resume on the stream version
+    /// as the cursor drains) but is **not** required to — bounding resident
+    /// memory is the adapter's concern. Whatever it does is invisible to
+    /// callers: `next()` yields events in ascending `Version` order from `from`
+    /// (inclusive) and returns `None` once the persisted stream is exhausted,
+    /// regardless of how the events are chunked. Memory is bounded by the
+    /// adapter's implementation — fjall, for instance, uses a single lazy LSM
+    /// cursor rather than fixed-size batches.
     fn read_stream(
         &self,
         id: &impl Id,
@@ -217,9 +219,12 @@ pub trait RawEventStore: Send + Sync {
     ///
     /// # Batching
     ///
-    /// Like [`read_stream`](Self::read_stream), an adapter materializes at
-    /// most its configured `batch_size` rows at a time, keyset-resuming on
-    /// `GlobalSeq`.
+    /// Like [`read_stream`](Self::read_stream), an adapter **may** chunk or
+    /// paginate internally (e.g. keyset-resume on `GlobalSeq`) but is **not**
+    /// required to. The externally-observable contract is unchanged: events
+    /// are yielded in ascending `GlobalSeq` order from `from` (inclusive),
+    /// the stream terminates with `None` when caught up, and resident memory
+    /// is bounded by the adapter's implementation.
     fn read_all(
         &self,
         from: GlobalSeq,
