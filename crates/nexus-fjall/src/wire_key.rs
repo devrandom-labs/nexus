@@ -499,6 +499,7 @@ mod tests {
         // of metadata/payload follow. The decoder must reject rather than read
         // past the buffer end.
         let mut buf = Vec::new();
+        buf.push(1u8); // frame_format_version = 1
         buf.extend_from_slice(&1u64.to_le_bytes()); // global_seq
         buf.extend_from_slice(&1u32.to_le_bytes()); // schema_version
         buf.extend_from_slice(&1u16.to_le_bytes()); // event_type_len = 1
