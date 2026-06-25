@@ -937,6 +937,23 @@ mod tests {
                 None => prop_assert_eq!(ml, META_LEN_ABSENT),
             }
         }
+
+        #[test]
+        fn encoded_frame_carries_v1_version_byte(
+            (global_seq, schema_version, event_type, metadata, payload) in valid_frame_inputs(),
+        ) {
+            let et_v = et(&event_type);
+            let pl_v = pl(&payload);
+            let md_v = metadata.as_deref().map(md);
+            let frame = encode_frame(global_seq, schema_version, &et_v, &pl_v, md_v.as_ref())
+                .expect("encode_frame succeeds on bounded inputs");
+            // Sequence: the leading byte is the version tag, == 1.
+            prop_assert_eq!(frame.value[VERSION_OFFSET], 1);
+            // And the header reader recovers it as the typed V1.
+            let header = FrameHeader::read_from(&frame.value)
+                .expect("header reads back from a freshly built frame");
+            prop_assert_eq!(header.format_version, FrameFormatVersion::V1);
+        }
     }
 
     #[test]
@@ -1588,5 +1605,52 @@ mod tests {
         let tampered = Bytes::from(bytes_vec);
         let err = decode_frame(&tampered).expect_err("schema_version=0 on wire rejected");
         assert!(matches!(err, DecodeError::CorruptSchemaVersion));
+    }
+
+    // -----------------------------------------------------------------
+    // Version-byte: 4 mandatory test categories
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn decode_rejects_every_unknown_version_byte() {
+        // A valid V1 frame, then flip offset 0 to each non-1 byte.
+        let frame = encode_frame(7, sv1(), &et("Evt"), &pl(b"payload"), Some(&md(b"m")))
+            .expect("valid frame for tamper base");
+        for bad in (0u8..=u8::MAX).filter(|b| *b != 1) {
+            let mut bytes_vec = frame.value.to_vec();
+            bytes_vec[VERSION_OFFSET] = bad;
+            let tampered = Bytes::from(bytes_vec);
+            match decode_frame(&tampered) {
+                Err(DecodeError::UnsupportedFrameVersion { version }) => {
+                    assert_eq!(version, bad);
+                }
+                other => panic!("version byte {bad} should be rejected, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decode_empty_buffer_is_too_short_not_version_error() {
+        match decode_frame(&[]) {
+            Err(DecodeError::ValueTooShort { min, actual }) => {
+                assert_eq!(min, HEADER_FIXED_SIZE);
+                assert_eq!(actual, 0);
+            }
+            other => panic!("empty buffer should be ValueTooShort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corrupt_version_byte_surfaces_unsupported_not_panic() {
+        // Simulate on-disk bit-rot of byte 0 of a persisted frame.
+        let frame = encode_frame(1, sv1(), &et("X"), &pl(b"p"), None).expect("encode");
+        let mut bytes_vec = frame.value.to_vec();
+        bytes_vec[VERSION_OFFSET] = 0xFF;
+        let tampered = Bytes::from(bytes_vec);
+        let err = decode_frame(&tampered).expect_err("corrupt version rejected");
+        assert!(matches!(
+            err,
+            DecodeError::UnsupportedFrameVersion { version: 0xFF }
+        ));
     }
 }
