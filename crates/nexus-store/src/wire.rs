@@ -10,9 +10,9 @@
 //! Layout:
 //!
 //! ```text
-//! [u64 LE global_seq][u32 LE schema_version][u16 LE event_type_len]
-//! [u32 LE meta_len][event_type bytes][metadata bytes if any]
-//! [padding zero-bytes][payload bytes]
+//! [u8 frame_format_version][u64 LE global_seq][u32 LE schema_version]
+//! [u16 LE event_type_len][u32 LE meta_len][event_type bytes]
+//! [metadata bytes if any][padding zero-bytes][payload bytes]
 //! ```
 //!
 //! `meta_len == u32::MAX` is the absent-metadata sentinel
@@ -24,6 +24,9 @@
 //!
 //! # Implicit couplings (deliberate, but worth knowing)
 //!
+//! - **The leading byte is the frame-format version.** `decode_frame`
+//!   reads it first and branches on layout; an unknown version is a
+//!   typed `DecodeError::UnsupportedFrameVersion`, never a misparse.
 //! - **Payload length is not stored.** It's derived as
 //!   `value.len() - (header + event_type + metadata + padding)`. Saves
 //!   four bytes per row but means truncation that lops bytes off the
@@ -57,20 +60,26 @@ use crate::value::{EventType, Metadata, Payload, SchemaVersion};
 /// Payload alignment in bytes. Wire-format invariant.
 pub const PAYLOAD_ALIGN: usize = 16;
 
-/// Fixed header size: `global_seq (8) + schema_version (4) + et_len (2) + meta_len (4)`.
-pub const HEADER_FIXED_SIZE: usize = 18;
+/// Fixed header size in bytes.
+///
+/// Fields: `frame_format_version` (1) + `global_seq` (8) + `schema_version` (4)
+/// + `et_len` (2) + `meta_len` (4) = 19.
+pub const HEADER_FIXED_SIZE: usize = 19;
+
+/// Offset of the `frame_format_version` byte in the frame's header.
+pub const VERSION_OFFSET: usize = 0;
 
 /// Offset of the `global_seq` field in the frame's header.
-pub const GLOBAL_SEQ_OFFSET: usize = 0;
+pub const GLOBAL_SEQ_OFFSET: usize = 1;
 
 /// Offset of the `schema_version` field in the frame's header.
-pub const SCHEMA_VERSION_OFFSET: usize = 8;
+pub const SCHEMA_VERSION_OFFSET: usize = 9;
 
 /// Offset of the `event_type_len` field in the frame's header.
-pub const EVENT_TYPE_LEN_OFFSET: usize = 12;
+pub const EVENT_TYPE_LEN_OFFSET: usize = 13;
 
 /// Offset of the `meta_len` field in the frame's header.
-pub const META_LEN_OFFSET: usize = 14;
+pub const META_LEN_OFFSET: usize = 15;
 
 /// Sentinel `meta_len` value meaning "no metadata field present".
 pub const META_LEN_ABSENT: u32 = u32::MAX;
@@ -84,24 +93,62 @@ const fn align_padding(offset: usize, align: usize) -> usize {
     (align - (offset % align)) % align
 }
 
+/// On-disk frame-format version — the byte-layout tag, distinct from the
+/// per-event `schema_version`.
+///
+/// Read first by the decoder so a future layout (different alignment, a CRC,
+/// a stored payload length) can coexist with `V1` rows. Exhaustive on purpose:
+/// adding the next variant is a compile-error-forcing one-liner here and in
+/// `decode_frame`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameFormatVersion {
+    /// The original layout: see the module-level diagram.
+    V1,
+}
+
+impl FrameFormatVersion {
+    /// The version every freshly-encoded frame is stamped with.
+    pub const CURRENT: Self = Self::V1;
+
+    /// On-wire byte for this version.
+    #[inline]
+    const fn to_u8(self) -> u8 {
+        match self {
+            Self::V1 => 1,
+        }
+    }
+
+    /// Map an on-wire byte to a known version, or `None` if unrecognized.
+    /// The caller turns `None` into `DecodeError::UnsupportedFrameVersion`,
+    /// so this stays decoupled from the error type.
+    #[inline]
+    const fn from_u8(byte: u8) -> Option<Self> {
+        match byte {
+            1 => Some(Self::V1),
+            _ => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // FrameHeader
 //
-// The four fixed-position fields packed at the start of every frame.
-// `write_into` serializes to exactly 18 bytes; `read_from` is its inverse.
+// The five fixed-position fields packed at the start of every frame.
+// `write_into` serializes to exactly 19 bytes; `read_from` is its inverse.
 // Stores `event_type_len`/`metadata_len` directly as the wire-format
 // integer widths (`u16` / `Option<u32>`) — there are no length newtypes
 // to enforce caps because the value newtypes (EventType / Metadata /
 // Payload / SchemaVersion) own those invariants at construction time.
 // ---------------------------------------------------------------------
 
-/// Fixed-position frame header (18 bytes on the wire).
+/// Fixed-position frame header (19 bytes on the wire).
 ///
-/// Carries the four header fields together so they serialize and
+/// Carries the header fields together so they serialize and
 /// deserialize as a unit. Use [`FrameHeader::write_into`] from the build
 /// path and [`FrameHeader::read_from`] from the decode path.
 #[derive(Debug, Clone, Copy)]
 pub struct FrameHeader {
+    pub format_version: FrameFormatVersion,
     pub global_seq: u64,
     pub schema_version: u32,
     event_type_len: u16,
@@ -135,6 +182,7 @@ impl FrameHeader {
     /// construction — they reject byte slices that would not fit the
     /// wire field at their `from_bytes` constructors.
     fn from_validated_lengths(
+        format_version: FrameFormatVersion,
         global_seq: u64,
         schema_version: u32,
         event_type_len: usize,
@@ -155,6 +203,7 @@ impl FrameHeader {
             v
         });
         Self {
+            format_version,
             global_seq,
             schema_version,
             event_type_len: event_type_len_u16,
@@ -162,9 +211,11 @@ impl FrameHeader {
         }
     }
 
-    /// Serialize this header into the start of `buf` (writes exactly 18 bytes).
+    /// Serialize this header into the start of `buf` (writes exactly 19 bytes:
+    /// the version byte then the four fixed fields). Inverse of `read_from`.
     fn write_into(&self, buf: &mut AVec<u8, ConstAlign<PAYLOAD_ALIGN>>) {
         let meta_field = self.metadata_len.unwrap_or(META_LEN_ABSENT);
+        buf.extend_from_slice(&[self.format_version.to_u8()]);
         buf.extend_from_slice(&self.global_seq.to_le_bytes());
         buf.extend_from_slice(&self.schema_version.to_le_bytes());
         buf.extend_from_slice(&self.event_type_len.to_le_bytes());
@@ -173,9 +224,18 @@ impl FrameHeader {
 
     /// Read the fixed header from the start of `value`.
     ///
+    /// Reads the V1 fixed-field layout (`global_seq` / `schema_version` /
+    /// `event_type_len` / `meta_len` at their constant offsets) after the
+    /// leading version byte. A future format version that *moves* these
+    /// fixed fields would need the version read + dispatch to happen here,
+    /// above the fixed-field parse — today's seam in [`decode_frame`]
+    /// localizes a new version's body/padding changes, not header-field moves.
+    ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::ValueTooShort`] if `value.len() < SIZE`.
+    /// - [`DecodeError::ValueTooShort`] if `value.len() < SIZE`.
+    /// - [`DecodeError::UnsupportedFrameVersion`] if the leading version byte
+    ///   is not a known [`FrameFormatVersion`].
     pub fn read_from(value: &[u8]) -> Result<Self, DecodeError> {
         if value.len() < Self::SIZE {
             return Err(DecodeError::ValueTooShort {
@@ -183,6 +243,12 @@ impl FrameHeader {
                 actual: value.len(),
             });
         }
+        let version_byte = value[VERSION_OFFSET];
+        let format_version = FrameFormatVersion::from_u8(version_byte).ok_or(
+            DecodeError::UnsupportedFrameVersion {
+                version: version_byte,
+            },
+        )?;
         let global_seq = u64::from_le_bytes([
             value[GLOBAL_SEQ_OFFSET],
             value[GLOBAL_SEQ_OFFSET + 1],
@@ -215,6 +281,7 @@ impl FrameHeader {
             Some(meta_field)
         };
         Ok(Self {
+            format_version,
             global_seq,
             schema_version,
             event_type_len,
@@ -370,6 +437,14 @@ pub struct DecodedFrame {
 pub enum DecodeError {
     #[error("value too short: need at least {min} bytes, got {actual}")]
     ValueTooShort { min: usize, actual: usize },
+    /// The leading frame-format-version byte holds a value this build does
+    /// not understand. Distinct from `ValueTooShort` (not enough bytes) and
+    /// `CorruptSchemaVersion` (per-event schema) — its own failure domain.
+    #[error(
+        "unsupported frame format version on wire: got {version}, this build supports up to {}",
+        FrameFormatVersion::CURRENT.to_u8()
+    )]
+    UnsupportedFrameVersion { version: u8 },
     #[error("event type length {et_len} extends past value (len={value_len})")]
     EventTypeTruncated { et_len: usize, value_len: usize },
     #[error("metadata length {meta_len} extends past value (len={value_len})")]
@@ -423,6 +498,7 @@ fn plan<'a>(
         payload_bytes.len(),
     )?;
     let header = FrameHeader::from_validated_lengths(
+        FrameFormatVersion::CURRENT,
         global_seq,
         schema_version.get(),
         event_type_bytes.len(),
@@ -472,9 +548,9 @@ fn execute(plan: FramePlan<'_>) -> EncodedFrame {
 /// Layout:
 ///
 /// ```text
-/// [u64 LE global_seq][u32 LE schema_version][u16 LE event_type_len]
-/// [u32 LE meta_len][event_type bytes][metadata bytes if any]
-/// [padding zero-bytes][payload bytes]
+/// [u8 frame_format_version][u64 LE global_seq][u32 LE schema_version]
+/// [u16 LE event_type_len][u32 LE meta_len][event_type bytes]
+/// [metadata bytes if any][padding zero-bytes][payload bytes]
 /// ```
 ///
 /// `meta_len == u32::MAX` is the absent-metadata sentinel.
@@ -507,21 +583,30 @@ pub fn encode_frame(
 
 /// Decode a frame value built by [`encode_frame`].
 ///
-/// Reads the fixed header, recovers event-type and metadata ranges, and
-/// computes the payload range honoring the 16-byte alignment padding.
-/// The `schema_version` is reconstructed through [`SchemaVersion::from_u32`]
-/// so a corrupt on-disk zero surfaces as
-/// [`DecodeError::CorruptSchemaVersion`].
+/// Reads the fixed header (including the leading format-version byte),
+/// dispatches to the appropriate per-version decoder, recovers
+/// event-type and metadata ranges, and computes the payload range
+/// honoring the 16-byte alignment padding. The `schema_version` is
+/// reconstructed through [`SchemaVersion::from_u32`] so a corrupt
+/// on-disk zero surfaces as [`DecodeError::CorruptSchemaVersion`].
 ///
 /// # Errors
 ///
 /// - [`DecodeError::ValueTooShort`] if `value` is shorter than the fixed header.
+/// - [`DecodeError::UnsupportedFrameVersion`] if the leading version byte is unrecognized.
 /// - [`DecodeError::EventTypeTruncated`] if the event-type length runs past the buffer.
 /// - [`DecodeError::MetadataTruncated`] if `meta_len` claims bytes past the buffer end.
 /// - [`DecodeError::OffsetOverflow`] if any computed offset would not fit in `u32`.
 /// - [`DecodeError::CorruptSchemaVersion`] if the on-disk `schema_version` is 0.
 pub fn decode_frame(value: &[u8]) -> Result<DecodedFrame, DecodeError> {
     let header = FrameHeader::read_from(value)?;
+    match header.format_version {
+        FrameFormatVersion::V1 => decode_frame_v1(value, header),
+    }
+}
+
+/// Decode the body of a `V1` frame given its already-validated header.
+fn decode_frame_v1(value: &[u8], header: FrameHeader) -> Result<DecodedFrame, DecodeError> {
     let schema_version = SchemaVersion::from_u32(header.schema_version)
         .map_err(|_| DecodeError::CorruptSchemaVersion)?;
     let et_len = usize::from(header.event_type_len);
@@ -852,6 +937,23 @@ mod tests {
                 None => prop_assert_eq!(ml, META_LEN_ABSENT),
             }
         }
+
+        #[test]
+        fn encoded_frame_carries_v1_version_byte(
+            (global_seq, schema_version, event_type, metadata, payload) in valid_frame_inputs(),
+        ) {
+            let et_v = et(&event_type);
+            let pl_v = pl(&payload);
+            let md_v = metadata.as_deref().map(md);
+            let frame = encode_frame(global_seq, schema_version, &et_v, &pl_v, md_v.as_ref())
+                .expect("encode_frame succeeds on bounded inputs");
+            // Sequence: the leading byte is the version tag, == 1.
+            prop_assert_eq!(frame.value[VERSION_OFFSET], 1);
+            // And the header reader recovers it as the typed V1.
+            let header = FrameHeader::read_from(&frame.value)
+                .expect("header reads back from a freshly built frame");
+            prop_assert_eq!(header.format_version, FrameFormatVersion::V1);
+        }
     }
 
     #[test]
@@ -917,6 +1019,7 @@ mod tests {
     fn decode_rejects_truncated_event_type() {
         // Header claims et_len = 100 but no event-type bytes follow.
         let mut buf = vec![0u8; HEADER_FIXED_SIZE];
+        buf[VERSION_OFFSET] = 1;
         buf[SCHEMA_VERSION_OFFSET..SCHEMA_VERSION_OFFSET + 4].copy_from_slice(&1u32.to_le_bytes());
         buf[EVENT_TYPE_LEN_OFFSET..EVENT_TYPE_LEN_OFFSET + 2]
             .copy_from_slice(&100u16.to_le_bytes());
@@ -931,6 +1034,7 @@ mod tests {
     fn decode_rejects_truncated_metadata() {
         // Header claims meta_len = 100 but no metadata bytes follow.
         let mut buf = vec![0u8; HEADER_FIXED_SIZE];
+        buf[VERSION_OFFSET] = 1;
         buf[SCHEMA_VERSION_OFFSET..SCHEMA_VERSION_OFFSET + 4].copy_from_slice(&1u32.to_le_bytes());
         buf[EVENT_TYPE_LEN_OFFSET..EVENT_TYPE_LEN_OFFSET + 2].copy_from_slice(&0u16.to_le_bytes());
         buf[META_LEN_OFFSET..META_LEN_OFFSET + 4].copy_from_slice(&100u32.to_le_bytes());
@@ -982,17 +1086,21 @@ mod tests {
     ///   so random bodies reach the metadata- and payload-range arms
     ///   that raw random would skip ~94% of the time.
     fn adversarial_decode_bytes() -> impl Strategy<Value = Vec<u8>> {
-        // Header-shaped: small et_len / meta_len, random body. Drives
-        // the deeper code paths that raw random rarely reaches.
+        // Header-shaped: leading version byte (mostly the valid 1, sometimes
+        // random to exercise the version-reject path), then small et_len /
+        // meta_len, random body. Drives the deeper code paths that raw
+        // random rarely reaches.
         let header_shaped = (
+            prop_oneof![10 => Just(1u8), 1 => any::<u8>()],
             any::<u64>(),
             any::<u32>(),
             0u16..=64,
             prop_oneof![Just(META_LEN_ABSENT), 0u32..=64],
             prop::collection::vec(any::<u8>(), 0..=512),
         )
-            .prop_map(|(gs, sv, et_len, meta_len, body)| {
+            .prop_map(|(version, gs, sv, et_len, meta_len, body)| {
                 let mut buf = Vec::with_capacity(HEADER_FIXED_SIZE + body.len());
+                buf.extend_from_slice(&[version]);
                 buf.extend_from_slice(&gs.to_le_bytes());
                 buf.extend_from_slice(&sv.to_le_bytes());
                 buf.extend_from_slice(&et_len.to_le_bytes());
@@ -1105,6 +1213,7 @@ mod tests {
     fn frame_header_write_into_writes_all_fields_at_correct_offsets() {
         // Distinct byte patterns per field so a mis-offset would show up.
         let header = FrameHeader {
+            format_version: FrameFormatVersion::V1,
             global_seq: 0x0102_0304_0506_0708,
             schema_version: 0x090A_0B0C,
             event_type_len: 0x0D0E,
@@ -1115,6 +1224,9 @@ mod tests {
 
         // Invariant: writes exactly SIZE bytes.
         assert_eq!(buf.len(), FrameHeader::SIZE);
+
+        // Invariant: version byte is at offset 0.
+        assert_eq!(buf[VERSION_OFFSET], 1);
 
         // Invariant: every field lives at its declared constant offset
         // in little-endian. Asserting all four catches mis-offset bugs
@@ -1140,6 +1252,7 @@ mod tests {
     #[test]
     fn frame_header_none_metadata_encodes_sentinel() {
         let header = FrameHeader {
+            format_version: FrameFormatVersion::V1,
             global_seq: 1,
             schema_version: 1,
             event_type_len: 0,
@@ -1161,6 +1274,7 @@ mod tests {
         // Some(0) — empty metadata field — must NOT encode as the
         // absent sentinel.
         let with_empty = FrameHeader {
+            format_version: FrameFormatVersion::V1,
             global_seq: 1,
             schema_version: 1,
             event_type_len: 0,
@@ -1194,10 +1308,10 @@ mod tests {
 
     #[test]
     fn frame_header_read_from_accepts_exactly_size() {
-        // SIZE-byte buffer is the minimum that succeeds.
-        let buf = vec![0u8; FrameHeader::SIZE];
-        // Default zeros: meta_len bytes are 0 (Some(0), not None).
+        let mut buf = vec![0u8; FrameHeader::SIZE];
+        buf[VERSION_OFFSET] = 1;
         let header = FrameHeader::read_from(&buf).expect("accepts at SIZE");
+        assert_eq!(header.format_version, FrameFormatVersion::V1);
         assert_eq!(header.global_seq, 0);
         assert_eq!(header.schema_version, 0);
         assert_eq!(header.event_type_len, 0);
@@ -1220,6 +1334,7 @@ mod tests {
                 _ => Some((u32::MAX - 1) / 2),
             };
             let original = FrameHeader {
+                format_version: FrameFormatVersion::V1,
                 global_seq,
                 schema_version,
                 event_type_len: et_raw,
@@ -1230,6 +1345,7 @@ mod tests {
             prop_assert_eq!(buf.len(), FrameHeader::SIZE);
 
             let read = FrameHeader::read_from(&buf).expect("round-trip read");
+            prop_assert_eq!(read.format_version, original.format_version);
             prop_assert_eq!(read.global_seq, original.global_seq);
             prop_assert_eq!(read.schema_version, original.schema_version);
             prop_assert_eq!(read.event_type_len, original.event_type_len);
@@ -1244,11 +1360,11 @@ mod tests {
     #[test]
     fn layout_concrete_no_metadata_example() {
         // Anchored example to nail down the exact arithmetic the
-        // proptest checks structurally: pre_payload = 18 + 2 = 20;
-        // padding = 12; payload starts at 32.
+        // proptest checks structurally: pre_payload = 19 + 2 = 21;
+        // padding = 11; payload starts at 32.
         let layout = FrameLayout::compute_from_validated_lengths(2, None, 1).expect("ok");
-        assert_eq!(layout.padding, 12);
-        assert_eq!(layout.event_type, 18..20);
+        assert_eq!(layout.padding, 11);
+        assert_eq!(layout.event_type, 19..21);
         assert_eq!(layout.metadata, None);
         assert_eq!(layout.payload, 32..33);
         assert_eq!(layout.total, 33);
@@ -1256,11 +1372,11 @@ mod tests {
 
     #[test]
     fn layout_concrete_with_metadata_example() {
-        // pre_payload = 18 + 2 + 3 = 23; padding = 9; payload starts at 32.
+        // pre_payload = 19 + 2 + 3 = 24; padding = 8; payload starts at 32.
         let layout = FrameLayout::compute_from_validated_lengths(2, Some(3), 4).expect("ok");
-        assert_eq!(layout.event_type, 18..20);
-        assert_eq!(layout.metadata, Some(20..23));
-        assert_eq!(layout.padding, 9);
+        assert_eq!(layout.event_type, 19..21);
+        assert_eq!(layout.metadata, Some(21..24));
+        assert_eq!(layout.padding, 8);
         assert_eq!(layout.payload, 32..36);
         assert_eq!(layout.total, 36);
     }
@@ -1375,7 +1491,7 @@ mod tests {
 
     #[test]
     fn execute_padding_bytes_are_zero() {
-        // Choose inputs where padding > 0: 18 + 1 (et) = 19, padding = 13.
+        // Choose inputs where padding > 0: 19 + 1 (et) = 20, padding = 12.
         let frame = encode_frame(1, sv1(), &et("x"), &pl(b"payload"), None).expect("ok");
         let pad_start = usize::try_from(frame.offsets.event_type.end).unwrap();
         let pad_end = usize::try_from(frame.offsets.payload.start).unwrap();
@@ -1489,5 +1605,52 @@ mod tests {
         let tampered = Bytes::from(bytes_vec);
         let err = decode_frame(&tampered).expect_err("schema_version=0 on wire rejected");
         assert!(matches!(err, DecodeError::CorruptSchemaVersion));
+    }
+
+    // -----------------------------------------------------------------
+    // Version-byte: 4 mandatory test categories
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn decode_rejects_every_unknown_version_byte() {
+        // A valid V1 frame, then flip offset 0 to each non-1 byte.
+        let frame = encode_frame(7, sv1(), &et("Evt"), &pl(b"payload"), Some(&md(b"m")))
+            .expect("valid frame for tamper base");
+        for bad in (0u8..=u8::MAX).filter(|b| *b != 1) {
+            let mut bytes_vec = frame.value.to_vec();
+            bytes_vec[VERSION_OFFSET] = bad;
+            let tampered = Bytes::from(bytes_vec);
+            match decode_frame(&tampered) {
+                Err(DecodeError::UnsupportedFrameVersion { version }) => {
+                    assert_eq!(version, bad);
+                }
+                other => panic!("version byte {bad} should be rejected, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decode_empty_buffer_is_too_short_not_version_error() {
+        match decode_frame(&[]) {
+            Err(DecodeError::ValueTooShort { min, actual }) => {
+                assert_eq!(min, HEADER_FIXED_SIZE);
+                assert_eq!(actual, 0);
+            }
+            other => panic!("empty buffer should be ValueTooShort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corrupt_version_byte_surfaces_unsupported_not_panic() {
+        // Simulate on-disk bit-rot of byte 0 of a persisted frame.
+        let frame = encode_frame(1, sv1(), &et("X"), &pl(b"p"), None).expect("encode");
+        let mut bytes_vec = frame.value.to_vec();
+        bytes_vec[VERSION_OFFSET] = 0xFF;
+        let tampered = Bytes::from(bytes_vec);
+        let err = decode_frame(&tampered).expect_err("corrupt version rejected");
+        assert!(matches!(
+            err,
+            DecodeError::UnsupportedFrameVersion { version: 0xFF }
+        ));
     }
 }

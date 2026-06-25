@@ -137,10 +137,10 @@ async fn lifecycle_clone_then_read_preserves_alignment() {
 #[tokio::test]
 async fn boundary_event_type_lengths_around_alignment_boundary_all_aligned() {
     // The wire row layout is:
-    //   [u64 global_seq][u32 schema_version][u16 et_len][u32 meta_len]
-    //   [event_type][metadata?][padding][payload]
+    //   [u8 frame_format_version][u64 global_seq][u32 schema_version]
+    //   [u16 et_len][u32 meta_len][event_type][metadata?][padding][payload]
     //
-    // Header fixed prefix is 18 bytes (u64 + u32 + u16 + u32). Then the
+    // Header fixed prefix is 19 bytes (u8 + u64 + u32 + u16 + u32). Then the
     // event_type and metadata extend the pre-padding header; the padding
     // takes the payload start up to the next 16-byte boundary.
     //
