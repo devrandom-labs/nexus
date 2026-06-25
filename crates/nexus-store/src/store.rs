@@ -249,6 +249,32 @@ pub trait RawEventStore: Send + Sync {
 /// `GlobalSeq` is a store artifact, not a domain fact. It is local to one
 /// producer's store and is not portable across producers — two stores each
 /// assign their own independent sequence.
+///
+/// # Not a distributed clock
+///
+/// `GlobalSeq` orders one store's appends; it is **not** a cross-producer or
+/// causal timestamp. A distributed adapter does not widen or reinterpret it:
+/// causal/HLC metadata rides in the event's `metadata` bytes, the store never
+/// orders by it, and merging across producers is the consumer's job. So the
+/// width below is fixed by *one store's* append count, not by any global clock.
+///
+/// # Width (frozen at 1.0)
+///
+/// The width is **`u64`** and is part of the frozen wire frame (the header's
+/// 8-byte `global_seq` field). The full `1..=u64::MAX` range is valid on the
+/// wire.
+///
+/// SQL-backed adapters are the exception worth naming: `PostgreSQL` sequences
+/// (`BIGSERIAL`) are **signed `i64`**, so such an adapter represents at most
+/// `GlobalSeq` values up to `i64::MAX` (≈ 9.2 × 10¹⁸) — roughly half the `u64`
+/// range. This is a per-adapter limit, not a narrowing of the frozen type: the
+/// wire format reserves the full `u64`, and an embedded adapter such as fjall
+/// uses it. A type-safe SQL adapter enforces its own range at the boundary
+/// where the types meet — a `u64 → i64` conversion (e.g. `i64::try_from`)
+/// returns an error for any value above `i64::MAX` rather than truncating, so
+/// the ceiling surfaces as an ordinary boundary error (CLAUDE.md rule 4), never
+/// silent corruption. The limit is in any case practically unreachable: ~9.2
+/// quintillion appends in a single store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GlobalSeq(NonZeroU64);
 
