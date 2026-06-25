@@ -1,0 +1,9 @@
+# Pinned stable toolchain — the single source of truth for both rustup users
+# and the Nix flake (consumed via fenix `fromToolchainFile`). Bump this in
+# lockstep with `rust-version` in the root Cargo.toml [workspace.package].
+#
+# Stable only: the crates carry no `#![feature(...)]` gates and the workspace
+# builds + tests on stable (verified for 1.0 freeze gate, issue #204).
+[toolchain]
+channel = "1.95.0"
+components = ["cargo", "rustc", "rust-std", "rustfmt", "clippy", "llvm-tools-preview"]

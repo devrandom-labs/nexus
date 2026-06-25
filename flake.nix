@@ -19,8 +19,16 @@
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
         isLinux = pkgs.stdenv.isLinux;
-        craneLib = (crane.mkLib pkgs).overrideToolchain
-          (fenix.packages.${system}.complete.toolchain);
+        # Pinned stable toolchain, read from rust-toolchain.toml so rustup
+        # users and the flake share one source of truth. No nightly — the
+        # crates are stable-clean (issue #204). The sha256 hashes the global
+        # channel manifest (platform-independent), so one value covers every
+        # system; per-component binaries are fetched per-platform from it.
+        rustToolchain = fenix.packages.${system}.fromToolchainFile {
+          file = ./rust-toolchain.toml;
+          sha256 = "sha256-gh/xTkxKHL4eiRXzWv8KP7vfjSk61Iq48x47BEDFgfk=";
+        };
+        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
         unfilteredSrc = ./.;
 
@@ -132,7 +140,6 @@
             tree
             cloc
             cargo-edit
-            cargo-expand
             gh
           ];
         };
