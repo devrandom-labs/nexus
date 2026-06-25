@@ -224,6 +224,13 @@ impl FrameHeader {
 
     /// Read the fixed header from the start of `value`.
     ///
+    /// Reads the V1 fixed-field layout (`global_seq` / `schema_version` /
+    /// `event_type_len` / `meta_len` at their constant offsets) after the
+    /// leading version byte. A future format version that *moves* these
+    /// fixed fields would need the version read + dispatch to happen here,
+    /// above the fixed-field parse — today's seam in [`decode_frame`]
+    /// localizes a new version's body/padding changes, not header-field moves.
+    ///
     /// # Errors
     ///
     /// - [`DecodeError::ValueTooShort`] if `value.len() < SIZE`.
@@ -433,7 +440,10 @@ pub enum DecodeError {
     /// The leading frame-format-version byte holds a value this build does
     /// not understand. Distinct from `ValueTooShort` (not enough bytes) and
     /// `CorruptSchemaVersion` (per-event schema) — its own failure domain.
-    #[error("unsupported frame format version on wire: got {version}, this build supports 1")]
+    #[error(
+        "unsupported frame format version on wire: got {version}, this build supports up to {}",
+        FrameFormatVersion::CURRENT.to_u8()
+    )]
     UnsupportedFrameVersion { version: u8 },
     #[error("event type length {et_len} extends past value (len={value_len})")]
     EventTypeTruncated { et_len: usize, value_len: usize },
