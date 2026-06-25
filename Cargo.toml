@@ -43,6 +43,9 @@ tokio-stream = "0.1"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# MSRV == the pinned toolchain (rust-toolchain.toml). Policy: pin tracks the
+# latest stable we build/test against; bump both together. See issue #204.
+rust-version = "1.95.0"
 license = "MIT OR Apache-2.0"
 authors = ["Joel DSouza <joel@devrandom.co>"]
 repository = "https://github.com/devrandom-labs/nexus"

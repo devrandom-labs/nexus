@@ -243,6 +243,7 @@ Every test must satisfy ALL of these:
 ## Key Conventions
 
 - **Rust edition 2024** with `rustfmt` edition 2024
+- **Toolchain & MSRV**: pinned to an exact **stable** release in `rust-toolchain.toml` (`channel`), which is the single source of truth for both `rustup` users and the Nix flake (consumed via fenix `fromToolchainFile`). **No nightly** — the crates carry no `#![feature(...)]` gates and the whole workspace (build, test, clippy, fmt, coverage, examples) runs on the pinned stable. MSRV policy: `rust-version` in `[workspace.package]` **equals** the pinned toolchain; when bumping Rust, bump `rust-toolchain.toml` *and* `rust-version` together (the pin tracks the latest stable we actually build/test against — no separate lower floor is claimed unless a CI job verifies it). All publishable crates opt in via `rust-version.workspace = true`.
 - **Strict clippy**: `all`, `pedantic`, `nursery` denied; `unwrap_used`, `expect_used`, `panic`, `todo`, `as_conversions`, `shadow_*`, `allow_attributes_without_reason` all denied
 - **Workspace dependencies**: all dependency versions declared in root `Cargo.toml` `[workspace.dependencies]`; crate-level Cargo.toml files use `workspace = true`
 - **workspace-hack crate**: managed by `cargo-hakari` for build optimization; run `cargo hakari generate` after dependency changes
