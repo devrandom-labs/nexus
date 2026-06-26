@@ -107,28 +107,41 @@ release-plumbing, overlapping the open **#221** (release-plz fix for the clean
 `KeyspaceCreateOptions` leak needs **no code change** — independent versioning
 *is* its mitigation.
 
-## Delivery: 3 code PRs
+## Delivery: 4 code PRs (workspace stays green at every step)
 
-### PR A — kernel (`nexus`)
+**Sequencing constraint:** `Id::to_label() -> ArrayString<64>` is consumed by
+`nexus-store` and `nexus-fjall` (fjall assigns `id.to_label()` to ~14
+`ArrayString<64>` error fields). The gate runs `nix flake check` over the whole
+workspace, so retyping `to_label` and the downstream fields must not be split
+across PRs that each have to compile. The arrayvec seal is therefore staged so
+`to_label`'s retype lands **last**, after every consumer has migrated to
+constructing `ErrorId` directly via `ErrorId::from_display`.
+
+### PR 1 — kernel additive (`nexus`) — no downstream dependency
 - Add `ErrorId<const N = 64>` (`error_id.rs`), re-export `nexus::ErrorId`.
-- `Id::to_label -> ErrorId`.
-- Seal `Events::IntoIter` via `EventsIntoIter` newtype.
-- Self-contained; no downstream dep.
+- Seal `Events::IntoIter` via the `EventsIntoIter` newtype.
+- **`to_label` is left unchanged** (`ArrayString<64>`) — retyped in PR 4.
+- Purely additive; workspace compiles unchanged.
 
-### PR B — store (`nexus-store`) — depends on A
+### PR 2 — store (`nexus-store`) — depends on PR 1
 - Adopt `ErrorId` in `StoreError::{Conflict,StreamNotFound}` and
-  `AppendError::Conflict` `stream_id` fields; update construction sites.
+  `AppendError::Conflict` `stream_id` fields; construct via
+  `ErrorId::from_display(&id)` (not `to_label`).
 - **Delete** `pub use arrayvec::ArrayString;`.
 - Seal `ProjectedIntents::IntoIter` via `ProjectedIntentsIntoIter` newtype.
 - `pub use bytes;`.
 - Rebind `EventStream` supertrait + `subscribe`/`subscribe_all` to
   `futures_core::Stream`; `pub use futures_core::Stream`.
 
-### PR C — fjall (`nexus-fjall`) — depends on A, independent of B
+### PR 3 — fjall (`nexus-fjall`) — depends on PR 1, independent of PR 2
 - Adopt `ErrorId<64>` for `stream_id` fields; `ErrorId<128>` for `reason`.
-- `reason_label -> ErrorId<128>`; update construction sites (most flow through
-  `id.to_label()` and update for free; the `ArrayString::new()` empty-label sites
-  in `scan.rs` become `ErrorId::default()`).
+- Replace the `id.to_label()` sites and `reason_label`/`ArrayString::new()`
+  sites with `ErrorId::from_display(&id)` / `ErrorId::default()`.
+
+### PR 4 — kernel, seal `to_label` (`nexus`) — depends on PR 2 + PR 3
+- Retype `Id::to_label -> ErrorId`. No consumer depends on the old
+  `ArrayString<64>` return by now, so this compiles workspace-wide.
+- Update any remaining in-kernel / example callers.
 
 ### Deferred
 - fjall independent versioning → #221.
