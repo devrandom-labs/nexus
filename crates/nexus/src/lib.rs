@@ -19,7 +19,7 @@ pub use aggregate::{
 pub use error::KernelError;
 pub use error_id::{DEFAULT_ERROR_ID_CAP, ErrorId};
 pub use event::DomainEvent;
-pub use events::Events;
+pub use events::{Events, EventsIntoIter};
 pub use id::Id;
 pub use message::Message;
 pub use saga::{React, Saga};
