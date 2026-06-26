@@ -16,8 +16,12 @@ mod aggregate_root_tests;
 mod architecture_tests;
 #[path = "kernel_tests/edge_case_tests.rs"]
 mod edge_case_tests;
+#[path = "kernel_tests/error_id_tests.rs"]
+mod error_id_tests;
 #[path = "kernel_tests/error_tests.rs"]
 mod error_tests;
+#[path = "kernel_tests/events_into_iter_tests.rs"]
+mod events_into_iter_tests;
 #[path = "kernel_tests/events_tests.rs"]
 mod events_tests;
 #[path = "kernel_tests/integration_test.rs"]

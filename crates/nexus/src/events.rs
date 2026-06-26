@@ -106,12 +106,49 @@ impl<E: DomainEvent, const N: usize> From<E> for Events<E, N> {
     }
 }
 
+/// Owning iterator over [`Events`].
+///
+/// Yields `first` then each event in `rest` in order. A named newtype
+/// wrapping the concrete `Chain<Once, _>` so the `arrayvec::IntoIter` type
+/// does not appear in the public API as [`Events`]' associated `IntoIter`.
+#[derive(Debug)]
+pub struct EventsIntoIter<E: DomainEvent, const N: usize> {
+    inner: Chain<Once<E>, ArrayVecIntoIter<E, N>>,
+}
+
+impl<E: DomainEvent, const N: usize> Iterator for EventsIntoIter<E, N> {
+    type Item = E;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<E: DomainEvent, const N: usize> DoubleEndedIterator for EventsIntoIter<E, N> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
+    }
+}
+
+// The newtype must declare `FusedIterator` itself — the marker is not
+// inherited from the wrapped `Chain`. Sound because both `Once` and
+// `arrayvec::IntoIter` yield `None` permanently once exhausted (neither
+// resets its cursor), so the chained sequence never yields `Some` after a
+// `None`.
+impl<E: DomainEvent, const N: usize> core::iter::FusedIterator for EventsIntoIter<E, N> {}
+
 impl<E: DomainEvent, const N: usize> IntoIterator for Events<E, N> {
     type Item = E;
-    type IntoIter = Chain<Once<E>, ArrayVecIntoIter<E, N>>;
+    type IntoIter = EventsIntoIter<E, N>;
 
     fn into_iter(self) -> Self::IntoIter {
-        once(self.first).chain(self.rest)
+        EventsIntoIter {
+            inner: once(self.first).chain(self.rest),
+        }
     }
 }
 
