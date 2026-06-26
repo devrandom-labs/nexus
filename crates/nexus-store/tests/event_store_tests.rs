@@ -130,7 +130,7 @@ async fn save_and_load_roundtrip() {
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
     let events = [TodoEvent::Created("Buy milk".into()), TodoEvent::Done];
-    es.save(&mut agg, &events).await.unwrap();
+    es.save(&mut agg, &save_events(&events)).await.unwrap();
 
     let loaded: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     assert_eq!(loaded.state().title, "Buy milk");
@@ -147,13 +147,8 @@ async fn load_empty_stream_returns_fresh_aggregate() {
     assert_eq!(loaded.state(), &TodoState::default());
 }
 
-#[tokio::test]
-async fn save_no_uncommitted_events_is_noop() {
-    let store = Store::new(InMemoryStore::new());
-    let es = store.repository().codec(TestCodec).build();
-    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
-    es.save(&mut agg, &[]).await.unwrap();
-}
+// REMOVED `save_no_uncommitted_events_is_noop` (#207): `save` now takes
+// `&Events<E, N>`, so an empty batch is a compile error, not a runtime no-op.
 
 #[tokio::test]
 async fn save_then_append_more_events() {
@@ -161,12 +156,14 @@ async fn save_then_append_more_events() {
     let es = store.repository().codec(TestCodec).build();
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
-    es.save(&mut agg, &[TodoEvent::Created("Task".into())])
+    es.save(&mut agg, &save_events(&[TodoEvent::Created("Task".into())]))
         .await
         .unwrap();
 
     let mut loaded: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
-    es.save(&mut loaded, &[TodoEvent::Done]).await.unwrap();
+    es.save(&mut loaded, &save_events(&[TodoEvent::Done]))
+        .await
+        .unwrap();
 
     let final_agg: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     assert_eq!(final_agg.state().title, "Task");
@@ -180,16 +177,21 @@ async fn optimistic_concurrency_conflict() {
     let es = store.repository().codec(TestCodec).build();
 
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
-    es.save(&mut agg, &[TodoEvent::Created("Original".into())])
-        .await
-        .unwrap();
+    es.save(
+        &mut agg,
+        &save_events(&[TodoEvent::Created("Original".into())]),
+    )
+    .await
+    .unwrap();
 
     let mut agg_a: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
     let mut agg_b: AggregateRoot<TodoAggregate> = es.load(TodoId("todo-1".into())).await.unwrap();
 
-    es.save(&mut agg_a, &[TodoEvent::Done]).await.unwrap();
+    es.save(&mut agg_a, &save_events(&[TodoEvent::Done]))
+        .await
+        .unwrap();
 
-    let result = es.save(&mut agg_b, &[TodoEvent::Done]).await;
+    let result = es.save(&mut agg_b, &save_events(&[TodoEvent::Done])).await;
     assert!(result.is_err(), "should get concurrency conflict");
 }
 
@@ -227,7 +229,7 @@ async fn load_with_transform_transforms_events() {
     let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
     es.save_with(
         &mut agg,
-        &[TodoEvent::Created("Task".into())],
+        &save_events(&[TodoEvent::Created("Task".into())]),
         v1_to_v2_current_version,
     )
     .await
@@ -249,4 +251,21 @@ async fn event_store_with_no_transforms_is_zero_sized_chain() {
     assert_eq!(std::mem::size_of::<()>(), 0);
     let store = Store::new(InMemoryStore::new());
     let _es = store.repository().codec(TestCodec).build();
+}
+
+// ─── #207 test helper ──────────────────────────────────────────────────────
+// `Repository::save` takes `&Events<E, N>` (non-empty, compile-time capacity).
+// These tests build batches from runtime-length slices/proptest vectors, so we
+// pack them into `Events<E, 32>` (capacity 33 — covers every batch built here;
+// the largest strategy yields 29). Empty input is a programmer error: `save`
+// makes a zero-event batch unrepresentable by construction.
+fn save_events<E: nexus::DomainEvent + Clone>(slice: &[E]) -> nexus::Events<E, 32> {
+    let (first, rest) = slice
+        .split_first()
+        .expect("save requires at least one event");
+    let mut events = nexus::Events::new(first.clone());
+    for event in rest {
+        events.add(event.clone());
+    }
+    events
 }

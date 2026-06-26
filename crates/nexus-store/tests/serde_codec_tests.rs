@@ -186,9 +186,9 @@ mod integration {
         let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("todo-1".into()));
         repo.save(
             &mut agg,
-            &[TodoEvent::Created {
+            &save_events(&[TodoEvent::Created {
                 title: "Write tests".to_owned(),
-            }],
+            }]),
         )
         .await
         .unwrap();
@@ -201,7 +201,9 @@ mod integration {
         assert_eq!(loaded.version(), Some(Version::new(1).unwrap()));
 
         // Append a Done event
-        repo.save(&mut loaded, &[TodoEvent::Done]).await.unwrap();
+        repo.save(&mut loaded, &save_events(&[TodoEvent::Done]))
+            .await
+            .unwrap();
 
         // Reload and verify full state
         let final_agg: AggregateRoot<TodoAggregate> =
@@ -210,4 +212,21 @@ mod integration {
         assert!(final_agg.state().done);
         assert_eq!(final_agg.version(), Some(Version::new(2).unwrap()));
     }
+}
+
+// ─── #207 test helper ──────────────────────────────────────────────────────
+// `Repository::save` takes `&Events<E, N>` (non-empty, compile-time capacity).
+// These tests build batches from runtime-length slices/proptest vectors, so we
+// pack them into `Events<E, 32>` (capacity 33 — covers every batch built here;
+// the largest strategy yields 29). Empty input is a programmer error: `save`
+// makes a zero-event batch unrepresentable by construction.
+fn save_events<E: nexus::DomainEvent + Clone>(slice: &[E]) -> nexus::Events<E, 32> {
+    let (first, rest) = slice
+        .split_first()
+        .expect("save requires at least one event");
+    let mut events = nexus::Events::new(first.clone());
+    for event in rest {
+        events.add(event.clone());
+    }
+    events
 }

@@ -954,7 +954,7 @@ proptest! {
             let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
 
             // Save
-            es.save(&mut root, &events).await.unwrap();
+            es.save(&mut root, &save_events(&events)).await.unwrap();
 
             // Load into fresh aggregate
             let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-42".into())).await.unwrap();
@@ -991,7 +991,7 @@ proptest! {
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = strings.iter().map(|s| TestEvent::Happened(s.clone())).collect();
 
-            es.save(&mut root, &events).await.unwrap();
+            es.save(&mut root, &save_events(&events)).await.unwrap();
             let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
 
             prop_assert_eq!(&loaded.state().log, &strings, "event log mismatch after roundtrip");
@@ -1001,34 +1001,10 @@ proptest! {
 }
 
 // ============================================================================
-// ATTACK 19: EventStore — save with no uncommitted events is a no-op
+// ATTACK 19: REMOVED — `save` now takes `&Events<E, N>` (#207), so a zero-event
+// batch is unrepresentable by construction. The former "empty save is a no-op"
+// runtime contract no longer exists; the invariant is enforced at compile time.
 // ============================================================================
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(32))]
-
-    #[test]
-    fn attack_event_store_noop_save(
-        values in prop::collection::vec(-100..100i64, 1..10),
-    ) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let store = Store::new(InMemoryStore::new());
-            let es = store.repository().codec(JsonCodec).build();
-
-            let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-99".into()));
-            let events: Vec<TestEvent> = values.iter().map(|&v| TestEvent::ValueSet(v)).collect();
-
-            // First save — should work
-            es.save(&mut root, &events).await.unwrap();
-
-            // Second save with no new events — should be a no-op, not an error
-            let result = es.save(&mut root, &[]).await;
-            prop_assert!(result.is_ok(), "save with empty events must be a no-op");
-            Ok(())
-        })?;
-    }
-}
 
 // ============================================================================
 // ATTACK 20: EventStore — load empty stream returns fresh aggregate
@@ -1067,17 +1043,17 @@ proptest! {
             // Seed the aggregate with n events
             let mut root_a = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
-            es.save(&mut root_a, &events).await.unwrap();
+            es.save(&mut root_a, &save_events(&events)).await.unwrap();
 
             // Load into two separate aggregates
             let mut copy1: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             let mut copy2: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
 
             // First save succeeds
-            es.save(&mut copy1, &[TestEvent::ValueSet(100)]).await.unwrap();
+            es.save(&mut copy1, &save_events(&[TestEvent::ValueSet(100)])).await.unwrap();
 
             // Second save MUST fail with conflict
-            let result = es.save(&mut copy2, &[TestEvent::ValueSet(200)]).await;
+            let result = es.save(&mut copy2, &save_events(&[TestEvent::ValueSet(200)])).await;
             prop_assert!(result.is_err(), "concurrent save MUST detect conflict");
             Ok(())
         })?;
@@ -1391,7 +1367,7 @@ proptest! {
                 expected_last_value = *values.last().unwrap();
 
                 // Save
-                es.save(&mut root, &events).await.unwrap();
+                es.save(&mut root, &save_events(&events)).await.unwrap();
                 total_events += u64::try_from(values.len()).unwrap();
 
                 // Verify by loading again
@@ -1618,7 +1594,7 @@ proptest! {
                 expected_log.push(s.clone());
             }
 
-            es.save(&mut root, &events).await.unwrap();
+            es.save(&mut root, &save_events(&events)).await.unwrap();
             let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-7".into())).await.unwrap();
 
             prop_assert_eq!(loaded.state().last_value, expected_last_value);
@@ -1854,13 +1830,13 @@ proptest! {
             // Batch 1: create, save events
             let mut root = nexus::AggregateRoot::<TestAggregate>::new(TestId("test-1".into()));
             let events1: Vec<TestEvent> = batch1.iter().map(|&v| TestEvent::ValueSet(v)).collect();
-            es.save(&mut root, &events1).await.unwrap();
+            es.save(&mut root, &save_events(&events1)).await.unwrap();
             let v1 = root.version().unwrap().as_u64();
             prop_assert_eq!(v1, u64::try_from(batch1.len()).unwrap());
 
             // Batch 2: save more to SAME root
             let events2: Vec<TestEvent> = batch2.iter().map(|&v| TestEvent::ValueSet(v)).collect();
-            es.save(&mut root, &events2).await.unwrap();
+            es.save(&mut root, &save_events(&events2)).await.unwrap();
             let v2 = root.version().unwrap().as_u64();
             prop_assert_eq!(v2, u64::try_from(batch1.len() + batch2.len()).unwrap());
 
@@ -1868,7 +1844,7 @@ proptest! {
             let mut fresh: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             prop_assert_eq!(fresh.version().unwrap().as_u64(), v2);
             let events3: Vec<TestEvent> = batch3.iter().map(|&v| TestEvent::ValueSet(v)).collect();
-            es.save(&mut fresh, &events3).await.unwrap();
+            es.save(&mut fresh, &save_events(&events3)).await.unwrap();
 
             // Final verification
             let final_root: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
@@ -2028,14 +2004,11 @@ proptest! {
             let events: Vec<TestEvent> = (0..n).map(|i| TestEvent::ValueSet(i as i64)).collect();
 
             // After save, version should advance
-            es.save(&mut root, &events).await.unwrap();
+            es.save(&mut root, &save_events(&events)).await.unwrap();
             prop_assert_eq!(root.version().unwrap().as_u64(), u64::try_from(n).unwrap());
 
-            // Second save with empty events should be a no-op
-            es.save(&mut root, &[]).await.unwrap();
-
             // Can still save more events
-            es.save(&mut root, &[TestEvent::ValueSet(999)]).await.unwrap();
+            es.save(&mut root, &save_events(&[TestEvent::ValueSet(999)])).await.unwrap();
 
             let loaded: nexus::AggregateRoot<TestAggregate> = es.load(TestId("test-1".into())).await.unwrap();
             prop_assert_eq!(loaded.state().last_value, 999);
@@ -2093,4 +2066,21 @@ proptest! {
         prop_assert_eq!(recovered_payload.as_slice(), payload.as_slice());
         prop_assert_eq!(recovered_metadata.as_slice(), meta.as_slice());
     }
+}
+
+// ─── #207 test helper ──────────────────────────────────────────────────────
+// `Repository::save` takes `&Events<E, N>` (non-empty, compile-time capacity).
+// These tests build batches from runtime-length slices/proptest vectors, so we
+// pack them into `Events<E, 32>` (capacity 33 — covers every batch built here;
+// the largest strategy yields 29). Empty input is a programmer error: `save`
+// makes a zero-event batch unrepresentable by construction.
+fn save_events<E: nexus::DomainEvent + Clone>(slice: &[E]) -> nexus::Events<E, 32> {
+    let (first, rest) = slice
+        .split_first()
+        .expect("save requires at least one event");
+    let mut events = nexus::Events::new(first.clone());
+    for event in rest {
+        events.add(event.clone());
+    }
+    events
 }
