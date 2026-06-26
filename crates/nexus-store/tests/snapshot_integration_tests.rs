@@ -130,7 +130,7 @@ async fn load_without_snapshot_does_full_replay() {
         CounterEvent::Decremented,
         CounterEvent::Incremented,
     ];
-    repo.save(&mut agg, &events).await.unwrap();
+    repo.save(&mut agg, &save_events(&events)).await.unwrap();
 
     // Reload — should replay all 5 events
     let loaded = repo.load(id).await.unwrap();
@@ -150,7 +150,7 @@ async fn save_triggers_snapshot_and_load_uses_it() {
         CounterEvent::Incremented,
         CounterEvent::Incremented,
     ];
-    repo.save(&mut agg, &events).await.unwrap();
+    repo.save(&mut agg, &save_events(&events)).await.unwrap();
 
     // At this point, trigger should have fired (crossed 3-boundary).
     // Reload — should hit snapshot + partial replay (0 additional events).
@@ -168,11 +168,11 @@ async fn save_below_threshold_no_snapshot_then_crosses() {
     let mut agg = repo.load(id.clone()).await.unwrap();
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -180,11 +180,11 @@ async fn save_below_threshold_no_snapshot_then_crosses() {
     // Save 3 more — crosses 5-boundary (v3→v6)
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -214,7 +214,7 @@ async fn schema_version_mismatch_falls_back_to_full_replay() {
     let id = CounterId("counter-1".into());
     let mut agg: AggregateRoot<CounterAggregate> = repo_v1.load(id.clone()).await.unwrap();
     repo_v1
-        .save(&mut agg, &[CounterEvent::Incremented])
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -242,15 +242,15 @@ async fn after_event_types_trigger_snapshots_on_domain_milestone() {
     let mut agg = repo.load(id.clone()).await.unwrap();
 
     // Save Incremented — no snapshot
-    repo.save(&mut agg, &[CounterEvent::Incremented])
+    repo.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
-    repo.save(&mut agg, &[CounterEvent::Incremented])
+    repo.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
     // Save Decremented — triggers snapshot
-    repo.save(&mut agg, &[CounterEvent::Decremented])
+    repo.save(&mut agg, &save_events(&[CounterEvent::Decremented]))
         .await
         .unwrap();
 
@@ -281,11 +281,11 @@ async fn lazy_snapshot_on_read_after_full_replay() {
     repo_write
         .save(
             &mut agg,
-            &[
+            &save_events(&[
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
-            ],
+            ]),
         )
         .await
         .unwrap();
@@ -312,17 +312,9 @@ async fn lazy_snapshot_on_read_after_full_replay() {
     assert_eq!(snap_version, Version::new(3).unwrap());
 }
 
-#[tokio::test]
-async fn empty_events_save_is_noop() {
-    let repo = repo(EveryNEvents(NonZeroU64::new(1).unwrap()), false);
-    let id = CounterId("counter-1".into());
-
-    let mut agg = repo.load(id.clone()).await.unwrap();
-    // Save empty slice — should not trigger snapshot
-    repo.save(&mut agg, &[]).await.unwrap();
-
-    assert_eq!(agg.version(), None);
-}
+// REMOVED `empty_events_save_is_noop` (#207): `save` takes `&Events<E, N>`,
+// so an empty batch (which previously skipped the snapshot trigger) is now
+// unrepresentable at compile time.
 
 #[tokio::test]
 async fn multiple_save_load_cycles() {
@@ -333,11 +325,11 @@ async fn multiple_save_load_cycles() {
     let mut agg = repo.load(id.clone()).await.unwrap();
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -347,11 +339,11 @@ async fn multiple_save_load_cycles() {
     assert_eq!(agg.state().value, 3);
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -375,11 +367,11 @@ async fn sequence_save_snapshot_save_more_snapshot_again() {
     let mut agg = repo.load(id.clone()).await.unwrap();
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -390,11 +382,11 @@ async fn sequence_save_snapshot_save_more_snapshot_again() {
     assert_eq!(agg.state().value, 3);
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Decremented,
             CounterEvent::Decremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -416,11 +408,11 @@ async fn sequence_batch_crossing_non_multiple_boundary() {
     let mut agg = repo.load(id.clone()).await.unwrap();
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -428,13 +420,13 @@ async fn sequence_batch_crossing_non_multiple_boundary() {
     // Save 5 events in batch (v4-v8) — crosses the 5 boundary
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -463,7 +455,7 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
     let id = CounterId("counter-1".into());
     let mut agg: AggregateRoot<CounterAggregate> = repo_v1.load(id.clone()).await.unwrap();
     repo_v1
-        .save(&mut agg, &[CounterEvent::Incremented])
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -481,7 +473,7 @@ async fn sequence_snapshot_invalidation_then_new_snapshot() {
 
     // Save another event → new snapshot with schema v2
     repo_v2
-        .save(&mut agg, &[CounterEvent::Incremented])
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -513,7 +505,7 @@ async fn lifecycle_create_save_snapshot_reload_verify() {
     // Save 2 events → snapshot
     repo.save(
         &mut agg,
-        &[CounterEvent::Incremented, CounterEvent::Decremented],
+        &save_events(&[CounterEvent::Incremented, CounterEvent::Decremented]),
     )
     .await
     .unwrap();
@@ -544,13 +536,13 @@ async fn lifecycle_lazy_snapshot_then_subsequent_load_uses_it() {
     repo_no_snap
         .save(
             &mut agg,
-            &[
+            &save_events(&[
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
-            ],
+            ]),
         )
         .await
         .unwrap();
@@ -628,7 +620,7 @@ async fn defensive_snapshot_codec_error_falls_back_to_full_replay() {
     let id = CounterId("counter-1".into());
     let mut agg: AggregateRoot<CounterAggregate> = repo_good.load(id.clone()).await.unwrap();
     repo_good
-        .save(&mut agg, &[CounterEvent::Incremented])
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -691,7 +683,7 @@ async fn defensive_snapshot_store_load_error_falls_back_to_full_replay() {
     good_repo
         .save(
             &mut agg,
-            &[CounterEvent::Incremented, CounterEvent::Incremented],
+            &save_events(&[CounterEvent::Incremented, CounterEvent::Incremented]),
         )
         .await
         .unwrap();
@@ -751,7 +743,9 @@ async fn defensive_snapshot_save_failure_does_not_fail_event_save() {
     let mut agg: AggregateRoot<CounterAggregate> = repo.load(id.clone()).await.unwrap();
 
     // Save should succeed despite snapshot save failure
-    let result = repo.save(&mut agg, &[CounterEvent::Incremented]).await;
+    let result = repo
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
+        .await;
     assert!(result.is_ok());
     assert_eq!(agg.state().value, 1);
 
@@ -796,11 +790,11 @@ async fn isolation_concurrent_loads_from_same_snapshot_get_independent_copies() 
     let mut agg: AggregateRoot<CounterAggregate> = repo.load(id.clone()).await.unwrap();
     repo.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -831,4 +825,21 @@ async fn isolation_concurrent_loads_from_same_snapshot_get_independent_copies() 
     assert_eq!(load_b.state().value, 3);
     assert_eq!(load_a.version(), Some(Version::new(3).unwrap()));
     assert_eq!(load_b.version(), Some(Version::new(3).unwrap()));
+}
+
+// ─── #207 test helper ──────────────────────────────────────────────────────
+// `Repository::save` takes `&Events<E, N>` (non-empty, compile-time capacity).
+// These tests build batches from runtime-length slices/proptest vectors, so we
+// pack them into `Events<E, 32>` (capacity 33 — covers every batch built here;
+// the largest strategy yields 29). Empty input is a programmer error: `save`
+// makes a zero-event batch unrepresentable by construction.
+fn save_events<E: nexus::DomainEvent + Clone>(slice: &[E]) -> nexus::Events<E, 32> {
+    let (first, rest) = slice
+        .split_first()
+        .expect("save requires at least one event");
+    let mut events = nexus::Events::new(first.clone());
+    for event in rest {
+        events.add(event.clone());
+    }
+    events
 }

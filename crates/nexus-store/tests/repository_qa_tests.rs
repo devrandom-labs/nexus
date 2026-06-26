@@ -504,11 +504,11 @@ async fn d1_encode_failure_mid_batch_returns_codec_error() {
     let result = es
         .save(
             &mut agg,
-            &[
+            &save_events(&[
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
                 CounterEvent::Incremented,
-            ],
+            ]),
         )
         .await;
     assert!(result.is_err());
@@ -528,7 +528,9 @@ async fn d1_encode_failure_first_event_returns_codec_error() {
         .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
 
-    let result = es.save(&mut agg, &[CounterEvent::Incremented]).await;
+    let result = es
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
+        .await;
     assert!(matches!(result.unwrap_err(), StoreError::Encode(_)));
 }
 
@@ -544,11 +546,11 @@ async fn d1_decode_failure_mid_stream_returns_codec_error() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
     es.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -572,7 +574,7 @@ async fn d1_decode_failure_first_event_returns_codec_error() {
         .codec(FailAfterNDecodesCodec::new(0))
         .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg, &[CounterEvent::Incremented])
+    es.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap(); // encode works fine
 
@@ -603,7 +605,7 @@ async fn d2_failed_encode_must_not_advance_version() {
     let result = es
         .save(
             &mut agg,
-            &[CounterEvent::Incremented, CounterEvent::Incremented],
+            &save_events(&[CounterEvent::Incremented, CounterEvent::Incremented]),
         )
         .await;
     assert!(result.is_err());
@@ -629,14 +631,14 @@ async fn d2_aggregate_must_be_retryable_after_failed_save() {
     let events = [CounterEvent::Incremented, CounterEvent::Incremented];
 
     // First save fails
-    let result = es.save(&mut agg, &events).await;
+    let result = es.save(&mut agg, &save_events(&events)).await;
     assert!(result.is_err());
 
     // Fix the codec
     fail_flag.store(false, Ordering::SeqCst);
 
     // CORRECT: retry must succeed — same events should persist
-    let retry = es.save(&mut agg, &events).await;
+    let retry = es.save(&mut agg, &save_events(&events)).await;
     assert!(
         retry.is_ok(),
         "aggregate must be retryable after a failed save — got: {:?}",
@@ -661,7 +663,9 @@ async fn d3_concurrent_saves_one_wins_one_conflicts() {
 
     // Setup: one event in the stream
     let mut setup = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut setup, &[CounterEvent::Set(0)]).await.unwrap();
+    es.save(&mut setup, &save_events(&[CounterEvent::Set(0)]))
+        .await
+        .unwrap();
 
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
 
@@ -673,7 +677,8 @@ async fn d3_concurrent_saves_one_wins_one_conflicts() {
             let mut agg: AggregateRoot<CounterAggregate> =
                 es.load(CounterId("counter-1".into())).await.unwrap();
             barrier.wait().await; // both loaded before either saves
-            es.save(&mut agg, &[CounterEvent::Set(100)]).await
+            es.save(&mut agg, &save_events(&[CounterEvent::Set(100)]))
+                .await
         }
     });
 
@@ -685,7 +690,8 @@ async fn d3_concurrent_saves_one_wins_one_conflicts() {
             let mut agg: AggregateRoot<CounterAggregate> =
                 es.load(CounterId("counter-1".into())).await.unwrap();
             barrier.wait().await; // both loaded before either saves
-            es.save(&mut agg, &[CounterEvent::Set(200)]).await
+            es.save(&mut agg, &save_events(&[CounterEvent::Set(200)]))
+                .await
         }
     });
 
@@ -717,7 +723,9 @@ async fn d3_concurrent_loads_both_succeed() {
     let es = Arc::new(store.repository().codec(SimpleCodec).build());
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg, &[CounterEvent::Set(42)]).await.unwrap();
+    es.save(&mut agg, &save_events(&[CounterEvent::Set(42)]))
+        .await
+        .unwrap();
 
     let handle_a = tokio::spawn({
         let es = es.clone();
@@ -750,14 +758,16 @@ async fn d3_cross_stream_concurrent_saves_both_succeed() {
         let es = es.clone();
         async move {
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-            es.save(&mut agg, &[CounterEvent::Set(10)]).await
+            es.save(&mut agg, &save_events(&[CounterEvent::Set(10)]))
+                .await
         }
     });
     let handle_b = tokio::spawn({
         let es = es.clone();
         async move {
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-2".into()));
-            es.save(&mut agg, &[CounterEvent::Set(20)]).await
+            es.save(&mut agg, &save_events(&[CounterEvent::Set(20)]))
+                .await
         }
     });
 
@@ -785,7 +795,7 @@ async fn d4_single_upcaster_transforms_on_load() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
     es.save_with(
         &mut agg,
-        &[CounterEvent::Set(42)],
+        &save_events(&[CounterEvent::Set(42)]),
         incremented_v1_to_v2_current_version,
     )
     .await
@@ -809,7 +819,7 @@ async fn d4_chained_upcasters_v1_to_v3() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
     es.save_with(
         &mut agg,
-        &[CounterEvent::Incremented, CounterEvent::Decremented],
+        &save_events(&[CounterEvent::Incremented, CounterEvent::Decremented]),
         incremented_v1_to_v3_current_version,
     )
     .await
@@ -906,7 +916,7 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
     // save_with: delta=3 stamped at schema_version=2 per the version fn.
     es.save_with(
         &mut loaded,
-        &[DeltaEvent { delta: 3 }],
+        &save_events(&[DeltaEvent { delta: 3 }]),
         delta_doubling_current_version,
     )
     .await
@@ -936,7 +946,7 @@ async fn d5_first_save_uses_version_initial_as_expected() {
     let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg, &[CounterEvent::Incremented])
+    es.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -955,7 +965,7 @@ async fn d5_version_consistency_through_save_load_cycles() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
 
     for round in 1..=10u64 {
-        es.save(&mut agg, &[CounterEvent::Incremented])
+        es.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
             .await
             .unwrap();
         assert_eq!(
@@ -991,7 +1001,7 @@ async fn d5_batch_version_tracking() {
         CounterEvent::Set(100),
         CounterEvent::Decremented,
     ];
-    es.save(&mut agg, &events).await.unwrap();
+    es.save(&mut agg, &save_events(&events)).await.unwrap();
     assert_eq!(agg.version(), Some(Version::new(4).unwrap()));
 
     let loaded: AggregateRoot<CounterAggregate> =
@@ -1017,7 +1027,7 @@ async fn d6_full_lifecycle_fresh_save_load_modify_save_load() {
     // 2. Save events
     es.save(
         &mut agg,
-        &[CounterEvent::Set(10), CounterEvent::Incremented],
+        &save_events(&[CounterEvent::Set(10), CounterEvent::Incremented]),
     )
     .await
     .unwrap();
@@ -1030,7 +1040,9 @@ async fn d6_full_lifecycle_fresh_save_load_modify_save_load() {
     assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
 
     // 4. Save more events
-    es.save(&mut loaded, &[CounterEvent::Set(0)]).await.unwrap();
+    es.save(&mut loaded, &save_events(&[CounterEvent::Set(0)]))
+        .await
+        .unwrap();
     assert_eq!(loaded.version(), Some(Version::new(3).unwrap()));
 
     // 5. Final load — verify complete state
@@ -1048,7 +1060,7 @@ async fn d6_ten_round_modify_save_load_cycles() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
 
     for round in 0..10 {
-        es.save(&mut agg, &[CounterEvent::Incremented])
+        es.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
             .await
             .unwrap();
 
@@ -1069,12 +1081,12 @@ async fn d6_state_determinism_same_events_same_state() {
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
     es.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Set(100),
             CounterEvent::Decremented,
             CounterEvent::Decremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -1096,7 +1108,7 @@ async fn d6_load_after_save_has_no_pending_state() {
     let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg, &[CounterEvent::Incremented])
+    es.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -1110,16 +1122,8 @@ async fn d6_load_after_save_has_no_pending_state() {
 // Dimension 7: Repository Contract Verification
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[tokio::test]
-async fn d7_save_empty_is_noop() {
-    let store = Store::new(InMemoryStore::new());
-    let es = store.repository().codec(SimpleCodec).build();
-    let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-
-    // Save with empty events — should be a no-op
-    es.save(&mut agg, &[]).await.unwrap();
-    assert_eq!(agg.version(), None);
-}
+// REMOVED `d7_save_empty_is_noop` (#207): `save` takes `&Events<E, N>`; an
+// empty batch is a compile error, not a runtime no-op.
 
 #[tokio::test]
 async fn d7_save_advances_version() {
@@ -1129,7 +1133,7 @@ async fn d7_save_advances_version() {
 
     es.save(
         &mut agg,
-        &[CounterEvent::Incremented, CounterEvent::Decremented],
+        &save_events(&[CounterEvent::Incremented, CounterEvent::Decremented]),
     )
     .await
     .unwrap();
@@ -1155,12 +1159,12 @@ async fn d7_repository_preserves_event_ordering() {
 
     es.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Set(100),
             CounterEvent::Decremented,
             CounterEvent::Set(0),
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -1187,7 +1191,10 @@ async fn d8_codec_encode_error_is_store_error_codec() {
         .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
 
-    match es.save(&mut agg, &[CounterEvent::Incremented]).await {
+    match es
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
+        .await
+    {
         Err(StoreError::Encode(inner)) => {
             assert!(
                 inner.to_string().contains("encode limit"),
@@ -1206,7 +1213,7 @@ async fn d8_codec_decode_error_is_store_error_codec() {
         .codec(FailAfterNDecodesCodec::new(0))
         .build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg, &[CounterEvent::Incremented])
+    es.save(&mut agg, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -1226,7 +1233,7 @@ async fn d8_concurrency_conflict_should_be_store_error_conflict_not_adapter() {
     let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg1, &[CounterEvent::Incremented])
+    es.save(&mut agg1, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
 
@@ -1235,11 +1242,11 @@ async fn d8_concurrency_conflict_should_be_store_error_conflict_not_adapter() {
     let mut copy_b: AggregateRoot<CounterAggregate> =
         es.load(CounterId("counter-1".into())).await.unwrap();
 
-    es.save(&mut copy_a, &[CounterEvent::Incremented])
+    es.save(&mut copy_a, &save_events(&[CounterEvent::Incremented]))
         .await
         .unwrap();
     let err = es
-        .save(&mut copy_b, &[CounterEvent::Decremented])
+        .save(&mut copy_b, &save_events(&[CounterEvent::Decremented]))
         .await
         .unwrap_err();
 
@@ -1258,11 +1265,11 @@ async fn d8_rehydration_limit_exceeded_is_store_error_kernel() {
     let mut agg = AggregateRoot::<TinyAggregate>::new(CounterId("counter-1".into()));
     es.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -1271,11 +1278,11 @@ async fn d8_rehydration_limit_exceeded_is_store_error_kernel() {
         es.load(CounterId("counter-1".into())).await.unwrap();
     es.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -1321,7 +1328,7 @@ proptest! {
                 CounterEvent::Set(v) => *v,
             });
 
-            es.save(&mut agg, &events).await.unwrap();
+            es.save(&mut agg, &save_events(&events)).await.unwrap();
 
             let loaded: AggregateRoot<CounterAggregate> =
                 es.load(CounterId("counter-1".into())).await.unwrap();
@@ -1347,7 +1354,7 @@ proptest! {
             });
 
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-            es.save(&mut agg, &events).await.unwrap();
+            es.save(&mut agg, &save_events(&events)).await.unwrap();
 
             let loaded: AggregateRoot<CounterAggregate> =
                 es.load(CounterId("counter-1".into())).await.unwrap();
@@ -1366,7 +1373,7 @@ proptest! {
             let es = store.repository().codec(SimpleCodec).build();
 
             let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-            es.save(&mut agg, &events).await.unwrap();
+            es.save(&mut agg, &save_events(&events)).await.unwrap();
 
             // Load twice — must produce identical state (deterministic replay)
             let load1: AggregateRoot<CounterAggregate> =
@@ -1391,8 +1398,17 @@ async fn d10_large_batch_500_events_save_and_load() {
     let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
 
+    // A 500-event single batch exceeds the shared `save_events` capacity (33),
+    // so build a wide-capacity `Events` directly for this deliberate
+    // large-batch facade test. (Real aggregates never decide this many events
+    // per command — the substrate large-batch path is covered via `append`.)
     let events: Vec<CounterEvent> = (0..500).map(|_| CounterEvent::Incremented).collect();
-    es.save(&mut agg, &events).await.unwrap();
+    let (first, rest) = events.split_first().expect("500 events");
+    let mut batch = nexus::Events::<CounterEvent, 511>::new(first.clone());
+    for event in rest {
+        batch.add(event.clone());
+    }
+    es.save(&mut agg, &batch).await.unwrap();
 
     let loaded: AggregateRoot<CounterAggregate> =
         es.load(CounterId("counter-1".into())).await.unwrap();
@@ -1410,11 +1426,11 @@ async fn d10_max_rehydration_events_boundary() {
     let mut agg = AggregateRoot::<TinyAggregate>::new(CounterId("counter-1".into()));
     es.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Incremented,
             CounterEvent::Incremented,
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -1423,7 +1439,7 @@ async fn d10_max_rehydration_events_boundary() {
         es.load(CounterId("counter-1".into())).await.unwrap();
     es.save(
         &mut agg,
-        &[CounterEvent::Incremented, CounterEvent::Incremented],
+        &save_events(&[CounterEvent::Incremented, CounterEvent::Incremented]),
     )
     .await
     .unwrap();
@@ -1490,7 +1506,9 @@ async fn d11_save_and_load_with_typed_id() {
     let store = Store::new(InMemoryStore::new());
     let es = store.repository().codec(SimpleCodec).build();
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    let result = es.save(&mut agg, &[CounterEvent::Incremented]).await;
+    let result = es
+        .save(&mut agg, &save_events(&[CounterEvent::Incremented]))
+        .await;
     assert!(result.is_ok(), "save with typed id should be accepted");
 
     let loaded: AggregateRoot<CounterAggregate> =
@@ -1504,14 +1522,14 @@ async fn d11_stream_isolation_different_streams_independent() {
     let es = store.repository().codec(SimpleCodec).build();
 
     let mut agg_a = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg_a, &[CounterEvent::Set(100)])
+    es.save(&mut agg_a, &save_events(&[CounterEvent::Set(100)]))
         .await
         .unwrap();
 
     let mut agg_b = AggregateRoot::<CounterAggregate>::new(CounterId("counter-2".into()));
     es.save(
         &mut agg_b,
-        &[CounterEvent::Set(200), CounterEvent::Incremented],
+        &save_events(&[CounterEvent::Set(200), CounterEvent::Incremented]),
     )
     .await
     .unwrap();
@@ -1527,18 +1545,10 @@ async fn d11_stream_isolation_different_streams_independent() {
     assert_eq!(loaded_b.version(), Some(Version::new(2).unwrap()));
 }
 
-#[tokio::test]
-async fn d11_append_empty_batch_is_noop() {
-    let store = Store::new(InMemoryStore::new());
-    let es = store.repository().codec(SimpleCodec).build();
-
-    let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("counter-1".into()));
-    es.save(&mut agg, &[]).await.unwrap();
-
-    let loaded: AggregateRoot<CounterAggregate> =
-        es.load(CounterId("counter-1".into())).await.unwrap();
-    assert_eq!(loaded.version(), None);
-}
+// REMOVED `d11_append_empty_batch_is_noop` (#207): this exercised
+// `Repository::save(&[])`, which no longer type-checks. Empty *substrate*
+// appends (`RawEventStore::append(&[])`) remain valid and are covered
+// separately in the adversarial/security suites.
 
 #[tokio::test]
 async fn d11_multiple_event_types_in_single_stream() {
@@ -1548,14 +1558,14 @@ async fn d11_multiple_event_types_in_single_stream() {
 
     es.save(
         &mut agg,
-        &[
+        &save_events(&[
             CounterEvent::Set(50),
             CounterEvent::Incremented,
             CounterEvent::Decremented,
             CounterEvent::Decremented,
             CounterEvent::Set(-10),
             CounterEvent::Incremented,
-        ],
+        ]),
     )
     .await
     .unwrap();
@@ -1564,4 +1574,21 @@ async fn d11_multiple_event_types_in_single_stream() {
         es.load(CounterId("counter-1".into())).await.unwrap();
     assert_eq!(loaded.state().value, -9); // 50 +1 -1 -1 = -10 +1 = -9
     assert_eq!(loaded.version(), Some(Version::new(6).unwrap()));
+}
+
+// ─── #207 test helper ──────────────────────────────────────────────────────
+// `Repository::save` takes `&Events<E, N>` (non-empty, compile-time capacity).
+// These tests build batches from runtime-length slices/proptest vectors, so we
+// pack them into `Events<E, 32>` (capacity 33 — covers every batch built here;
+// the largest strategy yields 29). Empty input is a programmer error: `save`
+// makes a zero-event batch unrepresentable by construction.
+fn save_events<E: nexus::DomainEvent + Clone>(slice: &[E]) -> nexus::Events<E, 32> {
+    let (first, rest) = slice
+        .split_first()
+        .expect("save requires at least one event");
+    let mut events = nexus::Events::new(first.clone());
+    for event in rest {
+        events.add(event.clone());
+    }
+    events
 }

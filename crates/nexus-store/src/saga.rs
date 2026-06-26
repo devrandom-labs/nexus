@@ -16,7 +16,7 @@ use core::iter::Chain;
 use core::option;
 
 use arrayvec::ArrayVec;
-use nexus::{AggregateRoot, DomainEvent, EventOf, React, Saga, Version};
+use nexus::{AggregateRoot, DomainEvent, React, Saga, Version};
 
 use crate::error::StoreError;
 use crate::repository::{Repository, first_persisted_version};
@@ -292,27 +292,24 @@ pub trait SagaRepository<S: Saga>: Repository<S> {
                 return Ok(Reaction::Ignored);
             };
 
-            // Materialize once to satisfy `Repository::save(&[EventOf<S>])`.
-            // `save` already allocates a Vec<PendingEnvelope> of equal length
-            // internally, so this is a bounded sibling allocation (not new
-            // asymptotic cost) and doubles as the projection source below.
-            let events: Vec<EventOf<S>> = produced.into_iter().collect();
-
             // First version this append assigns. Checked pre-save so overflow is
             // a clean error (save would also reject it).
             let first = first_persisted_version(before).ok_or(SagaError::VersionOverflow)?;
 
             // Persist atomically (optimistic concurrency enforced inside `save`).
-            self.save(root, &events).await.map_err(SagaError::Store)?;
+            // `&produced` carries the kernel's `>= 1` guarantee straight into
+            // `save` with no Vec materialization; `produced` stays alive as the
+            // projection source below (intents are minted only after durability).
+            self.save(root, &produced).await.map_err(SagaError::Store)?;
 
             // Project intents, each pinned to its event's assigned version.
-            // `events` is non-empty (`react` returned `Some`; `Events` holds >= 1),
-            // so the loop runs at least once and `current` ends on the last event's
-            // version. `peekable` advances the version only when a successor exists,
-            // sidestepping a bare `len() - 1` index computation entirely.
+            // `produced` is non-empty (`react` returned `Some`; `Events` holds
+            // >= 1), so the loop runs at least once and `current` ends on the
+            // last event's version. `peekable` advances the version only when a
+            // successor exists, sidestepping a bare `len() - 1` index computation.
             let mut intents = ProjectedIntents::<S, N>::new();
             let mut current = first;
-            let mut iter = events.iter().peekable();
+            let mut iter = produced.iter().peekable();
             while let Some(recorded) = iter.next() {
                 if let Some(intent) = S::intent_for(recorded) {
                     intents.push(ProjectedIntent::new(root.id().clone(), current, intent));

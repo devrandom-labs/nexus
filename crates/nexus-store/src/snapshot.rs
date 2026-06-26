@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, KernelError, Version};
+use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Events, KernelError, Version};
 
 use crate::repository::{ReplayFrom, Repository};
 use crate::state;
@@ -89,18 +89,19 @@ where
         Ok(root)
     }
 
-    async fn save(
+    async fn save<const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
-        events: &[EventOf<A>],
+        events: &Events<EventOf<A>, N>,
     ) -> Result<(), Self::Error> {
         let old_version = aggregate.version();
 
         // Delegate event persistence to inner.
         self.inner.save(aggregate, events).await?;
 
-        // Snapshot after save when trigger fires on non-empty batches.
-        let Some(new_version) = aggregate.version().filter(|_| !events.is_empty()) else {
+        // Snapshot after save when the trigger fires. `events` is non-empty
+        // (`&Events<_, N>`), so a successful save always advances the version.
+        let Some(new_version) = aggregate.version() else {
             return Ok(());
         };
         if self.trigger.should_persist(

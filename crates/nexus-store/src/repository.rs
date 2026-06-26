@@ -11,7 +11,7 @@ use std::future::Future;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Version};
+use nexus::{Aggregate, AggregateRoot, DomainEvent, EventOf, Events, Version};
 
 use futures::TryStreamExt;
 
@@ -46,14 +46,16 @@ use crate::value::SchemaVersion;
 ///
 /// # Save contract
 ///
-/// `save()` takes a mutable reference to the aggregate and a slice of
-/// decided events (from [`Handle::handle()`](nexus::Handle::handle)).
-/// It encodes the events, appends them atomically using
-/// `aggregate.version()` as the expected version, and on success
-/// calls `advance_version` + `apply_event` per event to sync the
-/// in-memory state.
+/// `save()` takes a mutable reference to the aggregate and the
+/// non-empty [`Events<E, N>`](nexus::Events) decided by
+/// [`Handle::handle()`](nexus::Handle::handle). It encodes the events,
+/// appends them atomically using `aggregate.version()` as the expected
+/// version, and on success calls `advance_version` + `apply_events` to
+/// sync the in-memory state.
 ///
-/// An empty slice is a silent no-op.
+/// Taking `&Events<E, N>` (not `&[EventOf<A>]`) carries the kernel's
+/// `>= 1` guarantee through to persistence: an empty save is
+/// unrepresentable, so there is no runtime no-op case to guard.
 ///
 /// # Schema evolution
 ///
@@ -90,19 +92,20 @@ pub trait Repository<A: Aggregate>: Send + Sync {
 
     /// Persist decided events and advance the aggregate's in-memory state.
     ///
-    /// `events` is the slice of decided events from
+    /// `events` is the non-empty [`Events<E, N>`](nexus::Events) decided by
     /// [`Handle::handle()`](nexus::Handle::handle). The aggregate's
     /// current [`version()`](AggregateRoot::version) is used as the
     /// expected version for optimistic concurrency.
     ///
-    /// An empty `events` slice is a silent no-op (no store interaction).
+    /// The `&Events<EventOf<A>, N>` parameter guarantees at least one
+    /// event at compile time — there is no empty-input case.
     ///
     /// On success, calls `advance_version` to the last persisted version
-    /// and `apply_event` for each event to keep in-memory state in sync.
-    fn save(
+    /// and `apply_events` to keep in-memory state in sync.
+    fn save<const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
-        events: &[EventOf<A>],
+        events: &Events<EventOf<A>, N>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
@@ -276,15 +279,15 @@ where
         self.replay_from(root, Version::INITIAL).await
     }
 
-    async fn save(
+    async fn save<const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
-        events: &[EventOf<A>],
+        events: &Events<EventOf<A>, N>,
     ) -> Result<(), Self::Error> {
         // The no-upcaster save stamps Version::INITIAL as the schema
         // version on every event — the schema-version-lookup function
         // is only needed when an upcaster is in play. See `save_with`.
-        save_owning::<A, S, C, _>(&self.store, &self.codec, aggregate, events, |_| None).await
+        save_owning::<A, S, C, _, N>(&self.store, &self.codec, aggregate, events, |_| None).await
     }
 }
 
@@ -383,10 +386,10 @@ impl<S, C> EventStore<S, C> {
     ///
     /// The same set of errors [`save`](Repository::save) can produce —
     /// the schema-version lookup itself is infallible.
-    pub async fn save_with<A, F>(
+    pub async fn save_with<A, F, const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
-        events: &[EventOf<A>],
+        events: &Events<EventOf<A>, N>,
         current_version: F,
     ) -> Result<
         (),
@@ -399,7 +402,7 @@ impl<S, C> EventStore<S, C> {
         F: Fn(&str) -> Option<Version>,
         EventOf<A>: DomainEvent,
     {
-        save_owning::<A, S, C, _>(&self.store, &self.codec, aggregate, events, current_version)
+        save_owning::<A, S, C, _, N>(&self.store, &self.codec, aggregate, events, current_version)
             .await
     }
 }
@@ -407,11 +410,11 @@ impl<S, C> EventStore<S, C> {
 // Internal save path shared between Repository::save (no upcaster, always
 // stamps Version::INITIAL) and EventStore::save_with (uses the user's
 // current_version fn). The owning-codec variant.
-async fn save_owning<A, S, C, F>(
+async fn save_owning<A, S, C, F, const N: usize>(
     store: &Store<S>,
     codec: &Arc<C>,
     aggregate: &mut AggregateRoot<A>,
-    events: &[EventOf<A>],
+    events: &Events<EventOf<A>, N>,
     current_version: F,
 ) -> Result<
     (),
@@ -424,16 +427,15 @@ where
     F: Fn(&str) -> Option<Version>,
     EventOf<A>: DomainEvent,
 {
-    if events.is_empty() {
-        return Ok(());
-    }
-
     let expected_version = aggregate.version();
 
     let mut next_version =
         first_persisted_version(expected_version).ok_or(StoreError::VersionOverflow)?;
 
     let mut envelopes = Vec::with_capacity(events.len());
+    // `events` is non-empty (`&Events<_, N>` guarantees >= 1), so the loop
+    // runs at least once and `last_version` is always overwritten before use.
+    let mut last_version = next_version;
 
     for event in events {
         let payload =
@@ -449,6 +451,7 @@ where
             .schema_version(SchemaVersion::new(schema_nz32))
             .build();
 
+        last_version = next_version;
         envelopes.push(envelope);
 
         if envelopes.len() < events.len() {
@@ -473,16 +476,8 @@ where
             AppendError::Store(e) => StoreError::Adapter(e),
         })?;
 
-    #[allow(
-        clippy::expect_used,
-        reason = "envelopes is non-empty: checked events.is_empty() above"
-    )]
-    let last_version = envelopes.last().expect("envelopes is non-empty").version();
-
     aggregate.advance_version(last_version);
-    for event in events {
-        aggregate.apply_event(event);
-    }
+    aggregate.apply_events(events);
     Ok(())
 }
 
@@ -581,12 +576,12 @@ where
         self.replay_from(root, Version::INITIAL).await
     }
 
-    async fn save(
+    async fn save<const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
-        events: &[EventOf<A>],
+        events: &Events<EventOf<A>, N>,
     ) -> Result<(), Self::Error> {
-        save_borrowing::<A, S, C, _>(&self.store, &self.codec, aggregate, events, |_| None).await
+        save_borrowing::<A, S, C, _, N>(&self.store, &self.codec, aggregate, events, |_| None).await
     }
 }
 
@@ -671,10 +666,10 @@ impl<S, C> ZeroCopyEventStore<S, C> {
     /// Same shape as [`Repository::save`] — adapter, encode, conflict,
     /// kernel, and version-overflow errors propagate through
     /// [`StoreError`]. The `current_version` lookup itself is infallible.
-    pub async fn save_with<A, F>(
+    pub async fn save_with<A, F, const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
-        events: &[EventOf<A>],
+        events: &Events<EventOf<A>, N>,
         current_version: F,
     ) -> Result<
         (),
@@ -687,8 +682,14 @@ impl<S, C> ZeroCopyEventStore<S, C> {
         F: Fn(&str) -> Option<Version>,
         EventOf<A>: DomainEvent,
     {
-        save_borrowing::<A, S, C, _>(&self.store, &self.codec, aggregate, events, current_version)
-            .await
+        save_borrowing::<A, S, C, _, N>(
+            &self.store,
+            &self.codec,
+            aggregate,
+            events,
+            current_version,
+        )
+        .await
     }
 }
 
@@ -697,11 +698,11 @@ impl<S, C> ZeroCopyEventStore<S, C> {
 // of the `StoreError` parameter pack — we only encode here, so the decode
 // error type is structurally present in the `StoreError` type but never
 // constructed.
-async fn save_borrowing<A, S, C, F>(
+async fn save_borrowing<A, S, C, F, const N: usize>(
     store: &Store<S>,
     codec: &Arc<C>,
     aggregate: &mut AggregateRoot<A>,
-    events: &[EventOf<A>],
+    events: &Events<EventOf<A>, N>,
     current_version: F,
 ) -> Result<
     (),
@@ -714,16 +715,15 @@ where
     F: Fn(&str) -> Option<Version>,
     EventOf<A>: DomainEvent,
 {
-    if events.is_empty() {
-        return Ok(());
-    }
-
     let expected_version = aggregate.version();
 
     let mut next_version =
         first_persisted_version(expected_version).ok_or(StoreError::VersionOverflow)?;
 
     let mut envelopes = Vec::with_capacity(events.len());
+    // `events` is non-empty (`&Events<_, N>` guarantees >= 1), so the loop
+    // runs at least once and `last_version` is always overwritten before use.
+    let mut last_version = next_version;
 
     for event in events {
         let payload =
@@ -739,6 +739,7 @@ where
             .schema_version(SchemaVersion::new(schema_nz32))
             .build();
 
+        last_version = next_version;
         envelopes.push(envelope);
 
         if envelopes.len() < events.len() {
@@ -763,16 +764,8 @@ where
             AppendError::Store(e) => StoreError::Adapter(e),
         })?;
 
-    #[allow(
-        clippy::expect_used,
-        reason = "envelopes is non-empty: checked events.is_empty() above"
-    )]
-    let last_version = envelopes.last().expect("envelopes is non-empty").version();
-
     aggregate.advance_version(last_version);
-    for event in events {
-        aggregate.apply_event(event);
-    }
+    aggregate.apply_events(events);
     Ok(())
 }
 

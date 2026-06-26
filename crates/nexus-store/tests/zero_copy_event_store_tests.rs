@@ -129,7 +129,7 @@ async fn zero_copy_save_and_load_roundtrip() {
 
     let mut agg = AggregateRoot::<CounterAggregate>::new(CounterId("ctr-1".into()));
     let events = [CounterEvent { delta: 10 }, CounterEvent { delta: -3 }];
-    es.save(&mut agg, &events).await.unwrap();
+    es.save(&mut agg, &save_events(&events)).await.unwrap();
 
     let loaded: AggregateRoot<CounterAggregate> = es.load(CounterId("ctr-1".into())).await.unwrap();
     assert_eq!(loaded.state().value, 7);
@@ -157,13 +157,13 @@ async fn zero_copy_multi_save_load() {
         .build_zero_copy();
 
     let mut agg1 = AggregateRoot::<CounterAggregate>::new(CounterId("ctr-1".into()));
-    es.save(&mut agg1, &[CounterEvent { delta: 5 }])
+    es.save(&mut agg1, &save_events(&[CounterEvent { delta: 5 }]))
         .await
         .unwrap();
 
     let mut agg2: AggregateRoot<CounterAggregate> =
         es.load(CounterId("ctr-1".into())).await.unwrap();
-    es.save(&mut agg2, &[CounterEvent { delta: 3 }])
+    es.save(&mut agg2, &save_events(&[CounterEvent { delta: 3 }]))
         .await
         .unwrap();
 
@@ -171,4 +171,21 @@ async fn zero_copy_multi_save_load() {
         es.load(CounterId("ctr-1".into())).await.unwrap();
     assert_eq!(final_agg.state().value, 8);
     assert_eq!(final_agg.version(), Some(Version::new(2).unwrap()));
+}
+
+// ─── #207 test helper ──────────────────────────────────────────────────────
+// `Repository::save` takes `&Events<E, N>` (non-empty, compile-time capacity).
+// These tests build batches from runtime-length slices/proptest vectors, so we
+// pack them into `Events<E, 32>` (capacity 33 — covers every batch built here;
+// the largest strategy yields 29). Empty input is a programmer error: `save`
+// makes a zero-event batch unrepresentable by construction.
+fn save_events<E: nexus::DomainEvent + Clone>(slice: &[E]) -> nexus::Events<E, 32> {
+    let (first, rest) = slice
+        .split_first()
+        .expect("save requires at least one event");
+    let mut events = nexus::Events::new(first.clone());
+    for event in rest {
+        events.add(event.clone());
+    }
+    events
 }
