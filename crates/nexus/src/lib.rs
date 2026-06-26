@@ -1,5 +1,6 @@
 mod aggregate;
 mod error;
+mod error_id;
 mod event;
 mod events;
 mod id;
@@ -16,6 +17,7 @@ pub use aggregate::{
     Aggregate, AggregateRoot, AggregateState, DEFAULT_MAX_REHYDRATION_EVENTS, EventOf, Handle,
 };
 pub use error::KernelError;
+pub use error_id::{DEFAULT_ERROR_ID_CAP, ErrorId};
 pub use event::DomainEvent;
 pub use events::Events;
 pub use id::Id;
