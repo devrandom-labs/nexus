@@ -1,4 +1,3 @@
-use arrayvec::ArrayString;
 use nexus::{ErrorId, KernelError, Version};
 use thiserror::Error;
 
@@ -147,7 +146,7 @@ pub enum AppendError<E> {
         "concurrency conflict on '{stream_id}': expected version {expected:?}, actual {actual:?}"
     )]
     Conflict {
-        stream_id: ArrayString<64>,
+        stream_id: ErrorId,
         expected: Option<Version>,
         actual: Option<Version>,
     },
