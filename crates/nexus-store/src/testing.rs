@@ -8,6 +8,7 @@ use crate::store::{GlobalSeq, RawEventStore};
 use crate::wake::WakeSource;
 use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
+use nexus::ErrorId;
 use nexus::Id;
 use nexus::Version;
 use std::collections::BTreeMap;
@@ -332,7 +333,7 @@ impl RawEventStore for InMemoryStore {
         let expected_raw = expected_version.map_or(0, nexus::Version::as_u64);
         if actual_version_raw != expected_raw {
             return Err(AppendError::Conflict {
-                stream_id: id.to_label(),
+                stream_id: ErrorId::from_display(id),
                 expected: expected_version,
                 actual: Version::new(actual_version_raw),
             });
@@ -347,13 +348,13 @@ impl RawEventStore for InMemoryStore {
                 .checked_add(1)
                 .and_then(|v| v.checked_add(i_u64))
                 .ok_or_else(|| AppendError::Conflict {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     expected: expected_version,
                     actual: Some(env.version()),
                 })?;
             if env.version().as_u64() != expected_env_version {
                 return Err(AppendError::Conflict {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     expected: Version::new(expected_env_version),
                     actual: Some(env.version()),
                 });

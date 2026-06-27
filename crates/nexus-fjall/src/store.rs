@@ -6,7 +6,7 @@ use crate::wire_key::{
     decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
 };
 use fjall::{Readable, Slice};
-use nexus::{Id, Version};
+use nexus::{ErrorId, Id, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::error::AppendError;
 use nexus_store::notify::{NotifyError, StreamNotifiers, WakeReg};
@@ -67,7 +67,7 @@ impl FjallStore {
             .map_or(Ok(0), |version_bytes| {
                 decode_stream_version(&version_bytes).map_err(|_| {
                     AppendError::Store(FjallError::CorruptMeta {
-                        stream_id: id.to_label(),
+                        stream_id: ErrorId::from_display(id),
                     })
                 })
             })
@@ -85,7 +85,7 @@ impl FjallStore {
             // New stream: expected_version must be None.
             return if expected.is_some() {
                 Err(AppendError::Conflict {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     expected,
                     actual: None,
                 })
@@ -95,7 +95,7 @@ impl FjallStore {
         }
         if current != expected.map_or(0, Version::as_u64) {
             return Err(AppendError::Conflict {
-                stream_id: id.to_label(),
+                stream_id: ErrorId::from_display(id),
                 expected,
                 actual: Version::new(current),
             });
@@ -115,7 +115,7 @@ impl FjallStore {
             .map_or(Ok(0), |bytes| {
                 let raw: [u8; 8] = bytes.as_ref().try_into().map_err(|_| {
                     AppendError::Store(FjallError::CorruptMeta {
-                        stream_id: id.to_label(),
+                        stream_id: ErrorId::from_display(id),
                     })
                 })?;
                 Ok(u64::from_le_bytes(raw))
@@ -160,14 +160,14 @@ impl RawEventStore for FjallStore {
             current_version
                 .checked_add(1)
                 .ok_or_else(|| AppendError::Conflict {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     expected: Version::new(current_version),
                     actual: Some(envelopes[0].version()),
                 })?;
         for env in envelopes {
             if env.version().as_u64() != expected_version_seq {
                 return Err(AppendError::Conflict {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     expected: Version::new(expected_version_seq),
                     actual: Some(env.version()),
                 });
@@ -176,7 +176,7 @@ impl RawEventStore for FjallStore {
                 expected_version_seq
                     .checked_add(1)
                     .ok_or_else(|| AppendError::Conflict {
-                        stream_id: id.to_label(),
+                        stream_id: ErrorId::from_display(id),
                         expected: Version::new(current_version),
                         actual: Some(env.version()),
                     })?;
@@ -196,7 +196,7 @@ impl RawEventStore for FjallStore {
 
             let key = encode_event_key(id_bytes, env.version().as_u64()).map_err(|e| {
                 AppendError::Store(FjallError::InvalidInput {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     version: env.version().as_u64(),
                     reason: reason_label(&e),
                 })
@@ -210,7 +210,7 @@ impl RawEventStore for FjallStore {
             )
             .map_err(|e| {
                 AppendError::Store(FjallError::InvalidInput {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     version: env.version().as_u64(),
                     reason: reason_label(&e),
                 })
@@ -254,7 +254,7 @@ impl RawEventStore for FjallStore {
             &self.events,
             StreamScan {
                 id: OwnedStreamId::from_id(id),
-                label: id.to_label(),
+                label: ErrorId::from_display(id),
             },
             from,
         )
@@ -271,7 +271,7 @@ impl RawEventStore for FjallStore {
 
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
-    use super::{FjallError, FjallStore, Id, Version};
+    use super::{ErrorId, FjallError, FjallStore, Id, Version};
     use crate::snapshot::{decode_snapshot_value, encode_snapshot_value};
     use nexus_store::state::SnapshotStore;
     use std::num::NonZeroU32;
@@ -291,7 +291,7 @@ mod snapshot_impl {
 
             let (schema_version_raw, version_raw, payload) = decode_snapshot_value(&bytes)
                 .map_err(|_| FjallError::CorruptValue {
-                    stream_id: id.to_label(),
+                    stream_id: ErrorId::from_display(id),
                     version: None,
                 })?;
 
@@ -301,7 +301,7 @@ mod snapshot_impl {
             }
 
             let version = Version::new(version_raw).ok_or_else(|| FjallError::CorruptValue {
-                stream_id: id.to_label(),
+                stream_id: ErrorId::from_display(id),
                 version: None,
             })?;
 
@@ -478,6 +478,31 @@ mod tests {
             } => {
                 assert_eq!(expected, None);
                 assert_eq!(actual, Version::new(1));
+            }
+            other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn conflict_truncates_overlong_stream_id_with_ellipsis() {
+        let (store, _dir) = temp_store();
+        // A >64-byte id forces the ErrorId<64> stream-id label to truncate;
+        // truncation must be visually signalled with a trailing ellipsis
+        // (CLAUDE.md "truncation must be visually signalled").
+        let long = "x".repeat(200);
+        let env = make_envelope(1, "E", b"p");
+        // New stream + Some(expected) → immediate optimistic-concurrency conflict.
+        let err = store
+            .append(&tid(&long), Version::new(1), &[env])
+            .await
+            .unwrap_err();
+        match err {
+            AppendError::Conflict { stream_id, .. } => {
+                assert!(stream_id.as_str().len() <= 64);
+                assert!(
+                    stream_id.as_str().ends_with('…'),
+                    "overlong stream id must be truncated with an ellipsis, got {stream_id:?}"
+                );
             }
             other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
         }

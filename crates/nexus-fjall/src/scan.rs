@@ -4,10 +4,9 @@
 //! [`PersistedEnvelope`]. NOT exported; no other adapter shares fjall's on-disk
 //! key layout, so this stays inside `nexus-fjall`.
 
-use arrayvec::ArrayString;
 use bytes::Bytes;
 use fjall::Slice;
-use nexus::Version;
+use nexus::{ErrorId, Version};
 use nexus_store::{GlobalSeq, PersistedEnvelope};
 
 use crate::error::{FjallError, reason_label};
@@ -33,7 +32,7 @@ pub trait ScanStrategy: Send {
 /// Per-stream scan: keyed by `[id_len][id_bytes][version]`, opens from a [`Version`].
 pub struct StreamScan {
     pub id: OwnedStreamId,
-    pub label: ArrayString<64>,
+    pub label: ErrorId,
 }
 
 /// `$all` scan: keyed by `[global_seq][version]`, opens from a [`GlobalSeq`].
@@ -43,14 +42,14 @@ pub struct GlobalScan;
 /// envelope, mapping the two terminal failures identically for both strategies.
 ///
 /// `stream_id` is the diagnostic label stamped into every error: the per-stream
-/// label for [`StreamScan`], an empty [`ArrayString`] for [`GlobalScan`] (a
+/// label for [`StreamScan`], an empty [`ErrorId`] for [`GlobalScan`] (a
 /// global key carries no stream id). `raw_version` is the version decoded from
 /// the key; it appears verbatim in the error fields.
 fn build_envelope(
     bytes_value: Bytes,
     decoded: DecodedEvent,
     raw_version: u64,
-    stream_id: ArrayString<64>,
+    stream_id: ErrorId,
 ) -> Result<PersistedEnvelope, FjallError> {
     let version = Version::new(raw_version).ok_or(FjallError::CorruptValue {
         stream_id,
@@ -126,13 +125,13 @@ impl ScanStrategy for GlobalScan {
     fn decode(&self, key: &Slice, value: Slice) -> Result<PersistedEnvelope, FjallError> {
         let (key_global_seq, version_raw) =
             decode_global_key(key).map_err(|_| FjallError::CorruptValue {
-                stream_id: ArrayString::new(),
+                stream_id: ErrorId::default(),
                 version: None,
             })?;
 
         let bytes_value: Bytes = value.into();
         let decoded = decode_event_value(&bytes_value).map_err(|_| FjallError::CorruptValue {
-            stream_id: ArrayString::new(),
+            stream_id: ErrorId::default(),
             version: Some(version_raw),
         })?;
 
@@ -140,12 +139,12 @@ impl ScanStrategy for GlobalScan {
         // (CLAUDE.md rule 4 — redundant data must be validated).
         if decoded.global_seq != key_global_seq {
             return Err(FjallError::CorruptValue {
-                stream_id: ArrayString::new(),
+                stream_id: ErrorId::default(),
                 version: Some(version_raw),
             });
         }
 
-        build_envelope(bytes_value, decoded, version_raw, ArrayString::new())
+        build_envelope(bytes_value, decoded, version_raw, ErrorId::default())
     }
 }
 
@@ -232,7 +231,6 @@ mod tests {
     use crate::store::FjallStore;
     use crate::store::read_test_helpers::{Tid, temp_store, tid};
     use futures::StreamExt;
-    use nexus::Id;
     use nexus_store::envelope::pending_envelope;
     use nexus_store::store::RawEventStore;
     use nexus_store::value::{EventType, Payload, SchemaVersion};
@@ -277,7 +275,7 @@ mod tests {
             &store.events,
             StreamScan {
                 id: OwnedStreamId::from_id(&id),
-                label: id.to_label(),
+                label: ErrorId::from_display(&id),
             },
             Version::INITIAL,
         )
@@ -300,7 +298,7 @@ mod tests {
             &store.events,
             StreamScan {
                 id: OwnedStreamId::from_id(&id),
-                label: id.to_label(),
+                label: ErrorId::from_display(&id),
             },
             Version::new(3).unwrap(),
         )
@@ -339,7 +337,7 @@ mod tests {
     fn stream_scan(id_bytes: &[u8], label: &str) -> StreamScan {
         StreamScan {
             id: OwnedStreamId::from_id(&label_id(id_bytes)),
-            label: ArrayString::try_from(label).unwrap(),
+            label: ErrorId::from_display(&label),
         }
     }
 

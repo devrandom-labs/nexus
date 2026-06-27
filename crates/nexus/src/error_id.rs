@@ -44,7 +44,7 @@ const fn truncate_at_char_boundary(s: &str, limit: usize) -> usize {
 /// Construct via [`ErrorId::from_display`]; longer values are truncated on a
 /// char boundary and suffixed with `…`. `N` defaults to
 /// [`DEFAULT_ERROR_ID_CAP`] (64).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ErrorId<const N: usize = DEFAULT_ERROR_ID_CAP> {
     inner: ArrayString<N>,
 }

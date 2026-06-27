@@ -1,20 +1,18 @@
-use arrayvec::ArrayString;
+use nexus::ErrorId;
 use nexus_store::envelope::EnvelopeError;
-use std::fmt::Write;
 use thiserror::Error;
 
-/// Format a `Display` value into a stack-allocated reason label,
-/// silently truncating at 128 bytes on a char boundary.
-pub(crate) fn reason_label(value: &impl std::fmt::Display) -> ArrayString<128> {
-    let mut buf = ArrayString::<128>::new();
-    let _ = write!(buf, "{value}");
-    buf
+/// Format a `Display` value into a stack-allocated reason label, truncating
+/// at 128 bytes on a char boundary with a trailing `…` if it overflows
+/// (truncation is visually signalled, per CLAUDE.md).
+pub(crate) fn reason_label(value: &impl std::fmt::Display) -> ErrorId<128> {
+    ErrorId::from_display(value)
 }
 
 /// Errors produced by the fjall event store adapter.
 ///
 /// Intentionally stack-allocated (~208 bytes) for IoT/embedded targets.
-/// All diagnostic fields use `ArrayString` — no heap allocation on error paths.
+/// All diagnostic fields use [`ErrorId`] — no heap allocation on error paths.
 #[derive(Debug, Error)]
 pub enum FjallError {
     /// Fjall I/O or internal database error.
@@ -24,7 +22,7 @@ pub enum FjallError {
     /// Stored value has corrupt or unrecognizable byte layout.
     #[error("corrupt value in stream '{stream_id}' at version {version:?}")]
     CorruptValue {
-        stream_id: ArrayString<64>,
+        stream_id: ErrorId,
         version: Option<u64>,
     },
 
@@ -34,7 +32,7 @@ pub enum FjallError {
     /// from wire-format-level corruption (`CorruptValue`).
     #[error("envelope integrity error in stream '{stream_id}' at version {version}")]
     EnvelopeCorrupt {
-        stream_id: ArrayString<64>,
+        stream_id: ErrorId,
         version: u64,
         #[source]
         source: EnvelopeError,
@@ -42,7 +40,7 @@ pub enum FjallError {
 
     /// Stream metadata has wrong byte size.
     #[error("corrupt metadata for stream '{stream_id}'")]
-    CorruptMeta { stream_id: ArrayString<64> },
+    CorruptMeta { stream_id: ErrorId },
 
     /// Invalid input on the write path (e.g. event type name too long).
     ///
@@ -50,9 +48,9 @@ pub enum FjallError {
     /// is unreadable. This error fires before any data is written.
     #[error("invalid input for stream '{stream_id}' at version {version}: {reason}")]
     InvalidInput {
-        stream_id: ArrayString<64>,
+        stream_id: ErrorId,
         version: u64,
-        reason: ArrayString<128>,
+        reason: ErrorId<128>,
     },
 
     /// Event version would overflow `u64::MAX`.
@@ -82,5 +80,45 @@ mod tests {
     fn satisfies_error_send_sync_static() {
         fn assert_bounds<T: std::error::Error + Send + Sync + 'static>() {}
         assert_bounds::<FjallError>();
+    }
+
+    /// Defensive boundary: an over-long stream id in the `ErrorId<64>` field
+    /// renders truncated and `…`-suffixed through the error's `Display`.
+    #[test]
+    fn corrupt_value_display_truncates_overlong_stream_id() {
+        let err = FjallError::CorruptValue {
+            stream_id: ErrorId::from_display(&"s".repeat(200)),
+            version: Some(7),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains('…'), "display must signal truncation: {msg}");
+        // The 64-byte label plus the surrounding format text — never the full
+        // 200-byte id.
+        assert!(!msg.contains(&"s".repeat(100)));
+    }
+
+    /// Defensive boundary: the `reason` field is `ErrorId<128>` (a wider cap
+    /// than the 64-byte stream-id labels); an over-long reason truncates at
+    /// 128 bytes with a trailing `…`, surfaced via `reason_label`.
+    #[test]
+    fn invalid_input_display_truncates_overlong_reason() {
+        let reason = reason_label(&"r".repeat(400));
+        assert!(reason.as_str().len() <= 128);
+        assert!(reason.as_str().ends_with('…'));
+
+        let err = FjallError::InvalidInput {
+            stream_id: ErrorId::from_display(&"stream-1"),
+            version: 3,
+            reason,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("stream-1"),
+            "display must carry stream id: {msg}"
+        );
+        assert!(
+            msg.contains('…'),
+            "display must signal reason truncation: {msg}"
+        );
     }
 }

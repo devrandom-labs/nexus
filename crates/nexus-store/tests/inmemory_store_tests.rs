@@ -1,8 +1,10 @@
 #![cfg(feature = "testing")]
 #![allow(clippy::unwrap_used, reason = "tests")]
+#![allow(clippy::panic, reason = "tests")]
 
 use futures::StreamExt;
 use nexus::{Id, Version};
+use nexus_store::AppendError;
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
 use nexus_store::testing::InMemoryStore;
@@ -21,6 +23,50 @@ impl AsRef<[u8]> for TestId {
 }
 impl Id for TestId {
     const BYTE_LEN: usize = 0;
+}
+
+/// An owned-`String` id so tests can build labels longer than the 64-byte
+/// `ErrorId` cap (the static-str [`TestId`] above can't carry a 200-byte id).
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct LongId(String);
+impl std::fmt::Display for LongId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl AsRef<[u8]> for LongId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+impl Id for LongId {
+    const BYTE_LEN: usize = 0;
+}
+
+#[tokio::test]
+async fn append_conflict_truncates_overlong_stream_id_with_ellipsis() {
+    let store = InMemoryStore::new();
+    let long = LongId("y".repeat(200));
+    let env = pending_envelope(Version::new(1).unwrap())
+        .event_type("E")
+        .payload(b"p".to_vec())
+        .unwrap()
+        .build();
+    // New stream + Some(expected) → conflict carrying the truncated id label.
+    let err = store
+        .append(&long, Version::new(1), &[env])
+        .await
+        .unwrap_err();
+    match err {
+        AppendError::Conflict { stream_id, .. } => {
+            assert!(stream_id.as_str().len() <= 64);
+            assert!(
+                stream_id.as_str().ends_with('…'),
+                "overlong stream id must be truncated with an ellipsis, got {stream_id:?}"
+            );
+        }
+        AppendError::Store(e) => panic!("expected Conflict, got Store({e})"),
+    }
 }
 
 #[tokio::test]

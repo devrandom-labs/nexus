@@ -51,6 +51,23 @@ fn default_is_empty() {
     assert!(id.is_empty());
 }
 
+#[test]
+fn error_id_is_copy() {
+    // `ErrorId` must be `Copy`: the fjall adapter's error paths stamp the
+    // same label into several variants in one expression (e.g. `scan.rs`
+    // builds `CorruptValue` then reuses the id for `EnvelopeCorrupt`), which
+    // only compiles move-free when the label is `Copy`. The wrapped
+    // `ArrayString<N>` is `Copy`, so this is sound and additive.
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<ErrorId<64>>();
+    assert_copy::<ErrorId<128>>();
+
+    let a = ErrorId::<64>::from_display(&"copy-me");
+    let b = a; // copies, not moves
+    assert_eq!(a, b);
+    assert_eq!(a.as_str(), "copy-me");
+}
+
 // ── Defensive boundary: lengths {0, 1, N-1, N, N+1} ────────────────────────
 
 #[test]

@@ -469,10 +469,7 @@ where
                 expected,
                 actual,
             } => StoreError::Conflict {
-                // Transitional: `AppendError::stream_id` is still `ArrayString<64>`
-                // (retyped to `ErrorId` in PR 3, atomic with the fjall construction
-                // sites). Re-wrap through the truncation-aware constructor for now.
-                stream_id: nexus::ErrorId::from_display(&stream_id),
+                stream_id,
                 expected,
                 actual,
             },
@@ -760,10 +757,7 @@ where
                 expected,
                 actual,
             } => StoreError::Conflict {
-                // Transitional: `AppendError::stream_id` is still `ArrayString<64>`
-                // (retyped to `ErrorId` in PR 3, atomic with the fjall construction
-                // sites). Re-wrap through the truncation-aware constructor for now.
-                stream_id: nexus::ErrorId::from_display(&stream_id),
+                stream_id,
                 expected,
                 actual,
             },
