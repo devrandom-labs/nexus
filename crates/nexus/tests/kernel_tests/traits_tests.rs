@@ -1,8 +1,6 @@
 use nexus::*;
 use std::fmt;
 
-use arrayvec::ArrayString;
-
 // --- Test ID type ---
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct TestId(String);
@@ -119,18 +117,48 @@ fn aggregate_state_apply_mutates() {
 }
 
 #[test]
-fn id_to_label_returns_display_as_array_string() {
+fn id_to_label_returns_errorid_verbatim_for_short_id() {
+    // `to_label` now returns the sealed `ErrorId`, not `arrayvec::ArrayString`.
     let id = TestId("order-123".into());
-    let label: ArrayString<64> = id.to_label();
+    let label: ErrorId = id.to_label();
     assert_eq!(label.as_str(), "order-123");
 }
 
 #[test]
-fn id_to_label_truncates_long_ids() {
-    // Create an ID whose Display output exceeds 64 bytes
+fn id_to_label_signals_truncation_with_ellipsis() {
+    // An ID whose Display exceeds 64 bytes is truncated, and — unlike the old
+    // silent `LabelWriter` — the overflow is *signalled* with a trailing `…`.
     let long_name = "x".repeat(100);
     let id = TestId(long_name);
     let label = id.to_label();
-    assert!(label.len() <= 64);
-    assert_eq!(label.len(), 64);
+    assert!(label.len() <= 64, "label must fit the 64-byte cap");
+    assert!(
+        label.as_str().ends_with('…'),
+        "truncation must be visually signalled with `…`, got {:?}",
+        label.as_str()
+    );
+    // The verbatim prefix is preserved up to the cap (minus the marker).
+    assert!(label.as_str().starts_with("xxxx"));
+}
+
+#[test]
+fn id_to_label_truncation_is_utf8_safe_on_multibyte_boundary() {
+    // Defensive boundary (CLAUDE.md rule 7): a multi-byte char straddling the
+    // cap must not panic and must leave the label valid UTF-8. `あ` is 3 bytes,
+    // so the 64-byte cap lands mid-character and forces a boundary backstep.
+    let long_name = "あ".repeat(40); // 120 bytes
+    let id = TestId(long_name);
+    let label = id.to_label();
+    assert!(label.len() <= 64, "label must fit the 64-byte cap");
+    assert!(
+        label.as_str().ends_with('…'),
+        "truncation must be signalled with `…`, got {:?}",
+        label.as_str()
+    );
+    // Every retained char is the intact `あ` (no split code unit) plus the `…`.
+    assert!(
+        label.as_str().chars().all(|c| c == 'あ' || c == '…'),
+        "truncation left a broken/unexpected char: {:?}",
+        label.as_str()
+    );
 }
