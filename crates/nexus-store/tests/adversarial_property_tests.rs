@@ -65,10 +65,9 @@ use std::convert::Infallible;
 use std::fmt;
 use std::sync::Arc;
 
-use arrayvec::ArrayString;
 use bytes::Bytes;
 use futures::StreamExt;
-use nexus::Version;
+use nexus::{ErrorId, Version};
 use nexus_store::InMemoryStoreError;
 use nexus_store::Repository;
 use nexus_store::Store;
@@ -114,8 +113,8 @@ fn build_persisted(
 /// Concrete `StoreError` for tests using `InMemoryStore` + `JsonCodec` + no upcaster.
 type TestStoreError = StoreError<InMemoryStoreError, JsonCodecError, JsonCodecError>;
 
-fn label(s: &str) -> ArrayString<64> {
-    ArrayString::try_from(s).unwrap()
+fn label(s: &str) -> ErrorId {
+    ErrorId::from_display(&s)
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

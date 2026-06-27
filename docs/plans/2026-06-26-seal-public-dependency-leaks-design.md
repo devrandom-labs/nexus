@@ -124,9 +124,17 @@ constructing `ErrorId` directly via `ErrorId::from_display`.
 - Purely additive; workspace compiles unchanged.
 
 ### PR 2 — store (`nexus-store`) — depends on PR 1
-- Adopt `ErrorId` in `StoreError::{Conflict,StreamNotFound}` and
-  `AppendError::Conflict` `stream_id` fields; construct via
-  `ErrorId::from_display(&id)` (not `to_label`).
+- Adopt `ErrorId` in `StoreError::{Conflict,StreamNotFound}` `stream_id` fields
+  **only**; construct via `ErrorId::from_display(&id)` (not `to_label`).
+  - **Scope correction (vs. the inventory):** `AppendError::Conflict`'s
+    `stream_id` is **not** retyped here. `AppendError::Conflict` is *constructed
+    by `nexus-fjall`* (`crates/nexus-fjall/src/store.rs`), so retyping its field
+    can't land in a store-only PR without breaking the fjall build — the same
+    cross-crate binding that defers `to_label` to PR 4. It moves to **PR 3**
+    (atomic with fjall). The store-side facade arms that map
+    `AppendError::Conflict → StoreError::Conflict` (`repository.rs`) therefore
+    do a transitional `ErrorId::from_display(&stream_id)` conversion, removed in
+    PR 3 once `AppendError` is also `ErrorId`.
 - **Delete** `pub use arrayvec::ArrayString;`.
 - Seal `ProjectedIntents::IntoIter` via `ProjectedIntentsIntoIter` newtype.
 - `pub use bytes;`.
@@ -135,6 +143,9 @@ constructing `ErrorId` directly via `ErrorId::from_display`.
 
 ### PR 3 — fjall (`nexus-fjall`) — depends on PR 1, independent of PR 2
 - Adopt `ErrorId<64>` for `stream_id` fields; `ErrorId<128>` for `reason`.
+- **Also retype `AppendError::Conflict`'s `stream_id`** to `ErrorId` (deferred
+  from PR 2): atomic with the fjall construction sites that build it, and drop
+  the transitional `ErrorId::from_display` conversion in the store facade arms.
 - Replace the `id.to_label()` sites and `reason_label`/`ArrayString::new()`
   sites with `ErrorId::from_display(&id)` / `ErrorId::default()`.
 

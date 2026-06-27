@@ -118,11 +118,14 @@ pub mod value;
 pub mod wake;
 pub mod wire;
 
-pub use arrayvec::ArrayString;
 pub use batch::{BatchSize, BatchSizeError, DEFAULT_BATCH, MAX_BATCH};
 #[cfg(feature = "snapshot")]
 pub use builder::WithSnapshot;
 pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
+// Re-export `bytes` so downstreams name `nexus_store::bytes::Bytes` to feed
+// `Encode` / the value newtypes, sharing *our* version rather than coupling to
+// theirs. Additive (non-breaking).
+pub use bytes;
 #[cfg(feature = "cbor")]
 pub use cbor::{
     ChunkError, ChunkHeader, decode_chunk, decode_header, encode_block, encode_header,
@@ -150,7 +153,8 @@ pub use nexus::Version;
 pub use projection::Projector;
 pub use repository::{EventStore, Repository, ZeroCopyEventStore};
 pub use saga::{
-    ConflictPredicate, ProjectedIntent, ProjectedIntents, Reaction, SagaError, SagaRepository,
+    ConflictPredicate, ProjectedIntent, ProjectedIntents, ProjectedIntentsIntoIter, Reaction,
+    SagaError, SagaRepository,
 };
 #[cfg(feature = "snapshot")]
 pub use snapshot::Snapshotting;
@@ -162,6 +166,11 @@ pub use state::{
 };
 pub use store::{GlobalSeq, RawEventStore, Store};
 pub use stream::EventStream;
+// Re-export the `Stream` trait from `futures-core` (the small, near-frozen
+// definitional crate) rather than `futures`. `futures::Stream` *is* this trait,
+// so our public `EventStream` / `subscribe*` surface is married to
+// `futures-core`'s stability, not the churning batteries-included `futures`.
+pub use futures_core::Stream;
 #[cfg(feature = "subscription")]
 pub use subscription::Subscription;
 #[cfg(feature = "testing")]

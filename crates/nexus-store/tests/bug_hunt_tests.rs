@@ -27,8 +27,7 @@
     reason = "clarity over brevity in test assertions"
 )]
 
-use arrayvec::ArrayString;
-use nexus::Version;
+use nexus::{ErrorId, Version};
 use nexus_store::AppendError;
 use nexus_store::InMemoryStoreError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
@@ -66,8 +65,8 @@ fn build_persisted(
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
 type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::io::Error>;
 
-fn label(s: &str) -> ArrayString<64> {
-    ArrayString::try_from(s).unwrap()
+fn label(s: &str) -> ErrorId {
+    ErrorId::from_display(&s)
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

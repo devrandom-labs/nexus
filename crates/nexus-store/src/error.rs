@@ -1,5 +1,5 @@
 use arrayvec::ArrayString;
-use nexus::{KernelError, Version};
+use nexus::{ErrorId, KernelError, Version};
 use thiserror::Error;
 
 /// Errors from the event store layer.
@@ -26,14 +26,14 @@ pub enum StoreError<A, EncErr, DecErr> {
         "concurrency conflict on stream '{stream_id}': expected version {expected:?}, actual {actual:?}"
     )]
     Conflict {
-        stream_id: ArrayString<64>,
+        stream_id: ErrorId,
         expected: Option<Version>,
         actual: Option<Version>,
     },
 
     /// Stream not found.
     #[error("stream '{stream_id}' not found")]
-    StreamNotFound { stream_id: ArrayString<64> },
+    StreamNotFound { stream_id: ErrorId },
 
     /// Database adapter failure.
     #[error("adapter error: {0}")]

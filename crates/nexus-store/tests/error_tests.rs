@@ -2,8 +2,7 @@
 
 #![allow(clippy::unwrap_used, reason = "tests")]
 
-use arrayvec::ArrayString;
-use nexus::{KernelError, Version};
+use nexus::{ErrorId, KernelError, Version};
 use nexus_store::{LoadWithError, StoreError};
 
 /// Concrete `StoreError` for tests: adapter = `std::io::Error`, codec = `std::io::Error`.
@@ -14,8 +13,8 @@ type TestStoreError = StoreError<std::io::Error, std::io::Error, std::io::Error>
 type TestLoadWithError =
     LoadWithError<std::io::Error, std::io::Error, std::io::Error, std::io::Error>;
 
-fn label(s: &str) -> ArrayString<64> {
-    ArrayString::try_from(s).unwrap()
+fn label(s: &str) -> ErrorId {
+    ErrorId::from_display(&s)
 }
 
 #[test]
@@ -163,6 +162,58 @@ fn load_with_upcast_display_contains_inner_message() {
     );
     let source = std::error::Error::source(&err);
     assert!(source.is_some(), "Upcast variant should have a source");
+}
+
+// ── Defensive boundary (PR2 #208): over-long stream ids are truncated and
+//    visually signalled with a trailing `…` in error Display output. The
+//    `stream_id` field is now `nexus::ErrorId`, whose `from_display`
+//    constructor caps at 64 bytes on a char boundary and appends the marker.
+
+#[test]
+fn conflict_display_truncates_overlong_stream_id_with_ellipsis() {
+    // 100 bytes of input against ErrorId's 64-byte cap.
+    let long = "s".repeat(100);
+    let err: TestStoreError = StoreError::Conflict {
+        stream_id: ErrorId::from_display(&long),
+        expected: Version::new(3),
+        actual: Version::new(5),
+    };
+    let msg = format!("{err}");
+    // The full over-long id must NOT appear verbatim …
+    assert!(
+        !msg.contains(&long),
+        "the untruncated stream id must not be rendered"
+    );
+    // … the loss is signalled with the ellipsis marker …
+    assert!(
+        msg.contains('…'),
+        "truncation must be visually signalled with '…'"
+    );
+    // … and the surviving 61-byte prefix (64 cap − 3-byte '…') renders.
+    assert!(
+        msg.contains(&"s".repeat(61)),
+        "the truncated prefix should still be present"
+    );
+    // Versions still render.
+    assert!(msg.contains('3') && msg.contains('5'));
+}
+
+#[test]
+fn stream_not_found_display_truncates_overlong_stream_id_with_ellipsis() {
+    let long = "u".repeat(200);
+    let err: TestStoreError = StoreError::StreamNotFound {
+        stream_id: ErrorId::from_display(&long),
+    };
+    let msg = format!("{err}");
+    assert!(
+        !msg.contains(&long),
+        "the untruncated stream id must not be rendered"
+    );
+    assert!(
+        msg.contains('…'),
+        "truncation must be visually signalled with '…'"
+    );
+    assert!(msg.contains("not found"), "should mention 'not found'");
 }
 
 #[test]

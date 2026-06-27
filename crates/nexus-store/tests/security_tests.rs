@@ -26,9 +26,8 @@
 )]
 #![allow(clippy::str_to_string, reason = "tests use to_string/to_owned freely")]
 
-use arrayvec::ArrayString;
 use futures::StreamExt;
-use nexus::{Id, Version};
+use nexus::{ErrorId, Id, Version};
 use nexus_store::InMemoryStoreError;
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
@@ -38,8 +37,8 @@ use nexus_store::testing::InMemoryStore;
 /// Concrete `StoreError` for tests using `InMemoryStore` with no codec/upcaster.
 type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::io::Error>;
 
-fn label(s: &str) -> ArrayString<64> {
-    ArrayString::try_from(s).unwrap()
+fn label(s: &str) -> ErrorId {
+    ErrorId::from_display(&s)
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
