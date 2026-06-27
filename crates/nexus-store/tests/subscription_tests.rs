@@ -59,6 +59,24 @@ async fn append_one(
 /// Timeout duration for operations that should complete quickly.
 const TIMEOUT: Duration = Duration::from_secs(2);
 
+// PR2 (#208): the public `subscribe` / `subscribe_all` return types are bound
+// to the re-exported `Stream` trait (`futures_core::Stream`), not the churning
+// `futures` umbrella crate. This compiles only if the returned cursors satisfy
+// that trait — a static guard on the public stream surface.
+#[tokio::test]
+async fn subscribe_returns_a_reexported_stream() {
+    fn assert_stream<T: nexus_store::Stream>(_: &T) {}
+
+    let store = Store::new(InMemoryStore::new());
+    let id = TestId::new("stream-static");
+
+    let per_stream = Subscription::new(&store).subscribe(&id, None).unwrap();
+    assert_stream(&per_stream);
+
+    let all = Subscription::new(&store).subscribe_all(None).unwrap();
+    assert_stream(&all);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. Sequence/Protocol Tests
 // ═══════════════════════════════════════════════════════════════════════════

@@ -88,7 +88,7 @@ impl<S: RawEventStore + WakeSource> Subscription<S> {
         id: &I,
         from: Option<Version>,
     ) -> Result<
-        impl futures::Stream<Item = Result<PersistedEnvelope, <S as RawEventStore>::Error>>
+        impl futures_core::Stream<Item = Result<PersistedEnvelope, <S as RawEventStore>::Error>>
         + Send
         + use<S, I>,
         <S as WakeSource>::Error,
@@ -116,7 +116,7 @@ impl<S: RawEventStore + WakeSource> Subscription<S> {
         &self,
         from: Option<GlobalSeq>,
     ) -> Result<
-        impl futures::Stream<Item = Result<PersistedEnvelope, <S as RawEventStore>::Error>>
+        impl futures_core::Stream<Item = Result<PersistedEnvelope, <S as RawEventStore>::Error>>
         + Send
         + use<S>,
         <S as WakeSource>::Error,

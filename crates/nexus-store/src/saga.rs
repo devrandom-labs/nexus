@@ -210,13 +210,47 @@ impl<'a, S: Saga, const N: usize> IntoIterator for &'a ProjectedIntents<S, N> {
     }
 }
 
+/// Owning iterator over [`ProjectedIntents`], yielding `first` then each
+/// token in `rest`.
+///
+/// A named newtype wrapping the concrete `Chain<option::IntoIter, _>` so the
+/// `arrayvec::IntoIter` type does not appear in the public API as
+/// `ProjectedIntents`' associated `IntoIter` (sealing `arrayvec` out of our
+/// `SemVer`). Mirrors the kernel's `EventsIntoIter`.
+pub struct ProjectedIntentsIntoIter<S: Saga, const N: usize> {
+    inner: Chain<option::IntoIter<ProjectedIntent<S>>, arrayvec::IntoIter<ProjectedIntent<S>, N>>,
+}
+
+impl<S: Saga, const N: usize> Iterator for ProjectedIntentsIntoIter<S, N> {
+    type Item = ProjectedIntent<S>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<S: Saga, const N: usize> DoubleEndedIterator for ProjectedIntentsIntoIter<S, N> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.inner.next_back()
+    }
+}
+
+// Sound: both halves of the chain (`option::IntoIter` and `arrayvec::IntoIter`)
+// yield `None` permanently once exhausted, so the chain is fused.
+impl<S: Saga, const N: usize> core::iter::FusedIterator for ProjectedIntentsIntoIter<S, N> {}
+
 impl<S: Saga, const N: usize> IntoIterator for ProjectedIntents<S, N> {
     type Item = ProjectedIntent<S>;
-    type IntoIter =
-        Chain<option::IntoIter<ProjectedIntent<S>>, arrayvec::IntoIter<ProjectedIntent<S>, N>>;
+    type IntoIter = ProjectedIntentsIntoIter<S, N>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.first.into_iter().chain(self.rest)
+        ProjectedIntentsIntoIter {
+            inner: self.first.into_iter().chain(self.rest),
+        }
     }
 }
 
@@ -360,8 +394,7 @@ impl<S: Saga, R: Repository<S>> SagaRepository<S> for R {}
 mod error_tests {
     use super::SagaError;
     use crate::error::StoreError;
-    use arrayvec::ArrayString;
-    use nexus::Version;
+    use nexus::{ErrorId, Version};
 
     type TestStoreError =
         StoreError<std::io::Error, std::convert::Infallible, std::convert::Infallible>;
@@ -370,7 +403,7 @@ mod error_tests {
     #[test]
     fn conflict_store_error_is_conflict() {
         let e: TestSagaError = SagaError::Store(StoreError::Conflict {
-            stream_id: ArrayString::from("s").expect("fits"),
+            stream_id: ErrorId::from_display(&"s"),
             expected: Some(Version::INITIAL),
             actual: None,
         });
@@ -392,7 +425,7 @@ mod error_tests {
 
 #[cfg(test)]
 mod projected_intents_tests {
-    use super::{ProjectedIntent, ProjectedIntents};
+    use super::{ProjectedIntent, ProjectedIntents, ProjectedIntentsIntoIter};
     use nexus::{
         Aggregate, AggregateState, DomainEvent, Events, Id, Message, React, Saga, Version,
     };
@@ -496,5 +529,34 @@ mod projected_intents_tests {
         assert_eq!(versions, vec![1, 2, 3]);
         let owned: Vec<u8> = intents.into_iter().map(|p| p.into_intent().0).collect();
         assert_eq!(owned, vec![1, 2, 3]);
+    }
+
+    // PR2 (#208): the owning `IntoIter` is the named, sealed
+    // `ProjectedIntentsIntoIter` (no `arrayvec::IntoIter` in the public API),
+    // preserving the underlying `Chain`'s capabilities.
+    #[test]
+    fn into_iter_is_named_sealed_type_double_ended_fused_and_sized() {
+        let mut intents = ProjectedIntents::<M, 2>::new();
+        for v in 1u64..=3 {
+            let version = Version::new(v).expect("non-zero");
+            let tag = u8::try_from(v).expect("fits u8");
+            intents.push(ProjectedIntent::new(Sid(9), version, Cmd(tag)));
+        }
+
+        // The associated `IntoIter` is the named type, not an arrayvec type.
+        let it: ProjectedIntentsIntoIter<M, 2> = intents.into_iter();
+        // `size_hint` counts first + rest exactly.
+        assert_eq!(it.size_hint(), (3, Some(3)));
+        // Double-ended: reversed yields last-to-first.
+        let reversed: Vec<u8> = it.rev().map(|p| p.into_intent().0).collect();
+        assert_eq!(reversed, vec![3, 2, 1]);
+
+        // Fused: once exhausted it keeps yielding `None`.
+        let mut single = ProjectedIntents::<M, 0>::new();
+        single.push(ProjectedIntent::new(Sid(1), Version::INITIAL, Cmd(7)));
+        let mut single_it = single.into_iter();
+        assert_eq!(single_it.next().map(|p| p.into_intent().0), Some(7));
+        assert!(single_it.next().is_none());
+        assert!(single_it.next().is_none());
     }
 }
