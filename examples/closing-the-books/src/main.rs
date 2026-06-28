@@ -25,7 +25,8 @@ use std::fmt;
 
 /// Append decided events to a stream history and advance the in-memory root.
 /// This stands in for a real `Repository`, mirroring its persist-then-apply
-/// step by driving the `advance_version` / `apply_events` mutators directly.
+/// step by driving `commit_persisted` (the single post-persist sync that
+/// advances the version and folds the events into state atomically).
 fn record<A: Aggregate, const N: usize>(
     root: &mut AggregateRoot<A>,
     history: &mut Vec<VersionedEvent<EventOf<A>>>,
