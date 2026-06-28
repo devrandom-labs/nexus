@@ -408,7 +408,12 @@ mod tests {
         // the `event_type` bytes in place (same length) with invalid UTF-8.
         let (k, v) = row(b"user-1", 7, 42, "ABC", b"data");
         let mut raw = v.to_vec();
-        let et_start = crate::wire_key::EVENT_VALUE_HEADER_SIZE;
+        // Derive the event_type start offset from a publicly-decoded
+        // `FrameOffsets` rather than a private wire header-size constant —
+        // `decode_frame` is the adapter-facing read path and already exposes
+        // every offset a decoder needs.
+        let et_start =
+            usize::try_from(wire::decode_frame(&raw).unwrap().offsets.event_type.start).unwrap();
         // 0xFF is never a valid UTF-8 byte; keep the 3-byte length intact.
         raw[et_start] = 0xFF;
         raw[et_start + 1] = 0xFE;
