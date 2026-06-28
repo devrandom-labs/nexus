@@ -102,13 +102,16 @@ impl RtAggregate {
 #[test]
 fn expanded_lifecycle() {
     let mut root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
-    root.apply_event(&RtEvent::Added("one".into()));
-    root.apply_event(&RtEvent::Added("two".into()));
-    root.apply_event(&RtEvent::Removed);
+    let decided: Events<RtEvent, 2> = events![
+        RtEvent::Added("one".into()),
+        RtEvent::Added("two".into()),
+        RtEvent::Removed,
+    ];
+    root.commit_persisted(Version::new(3).unwrap(), &decided);
 
     assert_eq!(root.state().items, vec!["one"]);
-    // Version is None because apply_event does not advance version
-    assert_eq!(root.version(), None);
+    // commit_persisted advances the version to the last persisted event.
+    assert_eq!(root.version(), Version::new(3));
 }
 
 #[test]
@@ -128,13 +131,14 @@ fn expanded_rehydrate() {
 #[test]
 fn expanded_root_accessors_work() {
     let mut root = AggregateRoot::<RtAggregate>::new(RtId::new(1));
-    root.apply_event(&RtEvent::Added("test".into()));
+    root.replay(Version::INITIAL, &RtEvent::Added("test".into()))
+        .unwrap();
 
     // AggregateRoot accessors
     assert_eq!(root.id(), &RtId::new(1));
     assert_eq!(root.state().items, vec!["test"]);
-    // Version is None because apply_event does not advance version
-    assert_eq!(root.version(), None);
+    // replay advances the version to the replayed event.
+    assert_eq!(root.version(), Version::new(1));
 }
 
 #[test]

@@ -112,14 +112,13 @@ fn replay_events(events: &[CountEvent]) -> AggregateRoot<CountAgg> {
     agg
 }
 
-/// Helper: apply events via `apply_events` (simulating post-persistence state update).
+/// Helper: fold events via `commit_persisted` (simulating post-persistence sync).
 fn apply_events_to(events: &[CountEvent]) -> AggregateRoot<CountAgg> {
     let mut agg = AggregateRoot::<CountAgg>::new(PId::new(1));
     for (i, e) in events.iter().enumerate() {
         let v = Version::new((i + 1) as u64).unwrap();
         let batch: Events<_, 0> = Events::new(e.clone());
-        agg.advance_version(v);
-        agg.apply_events(&batch);
+        agg.commit_persisted(v, &batch);
     }
     agg
 }
@@ -257,19 +256,4 @@ proptest! {
         prop_assert_eq!(next.as_u64(), v + 1, "next() must increment by exactly 1");
     }
 
-    /// Property 9: advance_version + apply_events is idempotent on version
-    ///
-    /// Calling advance_version with the same version is a no-op on version.
-    #[test]
-    fn prop_advance_version_is_idempotent(v in 1..=u64::MAX) {
-        let mut agg = AggregateRoot::<CountAgg>::new(PId::new(1));
-        let version = Version::new(v).unwrap();
-
-        agg.advance_version(version);
-        prop_assert_eq!(agg.version(), Some(version));
-
-        // Calling again with the same version doesn't change it
-        agg.advance_version(version);
-        prop_assert_eq!(agg.version(), Some(version));
-    }
 }

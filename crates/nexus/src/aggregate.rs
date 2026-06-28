@@ -211,15 +211,17 @@ pub const DEFAULT_MAX_REHYDRATION_EVENTS: NonZeroUsize = NonZeroUsize::new(1_000
 ///
 /// After loading, the application layer calls [`Handle::handle`] to decide,
 /// then persists the returned events via the repository. The aggregate
-/// itself never buffers or persists events.
+/// itself never buffers or persists events. After a durable persist the
+/// driver calls [`commit_persisted`](Self::commit_persisted) once to advance
+/// the version and fold the events into state atomically.
 ///
 /// # Panic safety
 ///
-/// [`replay`](Self::replay), [`apply_event`](Self::apply_event), and
-/// [`apply_events`](Self::apply_events) move the state out via
-/// [`mem::replace`] and fold it through [`AggregateState::apply`] — no
-/// clone. If `apply` panics (a state-machine bug), the state is left at
-/// [`AggregateState::initial`]: valid, never partially mutated.
+/// [`replay`](Self::replay) and [`commit_persisted`](Self::commit_persisted)
+/// move the state out via [`mem::replace`] and fold it through
+/// [`AggregateState::apply`] — no clone. If `apply` panics (a state-machine
+/// bug), the state is left at [`AggregateState::initial`]: valid, never
+/// partially mutated.
 pub struct AggregateRoot<A: Aggregate> {
     id: A::Id,
     state: A::State,
@@ -308,7 +310,12 @@ impl<A: Aggregate> AggregateRoot<A> {
     /// Takes a borrowed event reference so zero-copy codecs (rkyv, flatbuffers)
     /// can pass views directly from database buffers without cloning.
     ///
-    /// Internal — driven by the repository; not part of the user-facing flow.
+    /// The rehydration entry point: replays persisted events in strict version
+    /// order (starting at [`Version::INITIAL`], strictly sequential) to
+    /// reconstruct state. A repository drives this during load, but it is also
+    /// the supported path for manual / no-store event sourcing — replay a
+    /// known-good history `1..=n` to rebuild an aggregate with no persistence
+    /// layer at all.
     ///
     /// # Errors
     ///
@@ -325,7 +332,6 @@ impl<A: Aggregate> AggregateRoot<A> {
     ///
     /// Panics if `MAX_REHYDRATION_EVENTS` exceeds `u64::MAX` on the
     /// current platform (impossible on 32/64-bit systems).
-    #[doc(hidden)]
     #[allow(
         clippy::expect_used,
         reason = "u64::try_from(usize) cannot fail on supported platforms (max 64-bit)"
@@ -358,32 +364,50 @@ impl<A: Aggregate> AggregateRoot<A> {
         Ok(())
     }
 
-    /// Advance the version after successful persistence.
+    /// Sync the aggregate after the store has durably persisted `events`.
     ///
-    /// Called by the repository after events have been written to the store.
-    /// The version advances to reflect the newly persisted events.
+    /// Call this **once** after the event store has committed `events`, with
+    /// `version` set to the version of the **last** persisted event. It folds
+    /// the two halves of post-persist bookkeeping — advancing the version and
+    /// applying the events to state — into a single atomic call, so the version
+    /// and state can never desync (the footgun of advancing one without the
+    /// other is unrepresentable).
     ///
-    /// # Contract
+    /// The fold uses the no-clone [`mem::replace`] path, identical to
+    /// [`replay`](Self::replay): if [`AggregateState::apply`] panics (a
+    /// state-machine bug) the state is left at [`AggregateState::initial`] —
+    /// valid, never partially mutated.
     ///
-    /// Only call after a successful write to the event store. Calling
-    /// without persistence leaves the aggregate's version ahead of
-    /// the store — subsequent saves will produce a version conflict.
+    /// This is the blessed post-persist seam: a repository drives it after a
+    /// successful write, and a manual / no-store flow calls it after deciding
+    /// events it considers committed.
+    pub fn commit_persisted<const N: usize>(
+        &mut self,
+        version: Version,
+        events: &Events<EventOf<A>, N>,
+    ) {
+        self.advance_version(version);
+        self.apply_events(events);
+    }
+
+    /// Advance the version to reflect newly persisted events.
     ///
-    /// Internal — driven by the repository; not part of the user-facing flow.
-    #[doc(hidden)]
-    pub const fn advance_version(&mut self, new_version: Version) {
+    /// Private primitive: advancing the version without also applying the
+    /// matching events leaves state behind the version. The only caller is
+    /// [`commit_persisted`](Self::commit_persisted), which always pairs it with
+    /// [`apply_events`](Self::apply_events) atomically.
+    const fn advance_version(&mut self, new_version: Version) {
         self.version = Some(new_version);
     }
 
-    /// Apply decided events to state without recording them.
+    /// Apply already-persisted events to state without advancing the version.
     ///
-    /// Called by the repository after successful persistence to keep
-    /// the in-memory state in sync with the store. Events have already
-    /// been persisted — this just updates the local projection.
-    ///
-    /// Internal — driven by the repository; not part of the user-facing flow.
-    #[doc(hidden)]
-    pub fn apply_events<const N: usize>(&mut self, events: &Events<EventOf<A>, N>) {
+    /// In-crate primitive (`pub(crate)`): [`commit_persisted`](Self::commit_persisted)
+    /// pairs it with [`advance_version`](Self::advance_version), and the
+    /// `testing` fixtures fold decided events without persisting (no version to
+    /// advance). Not public — folding state without a version is exactly the
+    /// desync the public API forbids.
+    pub(crate) fn apply_events<const N: usize>(&mut self, events: &Events<EventOf<A>, N>) {
         for event in events {
             self.apply_event(event);
         }
@@ -391,22 +415,22 @@ impl<A: Aggregate> AggregateRoot<A> {
 
     /// Apply a single event to the aggregate state.
     ///
-    /// Called by the repository after successful persistence to keep
-    /// the in-memory state in sync. Moves the state out via [`mem::replace`]
-    /// and folds it through `apply` — no clone. If `apply` panics (a
-    /// state-machine bug), the state is left at [`AggregateState::initial`]
-    /// (valid, never partially mutated).
-    ///
-    /// Internal — driven by the repository; not part of the user-facing flow.
-    #[doc(hidden)]
-    pub fn apply_event(&mut self, event: &EventOf<A>) {
+    /// Private primitive driving [`apply_events`](Self::apply_events). Moves the
+    /// state out via [`mem::replace`] and folds it through `apply` — no clone.
+    /// If `apply` panics (a state-machine bug), the state is left at
+    /// [`AggregateState::initial`] (valid, never partially mutated).
+    fn apply_event(&mut self, event: &EventOf<A>) {
         let taken = mem::replace(&mut self.state, A::State::initial());
         self.state = taken.apply(event);
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code: panic-safety test deliberately panics in apply()"
+)]
 mod purist_dispatch_tests {
     use super::{Aggregate, AggregateRoot, AggregateState, Handle};
     use crate::event::DomainEvent;
@@ -516,6 +540,135 @@ mod purist_dispatch_tests {
         assert_eq!(
             AggregateRoot::<Counter>::new(CtrId::new(1)).handle(Add(0)),
             Err(CtrError)
+        );
+    }
+
+    #[test]
+    fn commit_persisted_advances_version_and_folds_state_atomically() {
+        // The "can't desync" guarantee: one call must advance the version AND
+        // fold every event into state. `CtrState: !Clone`, so this also proves
+        // the no-clone `mem::replace` fold is used.
+        let v2 = Version::new(2).expect("nonzero");
+        let persisted: Events<CtrEvent, 1> = events![CtrEvent::Added(10), CtrEvent::Added(5)];
+        let mut committed = AggregateRoot::<Counter>::new(CtrId::new(42));
+        committed.commit_persisted(v2, &persisted);
+        assert_eq!(committed.version(), Some(v2));
+        assert_eq!(committed.state().total, 15);
+
+        // The (version, state) reached via `commit_persisted` must equal the
+        // (version, state) reached by replaying the same events one-by-one.
+        let mut replayed = AggregateRoot::<Counter>::new(CtrId::new(42));
+        replayed
+            .replay(Version::INITIAL, &CtrEvent::Added(10))
+            .expect("replay v1");
+        replayed.replay(v2, &CtrEvent::Added(5)).expect("replay v2");
+        assert_eq!(committed.version(), replayed.version());
+        assert_eq!(committed.state().total, replayed.state().total);
+    }
+
+    // The following three tests cover the now-private primitives in isolation.
+    // They were relocated in-crate from `tests/kernel_tests/aggregate_root_tests.rs`
+    // (a separate crate, which can no longer reach `pub(crate)`/private methods)
+    // when the post-persist pair was folded into the public `commit_persisted`.
+
+    #[test]
+    fn advance_version_sets_version_without_applying_state() {
+        let mut agg = AggregateRoot::<Counter>::new(CtrId::new(1));
+        assert_eq!(agg.version(), None);
+        agg.advance_version(Version::INITIAL);
+        assert_eq!(agg.version(), Version::new(1));
+        // advance_version moves the version only; state is untouched.
+        assert_eq!(agg.state().total, 0);
+        // Idempotent on version: calling again with the same version is a no-op.
+        agg.advance_version(Version::INITIAL);
+        assert_eq!(agg.version(), Version::new(1));
+    }
+
+    #[test]
+    fn apply_events_folds_state_without_advancing_version() {
+        let mut agg = AggregateRoot::<Counter>::new(CtrId::new(1));
+        let decided: Events<CtrEvent, 1> = events![CtrEvent::Added(2), CtrEvent::Added(3)];
+        agg.apply_events(&decided);
+        assert_eq!(agg.state().total, 5);
+        // apply_events does NOT advance version — that is advance_version's job.
+        assert_eq!(agg.version(), None);
+    }
+
+    #[test]
+    fn apply_event_accumulates_state_without_advancing_version() {
+        let mut agg = AggregateRoot::<Counter>::new(CtrId::new(1));
+        agg.apply_event(&CtrEvent::Added(1));
+        assert_eq!(agg.state().total, 1);
+        agg.apply_event(&CtrEvent::Added(9));
+        assert_eq!(agg.state().total, 10);
+        // apply_event does NOT advance version.
+        assert_eq!(agg.version(), None);
+    }
+
+    #[test]
+    fn apply_events_mid_batch_panic_leaves_initial_state() {
+        // Relocated in-crate from `tests/kernel_tests/security_tests.rs` (h5):
+        // a panic mid-fold must leave state at `initial()` (no partial mutation)
+        // and must not touch the version (apply_events does not set version).
+        use std::panic;
+
+        #[derive(Debug, Clone)]
+        enum BoomEvent {
+            Inc,
+            Boom,
+        }
+        impl Message for BoomEvent {}
+        impl DomainEvent for BoomEvent {
+            fn name(&self) -> &'static str {
+                match self {
+                    Self::Inc => "Inc",
+                    Self::Boom => "Boom",
+                }
+            }
+        }
+
+        #[derive(Default, Debug)]
+        struct BoomState {
+            count: u64,
+        }
+        impl AggregateState for BoomState {
+            type Event = BoomEvent;
+            fn initial() -> Self {
+                Self::default()
+            }
+            fn apply(mut self, event: &BoomEvent) -> Self {
+                match event {
+                    BoomEvent::Inc => self.count += 1,
+                    BoomEvent::Boom => panic!("boom in apply_events"),
+                }
+                self
+            }
+        }
+
+        struct BoomAgg;
+        impl Aggregate for BoomAgg {
+            type State = BoomState;
+            type Error = CtrError;
+            type Id = CtrId;
+        }
+
+        let mut agg = AggregateRoot::<BoomAgg>::new(CtrId::new(1));
+        let events: Events<BoomEvent, 1> = events![BoomEvent::Inc, BoomEvent::Boom];
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            agg.apply_events(&events);
+        }));
+        assert!(result.is_err(), "apply_events should have panicked");
+
+        // mem::replace leaves a clean initial() placeholder when apply unwinds.
+        assert_eq!(
+            agg.state().count,
+            0,
+            "state must be left at initial() after a mid-batch panic"
+        );
+        assert_eq!(
+            agg.version(),
+            None,
+            "version must remain None — apply_events does not set version"
         );
     }
 

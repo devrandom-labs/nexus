@@ -232,8 +232,7 @@ impl InMemoryStore {
             stream.push(VersionedEvent::new(ver, event.clone()));
         }
         let new_version = Version::new(base + u64::try_from(decided.len()).unwrap()).unwrap();
-        account.advance_version(new_version);
-        account.apply_events(decided);
+        account.commit_persisted(new_version, decided);
     }
 
     fn load(&self, id: &AccountId) -> Option<AggregateRoot<BankAccount>> {

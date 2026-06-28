@@ -122,8 +122,7 @@ fn full_aggregate_lifecycle_with_handle() {
 
     // Simulate persistence + state advancement
     let v1 = Version::new(1).unwrap();
-    user.advance_version(v1);
-    user.apply_events(&create_events);
+    user.commit_persisted(v1, &create_events);
 
     assert_eq!(user.state().name, "Alice");
     assert_eq!(user.version(), Some(v1));
@@ -131,8 +130,7 @@ fn full_aggregate_lifecycle_with_handle() {
     // Second command
     let activate_events = user.handle(ActivateUser).unwrap();
     let v2 = Version::new(2).unwrap();
-    user.advance_version(v2);
-    user.apply_events(&activate_events);
+    user.commit_persisted(v2, &activate_events);
 
     assert!(user.state().active);
     assert_eq!(user.version(), Some(v2));
@@ -156,8 +154,7 @@ fn rehydrate_then_decide() {
 
     // Persist and advance
     let v2 = Version::new(2).unwrap();
-    user.advance_version(v2);
-    user.apply_events(&events);
+    user.commit_persisted(v2, &events);
 
     assert!(user.state().active);
     assert_eq!(user.version(), Some(v2));
@@ -173,8 +170,7 @@ fn invariant_violations_return_domain_errors() {
             name: "Charlie".into(),
         })
         .unwrap();
-    user.advance_version(Version::new(1).unwrap());
-    user.apply_events(&events);
+    user.commit_persisted(Version::new(1).unwrap(), &events);
 
     // Duplicate creation rejected
     assert!(matches!(
@@ -186,8 +182,7 @@ fn invariant_violations_return_domain_errors() {
 
     // Activate the user
     let events = user.handle(ActivateUser).unwrap();
-    user.advance_version(Version::new(2).unwrap());
-    user.apply_events(&events);
+    user.commit_persisted(Version::new(2).unwrap(), &events);
 
     // Duplicate activation rejected
     assert!(matches!(

@@ -124,13 +124,11 @@ fn marker_aggregate_lifecycle() {
         })
         .unwrap();
     let v1 = Version::new(1).unwrap();
-    user.advance_version(v1);
-    user.apply_events(&events);
+    user.commit_persisted(v1, &events);
 
     let events = user.handle(ActivateUser).unwrap();
     let v2 = Version::new(2).unwrap();
-    user.advance_version(v2);
-    user.apply_events(&events);
+    user.commit_persisted(v2, &events);
 
     assert_eq!(user.state().name, "Alice");
     assert!(user.state().active);
@@ -142,8 +140,7 @@ fn marker_aggregate_invariant_enforcement() {
     let mut user = AggregateRoot::<UserAggregate>::new(UserId::new(2));
 
     let events = user.handle(CreateUser { name: "Bob".into() }).unwrap();
-    user.advance_version(Version::new(1).unwrap());
-    user.apply_events(&events);
+    user.commit_persisted(Version::new(1).unwrap(), &events);
 
     assert!(matches!(
         user.handle(CreateUser {
@@ -153,8 +150,7 @@ fn marker_aggregate_invariant_enforcement() {
     ));
 
     let events = user.handle(ActivateUser).unwrap();
-    user.advance_version(Version::new(2).unwrap());
-    user.apply_events(&events);
+    user.commit_persisted(Version::new(2).unwrap(), &events);
 
     assert!(matches!(
         user.handle(ActivateUser),

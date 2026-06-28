@@ -141,8 +141,7 @@ fn bench_apply_events(c: &mut Criterion) {
                     for (i, batch) in batches.iter().enumerate() {
                         #[allow(clippy::as_conversions, reason = "bench index always fits u64")]
                         let v = Version::new((i + 1) as u64).unwrap();
-                        agg.advance_version(v);
-                        agg.apply_events(batch);
+                        agg.commit_persisted(v, batch);
                     }
                     black_box(agg)
                 },

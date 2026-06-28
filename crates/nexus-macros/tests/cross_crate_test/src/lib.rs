@@ -124,12 +124,10 @@ mod tests {
                 title: "Write tests".into(),
             })
             .unwrap();
-        task.apply_events(&decided);
-        task.advance_version(Version::new(1).unwrap());
+        task.commit_persisted(Version::new(1).unwrap(), &decided);
 
         let decided = task.handle(CompleteTask).unwrap();
-        task.apply_events(&decided);
-        task.advance_version(Version::new(2).unwrap());
+        task.commit_persisted(Version::new(2).unwrap(), &decided);
 
         assert_eq!(task.state().title, "Write tests");
         assert!(task.state().done);
@@ -144,7 +142,7 @@ mod tests {
                 title: "Task".into(),
             })
             .unwrap();
-        task.apply_events(&decided);
+        task.commit_persisted(Version::new(1).unwrap(), &decided);
 
         assert!(
             task.handle(CreateTask {
@@ -154,7 +152,7 @@ mod tests {
         );
 
         let decided = task.handle(CompleteTask).unwrap();
-        task.apply_events(&decided);
+        task.commit_persisted(Version::new(2).unwrap(), &decided);
 
         assert!(task.handle(CompleteTask).is_err());
     }
