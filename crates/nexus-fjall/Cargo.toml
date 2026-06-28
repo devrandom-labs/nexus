@@ -13,6 +13,8 @@ categories = ["database"]
 
 [features]
 snapshot = ["nexus-store/snapshot"]
+export = ["nexus-store/export"]
+import = ["nexus-store/import"]
 
 [dependencies]
 arrayvec = { workspace = true }
@@ -28,6 +30,18 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 [dev-dependencies]
 criterion = { workspace = true }
 insta = { workspace = true }
+# Self dev-dependency: enables the `export`/`import` features for the crate's
+# own test + bench builds so the feature-gated impls and tests below actually
+# run under the default-feature `nix flake check` gate (which builds with
+# default features only). Same unification trick `nexus-store` uses for its
+# testing/export/import/cbor tests. `cargo add` refuses a self-dependency, so
+# this is a deliberate manual entry.
+nexus-fjall = { path = ".", features = ["export", "import"] }
+# Pulls the CBOR backup box (`nexus_store::cbor`) into the test build; `cbor`
+# implies nexus-store's `export`+`import`, so the end-to-end round-trip tests
+# can encode/decode chunks. Separate from the line above because `cbor` is a
+# nexus-store feature, not a nexus-fjall one.
+nexus-store = { path = "../nexus-store", features = ["cbor"] }
 nexus-store-testing = { version = "0.1.0", path = "../nexus-store-testing" }
 proptest = { workspace = true }
 proptest-state-machine = { workspace = true }

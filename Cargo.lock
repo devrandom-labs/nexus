@@ -850,6 +850,7 @@ dependencies = [
  "futures",
  "insta",
  "nexus",
+ "nexus-fjall",
  "nexus-store",
  "nexus-store-testing",
  "proptest",
