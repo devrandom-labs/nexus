@@ -187,17 +187,16 @@ fn advance_version_and_apply_events_after_replay() {
     // Simulate persisting 2 new events, then advancing
     let new_events: Events<_, 1> =
         events![TEvent::Added(Added("d".into())), TEvent::Removed(Removed)];
-    agg.advance_version(v5);
-    agg.apply_events(&new_events);
+    agg.commit_persisted(v5, &new_events);
 
     assert_eq!(agg.version(), Some(v5));
     // State: [a, b, c] -> Added(d) -> [a, b, c, d] -> Removed -> [a, b, c]
     assert_eq!(agg.state().items, vec!["a", "b", "c"]);
 }
 
-// Separate clean test for advance + apply correctness
+// Separate clean test for commit_persisted state correctness
 #[test]
-fn advance_version_and_apply_events_state_correctness() {
+fn commit_persisted_state_correctness() {
     let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     let v1 = Version::new(1).expect("non-zero");
     let v2 = Version::new(2).expect("non-zero");
@@ -213,8 +212,7 @@ fn advance_version_and_apply_events_state_correctness() {
         TEvent::Added(Added("d".into()))
     ];
     let v4 = Version::new(4).expect("non-zero");
-    agg.advance_version(v4);
-    agg.apply_events(&decided);
+    agg.commit_persisted(v4, &decided);
 
     assert_eq!(agg.version(), Some(v4));
     assert_eq!(agg.state().items, vec!["a", "b", "c", "d"]);
@@ -333,8 +331,7 @@ fn replay_then_advance_and_apply_continues_correctly() {
 
     // Simulate persisting 1 new event at version 3
     let decided: Events<_, 0> = events![TEvent::Added(Added("z".into()))];
-    agg.advance_version(v3);
-    agg.apply_events(&decided);
+    agg.commit_persisted(v3, &decided);
 
     assert_eq!(agg.version(), Some(v3));
     assert_eq!(agg.state().items, vec!["x", "y", "z"]);
@@ -347,15 +344,14 @@ fn replay_then_advance_and_apply_continues_correctly() {
 }
 
 #[test]
-fn advance_version_on_fresh_aggregate() {
+fn commit_persisted_on_fresh_aggregate() {
     let mut agg = AggregateRoot::<TAgg>::new(TId::new(1));
     assert_eq!(agg.version(), None);
 
     // Simulate: first-ever command produces events, repository persists them
     let decided: Events<_, 0> = events![TEvent::Added(Added("first".into()))];
     let v1 = Version::new(1).expect("non-zero");
-    agg.advance_version(v1);
-    agg.apply_events(&decided);
+    agg.commit_persisted(v1, &decided);
 
     assert_eq!(agg.version(), Some(v1));
     assert_eq!(agg.state().items, vec!["first"]);
@@ -367,8 +363,7 @@ fn apply_events_with_single_event() {
     let decided: Events<_, 0> = events![TEvent::Added(Added("only".into()))];
     let v1 = Version::new(1).expect("non-zero");
 
-    agg.advance_version(v1);
-    agg.apply_events(&decided);
+    agg.commit_persisted(v1, &decided);
 
     assert_eq!(agg.state().items, vec!["only"]);
 }

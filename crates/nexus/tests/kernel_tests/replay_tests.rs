@@ -239,11 +239,11 @@ fn replay_enforces_rehydration_limit() {
 }
 
 // =============================================================================
-// 8. replay then advance_version + apply_events continues correctly
+// 8. replay then commit_persisted continues correctly
 // =============================================================================
 
 #[test]
-fn replay_then_advance_and_apply_continues_correctly() {
+fn replay_then_commit_persisted_continues_correctly() {
     let mut agg = AggregateRoot::<RAgg>::new(RId::new(1));
 
     // Rehydrate from two persisted events
@@ -255,16 +255,11 @@ fn replay_then_advance_and_apply_continues_correctly() {
     let new_events: nexus::Events<_, 1> =
         nexus::events![REvent::Added("c".into()), REvent::Added("d".into())];
 
-    // Repository advances version to reflect persisted events
-    agg.advance_version(v(4));
+    // Repository syncs the root after the durable write: version advances to the
+    // last persisted event and state folds the events, atomically.
+    agg.commit_persisted(v(4), &new_events);
     assert_eq!(agg.version(), Some(v(4)));
-
-    // Repository applies events to keep in-memory state in sync
-    agg.apply_events(&new_events);
     assert_eq!(agg.state().items, vec!["a", "b", "c", "d"]);
-
-    // Version stays at what advance_version set — apply_events does not touch it
-    assert_eq!(agg.version(), Some(v(4)));
 }
 
 // =============================================================================

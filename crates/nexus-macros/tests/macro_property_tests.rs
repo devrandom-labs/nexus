@@ -129,67 +129,40 @@ proptest! {
         prop_assert_eq!(agg.version(), Version::new(n));
     }
 
-    /// Property 3: apply_event updates state without advancing version
+    // Properties 3 & 4 (apply_event leaves version None; replay-state ==
+    // apply_event-state) were deleted as redundant: `apply_event`/`apply_events`
+    // are now private to the `nexus` crate, and their in-isolation contracts are
+    // covered by in-crate tests in `crates/nexus/src/aggregate.rs`
+    // (`apply_event_accumulates_state_without_advancing_version` and
+    // `commit_persisted_advances_version_and_folds_state_atomically`, which
+    // asserts the commit-fold matches a replay of the same events).
+
+    /// Property 5: Version tracks the cumulative replayed count across batches
     ///
-    /// apply_event is for post-persistence sync, so version stays None.
+    /// Replaying two batches in sequence leaves the version at the running
+    /// total — the public rehydration path advances the version itself.
     #[test]
-    fn prop_macro_apply_event_no_version(events in proptest::collection::vec(arb_event(), 0..50)) {
-        let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(1));
-        for event in &events {
-            agg.apply_event(event);
-        }
-
-        // Version should still be None — apply_event does not advance version
-        prop_assert_eq!(agg.version(), None);
-    }
-
-    /// Property 4: Rehydrate-apply equivalence
-    ///
-    /// replay produces the same state as new() + apply_event().
-    #[test]
-    fn prop_macro_rehydrate_equals_apply(raw_events in proptest::collection::vec(arb_event(), 0..50)) {
-        // Path A: new() + replay()
-        let mut agg_replayed = AggregateRoot::<CounterAggregate>::new(PId::new(1));
-        let mut ver = Version::INITIAL;
-        for (i, e) in raw_events.iter().enumerate() {
-            let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
-            agg_replayed.replay(v, e).unwrap();
-            ver = v;
-        }
-
-        // Path B: new() + apply_event()
-        let mut agg_applied = AggregateRoot::<CounterAggregate>::new(PId::new(1));
-        for event in &raw_events {
-            agg_applied.apply_event(event);
-        }
-
-        prop_assert_eq!(agg_replayed.state(), agg_applied.state());
-    }
-
-    /// Property 5: Version advances via advance_version
-    ///
-    /// After advance_version, version reflects the new value.
-    #[test]
-    fn prop_macro_advance_version(
+    fn prop_macro_version_tracks_cumulative_batches(
         batch1 in proptest::collection::vec(arb_event(), 1..20usize),
         batch2 in proptest::collection::vec(arb_event(), 1..20usize),
     ) {
         let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(1));
+        let mut ver = Version::INITIAL;
 
-        // Apply batch1 events and advance version
-        for event in &batch1 {
-            agg.apply_event(event);
+        for (i, event) in batch1.iter().enumerate() {
+            let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
+            agg.replay(v, event).unwrap();
+            ver = v;
         }
         let v1 = Version::new(batch1.len() as u64).expect("nonzero");
-        agg.advance_version(v1);
         prop_assert_eq!(agg.version(), Some(v1));
 
-        // Apply batch2 events and advance version
         for event in &batch2 {
-            agg.apply_event(event);
+            let v = ver.next().expect("version");
+            agg.replay(v, event).unwrap();
+            ver = v;
         }
         let v2 = Version::new((batch1.len() + batch2.len()) as u64).expect("nonzero");
-        agg.advance_version(v2);
         prop_assert_eq!(agg.version(), Some(v2));
     }
 
@@ -202,15 +175,18 @@ proptest! {
         prop_assert_eq!(agg.version(), None);
     }
 
-    /// Property 7: AggregateRoot accessors reflect applied events
+    /// Property 7: AggregateRoot accessors reflect replayed events
     ///
-    /// `id` is preserved, `version` stays None under `apply_event`, and
-    /// `state` equals the net fold of every applied event.
+    /// `id` is preserved, `version` tracks the replayed count, and `state`
+    /// equals the net fold of every event.
     #[test]
     fn prop_macro_root_accessors_consistent(events in proptest::collection::vec(arb_event(), 0..50)) {
         let mut agg = AggregateRoot::<CounterAggregate>::new(PId::new(7));
-        for event in &events {
-            agg.apply_event(event);
+        let mut ver = Version::INITIAL;
+        for (i, event) in events.iter().enumerate() {
+            let v = if i == 0 { Version::INITIAL } else { ver.next().expect("version") };
+            agg.replay(v, event).unwrap();
+            ver = v;
         }
 
         // Net effect of all events on the counter value.
@@ -221,7 +197,8 @@ proptest! {
         });
 
         prop_assert_eq!(agg.id(), &PId::new(7));
-        prop_assert_eq!(agg.version(), None);
+        // `Version::new(0)` is `None`, matching a fresh aggregate with no events.
+        prop_assert_eq!(agg.version(), Version::new(events.len() as u64));
         prop_assert_eq!(agg.state().value, expected_value);
     }
 }

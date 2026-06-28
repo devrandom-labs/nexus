@@ -50,8 +50,8 @@ use crate::value::SchemaVersion;
 /// non-empty [`Events<E, N>`](nexus::Events) decided by
 /// [`Handle::handle()`](nexus::Handle::handle). It encodes the events,
 /// appends them atomically using `aggregate.version()` as the expected
-/// version, and on success calls `advance_version` + `apply_events` to
-/// sync the in-memory state.
+/// version, and on success calls `commit_persisted` to advance the version
+/// and fold the events into in-memory state atomically.
 ///
 /// Taking `&Events<E, N>` (not `&[EventOf<A>]`) carries the kernel's
 /// `>= 1` guarantee through to persistence: an empty save is
@@ -100,8 +100,8 @@ pub trait Repository<A: Aggregate>: Send + Sync {
     /// The `&Events<EventOf<A>, N>` parameter guarantees at least one
     /// event at compile time — there is no empty-input case.
     ///
-    /// On success, calls `advance_version` to the last persisted version
-    /// and `apply_events` to keep in-memory state in sync.
+    /// On success, calls `commit_persisted` with the last persisted version to
+    /// advance the version and fold the events into in-memory state atomically.
     fn save<const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
@@ -476,8 +476,7 @@ where
             AppendError::Store(e) => StoreError::Adapter(e),
         })?;
 
-    aggregate.advance_version(last_version);
-    aggregate.apply_events(events);
+    aggregate.commit_persisted(last_version, events);
     Ok(())
 }
 
@@ -764,8 +763,7 @@ where
             AppendError::Store(e) => StoreError::Adapter(e),
         })?;
 
-    aggregate.advance_version(last_version);
-    aggregate.apply_events(events);
+    aggregate.commit_persisted(last_version, events);
     Ok(())
 }
 

@@ -325,45 +325,29 @@ fn handle_uses_current_state_for_decision() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: advance_version + apply_events (post-persistence workflow)
+// Tests: commit_persisted (post-persistence workflow)
+//
+// The lower-level `advance_version` / `apply_events` / `apply_event` primitives
+// are now private to the `nexus` crate; their in-isolation behavior is covered
+// by in-crate tests in `crates/nexus/src/aggregate.rs`. These cross-crate tests
+// exercise the public `commit_persisted` seam the repository drives.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn advance_version_updates_version() {
-    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
-    assert_eq!(agg.version(), None);
-
-    agg.advance_version(Version::new(1).unwrap());
-    assert_eq!(agg.version(), Version::new(1));
-}
-
-#[test]
-fn apply_events_updates_state_without_changing_version() {
-    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
-    let decided: Events<_, 1> = events![CounterEvent::Incremented, CounterEvent::Incremented];
-    agg.apply_events(&decided);
-
-    assert_eq!(agg.state().value, 2);
-    // apply_events does NOT advance version — that is advance_version's job.
-    assert_eq!(agg.version(), None);
-}
-
-#[test]
-fn advance_version_then_apply_events_full_workflow() {
+fn commit_persisted_advances_version_and_folds_state() {
     let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
 
-    // Simulate: handle -> persist -> advance + apply.
+    // Simulate: handle -> persist -> commit_persisted.
     let decided: Events<_, 1> = events![CounterEvent::Incremented, CounterEvent::IncrementedBy(9)];
     let new_version = Version::new(2).unwrap();
-    agg.advance_version(new_version);
-    agg.apply_events(&decided);
+    agg.commit_persisted(new_version, &decided);
 
     assert_eq!(agg.version(), Version::new(2));
     assert_eq!(agg.state().value, 10);
 }
 
 #[test]
-fn advance_version_then_replay_continues_from_advanced_version() {
+fn commit_persisted_then_replay_continues_from_committed_version() {
     let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
 
     // First, replay version 1.
@@ -372,8 +356,7 @@ fn advance_version_then_replay_continues_from_advanced_version() {
 
     // Simulate persistence of two more events (versions 2, 3).
     let decided: Events<_, 1> = events![CounterEvent::Incremented, CounterEvent::Incremented];
-    agg.advance_version(Version::new(3).unwrap());
-    agg.apply_events(&decided);
+    agg.commit_persisted(Version::new(3).unwrap(), &decided);
 
     assert_eq!(agg.version(), Version::new(3));
     assert_eq!(agg.state().value, 3);
@@ -383,40 +366,6 @@ fn advance_version_then_replay_continues_from_advanced_version() {
         .unwrap();
     assert_eq!(agg.version(), Version::new(4));
     assert_eq!(agg.state().value, 2);
-}
-
-// ---------------------------------------------------------------------------
-// Tests: apply_event (single-event state advancement)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn apply_event_updates_state_single_increment() {
-    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
-    assert_eq!(agg.state().value, 0);
-
-    agg.apply_event(&CounterEvent::Incremented);
-    assert_eq!(agg.state().value, 1);
-}
-
-#[test]
-fn apply_event_called_twice_accumulates_state() {
-    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
-    assert_eq!(agg.state().value, 0);
-
-    agg.apply_event(&CounterEvent::Incremented);
-    assert_eq!(agg.state().value, 1);
-
-    agg.apply_event(&CounterEvent::IncrementedBy(9));
-    assert_eq!(agg.state().value, 10);
-}
-
-#[test]
-fn apply_event_does_not_change_version() {
-    let mut agg = AggregateRoot::<Counter>::new(TestId("1".into()));
-    agg.apply_event(&CounterEvent::Incremented);
-
-    // apply_event does NOT advance version — that is advance_version's job.
-    assert_eq!(agg.version(), None);
 }
 
 // ---------------------------------------------------------------------------

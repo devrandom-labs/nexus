@@ -109,15 +109,14 @@ fn derive_aggregate_lifecycle() {
             title: "Buy milk".into(),
         })
         .unwrap();
-    todo.apply_events(&created);
+    todo.commit_persisted(Version::new(1).unwrap(), &created);
     let completed = todo.handle(CompleteTodo).unwrap();
-    todo.apply_events(&completed);
+    todo.commit_persisted(Version::new(2).unwrap(), &completed);
 
     assert_eq!(todo.state().title, "Buy milk");
     assert!(todo.state().done);
-    // Version is None because apply_events does not advance version
-    // (version is only advanced via replay or advance_version)
-    assert_eq!(todo.version(), None);
+    // commit_persisted advances the version to the last persisted event.
+    assert_eq!(todo.version(), Version::new(2));
 }
 
 #[test]
@@ -128,7 +127,7 @@ fn derive_aggregate_invariants() {
             title: "Test".into(),
         })
         .unwrap();
-    todo.apply_events(&created);
+    todo.commit_persisted(Version::new(1).unwrap(), &created);
 
     assert!(matches!(
         todo.handle(CreateTodo {
@@ -138,7 +137,7 @@ fn derive_aggregate_invariants() {
     ));
 
     let completed = todo.handle(CompleteTodo).unwrap();
-    todo.apply_events(&completed);
+    todo.commit_persisted(Version::new(2).unwrap(), &completed);
     assert!(matches!(
         todo.handle(CompleteTodo),
         Err(TodoError::AlreadyDone)
@@ -191,7 +190,7 @@ fn derive_aggregate_debug_does_not_leak_state() {
             title: "SECRET_TITLE".into(),
         })
         .unwrap();
-    todo.apply_events(&created);
+    todo.commit_persisted(Version::INITIAL, &created);
     let debug = format!("{todo:?}");
     // State must NOT appear in debug output
     assert!(

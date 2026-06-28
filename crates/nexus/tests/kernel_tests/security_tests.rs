@@ -378,80 +378,10 @@ fn h5_replay_panic_no_partial_mutation() {
     );
 }
 
-#[test]
-fn h5_apply_events_panic_no_partial_mutation() {
-    use std::panic;
-
-    #[derive(Debug, Clone)]
-    enum SeqEvent {
-        Inc,
-        Boom,
-    }
-    impl Message for SeqEvent {}
-    impl DomainEvent for SeqEvent {
-        fn name(&self) -> &'static str {
-            match self {
-                Self::Inc => "Inc",
-                Self::Boom => "Boom",
-            }
-        }
-    }
-
-    #[derive(Default, Debug, Clone)]
-    struct SeqState {
-        count: u64,
-    }
-    impl AggregateState for SeqState {
-        type Event = SeqEvent;
-        fn initial() -> Self {
-            Self::default()
-        }
-        fn apply(mut self, event: &SeqEvent) -> Self {
-            match event {
-                SeqEvent::Inc => self.count += 1,
-                SeqEvent::Boom => panic!("boom in apply_events"),
-            }
-            self
-        }
-    }
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("e")]
-    struct SeqError;
-
-    #[derive(Debug)]
-    struct SeqAgg;
-    impl Aggregate for SeqAgg {
-        type State = SeqState;
-        type Error = SeqError;
-        type Id = SId;
-    }
-
-    let mut agg = AggregateRoot::<SeqAgg>::new(SId::new(1));
-
-    // apply_events with a panic in the middle
-    let events: Events<_, 1> = events![SeqEvent::Inc, SeqEvent::Boom];
-    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        agg.apply_events(&events);
-    }));
-    assert!(result.is_err(), "apply_events should have panicked");
-
-    // apply_events folds each event through mem::replace (no clone). When the
-    // panicking event's apply unwinds, the state it had moved out is dropped
-    // and a clean initial() placeholder remains — so the batch leaves state at
-    // initial(), never a partially-mutated value. version() is untouched
-    // (apply_events does not set version).
-    assert_eq!(
-        agg.state().count,
-        0,
-        "state must be left at initial() after a mid-batch panic (no partial mutation)"
-    );
-    assert_eq!(
-        agg.version(),
-        None,
-        "version must remain None — apply_events does not set version"
-    );
-}
+// `h5_apply_events_panic_no_partial_mutation` was relocated in-crate to
+// `crates/nexus/src/aggregate.rs` (`apply_events_mid_batch_panic_leaves_initial_state`)
+// when `apply_events` became a private primitive — its panic-safety contract
+// (state left at initial(), version untouched) is only reachable in-crate now.
 
 // =============================================================================
 // L2: KernelError variants — exhaustive matching

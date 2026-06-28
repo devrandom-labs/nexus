@@ -39,8 +39,7 @@ fn record<A: Aggregate, const N: usize>(
         history.push(VersionedEvent::new(version, event.clone()));
     }
     let new_version = Version::new(base + u64::try_from(decided.len()).unwrap()).unwrap();
-    root.advance_version(new_version);
-    root.apply_events(decided);
+    root.commit_persisted(new_version, decided);
 }
 
 /// Rebuild current state from one stream by replaying every event, returning

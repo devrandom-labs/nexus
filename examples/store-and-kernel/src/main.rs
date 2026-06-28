@@ -280,20 +280,17 @@ async fn main() {
             owner: "Alice Smith".to_owned(),
         })
         .expect("open should succeed");
-    account.apply_events(&decided);
-    account.advance_version(Version::new(1).unwrap());
+    account.commit_persisted(Version::new(1).unwrap(), &decided);
 
     let decided = account
         .handle(Deposit { amount: 1000 })
         .expect("deposit should succeed");
-    account.apply_events(&decided);
-    account.advance_version(Version::new(2).unwrap());
+    account.commit_persisted(Version::new(2).unwrap(), &decided);
 
     let decided = account
         .handle(Deposit { amount: 500 })
         .expect("deposit should succeed");
-    account.apply_events(&decided);
-    account.advance_version(Version::new(3).unwrap());
+    account.commit_persisted(Version::new(3).unwrap(), &decided);
 
     println!(
         "State: owner={}, balance={}, version={:?}",
@@ -317,14 +314,12 @@ async fn main() {
         })
         .expect("open");
     let envelopes = encode_decided(&codec, &decided, 0);
-    fresh.apply_events(&decided);
-    fresh.advance_version(Version::new(1).unwrap());
+    fresh.commit_persisted(Version::new(1).unwrap(), &decided);
 
     let decided = fresh.handle(Deposit { amount: 1000 }).expect("deposit");
     let mut more = encode_decided(&codec, &decided, 1);
     envelopes.len(); // keep envelopes alive
-    fresh.apply_events(&decided);
-    fresh.advance_version(Version::new(2).unwrap());
+    fresh.commit_persisted(Version::new(2).unwrap(), &decided);
 
     let decided = fresh.handle(Deposit { amount: 500 }).expect("deposit");
     let mut even_more = encode_decided(&codec, &decided, 2);
@@ -378,9 +373,8 @@ async fn main() {
         .await
         .expect("append should succeed");
 
-    account.apply_events(&decided);
     let new_ver = Version::new(base + 1).unwrap();
-    account.advance_version(new_ver);
+    account.commit_persisted(new_ver, &decided);
 
     println!(
         "Persisted {} more event(s). balance={}, version={:?}",

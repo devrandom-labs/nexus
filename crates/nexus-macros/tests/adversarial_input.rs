@@ -61,7 +61,7 @@ struct SingleAggregate;
 #[test]
 fn single_variant_event_enum() {
     let mut agg = AggregateRoot::<SingleAggregate>::new(AId::new(1));
-    agg.apply_event(&SingleEvent::Only);
+    agg.replay(Version::INITIAL, &SingleEvent::Only).unwrap();
     assert!(agg.state().triggered);
 }
 
@@ -146,11 +146,13 @@ fn very_long_type_names() {
         AggregateRoot::<VeryLongAggregateNameThatShouldStillWorkCorrectlyWithTheMacro>::new(
             AId::new(1),
         );
-    agg.apply_event(
+    agg.replay(
+        Version::INITIAL,
         &VeryLongEventNameThatShouldStillWorkCorrectlyWithTheMacro::SomethingHappenedWithAnExtremelyDescriptiveNameThatGoesOnAndOn(
             "hello".into(),
         ),
-    );
+    )
+    .unwrap();
     assert_eq!(agg.state().data, "hello");
 }
 
@@ -193,8 +195,10 @@ struct PathTypeAggregate;
 #[test]
 fn aggregate_with_path_types() {
     let mut agg = AggregateRoot::<PathTypeAggregate>::new(AId::new(1));
-    agg.apply_event(&inner::InnerEvent::Ping);
-    agg.apply_event(&inner::InnerEvent::Ping);
+    agg.replay(Version::INITIAL, &inner::InnerEvent::Ping)
+        .unwrap();
+    agg.replay(Version::new(2).unwrap(), &inner::InnerEvent::Ping)
+        .unwrap();
     assert_eq!(agg.state().pings, 2);
 }
 
