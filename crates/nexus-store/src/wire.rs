@@ -64,25 +64,25 @@ pub const PAYLOAD_ALIGN: usize = 16;
 ///
 /// Fields: `frame_format_version` (1) + `global_seq` (8) + `schema_version` (4)
 /// + `et_len` (2) + `meta_len` (4) = 19.
-pub const HEADER_FIXED_SIZE: usize = 19;
+pub(crate) const HEADER_FIXED_SIZE: usize = 19;
 
 /// Offset of the `frame_format_version` byte in the frame's header.
-pub const VERSION_OFFSET: usize = 0;
+pub(crate) const VERSION_OFFSET: usize = 0;
 
 /// Offset of the `global_seq` field in the frame's header.
-pub const GLOBAL_SEQ_OFFSET: usize = 1;
+pub(crate) const GLOBAL_SEQ_OFFSET: usize = 1;
 
 /// Offset of the `schema_version` field in the frame's header.
-pub const SCHEMA_VERSION_OFFSET: usize = 9;
+pub(crate) const SCHEMA_VERSION_OFFSET: usize = 9;
 
 /// Offset of the `event_type_len` field in the frame's header.
-pub const EVENT_TYPE_LEN_OFFSET: usize = 13;
+pub(crate) const EVENT_TYPE_LEN_OFFSET: usize = 13;
 
 /// Offset of the `meta_len` field in the frame's header.
-pub const META_LEN_OFFSET: usize = 15;
+pub(crate) const META_LEN_OFFSET: usize = 15;
 
 /// Sentinel `meta_len` value meaning "no metadata field present".
-pub const META_LEN_ABSENT: u32 = u32::MAX;
+pub(crate) const META_LEN_ABSENT: u32 = u32::MAX;
 
 /// Bytes needed after `offset` to reach the next multiple of `align`.
 ///
@@ -101,14 +101,14 @@ const fn align_padding(offset: usize, align: usize) -> usize {
 /// adding the next variant is a compile-error-forcing one-liner here and in
 /// `decode_frame`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameFormatVersion {
+pub(crate) enum FrameFormatVersion {
     /// The original layout: see the module-level diagram.
     V1,
 }
 
 impl FrameFormatVersion {
     /// The version every freshly-encoded frame is stamped with.
-    pub const CURRENT: Self = Self::V1;
+    pub(crate) const CURRENT: Self = Self::V1;
 
     /// On-wire byte for this version.
     #[inline]
@@ -147,32 +147,17 @@ impl FrameFormatVersion {
 /// deserialize as a unit. Use [`FrameHeader::write_into`] from the build
 /// path and [`FrameHeader::read_from`] from the decode path.
 #[derive(Debug, Clone, Copy)]
-pub struct FrameHeader {
-    pub format_version: FrameFormatVersion,
-    pub global_seq: u64,
-    pub schema_version: u32,
+pub(crate) struct FrameHeader {
+    pub(crate) format_version: FrameFormatVersion,
+    pub(crate) global_seq: u64,
+    pub(crate) schema_version: u32,
     event_type_len: u16,
     metadata_len: Option<u32>,
 }
 
 impl FrameHeader {
     /// Header size in bytes. Matches [`HEADER_FIXED_SIZE`].
-    pub const SIZE: usize = HEADER_FIXED_SIZE;
-
-    /// Public view of the event-type length as a `u16`.
-    #[inline]
-    #[must_use]
-    pub const fn event_type_len(&self) -> u16 {
-        self.event_type_len
-    }
-
-    /// Public view of the metadata length as `Option<u32>`. `None` means
-    /// the absent sentinel ([`META_LEN_ABSENT`]) is on the wire.
-    #[inline]
-    #[must_use]
-    pub const fn metadata_len(&self) -> Option<u32> {
-        self.metadata_len
-    }
+    pub(crate) const SIZE: usize = HEADER_FIXED_SIZE;
 
     /// Construct a header from already-validated raw lengths.
     ///
@@ -236,7 +221,7 @@ impl FrameHeader {
     /// - [`DecodeError::ValueTooShort`] if `value.len() < SIZE`.
     /// - [`DecodeError::UnsupportedFrameVersion`] if the leading version byte
     ///   is not a known [`FrameFormatVersion`].
-    pub fn read_from(value: &[u8]) -> Result<Self, DecodeError> {
+    pub(crate) fn read_from(value: &[u8]) -> Result<Self, DecodeError> {
         if value.len() < Self::SIZE {
             return Err(DecodeError::ValueTooShort {
                 min: Self::SIZE,

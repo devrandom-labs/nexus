@@ -46,12 +46,6 @@ const EVENT_KEY_VERSION_SIZE: usize = 8;
 /// Size of an encoded stream version value in bytes: `[u64 LE version]`.
 pub const STREAM_VERSION_SIZE: usize = 8;
 
-/// Size of the fixed header in an encoded event value.
-///
-/// Re-exported from [`wire::HEADER_FIXED_SIZE`] for adapter-local tests.
-#[cfg(test)]
-pub const EVENT_VALUE_HEADER_SIZE: usize = wire::HEADER_FIXED_SIZE;
-
 /// Compute the total size of an event key for a given ID length.
 ///
 /// Format: `[u16 BE id_len][id_bytes][u64 BE version]`.
@@ -191,7 +185,7 @@ pub fn decode_stream_version(value: &[u8]) -> Result<u64, DecodeError> {
 ///
 /// All three ranges are valid offsets into the `&Bytes` that was passed
 /// to `decode_event_value`. `metadata_range` is `None` when the encoded
-/// `meta_len` is the [`wire::META_LEN_ABSENT`] sentinel. The payload offset
+/// `meta_len` is the absent sentinel (`u32::MAX`). The payload offset
 /// honors the 16-byte alignment invariant from
 /// [`nexus_store::wire`][wire]. `schema_version` is the typed
 /// [`nexus_store::value::SchemaVersion`] — corrupt on-disk zeros are
