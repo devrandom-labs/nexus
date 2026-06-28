@@ -788,6 +788,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-example-fjall-end-to-end"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "nexus",
+ "nexus-fjall",
+ "nexus-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
 name = "nexus-example-inmemory"
 version = "0.0.0"
 dependencies = [
