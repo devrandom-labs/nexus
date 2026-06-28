@@ -28,6 +28,7 @@ const fn idx(n: u32) -> usize {
 
 /// Errors from envelope construction.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum EnvelopeError {
     #[error("range {start}..{end} exceeds buffer length {len}")]
     RangeOutOfBounds { start: u32, end: u32, len: usize },
@@ -72,6 +73,7 @@ pub enum EnvelopeError {
 /// construction, the wire encode, and the envelope `try_new` — `?`
 /// promotes any of the three.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ForDecodeError {
     #[error(transparent)]
     Value(#[from] ValueError),

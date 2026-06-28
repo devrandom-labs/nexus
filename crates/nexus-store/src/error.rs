@@ -19,6 +19,7 @@ use thiserror::Error;
 /// upcast function), the result wraps `StoreError` in
 /// [`LoadWithError`] alongside the user's upcast error type.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StoreError<A, EncErr, DecErr> {
     /// Optimistic concurrency conflict.
     #[error(
@@ -115,6 +116,7 @@ impl<A, EncErr, DecErr> StoreError<A, EncErr, DecErr> {
 /// `?` operator promote a `StoreError` into the wider variant inside a
 /// `load_with` body without manual matching.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum LoadWithError<A, EncErr, DecErr, UpErr> {
     /// All non-upcast errors — wrapped verbatim from the no-upcaster path.
     #[error(transparent)]
@@ -140,6 +142,7 @@ impl<A, EncErr, DecErr, UpErr> From<KernelError> for LoadWithError<A, EncErr, De
 /// This lets the `EventStore` facade map conflicts to
 /// [`StoreError::Conflict`] without opaque wrapping.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AppendError<E> {
     /// Optimistic concurrency conflict — expected version doesn't match.
     #[error(

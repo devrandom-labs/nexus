@@ -65,7 +65,9 @@ async fn append_conflict_truncates_overlong_stream_id_with_ellipsis() {
                 "overlong stream id must be truncated with an ellipsis, got {stream_id:?}"
             );
         }
-        AppendError::Store(e) => panic!("expected Conflict, got Store({e})"),
+        // AppendError is #[non_exhaustive] (#209): Store and any future variant
+        // collapse into the catch-all — only Conflict is expected here.
+        other => panic!("expected Conflict, got: {other}"),
     }
 }
 

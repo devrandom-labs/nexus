@@ -359,7 +359,10 @@ impl StateMachineTest for FjallStateMachineTest {
                     AppendError::Conflict { .. } => {
                         // Expected error.
                     }
-                    other @ AppendError::Store(_) => {
+                    // AppendError is #[non_exhaustive] (#209): the wildcard
+                    // covers Store and any future variant — anything but
+                    // Conflict here is a test failure.
+                    other => {
                         panic!("AppendConflict: expected Conflict error, got: {other}")
                     }
                 }

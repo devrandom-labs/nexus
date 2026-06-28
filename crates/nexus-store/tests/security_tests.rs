@@ -280,6 +280,10 @@ fn store_error_variants_are_known() {
     let err: TestStoreError = StoreError::StreamNotFound {
         stream_id: label("test"),
     };
+    // StoreError is #[non_exhaustive] at the 1.0 freeze (#209), so a separate
+    // test crate cannot match it exhaustively — the `_` arm covers the open
+    // tail. This trades the old compile-time exhaustiveness guard for the
+    // non_exhaustive contract (new error variants are a minor, not major, bump).
     match err {
         StoreError::Conflict { .. } => {}
         StoreError::StreamNotFound { .. } => {}
@@ -287,8 +291,9 @@ fn store_error_variants_are_known() {
         StoreError::Decode(_) => {}
         StoreError::Adapter(_) => {}
         StoreError::Kernel(_) => {}
-        StoreError::VersionOverflow => {} // If you add a variant, add it here
+        StoreError::VersionOverflow => {}
         StoreError::EnvelopeSynthesis(_) => {}
         StoreError::Envelope(_) => {}
+        _ => {}
     }
 }

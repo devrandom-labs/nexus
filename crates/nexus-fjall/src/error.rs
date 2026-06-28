@@ -14,6 +14,7 @@ pub(crate) fn reason_label(value: &impl std::fmt::Display) -> ErrorId<128> {
 /// Intentionally stack-allocated (~208 bytes) for IoT/embedded targets.
 /// All diagnostic fields use [`ErrorId`] — no heap allocation on error paths.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FjallError {
     /// Fjall I/O or internal database error.
     #[error("fjall error: {0}")]
