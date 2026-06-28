@@ -56,21 +56,37 @@ impl FjallStore {
     }
 
     /// Point-read the current version counter for `id` from the `streams`
+    /// partition within `tx`, in the bare [`FjallError`] domain. Returns `0`
+    /// for a stream that does not yet exist.
+    ///
+    /// The atomic-append path consumes this directly (it lives in the
+    /// [`AtomicAppendError`](nexus_store::import::AtomicAppendError) domain, not
+    /// `AppendError`); [`read_current_version`](Self::read_current_version)
+    /// wraps it for the single-stream `append` path. Splitting the bare core
+    /// out keeps the error mapping honest — neither caller invents a variant
+    /// the read can never produce.
+    fn read_version_raw(
+        &self,
+        tx: &fjall::SingleWriterWriteTx<'_>,
+        id: &impl Id,
+    ) -> Result<u64, FjallError> {
+        tx.get(&self.streams, id.as_ref())
+            .map_err(FjallError::Io)?
+            .map_or(Ok(0), |version_bytes| {
+                decode_stream_version(&version_bytes).map_err(|_| FjallError::CorruptMeta {
+                    stream_id: ErrorId::from_display(id),
+                })
+            })
+    }
+
+    /// Point-read the current version counter for `id` from the `streams`
     /// partition within `tx`. Returns `0` for a stream that does not yet exist.
     fn read_current_version(
         &self,
         tx: &fjall::SingleWriterWriteTx<'_>,
         id: &impl Id,
     ) -> Result<u64, AppendError<FjallError>> {
-        tx.get(&self.streams, id.as_ref())
-            .map_err(|e| AppendError::Store(FjallError::Io(e)))?
-            .map_or(Ok(0), |version_bytes| {
-                decode_stream_version(&version_bytes).map_err(|_| {
-                    AppendError::Store(FjallError::CorruptMeta {
-                        stream_id: ErrorId::from_display(id),
-                    })
-                })
-            })
+        self.read_version_raw(tx, id).map_err(AppendError::Store)
     }
 
     /// Optimistic-concurrency check: the caller's `expected` version must match
@@ -104,22 +120,37 @@ impl FjallStore {
     }
 
     /// Point-read the store-global sequence counter (monotonic, shared across
+    /// all streams) from the `global` partition within `tx`, in the bare
+    /// [`FjallError`] domain. Absent key = `0`. `id` only labels a corrupt-meta
+    /// error. The atomic-append path consumes this directly; see
+    /// [`read_version_raw`](Self::read_version_raw).
+    fn read_global_raw(
+        &self,
+        tx: &fjall::SingleWriterWriteTx<'_>,
+        id: &impl Id,
+    ) -> Result<u64, FjallError> {
+        tx.get(&self.global, GLOBAL_SEQ_KEY)
+            .map_err(FjallError::Io)?
+            .map_or(Ok(0), |bytes| {
+                let raw: [u8; 8] =
+                    bytes
+                        .as_ref()
+                        .try_into()
+                        .map_err(|_| FjallError::CorruptMeta {
+                            stream_id: ErrorId::from_display(id),
+                        })?;
+                Ok(u64::from_le_bytes(raw))
+            })
+    }
+
+    /// Point-read the store-global sequence counter (monotonic, shared across
     /// all streams) from the `global` partition within `tx`. Absent key = `0`.
     fn read_current_global(
         &self,
         tx: &fjall::SingleWriterWriteTx<'_>,
         id: &impl Id,
     ) -> Result<u64, AppendError<FjallError>> {
-        tx.get(&self.global, GLOBAL_SEQ_KEY)
-            .map_err(|e| AppendError::Store(FjallError::Io(e)))?
-            .map_or(Ok(0), |bytes| {
-                let raw: [u8; 8] = bytes.as_ref().try_into().map_err(|_| {
-                    AppendError::Store(FjallError::CorruptMeta {
-                        stream_id: ErrorId::from_display(id),
-                    })
-                })?;
-                Ok(u64::from_le_bytes(raw))
-            })
+        self.read_global_raw(tx, id).map_err(AppendError::Store)
     }
 }
 
@@ -320,6 +351,257 @@ mod snapshot_impl {
             self.snapshots
                 .insert(id.as_ref(), fjall::Slice::from(&*buf))?;
             Ok(())
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AtomicAppend — commit N per-stream runs in ONE cross-partition transaction
+// (export/import, issue #145 + #220). The primitive `Atomicity::WholeChunk`
+// import needs and that per-stream `RawEventStore::append` cannot provide.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Mirrors `InMemoryStore::atomic_append_many`'s two-phase discipline, but the
+/// whole batch lands in a single fjall `write_tx` spanning every partition
+/// (`streams`, `events`, `events_global`, `global`): either every run commits
+/// or — on any conflict, overflow, or encode failure — the transaction is
+/// dropped uncommitted and **nothing** lands across **any** partition (CLAUDE
+/// rule 1). A second `write_tx` or a per-stream commit loop would be the bug
+/// this is built to prevent.
+#[cfg(feature = "import")]
+mod atomic_append_impl {
+    use super::{
+        ErrorId, FjallError, FjallStore, GLOBAL_SEQ_KEY, Id, Slice, Version, encode_event_key,
+        encode_global_key, encode_stream_version, reason_label, wire,
+    };
+    use nexus_store::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
+    use std::collections::HashMap;
+
+    type Tx<'a> = fjall::SingleWriterWriteTx<'a>;
+
+    /// Map an encode failure (event-key or wire-frame) to a `Store` error,
+    /// preserving the source's message via `reason_label`. Generic over the
+    /// concrete error type so both `encode_event_key`'s `EncodeError` and
+    /// `wire::encode_frame`'s `WireError` flow through one site (rule 3 — keep
+    /// the source's structured detail rather than collapsing it).
+    fn invalid_input<I: Id, E: std::fmt::Display>(
+        target: &I,
+        version: u64,
+        source: &E,
+    ) -> AtomicAppendError<FjallError> {
+        AtomicAppendError::Store(FjallError::InvalidInput {
+            stream_id: ErrorId::from_display(target),
+            version,
+            reason: reason_label(source),
+        })
+    }
+
+    impl FjallStore {
+        /// Phase 1 — validate every write's head against a RUNNING projected
+        /// head; NO mutation, NO partition writes. Tracking prior same-batch
+        /// writes to a target makes a non-injective route (two writes → one
+        /// stream) conflict here instead of concatenating into a corrupt,
+        /// non-monotonic stream (`AtomicAppend` distinct-targets contract). The
+        /// projected head is keyed by raw id bytes — ids need not be UTF-8.
+        fn validate_atomic_writes<I: Id>(
+            &self,
+            tx: &Tx<'_>,
+            writes: &[PlannedAppend<I>],
+        ) -> Result<(), AtomicAppendError<FjallError>> {
+            let mut projected: HashMap<Vec<u8>, u64> = HashMap::with_capacity(writes.len());
+            for (index, w) in writes.iter().enumerate() {
+                let key = w.target.as_ref().to_vec();
+                let actual = match projected.get(&key) {
+                    Some(&head) => head,
+                    None => self
+                        .read_version_raw(tx, &w.target)
+                        .map_err(AtomicAppendError::Store)?,
+                };
+                let expected = w.expected_version.map_or(0, Version::as_u64);
+                let conflict = || AtomicAppendError::Conflict {
+                    index,
+                    actual: Version::new(actual),
+                };
+                if actual != expected {
+                    return Err(conflict());
+                }
+                // Defensive (each crate validates at its own boundary): the run
+                // must be strictly sequential from expected + 1. A running
+                // checked_add counter avoids any index→u64 cast (rule 2).
+                let mut want = expected.checked_add(1);
+                for env in &w.events {
+                    let Some(want_version) = want else {
+                        return Err(AtomicAppendError::Store(FjallError::VersionOverflow));
+                    };
+                    if env.version().as_u64() != want_version {
+                        return Err(conflict());
+                    }
+                    want = want_version.checked_add(1);
+                }
+                // Advance this target's projected head by the run just validated,
+                // so a later same-target write in this batch conflicts above.
+                let new_head = w
+                    .events
+                    .last()
+                    .map_or(actual, |last| last.version().as_u64());
+                projected.insert(key, new_head);
+            }
+            Ok(())
+        }
+
+        /// Phase 2 — stage + write every run into all partitions in the SAME
+        /// transaction, stamping each event with the next `GlobalSeq` via one
+        /// running counter shared across all streams (monotonic; gaps
+        /// permitted). `writes` is non-empty (the caller returns early on
+        /// empty), so `writes[0]` labels a corrupt global-counter error.
+        fn write_atomic_runs<I: Id>(
+            &self,
+            tx: &mut Tx<'_>,
+            writes: &[PlannedAppend<I>],
+        ) -> Result<(), AtomicAppendError<FjallError>> {
+            let current_global = self
+                .read_global_raw(tx, &writes[0].target)
+                .map_err(AtomicAppendError::Store)?;
+            let mut global_seq = current_global;
+            for w in writes {
+                let id_bytes = w.target.as_ref();
+                for env in &w.events {
+                    global_seq = global_seq
+                        .checked_add(1)
+                        .ok_or(AtomicAppendError::Store(FjallError::GlobalSeqOverflow))?;
+                    let version = env.version().as_u64();
+                    let key = encode_event_key(id_bytes, version)
+                        .map_err(|e| invalid_input(&w.target, version, &e))?;
+                    let frame = wire::encode_frame(
+                        global_seq,
+                        env.schema_version_value(),
+                        &env.event_type_value(),
+                        &env.payload_value(),
+                        env.metadata_value().as_ref(),
+                    )
+                    .map_err(|e| invalid_input(&w.target, version, &e))?;
+                    let slice = Slice::from(frame.value);
+                    tx.insert(&self.events, &key, slice.clone());
+                    let global_key = encode_global_key(global_seq, env.version().as_u64());
+                    tx.insert(&self.events_global, global_key, slice);
+                }
+                // Advance the stream version counter to the run's last version.
+                // The planner guarantees a non-empty run; an empty run is a
+                // defensive no-op (no version to stamp).
+                if let Some(last) = w.events.last() {
+                    tx.insert(
+                        &self.streams,
+                        id_bytes,
+                        encode_stream_version(last.version().as_u64()),
+                    );
+                }
+            }
+            // Advance the global counter once, in the same transaction — only
+            // when at least one event was assigned (an all-empty batch leaves it
+            // untouched, mirroring append's empty-batch path).
+            if global_seq != current_global {
+                tx.insert(&self.global, GLOBAL_SEQ_KEY, global_seq.to_le_bytes());
+            }
+            Ok(())
+        }
+    }
+
+    impl AtomicAppend for FjallStore {
+        #[allow(
+            clippy::significant_drop_tightening,
+            reason = "the single write_tx is held across validation + every insert + commit so the whole batch is one atomic transaction (rule 1)"
+        )]
+        async fn atomic_append_many<I: Id>(
+            &self,
+            writes: &[PlannedAppend<I>],
+        ) -> Result<(), AtomicAppendError<FjallError>> {
+            // Nothing to commit — don't open an empty transaction.
+            if writes.is_empty() {
+                return Ok(());
+            }
+
+            // One write_tx spans validation, every partition insert, and the
+            // commit. Any early Err drops `tx` uncommitted → nothing lands
+            // across any partition (the whole point of this card).
+            let mut tx = self.db.write_tx();
+            self.validate_atomic_writes(&tx, writes)?;
+            self.write_atomic_runs(&mut tx, writes)?;
+            tx.commit()
+                .map_err(|e| AtomicAppendError::Store(FjallError::Io(e)))?;
+
+            // Wake AFTER the durable commit so a woken subscriber re-reads
+            // already-visible data: one wake per touched stream + the $all path.
+            for w in writes {
+                if !w.events.is_empty() {
+                    self.notifiers.wake(w.target.as_ref());
+                }
+            }
+            self.notifiers.wake_all();
+            Ok(())
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// StreamLister — lazily enumerate stream ids for export (issue #145 + #220).
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "export")]
+mod stream_lister_impl {
+    use super::{FjallError, FjallStore};
+    use bytes::Bytes;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+    use nexus_store::export::StreamLister;
+
+    /// A lazy cursor over the `streams` partition's keys — each key is one
+    /// stream id. Wraps a single snapshot-pinned `fjall::Iter` (a lazy k-way LSM
+    /// merge that pulls the next block only when the current drains), so it
+    /// streams ids in bounded memory rather than materializing them all (unlike
+    /// `InMemoryStore`'s eager `collect()`). Snapshot-consistent at open: the id
+    /// set is a torn-free point-in-time view.
+    pub struct StreamIdCursor {
+        iter: fjall::Iter,
+        /// Once an error is yielded the cursor is poisoned: subsequent polls
+        /// return `None` rather than silently skipping ids (mirrors `ScanCursor`).
+        poisoned: bool,
+    }
+
+    impl StreamIdCursor {
+        fn poll_one(&mut self) -> Option<Result<Bytes, FjallError>> {
+            if self.poisoned {
+                return None;
+            }
+            // `key()` loads the key only (no value): an id enumeration never
+            // needs the stored version counter, and the `bytes_1` feature makes
+            // the `Slice → Bytes` conversion zero-copy.
+            match self.iter.next()?.key() {
+                Ok(key) => Some(Ok(Bytes::from(key))),
+                Err(e) => {
+                    self.poisoned = true;
+                    Some(Err(FjallError::Io(e)))
+                }
+            }
+        }
+    }
+
+    // `fjall::Iter` is `Unpin`, so the cursor is `Unpin` and `get_mut()` is sound.
+    impl futures::Stream for StreamIdCursor {
+        type Item = Result<Bytes, FjallError>;
+
+        fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Ready(self.get_mut().poll_one())
+        }
+    }
+
+    impl StreamLister for FjallStore {
+        type StreamList = StreamIdCursor;
+
+        async fn list_streams(&self) -> Result<Self::StreamList, FjallError> {
+            Ok(StreamIdCursor {
+                iter: self.streams.inner().iter(),
+                poisoned: false,
+            })
         }
     }
 }
@@ -852,5 +1134,401 @@ mod tests {
             seen.push(item.unwrap().version().as_u64());
         }
         assert_eq!(seen, (1..=20).collect::<Vec<_>>());
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AtomicAppend white-box tests (issue #220). These reach the `pub(crate)`
+// partition handles directly, so they live in-crate rather than in `tests/`:
+// the freeze-gating guarantee is "nothing lands across ANY partition", which
+// can only be proven by inspecting every partition. Gated on `import` so they
+// run under the default-feature `nix flake check` gate via the self
+// dev-dependency.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(all(test, feature = "import"))]
+#[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(clippy::panic, reason = "test code")]
+mod atomic_append_tests {
+    use super::*;
+    use crate::store::read_test_helpers::{Tid, temp_store, tid};
+    use futures::StreamExt;
+    use nexus_store::envelope::pending_envelope;
+    use nexus_store::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
+    use std::sync::Arc as StdArc;
+    use tokio::sync::Barrier;
+
+    fn pending(version: u64, payload: &[u8]) -> PendingEnvelope {
+        pending_envelope(Version::new(version).unwrap())
+            .event_type("E")
+            .payload(payload.to_vec())
+            .unwrap()
+            .build()
+    }
+
+    fn planned(target: &str, expected: Option<u64>, versions: &[u64]) -> PlannedAppend<Tid> {
+        PlannedAppend {
+            target: tid(target),
+            expected_version: expected.and_then(Version::new),
+            events: versions.iter().map(|n| pending(*n, b"p")).collect(),
+        }
+    }
+
+    async fn read_versions(store: &FjallStore, id: &Tid) -> Vec<u64> {
+        let mut stream = store.read_stream(id, Version::INITIAL).await.unwrap();
+        let mut out = Vec::new();
+        while let Some(item) = stream.next().await {
+            out.push(item.unwrap().version().as_u64());
+        }
+        out
+    }
+
+    // ── White-box partition probes ──────────────────────────────────────────
+
+    fn row_count(ks: &fjall::SingleWriterTxKeyspace) -> usize {
+        ks.inner().iter().count()
+    }
+
+    fn stream_counter(store: &FjallStore, id: &Tid) -> Option<u64> {
+        store
+            .streams
+            .inner()
+            .get(id.as_ref())
+            .unwrap()
+            .map(|v| decode_stream_version(&v).unwrap())
+    }
+
+    fn global_counter(store: &FjallStore) -> Option<u64> {
+        store
+            .global
+            .inner()
+            .get(GLOBAL_SEQ_KEY)
+            .unwrap()
+            .map(|b| u64::from_le_bytes(<[u8; 8]>::try_from(b.as_ref()).unwrap()))
+    }
+
+    /// Snapshot every partition's observable state so a test can assert "nothing
+    /// changed across ANY partition" after a rolled-back transaction.
+    fn partition_snapshot(store: &FjallStore) -> (usize, usize, Option<u64>) {
+        (
+            row_count(&store.events),
+            row_count(&store.events_global),
+            global_counter(store),
+        )
+    }
+
+    // ── Category 1: sequence / protocol ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn atomic_append_many_commits_all_runs() {
+        let (store, _dir) = temp_store();
+        let writes = vec![planned("a", None, &[1, 2]), planned("b", None, &[1])];
+        store.atomic_append_many(&writes).await.unwrap();
+
+        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2]);
+        assert_eq!(read_versions(&store, &tid("b")).await, vec![1]);
+        // Three events total → events + events_global each hold 3 rows, and the
+        // shared global counter advanced to 3.
+        assert_eq!(row_count(&store.events), 3);
+        assert_eq!(row_count(&store.events_global), 3);
+        assert_eq!(global_counter(&store), Some(3));
+        assert_eq!(stream_counter(&store, &tid("a")), Some(2));
+        assert_eq!(stream_counter(&store, &tid("b")), Some(1));
+    }
+
+    #[tokio::test]
+    async fn atomic_append_then_normal_append_shares_counters() {
+        // The two append paths share the version + global counters: a normal
+        // append must continue exactly where an atomic batch left off.
+        let (store, _dir) = temp_store();
+        store
+            .atomic_append_many(&[planned("a", None, &[1, 2])])
+            .await
+            .unwrap();
+        store
+            .append(&tid("a"), Version::new(2), &[pending(3, b"p")])
+            .await
+            .unwrap();
+
+        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2, 3]);
+        // global_seq is contiguous across the two paths: 1,2 (atomic) then 3.
+        assert_eq!(global_counter(&store), Some(3));
+        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
+        let mut seqs = Vec::new();
+        while let Some(env) = all.next().await {
+            seqs.push(env.unwrap().global_seq().as_u64());
+        }
+        assert_eq!(seqs, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn empty_writes_commit_nothing() {
+        let (store, _dir) = temp_store();
+        store.atomic_append_many::<Tid>(&[]).await.unwrap();
+        assert_eq!(partition_snapshot(&store), (0, 0, None));
+    }
+
+    // ── Category 2: lifecycle (write → close → reopen) ──────────────────────
+
+    #[tokio::test]
+    async fn atomic_append_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let store = FjallStore::builder(&path).open().unwrap();
+            store
+                .atomic_append_many(&[planned("a", None, &[1, 2]), planned("b", None, &[1])])
+                .await
+                .unwrap();
+        }
+        let store = FjallStore::builder(&path).open().unwrap();
+        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2]);
+        assert_eq!(read_versions(&store, &tid("b")).await, vec![1]);
+        // A post-reopen normal append continues the global sequence (4th event
+        // → global_seq 4), proving the counter persisted.
+        store
+            .append(&tid("a"), Version::new(2), &[pending(3, b"p")])
+            .await
+            .unwrap();
+        assert_eq!(global_counter(&store), Some(4));
+    }
+
+    // ── Category 3: defensive boundary — the FREEZE GATE ────────────────────
+
+    #[tokio::test]
+    async fn conflict_rolls_back_every_partition() {
+        // THE freeze-gating test (CLAUDE rule 1). Pre-seed "b" to v1 so the
+        // second write (expecting fresh) conflicts. Write "a"'s clean run is
+        // index 0; "b"'s conflict is index 1. A per-stream commit loop would
+        // have committed "a" before failing "b"; the single write_tx must leave
+        // EVERY partition byte-identical to the pre-import snapshot.
+        let (store, _dir) = temp_store();
+        store
+            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .await
+            .unwrap();
+        let before = partition_snapshot(&store);
+
+        let writes = vec![planned("a", None, &[1, 2]), planned("b", None, &[1])];
+        let err = store.atomic_append_many(&writes).await.unwrap_err();
+        match err {
+            AtomicAppendError::Conflict { index, actual } => {
+                assert_eq!(index, 1);
+                assert_eq!(actual, Version::new(1));
+            }
+            // AtomicAppendError is #[non_exhaustive] (public error enum); the
+            // wildcard covers Store and any future variant.
+            other => panic!("expected Conflict, got {other}"),
+        }
+
+        // Nothing landed anywhere: "a" has no events + no version counter, the
+        // event/global row counts and the global seq counter are unchanged.
+        assert_eq!(read_versions(&store, &tid("a")).await, Vec::<u64>::new());
+        assert_eq!(stream_counter(&store, &tid("a")), None);
+        assert_eq!(read_versions(&store, &tid("b")).await, vec![1], "b intact");
+        assert_eq!(stream_counter(&store, &tid("b")), Some(1));
+        assert_eq!(
+            partition_snapshot(&store),
+            before,
+            "every partition must be byte-identical to before the aborted import",
+        );
+    }
+
+    #[tokio::test]
+    async fn non_injective_route_conflicts_no_corruption() {
+        // Two writes to the SAME target, both expecting a fresh stream. The
+        // second conflicts against the running projected head (set by the
+        // first) — never a concatenated [1,2,1,2] stream.
+        let (store, _dir) = temp_store();
+        let writes = vec![planned("t", None, &[1, 2]), planned("t", None, &[1, 2])];
+        let err = store.atomic_append_many(&writes).await.unwrap_err();
+        match err {
+            AtomicAppendError::Conflict { index, actual } => {
+                assert_eq!(index, 1);
+                // The first write projected "t"'s head to 2.
+                assert_eq!(actual, Version::new(2));
+            }
+            // AtomicAppendError is #[non_exhaustive] (public error enum).
+            other => panic!("expected Conflict, got {other}"),
+        }
+        // All-or-nothing: "t" is empty, definitely not [1,2,1,2].
+        assert_eq!(read_versions(&store, &tid("t")).await, Vec::<u64>::new());
+        assert_eq!(partition_snapshot(&store), (0, 0, None));
+    }
+
+    #[tokio::test]
+    async fn defensive_non_sequential_run_conflicts_and_rolls_back() {
+        // The contract says the caller guarantees a contiguous run; fjall still
+        // validates defensively. A run [1, 3] (internal gap) must be rejected
+        // with nothing committed.
+        let (store, _dir) = temp_store();
+        let writes = vec![planned("a", None, &[1, 3])];
+        let err = store.atomic_append_many(&writes).await.unwrap_err();
+        assert!(matches!(err, AtomicAppendError::Conflict { index: 0, .. }));
+        assert_eq!(partition_snapshot(&store), (0, 0, None));
+    }
+
+    // ── Category 4: linearizability / isolation ─────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn clean_atomic_append_is_visible_all_or_nothing() {
+        // A concurrent reader draining "a" while a multi-event atomic batch
+        // commits must observe EITHER nothing OR the whole run [1,2,3] — never a
+        // torn prefix like [1] or [1,2]. fjall's snapshot reads + single commit
+        // give all-or-nothing visibility.
+        let (raw, _dir) = temp_store();
+        let store = StdArc::new(raw);
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let writer = StdArc::clone(&store);
+        let wbarrier = StdArc::clone(&barrier);
+        let handle = tokio::spawn(async move {
+            wbarrier.wait().await;
+            writer
+                .atomic_append_many(&[planned("a", None, &[1, 2, 3]), planned("b", None, &[1])])
+                .await
+                .unwrap();
+        });
+
+        barrier.wait().await;
+        // Poll the reader repeatedly to maximise the chance of catching a
+        // mid-commit torn view, if one were possible.
+        for _ in 0..64u32 {
+            let seen = read_versions(&store, &tid("a")).await;
+            assert!(
+                seen.is_empty() || seen == vec![1, 2, 3],
+                "torn atomic batch observed: {seen:?}",
+            );
+        }
+        handle.await.unwrap();
+        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2, 3]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn aborted_batch_never_exposes_its_writes_to_a_reader() {
+        // The cross-partition rollback under a concurrent reader. "a" is seeded
+        // to v1; a doomed batch tries to extend "a" to v3 while "b" (pre-seeded)
+        // conflicts. A concurrent reader on "a" must NEVER see v2/v3, and "a"
+        // must finish at exactly [1] — proving "a"'s would-be writes were rolled
+        // back atomically rather than committed before "b" failed.
+        let (raw, _dir) = temp_store();
+        let store = StdArc::new(raw);
+        store
+            .append(&tid("a"), None, &[pending(1, b"seed")])
+            .await
+            .unwrap();
+        store
+            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .await
+            .unwrap();
+
+        let barrier = StdArc::new(Barrier::new(2));
+        let writer = StdArc::clone(&store);
+        let wbarrier = StdArc::clone(&barrier);
+        let handle = tokio::spawn(async move {
+            wbarrier.wait().await;
+            let batch = vec![planned("a", Some(1), &[2, 3]), planned("b", None, &[1])];
+            // Doomed: "b" is already at v1, so the batch must abort.
+            writer.atomic_append_many(&batch).await.unwrap_err();
+        });
+
+        barrier.wait().await;
+        for _ in 0..64u32 {
+            let seen = read_versions(&store, &tid("a")).await;
+            assert_eq!(
+                seen,
+                vec![1],
+                "aborted batch leaked a write to the reader: {seen:?}"
+            );
+        }
+        handle.await.unwrap();
+        assert_eq!(read_versions(&store, &tid("a")).await, vec![1]);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// StreamLister tests (issue #220) — gated on `export`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(all(test, feature = "export"))]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod stream_lister_tests {
+    use super::*;
+    use crate::store::read_test_helpers::{seed, temp_store, tid};
+    use futures::StreamExt;
+    use nexus_store::export::StreamLister;
+    use std::collections::HashSet;
+
+    async fn list_ids(store: &FjallStore) -> HashSet<Vec<u8>> {
+        let stream = store.list_streams().await.unwrap();
+        stream
+            .map(|r| r.unwrap().to_vec())
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn lists_exactly_the_appended_ids() {
+        let (store, _dir) = temp_store();
+        seed(&store, &tid("alpha"), 1).await;
+        seed(&store, &tid("beta"), 2).await;
+        seed(&store, &tid("gamma"), 3).await;
+
+        let ids = list_ids(&store).await;
+        let expected: HashSet<Vec<u8>> = [b"alpha".to_vec(), b"beta".to_vec(), b"gamma".to_vec()]
+            .into_iter()
+            .collect();
+        assert_eq!(ids, expected);
+    }
+
+    #[tokio::test]
+    async fn empty_store_lists_nothing() {
+        let (store, _dir) = temp_store();
+        assert!(list_ids(&store).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn lists_each_stream_once_regardless_of_event_count() {
+        // A 50-event stream is one id, not 50 — the lister scans the `streams`
+        // partition (one row per stream), never the `events` partition.
+        let (store, _dir) = temp_store();
+        seed(&store, &tid("busy"), 50).await;
+        let stream = store.list_streams().await.unwrap();
+        let all: Vec<Vec<u8>> = stream
+            .map(|r| r.unwrap().to_vec())
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(all, vec![b"busy".to_vec()]);
+    }
+
+    #[tokio::test]
+    async fn list_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let store = FjallStore::builder(&path).open().unwrap();
+            seed(&store, &tid("a"), 1).await;
+            seed(&store, &tid("b"), 1).await;
+        }
+        let store = FjallStore::builder(&path).open().unwrap();
+        let ids = list_ids(&store).await;
+        assert_eq!(ids, [b"a".to_vec(), b"b".to_vec()].into_iter().collect());
+    }
+
+    #[tokio::test]
+    async fn handles_long_stream_ids() {
+        // fjall keys are the raw id bytes; lsm-tree rejects an *empty* key, so
+        // an empty stream id is unsupported at the `append` boundary (a
+        // pre-existing adapter limitation, not the lister's). A long id is the
+        // boundary the lister must round-trip faithfully.
+        let (store, _dir) = temp_store();
+        let long = "x".repeat(300);
+        seed(&store, &tid(&long), 1).await;
+        seed(&store, &tid("short"), 1).await;
+        let ids = list_ids(&store).await;
+        assert!(ids.contains(long.as_bytes()));
+        assert!(ids.contains(b"short".as_slice()));
     }
 }
