@@ -398,6 +398,7 @@ pub struct FrameOffsets {
 /// metadata non-empty + cap, `schema_version` > 0) are upheld at the
 /// value newtype boundary in [`crate::value`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum WireError {
     #[error(
         "frame length overflow combining header={header}, padding={padding}, payload={payload}"
@@ -419,6 +420,7 @@ pub struct DecodedFrame {
 
 /// Errors from [`decode_frame`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DecodeError {
     #[error("value too short: need at least {min} bytes, got {actual}")]
     ValueTooShort { min: usize, actual: usize },

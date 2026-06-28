@@ -48,6 +48,7 @@ impl<A, EncErr, DecErr> ConflictPredicate for StoreError<A, EncErr, DecErr> {
 /// Error from a saga react+persist. Two failure domains plus a defensive
 /// overflow guard (CLAUDE.md rule 3 — one variant = one domain).
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SagaError<SagaErr, StoreErr> {
     /// `react` rejected the upstream event (a saga invariant). Nothing persisted.
     #[error("saga rejected event: {0}")]

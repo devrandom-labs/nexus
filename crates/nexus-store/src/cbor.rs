@@ -28,6 +28,7 @@ const FORMAT_VERSION: u32 = 1;
 /// Not [`ImportError`](crate::import::ImportError) — the box has no store error
 /// or id type. Two failure domains, two variants (CLAUDE rule 3).
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ChunkError {
     /// Decode: the chunk framing is unreadable. The `&'static str` is a debug
     /// hint. Distinct from a per-block crc failure, which is a non-error

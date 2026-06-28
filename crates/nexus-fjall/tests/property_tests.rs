@@ -516,8 +516,10 @@ proptest! {
                     prop_assert_eq!(actual, Version::new(actual_version),
                         "conflict actual version wrong");
                 }
-                AppendError::Store(e) => {
-                    panic!("expected Conflict, got Store error: {}", e);
+                // AppendError is #[non_exhaustive] (#209): anything but Conflict
+                // (Store or a future variant) is a test failure.
+                other => {
+                    panic!("expected Conflict, got: {other}");
                 }
             }
             Ok(())
@@ -615,7 +617,9 @@ async fn attack_concurrent_appends_one_wins() {
         match handle.await.unwrap() {
             Ok(()) => success_count += 1,
             Err(AppendError::Conflict { .. }) => conflict_count += 1,
-            Err(AppendError::Store(e)) => panic!("unexpected store error: {}", e),
+            // AppendError is #[non_exhaustive] (#209): Store and any future
+            // variant collapse into the catch-all — only Conflict is expected.
+            Err(e) => panic!("unexpected error: {e}"),
         }
     }
 

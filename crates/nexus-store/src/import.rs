@@ -155,6 +155,7 @@ pub enum AbortReason {
 /// outcomes carried in an [`ImportReport`]. `E` is the underlying store
 /// error; `I` is the caller's target stream-id type.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ImportError<E, I> {
     /// Chunk header unreadable: bad magic, unknown format-version, or a
     /// structurally unparseable block. Distinct from a per-block checksum
@@ -221,6 +222,7 @@ pub struct PlannedAppend<I> {
 /// whole transaction is rolled back — nothing landed. `Store` is an
 /// adapter-level failure. Distinct domains, distinct variants (CLAUDE rule 3).
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AtomicAppendError<E> {
     /// Write at `index` had a head mismatch; `actual` is the target's real head.
     #[error("atomic append conflict at write {index}: actual head {actual:?}")]

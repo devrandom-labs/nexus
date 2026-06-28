@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 
 /// Error type for the [`InMemoryStore`] adapter.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum InMemoryStoreError {
     /// Stored event has version 0 — corrupt data.
     #[error("stored event has version 0 — corrupt data")]

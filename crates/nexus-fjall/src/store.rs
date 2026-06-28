@@ -479,7 +479,9 @@ mod tests {
                 assert_eq!(expected, None);
                 assert_eq!(actual, Version::new(1));
             }
-            other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
+            // AppendError is #[non_exhaustive] (#209): the wildcard covers
+            // Store and any future variant — only Conflict is expected.
+            other => panic!("expected Conflict, got: {other}"),
         }
     }
 
@@ -504,7 +506,9 @@ mod tests {
                     "overlong stream id must be truncated with an ellipsis, got {stream_id:?}"
                 );
             }
-            other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
+            // AppendError is #[non_exhaustive] (#209): the wildcard covers
+            // Store and any future variant — only Conflict is expected.
+            other => panic!("expected Conflict, got: {other}"),
         }
     }
 
@@ -524,7 +528,9 @@ mod tests {
                 assert_eq!(expected, Version::new(5));
                 assert_eq!(actual, None);
             }
-            other @ AppendError::Store(_) => panic!("expected Conflict, got: {other}"),
+            // AppendError is #[non_exhaustive] (#209): the wildcard covers
+            // Store and any future variant — only Conflict is expected.
+            other => panic!("expected Conflict, got: {other}"),
         }
     }
 

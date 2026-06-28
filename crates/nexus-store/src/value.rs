@@ -39,6 +39,7 @@ pub const MAX_PAYLOAD_LEN: usize = u32::MAX as usize;
 
 /// Construction errors for value newtypes.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ValueError {
     #[error("event_type length {actual} exceeds maximum {MAX_EVENT_TYPE_LEN}")]
     EventTypeTooLong { actual: usize },

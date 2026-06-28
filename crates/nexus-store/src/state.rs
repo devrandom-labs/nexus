@@ -243,6 +243,7 @@ where
 /// Error from [`CodecSnapshotStore`] — the underlying store, the encoder, the decoder,
 /// or the wire-format synthesis used to call the envelope-based decode trait.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CodecSnapshotStoreError<S, EncErr, DecErr> {
     /// The underlying byte-level store failed.
     #[error(transparent)]

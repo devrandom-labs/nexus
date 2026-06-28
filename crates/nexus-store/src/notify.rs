@@ -81,6 +81,7 @@ use crate::wake::{WakeRegistration, WakeSource};
 
 /// Errors produced by [`StreamNotifiers`].
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum NotifyError {
     /// The live-subscriber count for a single stream would exceed `usize::MAX`.
     ///
