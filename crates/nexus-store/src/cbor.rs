@@ -570,10 +570,43 @@ mod tests {
             .expect("not torn")
     }
 
+    /// Header bytes alone — the writer-built equivalent of the old `encode_header`.
+    fn header_bytes(origin: Option<&[u8]>) -> Vec<u8> {
+        ChunkWriter::new(Vec::new(), origin)
+            .expect("header writer")
+            .into_sink()
+    }
+
+    /// Section-heading bytes alone: header+heading via the writer, minus the header
+    /// prefix (a CBOR sequence is concatenation, so the tail is exactly the heading).
+    fn heading_bytes(stream_id: &[u8]) -> Vec<u8> {
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("writer");
+        w.section(stream_id).expect("section");
+        let full = w.into_sink();
+        full[header_bytes(None).len()..].to_vec()
+    }
+
+    /// One block's bytes alone: header+heading+block via the writer, minus the
+    /// header+heading prefix.
+    fn block_bytes(event: &PersistedEnvelope) -> Vec<u8> {
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("writer");
+        {
+            let mut s = w.section(b"k").expect("section");
+            s.block(event).expect("block");
+        }
+        let full = w.into_sink();
+        let prefix = {
+            let mut w2 = ChunkWriter::new(Vec::new(), None).expect("writer");
+            w2.section(b"k").expect("section");
+            w2.into_sink().len()
+        };
+        full[prefix..].to_vec()
+    }
+
     #[test]
     fn block_round_trips_all_fields() {
         let event = persisted(7, 3, "AccountOpened", Some(b"hlc=42"), b"balance:100");
-        let bytes = encode_block(&event).expect("encode");
+        let bytes = block_bytes(&event);
         match decode_one_block(&bytes) {
             ImportBlock::Event(got) => {
                 assert_eq!(got.version().as_u64(), 7);
@@ -589,7 +622,7 @@ mod tests {
     #[test]
     fn block_round_trips_without_metadata_and_empty_payload() {
         let event = persisted(1, 1, "E", None, b"");
-        let bytes = encode_block(&event).expect("encode");
+        let bytes = block_bytes(&event);
         match decode_one_block(&bytes) {
             ImportBlock::Event(got) => {
                 assert_eq!(got.metadata(), None);
@@ -603,8 +636,7 @@ mod tests {
     #[test]
     fn block_with_flipped_body_byte_is_corrupt() {
         let event = persisted(2, 1, "E", None, b"hello");
-        let bytes = encode_block(&event).expect("encode");
-        let mut v = bytes.to_vec();
+        let mut v = block_bytes(&event);
         let last = v.len() - 1;
         v[last] ^= 0xFF;
         assert!(matches!(decode_one_block(&v), ImportBlock::Corrupt));
@@ -612,7 +644,7 @@ mod tests {
 
     #[test]
     fn header_round_trips_without_origin() {
-        let bytes = encode_header(None).expect("encode");
+        let bytes = header_bytes(None);
         let header = decode_header(&bytes).expect("decode");
         assert_eq!(header.format_version, 1);
         assert_eq!(header.origin, None);
@@ -620,7 +652,7 @@ mod tests {
 
     #[test]
     fn header_round_trips_with_origin() {
-        let bytes = encode_header(Some(b"phone-7")).expect("encode");
+        let bytes = header_bytes(Some(b"phone-7"));
         let header = decode_header(&bytes).expect("decode");
         assert_eq!(header.format_version, 1);
         assert_eq!(header.origin.as_deref(), Some(b"phone-7".as_slice()));
@@ -628,7 +660,7 @@ mod tests {
 
     #[test]
     fn header_rejects_bad_magic() {
-        let mut v = encode_header(None).expect("encode").to_vec();
+        let mut v = header_bytes(None);
         let pos = v.iter().position(|&b| b == b'n').expect("magic present");
         v[pos] = b'X';
         let err = decode_header(&v).expect_err("bad magic rejected");
@@ -637,22 +669,21 @@ mod tests {
 
     #[test]
     fn header_rejects_truncated() {
-        let bytes = encode_header(Some(b"x")).expect("encode");
+        let bytes = header_bytes(Some(b"x"));
         let err = decode_header(&bytes[..bytes.len() / 2]).expect_err("truncated rejected");
         assert!(matches!(err, ChunkError::Malformed(_)));
     }
 
-    /// Encode a full multi-stream chunk: header + per-stream heading + blocks.
+    /// Build a full multi-stream chunk through the public `ChunkWriter`.
     fn encode_chunk(origin: Option<&[u8]>, streams: &[(&[u8], Vec<PersistedEnvelope>)]) -> Bytes {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&encode_header(origin).expect("header"));
+        let mut w = ChunkWriter::new(Vec::new(), origin).expect("writer");
         for (stream_id, events) in streams {
-            buf.extend_from_slice(&encode_section_heading(stream_id).expect("heading"));
+            let mut s = w.section(stream_id).expect("section");
             for e in events {
-                buf.extend_from_slice(&encode_block(e).expect("block"));
+                s.block(e).expect("block");
             }
         }
-        Bytes::from(buf)
+        Bytes::from(w.into_sink())
     }
 
     #[test]
@@ -694,16 +725,16 @@ mod tests {
 
     #[test]
     fn decode_header_only_chunk_is_empty_vec() {
-        let chunk = encode_header(None).expect("header");
+        let chunk = header_bytes(None);
         let sections = decode_chunk(&chunk).expect("decode");
         assert!(sections.is_empty());
     }
 
     #[test]
     fn decode_block_before_heading_is_malformed() {
-        let mut chunk = encode_header(None).expect("header").to_vec();
+        let mut chunk = header_bytes(None);
         let event = persisted(1, 1, "E", None, b"x");
-        chunk.extend_from_slice(&encode_block(&event).expect("block"));
+        chunk.extend_from_slice(&block_bytes(&event));
         let err = decode_chunk(&chunk).expect_err("block before heading");
         assert!(matches!(
             err,
@@ -774,7 +805,7 @@ mod tests {
 
     #[test]
     fn unexpected_top_level_item_is_malformed() {
-        let mut v = encode_header(None).expect("header").to_vec();
+        let mut v = header_bytes(None);
         v.push(0x01); // CBOR uint 1 — neither map nor array
         assert!(matches!(
             decode_chunk(&v),
@@ -812,8 +843,8 @@ mod tests {
             crc: crc32c::crc32c(&body),
             body: &body,
         };
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
         assert!(matches!(
             decode_chunk(&chunk),
@@ -823,18 +854,21 @@ mod tests {
 
     // ── Task 6: Lifecycle — incremental append / truncation / valid prefix ──
 
-    /// The cumulative byte length after the header + heading + first N blocks.
+    /// Byte length of a chunk holding the header, one heading, and the first `n`
+    /// blocks — the valid-prefix cut after `n` blocks in the full chunk.
     fn prefix_len_after_n_blocks(
         stream_id: &[u8],
         events: &[PersistedEnvelope],
         n: usize,
     ) -> usize {
-        let mut len = encode_header(None).expect("header").len();
-        len += encode_section_heading(stream_id).expect("heading").len();
-        for e in events.iter().take(n) {
-            len += encode_block(e).expect("block").len();
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("writer");
+        {
+            let mut s = w.section(stream_id).expect("section");
+            for e in events.iter().take(n) {
+                s.block(e).expect("block");
+            }
         }
-        len
+        w.into_sink().len()
     }
 
     #[test]
@@ -877,14 +911,14 @@ mod tests {
 
     #[test]
     fn golden_header_bytes() {
-        let bytes = encode_header(Some(b"dev")).expect("header");
+        let bytes = header_bytes(Some(b"dev"));
         insta::assert_snapshot!("header_with_origin_hex", hex_of(&bytes));
     }
 
     #[test]
     fn golden_block_bytes() {
         let event = persisted(1, 1, "E", None, b"hi");
-        let bytes = encode_block(&event).expect("block");
+        let bytes = block_bytes(&event);
         insta::assert_snapshot!("block_v1_hex", hex_of(&bytes));
     }
 
@@ -980,8 +1014,7 @@ mod tests {
             flip_pick in any::<prop::sample::Index>(),
         ) {
             let event = persisted(ev_v, ev_sc, &ev_et, ev_md.as_deref(), &ev_pl);
-            let block = encode_block(&event).expect("block");
-            let mut v = block.to_vec();
+            let mut v = block_bytes(&event);
             let start = v.len() / 2;
             let idx = start + flip_pick.index(v.len() - start);
             v[idx] ^= 0xFF;
@@ -1012,7 +1045,7 @@ mod tests {
         fn decode_chunk_never_panics_on_valid_header_plus_garbage(
             garbage in proptest::collection::vec(any::<u8>(), 0..128),
         ) {
-            let mut v = encode_header(None).expect("header").to_vec();
+            let mut v = header_bytes(None);
             v.extend_from_slice(&garbage);
             let _ = decode_chunk(&v);
         }
@@ -1052,8 +1085,8 @@ mod tests {
             crc: crc32c::crc32c(&body),
             body: &body,
         };
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
         let sections = decode_chunk(&chunk).expect("decode");
         match &sections[0].blocks[0] {
@@ -1090,18 +1123,19 @@ mod tests {
         }
 
         // Export → box-encode into one chunk.
-        let mut chunk = encode_header(Some(b"src")).expect("header").to_vec();
+        let mut w = ChunkWriter::new(Vec::new(), Some(b"src")).expect("writer");
         for sid in ["task-1", "task-2"] {
-            chunk.extend_from_slice(&encode_section_heading(sid.as_bytes()).expect("heading"));
-            let mut s = src
+            let s = src
                 .read_stream(&StreamKey::from_slice(sid.as_bytes()), Version::INITIAL)
                 .await
                 .expect("read");
-            while let Some(item) = s.next().await {
-                let e = item.expect("no read error");
-                chunk.extend_from_slice(&encode_block(&e).expect("block"));
-            }
+            w.section(sid.as_bytes())
+                .expect("section")
+                .try_extend(s)
+                .await
+                .expect("extend");
         }
+        let chunk = w.into_sink();
 
         // Box-decode → import into a fresh store under origin-namespaced ids.
         let sections = decode_chunk(&chunk).expect("decode");
@@ -1146,7 +1180,7 @@ mod tests {
         for size in [0usize, 23, 24, 255, 256, 1024, 65536] {
             let payload = vec![0xABu8; size];
             let event = persisted(1, 1, "E", None, &payload);
-            let bytes = encode_block(&event).expect("encode");
+            let bytes = block_bytes(&event);
             match decode_one_block(&bytes) {
                 ImportBlock::Event(got) => {
                     assert_eq!(got.payload().len(), size, "payload size {size} length");
@@ -1162,7 +1196,7 @@ mod tests {
         for et_len in [256usize, crate::value::MAX_EVENT_TYPE_LEN] {
             let et = "a".repeat(et_len);
             let event = persisted(1, 1, &et, Some(b"m"), b"p");
-            let bytes = encode_block(&event).expect("encode");
+            let bytes = block_bytes(&event);
             match decode_one_block(&bytes) {
                 ImportBlock::Event(got) => {
                     assert_eq!(got.event_type().len(), et_len, "event_type len {et_len}");
@@ -1178,7 +1212,7 @@ mod tests {
     fn box_round_trips_metadata_at_2byte_band() {
         let meta = vec![0x07u8; 300];
         let event = persisted(1, 1, "E", Some(&meta), b"p");
-        match decode_one_block(&encode_block(&event).expect("encode")) {
+        match decode_one_block(&block_bytes(&event)) {
             ImportBlock::Event(got) => assert_eq!(got.metadata(), Some(meta.as_slice())),
             ImportBlock::Corrupt => panic!("metadata 2-byte band must round-trip"),
         }
@@ -1218,8 +1252,8 @@ mod tests {
     #[test]
     fn indefinite_array_at_top_level_is_malformed() {
         // decode_chunk peeks Type::ArrayIndef (not Array) → unexpected item type.
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.push(0x9f); // array(*) indefinite
         chunk.push(0xff); // break
         assert!(matches!(
@@ -1238,7 +1272,7 @@ mod tests {
             &[(b"done".as_slice(), vec![persisted(1, 1, "E", None, b"x")])],
         );
         let mut v = chunk.to_vec();
-        let heading = encode_section_heading(b"truncated-stream-id").expect("heading");
+        let heading = heading_bytes(b"truncated-stream-id");
         v.extend_from_slice(&heading[..heading.len() - 4]); // drop 4 id bytes
         let sections = decode_chunk(&v).expect("valid prefix");
         assert_eq!(sections.len(), 1, "torn heading produces no section");
@@ -1346,8 +1380,8 @@ mod tests {
             crc: crc32c::crc32c(&body),
             body: &body,
         };
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
         assert!(matches!(
             decode_chunk(&chunk),
