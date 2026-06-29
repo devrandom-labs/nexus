@@ -10,6 +10,8 @@ use core::convert::Infallible;
 use core::ops::Range;
 
 use bytes::Bytes;
+use futures::Stream;
+use futures::StreamExt as _;
 use minicbor::Decoder;
 use minicbor::Encoder;
 use minicbor::data::Type;
@@ -151,6 +153,7 @@ pub fn decode_header(bytes: &[u8]) -> Result<ChunkHeader, ChunkError> {
 /// deliberately no `finish`: a CBOR sequence (RFC 8742) has no terminator, so a
 /// chunk is complete when writing stops. Recover the buffer with
 /// [`ChunkWriter::into_sink`].
+#[derive(Debug)]
 pub struct ChunkWriter<W> {
     enc: Encoder<W>,
 }
@@ -197,11 +200,37 @@ impl<W: minicbor::encode::Write> ChunkWriter<W> {
 ///
 /// The ONLY type that can write blocks, so "block before heading" is un-nameable
 /// — a compile error, not a runtime check. Obtained from [`ChunkWriter::section`].
+#[derive(Debug)]
 pub struct SectionWriter<'a, W> {
     enc: &'a mut Encoder<W>,
 }
 
 impl<W: minicbor::encode::Write> SectionWriter<'_, W> {
+    /// Drain a fallible event stream into this section, writing each event.
+    ///
+    /// Mirrors `TryStreamExt::try_collect`: each item is written as a block.
+    /// [`SectionError::Read`] surfaces a source-stream error and
+    /// [`SectionError::Write`] a sink-write error — the two domains never collapse
+    /// into one (CLAUDE rule 3).
+    ///
+    /// # Errors
+    /// [`SectionError::Read`] if the source stream yields an error;
+    /// [`SectionError::Write`] if writing a block fails.
+    pub async fn try_extend<S, R>(
+        &mut self,
+        events: S,
+    ) -> Result<&mut Self, SectionError<W::Error, R>>
+    where
+        S: Stream<Item = Result<PersistedEnvelope, R>>,
+    {
+        futures::pin_mut!(events);
+        while let Some(item) = events.next().await {
+            let env = item.map_err(SectionError::Read)?;
+            self.block(&env).map_err(SectionError::Write)?;
+        }
+        Ok(self)
+    }
+
     /// Append one event as a block `[crc32c(body), body]`.
     ///
     /// The crc covers exactly the body bstr bytes.
@@ -432,7 +461,6 @@ mod tests {
     use crate::store::RawEventStore;
     use crate::stream_id::StreamKey;
     use crate::testing::InMemoryStore;
-    use futures::StreamExt;
 
     #[test]
     fn writer_multi_section_round_trips() {
@@ -1240,6 +1268,47 @@ mod tests {
             decode_chunk(&bytes),
             Err(ChunkError::Malformed(_))
         ));
+    }
+
+    // ── Task 4: try_extend — drains a fallible stream into a section ──────────
+
+    #[tokio::test]
+    async fn try_extend_drains_stream_into_section() {
+        let events = vec![
+            Ok::<_, std::io::Error>(persisted(1, 1, "E", None, b"x1")),
+            Ok(persisted(2, 1, "E", Some(b"m"), b"x2")),
+        ];
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("new");
+        w.section(b"s")
+            .expect("section")
+            .try_extend(futures::stream::iter(events))
+            .await
+            .expect("extend");
+        let chunk = Bytes::from(w.into_sink());
+
+        let sections = decode_chunk(&chunk).expect("decode");
+        assert_eq!(sections[0].blocks.len(), 2);
+        match &sections[0].blocks[1] {
+            ImportBlock::Event(e) => assert_eq!(e.payload(), b"x2"),
+            ImportBlock::Corrupt => panic!("expected Event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn try_extend_surfaces_read_error_distinctly() {
+        let boom = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let events = vec![Ok(persisted(1, 1, "E", None, b"x1")), Err(boom)];
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("new");
+        let err = w
+            .section(b"s")
+            .expect("section")
+            .try_extend(futures::stream::iter(events))
+            .await
+            .expect_err("read error propagates");
+        match err {
+            SectionError::Read(io) => assert_eq!(io.to_string(), "boom"),
+            SectionError::Write(_) => panic!("a read failure must not be a write failure"),
+        }
     }
 
     #[test]
