@@ -10,7 +10,10 @@ use core::convert::Infallible;
 use core::ops::Range;
 
 use bytes::Bytes;
+use futures::Stream;
+use futures::StreamExt as _;
 use minicbor::Decoder;
+use minicbor::Encoder;
 use minicbor::data::Type;
 use thiserror::Error;
 
@@ -23,10 +26,10 @@ use nexus::Version;
 const MAGIC: &[u8] = b"nxch";
 const FORMAT_VERSION: u32 = 1;
 
-/// A box-layer encode/decode failure.
+/// A box-layer decode failure.
 ///
 /// Not [`ImportError`](crate::import::ImportError) — the box has no store error
-/// or id type. Two failure domains, two variants (CLAUDE rule 3).
+/// or id type. Decode-only: write-path failures are [`WriteError`].
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ChunkError {
@@ -35,11 +38,43 @@ pub enum ChunkError {
     /// [`ImportBlock::Corrupt`](crate::import::ImportBlock::Corrupt).
     #[error("malformed chunk: {0}")]
     Malformed(&'static str),
-    /// Encode: minicbor serialization failed. Never fires in practice (the
-    /// `Vec` writer is `Infallible`, a `PersistedEnvelope` guarantees every
-    /// field cap) but minicbor's API is fallible, so the type is honest.
-    #[error("chunk encode failed: {0}")]
-    Encode(#[from] minicbor::encode::Error<Infallible>),
+}
+
+/// A write-path failure, generic over the sink's write error `E` (`W::Error`).
+///
+/// Distinct from [`ChunkError`] (the read domain, CLAUDE rule 3). Wraps
+/// minicbor's encode error; unlike the old `Vec`-only encoders this can fire for
+/// real (a generic sink — e.g. a file — can fail mid-write).
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum WriteError<E> {
+    /// minicbor serialization or the sink failed while writing a chunk item.
+    #[error("chunk write failed: {0}")]
+    Encode(#[from] minicbor::encode::Error<E>),
+}
+
+/// A `SectionWriter::try_extend` failure: the two domains it spans, kept
+/// distinct (CLAUDE rule 3) — a read failure is never reported as a write
+/// failure.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SectionError<E, R> {
+    /// Writing a block into the chunk failed.
+    #[error(transparent)]
+    Write(#[from] WriteError<E>),
+    /// The source event stream yielded an error.
+    #[error("event stream read failed: {0}")]
+    Read(#[source] R),
+}
+
+/// Widen a scratch-buffer (`Vec`) encode error into the writer's error domain.
+///
+/// The `Vec` sink's write error is `Infallible`, so this path is unreachable; it
+/// only satisfies the type checker, preserving the error's `Display` message. A
+/// `Custom`-variant source chain would be dropped, but a `Vec` sink only ever
+/// produces `Message` errors, so none can reach here.
+fn widen_encode_err<E>(e: minicbor::encode::Error<Infallible>) -> WriteError<E> {
+    WriteError::Encode(minicbor::encode::Error::message(e))
 }
 
 /// The decoded chunk header — what [`decode_header`] returns.
@@ -75,21 +110,6 @@ fn validate_header(magic: &[u8], format_version: u32) -> Result<(), ChunkError> 
     Ok(())
 }
 
-/// Encode the chunk header. Call once, at the start of a chunk. `origin` is an
-/// optional chunk-level producer/device id (omitted from the map when `None`).
-///
-/// # Errors
-/// Returns [`ChunkError::Encode`] if minicbor serialization fails (never in
-/// practice — the `Vec` writer is infallible).
-pub fn encode_header(origin: Option<&[u8]>) -> Result<Bytes, ChunkError> {
-    let repr = HeaderRepr {
-        magic: MAGIC,
-        format_version: FORMAT_VERSION,
-        origin,
-    };
-    Ok(Bytes::from(minicbor::to_vec(&repr)?))
-}
-
 /// Decode just the header — a cheap peek that validates magic + format version
 /// and returns the chunk-level origin without parsing the body.
 ///
@@ -106,6 +126,115 @@ pub fn decode_header(bytes: &[u8]) -> Result<ChunkHeader, ChunkError> {
     })
 }
 
+/// A chunk being written.
+///
+/// The header is already on the wire the moment this exists — you cannot hold a
+/// `ChunkWriter` without it (Arrow's schema-in-constructor discipline). There is
+/// deliberately no `finish`: a CBOR sequence (RFC 8742) has no terminator, so a
+/// chunk is complete when writing stops. Recover the buffer with
+/// [`ChunkWriter::into_sink`].
+#[derive(Debug)]
+pub struct ChunkWriter<W> {
+    enc: Encoder<W>,
+}
+
+impl<W: minicbor::encode::Write> ChunkWriter<W> {
+    /// Construct a writer over `sink` and emit the chunk header (magic + format
+    /// version + optional `origin` producer/device id).
+    ///
+    /// # Errors
+    /// Returns [`WriteError`] if writing the header to the sink fails.
+    pub fn new(sink: W, origin: Option<&[u8]>) -> Result<Self, WriteError<W::Error>> {
+        let mut enc = Encoder::new(sink);
+        enc.encode(HeaderRepr {
+            magic: MAGIC,
+            format_version: FORMAT_VERSION,
+            origin,
+        })?;
+        Ok(Self { enc })
+    }
+
+    /// Begin a section for `stream_id`, recording the id once.
+    ///
+    /// Borrows `&mut self`, so the previous section's [`SectionWriter`] must be
+    /// dropped first — sections cannot interleave.
+    ///
+    /// # Errors
+    /// Returns [`WriteError`] if writing the heading to the sink fails.
+    pub fn section(
+        &mut self,
+        stream_id: &[u8],
+    ) -> Result<SectionWriter<'_, W>, WriteError<W::Error>> {
+        self.enc.encode(HeadingRepr { stream_id })?;
+        Ok(SectionWriter { enc: &mut self.enc })
+    }
+
+    /// Recover the sink. NOT a format "finish" (a CBOR sequence has no
+    /// terminator) — this just hands back everything written so far.
+    pub fn into_sink(self) -> W {
+        self.enc.into_writer()
+    }
+}
+
+/// A section whose heading is open.
+///
+/// The ONLY type that can write blocks, so "block before heading" is un-nameable
+/// — a compile error, not a runtime check. Obtained from [`ChunkWriter::section`].
+#[derive(Debug)]
+pub struct SectionWriter<'a, W> {
+    enc: &'a mut Encoder<W>,
+}
+
+impl<W: minicbor::encode::Write> SectionWriter<'_, W> {
+    /// Drain a fallible event stream into this section, writing each event.
+    ///
+    /// Mirrors `TryStreamExt::try_collect`: each item is written as a block.
+    /// [`SectionError::Read`] surfaces a source-stream error and
+    /// [`SectionError::Write`] a sink-write error — the two domains never collapse
+    /// into one (CLAUDE rule 3).
+    ///
+    /// # Errors
+    /// [`SectionError::Read`] if the source stream yields an error;
+    /// [`SectionError::Write`] if writing a block fails.
+    pub async fn try_extend<S, R>(
+        &mut self,
+        events: S,
+    ) -> Result<&mut Self, SectionError<W::Error, R>>
+    where
+        S: Stream<Item = Result<PersistedEnvelope, R>>,
+    {
+        futures::pin_mut!(events);
+        while let Some(item) = events.next().await {
+            let env = item.map_err(SectionError::Read)?;
+            self.block(&env).map_err(SectionError::Write)?;
+        }
+        Ok(self)
+    }
+
+    /// Append one event as a block `[crc32c(body), body]`.
+    ///
+    /// The crc covers exactly the body bstr bytes.
+    ///
+    /// # Errors
+    /// Returns [`WriteError`] if writing the block to the sink fails.
+    pub fn block(&mut self, event: &PersistedEnvelope) -> Result<&mut Self, WriteError<W::Error>> {
+        let body = BodyRepr {
+            version: event.version().as_u64(),
+            schema_version: event.schema_version(),
+            event_type: event.event_type(),
+            metadata: event.metadata(),
+            payload: event.payload(),
+        };
+        // Scratch-encode the body so it can be CRC'd before it is written.
+        let body_bytes = minicbor::to_vec(&body).map_err(widen_encode_err)?;
+        self.enc.encode(BlockRepr {
+            crc: crc32c::crc32c(&body_bytes),
+            body: &body_bytes,
+        })?;
+        Ok(self)
+    }
+}
+
 /// Wire shape of a section heading map `{0: stream_id}`.
 #[derive(minicbor::Encode, minicbor::Decode)]
 #[cbor(map)]
@@ -113,17 +242,6 @@ struct HeadingRepr<'a> {
     #[n(0)]
     #[cbor(with = "minicbor::bytes")]
     stream_id: &'a [u8],
-}
-
-/// Encode a per-stream section heading, recording the origin stream id once.
-/// Emit one before the blocks of each stream.
-///
-/// # Errors
-/// Returns [`ChunkError::Encode`] if minicbor serialization fails (never in
-/// practice).
-pub fn encode_section_heading(stream_id: &[u8]) -> Result<Bytes, ChunkError> {
-    let repr = HeadingRepr { stream_id };
-    Ok(Bytes::from(minicbor::to_vec(&repr)?))
 }
 
 /// Wire shape of a block body map. `global_seq` is deliberately absent —
@@ -155,28 +273,6 @@ struct BlockRepr<'a> {
     #[n(1)]
     #[cbor(with = "minicbor::bytes")]
     body: &'a [u8],
-}
-
-/// Encode one event as a block `[crc32c(body), body]`. The crc covers exactly
-/// the body bstr bytes.
-///
-/// # Errors
-/// Returns [`ChunkError::Encode`] if minicbor serialization fails (never in
-/// practice).
-pub fn encode_block(event: &PersistedEnvelope) -> Result<Bytes, ChunkError> {
-    let body = BodyRepr {
-        version: event.version().as_u64(),
-        schema_version: event.schema_version(),
-        event_type: event.event_type(),
-        metadata: event.metadata(),
-        payload: event.payload(),
-    };
-    let body_bytes = minicbor::to_vec(&body)?;
-    let block = BlockRepr {
-        crc: crc32c::crc32c(&body_bytes),
-        body: &body_bytes,
-    };
-    Ok(Bytes::from(minicbor::to_vec(&block)?))
 }
 
 /// Decode one block from the decoder's current position.
@@ -312,7 +408,75 @@ mod tests {
     use crate::store::RawEventStore;
     use crate::stream_id::StreamKey;
     use crate::testing::InMemoryStore;
-    use futures::StreamExt;
+
+    #[test]
+    fn writer_multi_section_round_trips() {
+        let mut w = ChunkWriter::new(Vec::new(), Some(b"dev")).expect("new");
+        {
+            let mut s = w.section(b"task-1").expect("section");
+            s.block(&persisted(1, 1, "E", None, b"a1")).expect("block");
+            s.block(&persisted(2, 1, "E", Some(b"m"), b"a2"))
+                .expect("block");
+        }
+        {
+            let mut s = w.section(b"task-2").expect("section");
+            s.block(&persisted(1, 2, "E", None, b"b1")).expect("block");
+        }
+        let chunk = Bytes::from(w.into_sink());
+
+        let sections = decode_chunk(&chunk).expect("decode");
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].origin.as_ref(), b"task-1");
+        assert_eq!(sections[0].blocks.len(), 2);
+        assert_eq!(sections[1].origin.as_ref(), b"task-2");
+        match (&sections[0].blocks[1], &sections[1].blocks[0]) {
+            (ImportBlock::Event(a2), ImportBlock::Event(b1)) => {
+                assert_eq!(a2.metadata(), Some(b"m".as_slice()));
+                assert_eq!(a2.payload(), b"a2");
+                assert_eq!(b1.schema_version(), 2);
+                assert_eq!(b1.payload(), b"b1");
+            }
+            _ => panic!("expected Event blocks"),
+        }
+    }
+
+    #[test]
+    fn writer_empty_section_then_stream() {
+        // A section with zero blocks, then a real one — the writer-path typestate
+        // must stay sound across an empty section (heading with no following
+        // blocks) and a subsequent section.
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("new");
+        {
+            let _s = w.section(b"empty").expect("section");
+        }
+        {
+            let mut s = w.section(b"real").expect("section");
+            s.block(&persisted(1, 1, "E", None, b"x")).expect("block");
+        }
+        let sections = decode_chunk(&Bytes::from(w.into_sink())).expect("decode");
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].origin.as_ref(), b"empty");
+        assert!(sections[0].blocks.is_empty());
+        assert_eq!(sections[1].blocks.len(), 1);
+    }
+
+    #[test]
+    fn writer_header_decodes() {
+        let w = ChunkWriter::new(Vec::new(), Some(b"dev-1")).expect("new");
+        let bytes = Bytes::from(w.into_sink());
+        let header = decode_header(&bytes).expect("decode header");
+        assert_eq!(header.format_version, 1);
+        assert_eq!(header.origin.as_deref(), Some(b"dev-1".as_slice()));
+    }
+
+    #[test]
+    fn write_error_displays_and_is_error() {
+        // Infallible sink error: the WriteError type must still be constructible and
+        // implement std::error::Error so it composes in caller error chains.
+        fn assert_error<E: std::error::Error>() {}
+        assert_error::<WriteError<core::convert::Infallible>>();
+        assert_error::<SectionError<core::convert::Infallible, std::io::Error>>();
+    }
 
     /// Build a `PersistedEnvelope` directly: backing buffer = [`event_type` | metadata? | payload].
     fn persisted(
@@ -353,10 +517,43 @@ mod tests {
             .expect("not torn")
     }
 
+    /// Header bytes alone — the writer-built equivalent of the old `encode_header`.
+    fn header_bytes(origin: Option<&[u8]>) -> Vec<u8> {
+        ChunkWriter::new(Vec::new(), origin)
+            .expect("header writer")
+            .into_sink()
+    }
+
+    /// Section-heading bytes alone: header+heading via the writer, minus the header
+    /// prefix (a CBOR sequence is concatenation, so the tail is exactly the heading).
+    fn heading_bytes(stream_id: &[u8]) -> Vec<u8> {
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("writer");
+        w.section(stream_id).expect("section");
+        let full = w.into_sink();
+        full[header_bytes(None).len()..].to_vec()
+    }
+
+    /// One block's bytes alone: header+heading+block via the writer, minus the
+    /// header+heading prefix.
+    fn block_bytes(event: &PersistedEnvelope) -> Vec<u8> {
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("writer");
+        {
+            let mut s = w.section(b"k").expect("section");
+            s.block(event).expect("block");
+        }
+        let full = w.into_sink();
+        let prefix = {
+            let mut w2 = ChunkWriter::new(Vec::new(), None).expect("writer");
+            w2.section(b"k").expect("section");
+            w2.into_sink().len()
+        };
+        full[prefix..].to_vec()
+    }
+
     #[test]
     fn block_round_trips_all_fields() {
         let event = persisted(7, 3, "AccountOpened", Some(b"hlc=42"), b"balance:100");
-        let bytes = encode_block(&event).expect("encode");
+        let bytes = block_bytes(&event);
         match decode_one_block(&bytes) {
             ImportBlock::Event(got) => {
                 assert_eq!(got.version().as_u64(), 7);
@@ -372,7 +569,7 @@ mod tests {
     #[test]
     fn block_round_trips_without_metadata_and_empty_payload() {
         let event = persisted(1, 1, "E", None, b"");
-        let bytes = encode_block(&event).expect("encode");
+        let bytes = block_bytes(&event);
         match decode_one_block(&bytes) {
             ImportBlock::Event(got) => {
                 assert_eq!(got.metadata(), None);
@@ -386,8 +583,7 @@ mod tests {
     #[test]
     fn block_with_flipped_body_byte_is_corrupt() {
         let event = persisted(2, 1, "E", None, b"hello");
-        let bytes = encode_block(&event).expect("encode");
-        let mut v = bytes.to_vec();
+        let mut v = block_bytes(&event);
         let last = v.len() - 1;
         v[last] ^= 0xFF;
         assert!(matches!(decode_one_block(&v), ImportBlock::Corrupt));
@@ -395,7 +591,7 @@ mod tests {
 
     #[test]
     fn header_round_trips_without_origin() {
-        let bytes = encode_header(None).expect("encode");
+        let bytes = header_bytes(None);
         let header = decode_header(&bytes).expect("decode");
         assert_eq!(header.format_version, 1);
         assert_eq!(header.origin, None);
@@ -403,7 +599,7 @@ mod tests {
 
     #[test]
     fn header_round_trips_with_origin() {
-        let bytes = encode_header(Some(b"phone-7")).expect("encode");
+        let bytes = header_bytes(Some(b"phone-7"));
         let header = decode_header(&bytes).expect("decode");
         assert_eq!(header.format_version, 1);
         assert_eq!(header.origin.as_deref(), Some(b"phone-7".as_slice()));
@@ -411,7 +607,7 @@ mod tests {
 
     #[test]
     fn header_rejects_bad_magic() {
-        let mut v = encode_header(None).expect("encode").to_vec();
+        let mut v = header_bytes(None);
         let pos = v.iter().position(|&b| b == b'n').expect("magic present");
         v[pos] = b'X';
         let err = decode_header(&v).expect_err("bad magic rejected");
@@ -420,22 +616,21 @@ mod tests {
 
     #[test]
     fn header_rejects_truncated() {
-        let bytes = encode_header(Some(b"x")).expect("encode");
+        let bytes = header_bytes(Some(b"x"));
         let err = decode_header(&bytes[..bytes.len() / 2]).expect_err("truncated rejected");
         assert!(matches!(err, ChunkError::Malformed(_)));
     }
 
-    /// Encode a full multi-stream chunk: header + per-stream heading + blocks.
+    /// Build a full multi-stream chunk through the public `ChunkWriter`.
     fn encode_chunk(origin: Option<&[u8]>, streams: &[(&[u8], Vec<PersistedEnvelope>)]) -> Bytes {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&encode_header(origin).expect("header"));
+        let mut w = ChunkWriter::new(Vec::new(), origin).expect("writer");
         for (stream_id, events) in streams {
-            buf.extend_from_slice(&encode_section_heading(stream_id).expect("heading"));
+            let mut s = w.section(stream_id).expect("section");
             for e in events {
-                buf.extend_from_slice(&encode_block(e).expect("block"));
+                s.block(e).expect("block");
             }
         }
-        Bytes::from(buf)
+        Bytes::from(w.into_sink())
     }
 
     #[test]
@@ -477,16 +672,16 @@ mod tests {
 
     #[test]
     fn decode_header_only_chunk_is_empty_vec() {
-        let chunk = encode_header(None).expect("header");
+        let chunk = header_bytes(None);
         let sections = decode_chunk(&chunk).expect("decode");
         assert!(sections.is_empty());
     }
 
     #[test]
     fn decode_block_before_heading_is_malformed() {
-        let mut chunk = encode_header(None).expect("header").to_vec();
+        let mut chunk = header_bytes(None);
         let event = persisted(1, 1, "E", None, b"x");
-        chunk.extend_from_slice(&encode_block(&event).expect("block"));
+        chunk.extend_from_slice(&block_bytes(&event));
         let err = decode_chunk(&chunk).expect_err("block before heading");
         assert!(matches!(
             err,
@@ -557,7 +752,7 @@ mod tests {
 
     #[test]
     fn unexpected_top_level_item_is_malformed() {
-        let mut v = encode_header(None).expect("header").to_vec();
+        let mut v = header_bytes(None);
         v.push(0x01); // CBOR uint 1 — neither map nor array
         assert!(matches!(
             decode_chunk(&v),
@@ -595,8 +790,8 @@ mod tests {
             crc: crc32c::crc32c(&body),
             body: &body,
         };
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
         assert!(matches!(
             decode_chunk(&chunk),
@@ -606,18 +801,21 @@ mod tests {
 
     // ── Task 6: Lifecycle — incremental append / truncation / valid prefix ──
 
-    /// The cumulative byte length after the header + heading + first N blocks.
+    /// Byte length of a chunk holding the header, one heading, and the first `n`
+    /// blocks — the valid-prefix cut after `n` blocks in the full chunk.
     fn prefix_len_after_n_blocks(
         stream_id: &[u8],
         events: &[PersistedEnvelope],
         n: usize,
     ) -> usize {
-        let mut len = encode_header(None).expect("header").len();
-        len += encode_section_heading(stream_id).expect("heading").len();
-        for e in events.iter().take(n) {
-            len += encode_block(e).expect("block").len();
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("writer");
+        {
+            let mut s = w.section(stream_id).expect("section");
+            for e in events.iter().take(n) {
+                s.block(e).expect("block");
+            }
         }
-        len
+        w.into_sink().len()
     }
 
     #[test]
@@ -660,14 +858,14 @@ mod tests {
 
     #[test]
     fn golden_header_bytes() {
-        let bytes = encode_header(Some(b"dev")).expect("header");
+        let bytes = header_bytes(Some(b"dev"));
         insta::assert_snapshot!("header_with_origin_hex", hex_of(&bytes));
     }
 
     #[test]
     fn golden_block_bytes() {
         let event = persisted(1, 1, "E", None, b"hi");
-        let bytes = encode_block(&event).expect("block");
+        let bytes = block_bytes(&event);
         insta::assert_snapshot!("block_v1_hex", hex_of(&bytes));
     }
 
@@ -763,8 +961,7 @@ mod tests {
             flip_pick in any::<prop::sample::Index>(),
         ) {
             let event = persisted(ev_v, ev_sc, &ev_et, ev_md.as_deref(), &ev_pl);
-            let block = encode_block(&event).expect("block");
-            let mut v = block.to_vec();
+            let mut v = block_bytes(&event);
             let start = v.len() / 2;
             let idx = start + flip_pick.index(v.len() - start);
             v[idx] ^= 0xFF;
@@ -795,7 +992,7 @@ mod tests {
         fn decode_chunk_never_panics_on_valid_header_plus_garbage(
             garbage in proptest::collection::vec(any::<u8>(), 0..128),
         ) {
-            let mut v = encode_header(None).expect("header").to_vec();
+            let mut v = header_bytes(None);
             v.extend_from_slice(&garbage);
             let _ = decode_chunk(&v);
         }
@@ -835,8 +1032,8 @@ mod tests {
             crc: crc32c::crc32c(&body),
             body: &body,
         };
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
         let sections = decode_chunk(&chunk).expect("decode");
         match &sections[0].blocks[0] {
@@ -873,18 +1070,19 @@ mod tests {
         }
 
         // Export → box-encode into one chunk.
-        let mut chunk = encode_header(Some(b"src")).expect("header").to_vec();
+        let mut w = ChunkWriter::new(Vec::new(), Some(b"src")).expect("writer");
         for sid in ["task-1", "task-2"] {
-            chunk.extend_from_slice(&encode_section_heading(sid.as_bytes()).expect("heading"));
-            let mut s = src
+            let s = src
                 .read_stream(&StreamKey::from_slice(sid.as_bytes()), Version::INITIAL)
                 .await
                 .expect("read");
-            while let Some(item) = s.next().await {
-                let e = item.expect("no read error");
-                chunk.extend_from_slice(&encode_block(&e).expect("block"));
-            }
+            w.section(sid.as_bytes())
+                .expect("section")
+                .try_extend(s)
+                .await
+                .expect("extend");
         }
+        let chunk = w.into_sink();
 
         // Box-decode → import into a fresh store under origin-namespaced ids.
         let sections = decode_chunk(&chunk).expect("decode");
@@ -922,14 +1120,14 @@ mod tests {
     // CBOR encodes a byte/text-string length with a different prefix per size
     // band: inline (<24), 1-byte (24..=255), 2-byte (256..=65535), 4-byte
     // (65536..). A bug mishandling one band is invisible until a value lands in
-    // it; exercise each band explicitly through encode_block → decode.
+    // it; exercise each band explicitly through `block_bytes` → decode.
 
     #[test]
     fn box_round_trips_every_payload_length_band() {
         for size in [0usize, 23, 24, 255, 256, 1024, 65536] {
             let payload = vec![0xABu8; size];
             let event = persisted(1, 1, "E", None, &payload);
-            let bytes = encode_block(&event).expect("encode");
+            let bytes = block_bytes(&event);
             match decode_one_block(&bytes) {
                 ImportBlock::Event(got) => {
                     assert_eq!(got.payload().len(), size, "payload size {size} length");
@@ -945,7 +1143,7 @@ mod tests {
         for et_len in [256usize, crate::value::MAX_EVENT_TYPE_LEN] {
             let et = "a".repeat(et_len);
             let event = persisted(1, 1, &et, Some(b"m"), b"p");
-            let bytes = encode_block(&event).expect("encode");
+            let bytes = block_bytes(&event);
             match decode_one_block(&bytes) {
                 ImportBlock::Event(got) => {
                     assert_eq!(got.event_type().len(), et_len, "event_type len {et_len}");
@@ -961,7 +1159,7 @@ mod tests {
     fn box_round_trips_metadata_at_2byte_band() {
         let meta = vec![0x07u8; 300];
         let event = persisted(1, 1, "E", Some(&meta), b"p");
-        match decode_one_block(&encode_block(&event).expect("encode")) {
+        match decode_one_block(&block_bytes(&event)) {
             ImportBlock::Event(got) => assert_eq!(got.metadata(), Some(meta.as_slice())),
             ImportBlock::Corrupt => panic!("metadata 2-byte band must round-trip"),
         }
@@ -1001,8 +1199,8 @@ mod tests {
     #[test]
     fn indefinite_array_at_top_level_is_malformed() {
         // decode_chunk peeks Type::ArrayIndef (not Array) → unexpected item type.
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.push(0x9f); // array(*) indefinite
         chunk.push(0xff); // break
         assert!(matches!(
@@ -1021,7 +1219,7 @@ mod tests {
             &[(b"done".as_slice(), vec![persisted(1, 1, "E", None, b"x")])],
         );
         let mut v = chunk.to_vec();
-        let heading = encode_section_heading(b"truncated-stream-id").expect("heading");
+        let heading = heading_bytes(b"truncated-stream-id");
         v.extend_from_slice(&heading[..heading.len() - 4]); // drop 4 id bytes
         let sections = decode_chunk(&v).expect("valid prefix");
         assert_eq!(sections.len(), 1, "torn heading produces no section");
@@ -1051,6 +1249,47 @@ mod tests {
             decode_chunk(&bytes),
             Err(ChunkError::Malformed(_))
         ));
+    }
+
+    // ── Task 4: try_extend — drains a fallible stream into a section ──────────
+
+    #[tokio::test]
+    async fn try_extend_drains_stream_into_section() {
+        let events = vec![
+            Ok::<_, std::io::Error>(persisted(1, 1, "E", None, b"x1")),
+            Ok(persisted(2, 1, "E", Some(b"m"), b"x2")),
+        ];
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("new");
+        w.section(b"s")
+            .expect("section")
+            .try_extend(futures::stream::iter(events))
+            .await
+            .expect("extend");
+        let chunk = Bytes::from(w.into_sink());
+
+        let sections = decode_chunk(&chunk).expect("decode");
+        assert_eq!(sections[0].blocks.len(), 2);
+        match &sections[0].blocks[1] {
+            ImportBlock::Event(e) => assert_eq!(e.payload(), b"x2"),
+            ImportBlock::Corrupt => panic!("expected Event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn try_extend_surfaces_read_error_distinctly() {
+        let boom = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let events = vec![Ok(persisted(1, 1, "E", None, b"x1")), Err(boom)];
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("new");
+        let err = w
+            .section(b"s")
+            .expect("section")
+            .try_extend(futures::stream::iter(events))
+            .await
+            .expect_err("read error propagates");
+        match err {
+            SectionError::Read(io) => assert_eq!(io.to_string(), "boom"),
+            SectionError::Write(_) => panic!("a read failure must not be a write failure"),
+        }
     }
 
     #[test]
@@ -1088,8 +1327,8 @@ mod tests {
             crc: crc32c::crc32c(&body),
             body: &body,
         };
-        let mut chunk = encode_header(None).expect("header").to_vec();
-        chunk.extend_from_slice(&encode_section_heading(b"s").expect("heading"));
+        let mut chunk = header_bytes(None);
+        chunk.extend_from_slice(&heading_bytes(b"s"));
         chunk.extend_from_slice(&minicbor::to_vec(&block).expect("block"));
         assert!(matches!(
             decode_chunk(&chunk),
