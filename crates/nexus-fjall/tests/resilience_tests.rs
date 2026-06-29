@@ -42,6 +42,7 @@ use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_store::PendingEnvelope;
+use nexus_store::StreamKey;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::RawEventStore;
@@ -52,23 +53,8 @@ use proptest::prelude::*;
 // Helpers
 // ============================================================================
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(String);
-impl std::fmt::Display for TestId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl nexus::Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
-fn tid(s: &str) -> TestId {
-    TestId(s.to_owned())
+fn sk(s: &str) -> StreamKey {
+    StreamKey::from_slice(s.as_bytes())
 }
 
 fn leak(s: &str) -> &'static str {
@@ -89,7 +75,7 @@ fn temp_store() -> (FjallStore, tempfile::TempDir) {
     (store, dir)
 }
 
-async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8>> {
+async fn read_all_payloads(store: &FjallStore, stream_id: &StreamKey) -> Vec<Vec<u8>> {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -102,7 +88,7 @@ async fn read_all_payloads(store: &FjallStore, stream_id: &TestId) -> Vec<Vec<u8
     payloads
 }
 
-async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
+async fn read_all_versions(store: &FjallStore, stream_id: &StreamKey) -> Vec<u64> {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -115,7 +101,7 @@ async fn read_all_versions(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
     versions
 }
 
-async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<String> {
+async fn read_all_event_types(store: &FjallStore, stream_id: &StreamKey) -> Vec<String> {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -128,7 +114,7 @@ async fn read_all_event_types(store: &FjallStore, stream_id: &TestId) -> Vec<Str
     types
 }
 
-async fn count_events(store: &FjallStore, stream_id: &TestId) -> u64 {
+async fn count_events(store: &FjallStore, stream_id: &StreamKey) -> u64 {
     let mut stream = store
         .read_stream(stream_id, Version::INITIAL)
         .await
@@ -248,8 +234,8 @@ async fn attack_dual_instance_same_path() {
         Ok(store2) => {
             // DANGEROUS: two writers on same DB!
             // Try creating different streams from each
-            let sid1 = tid("stream-from-store1");
-            let sid2 = tid("stream-from-store2");
+            let sid1 = sk("stream-from-store1");
+            let sid2 = sk("stream-from-store2");
             let env1 = make_envelope(1, "A", b"from-1");
             let env2 = make_envelope(1, "B", b"from-2");
 
@@ -306,8 +292,8 @@ proptest! {
             let mut store = FjallStore::builder(&path).open().unwrap();
 
             // Shadow model: stream_idx -> list of payloads
-            let stream_names: Vec<TestId> = (0..5)
-                .map(|i| tid(&format!("stream_{i}")))
+            let stream_names: Vec<StreamKey> = (0..5)
+                .map(|i| sk(&format!("stream_{i}")))
                 .collect();
             let mut model: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
 
@@ -378,7 +364,7 @@ proptest! {
 async fn attack_read_snapshot_isolation() {
     // Append 1000 events in 10 batches of 100, then verify read consistency
     let (store, _dir) = temp_store();
-    let sid_val = tid("snapshot-stream");
+    let sid_val = sk("snapshot-stream");
 
     for batch in 0..10u64 {
         let start = batch * 100 + 1;
@@ -420,7 +406,7 @@ async fn attack_crash_simulation_forget_store() {
     {
         let store = FjallStore::builder(&path).open().unwrap();
         let envs = vec![make_envelope(1, "Before", b"crash-data")];
-        store.append(&tid("crash-test"), None, &envs).await.unwrap();
+        store.append(&sk("crash-test"), None, &envs).await.unwrap();
         std::mem::forget(store); // Simulate crash — no Drop, no flush
     }
 
@@ -437,7 +423,7 @@ async fn attack_crash_simulation_forget_store() {
             );
         }
         Ok(store) => {
-            let payloads = read_all_payloads(&store, &tid("crash-test")).await;
+            let payloads = read_all_payloads(&store, &sk("crash-test")).await;
             if payloads.is_empty() {
                 println!(
                     "DURABILITY NOTE: data lost after mem::forget — \
@@ -462,10 +448,10 @@ async fn attack_version_u64_max_read() {
     // Read from version u64::MAX — should return empty (no events at that version)
     let (store, _dir) = temp_store();
     let envs = vec![make_envelope(1, "A", b"data")];
-    store.append(&tid("s"), None, &envs).await.unwrap();
+    store.append(&sk("s"), None, &envs).await.unwrap();
 
     let mut stream = store
-        .read_stream(&tid("s"), Version::new(u64::MAX).unwrap())
+        .read_stream(&sk("s"), Version::new(u64::MAX).unwrap())
         .await
         .unwrap();
     assert!(
@@ -480,10 +466,10 @@ async fn attack_read_from_version_zero() {
     // because events start at version 1, and the range scan starts from 0.
     let (store, _dir) = temp_store();
     let envs = vec![make_envelope(1, "A", b"1"), make_envelope(2, "B", b"2")];
-    store.append(&tid("s"), None, &envs).await.unwrap();
+    store.append(&sk("s"), None, &envs).await.unwrap();
 
     // Read from version 0 (INITIAL)
-    let count = count_events(&store, &tid("s")).await;
+    let count = count_events(&store, &sk("s")).await;
     assert_eq!(count, 2, "reading from INITIAL should return all events");
 }
 
@@ -491,7 +477,7 @@ async fn attack_read_from_version_zero() {
 async fn attack_read_nonexistent_stream() {
     let (store, _dir) = temp_store();
     let mut stream = store
-        .read_stream(&tid("does-not-exist"), Version::INITIAL)
+        .read_stream(&sk("does-not-exist"), Version::INITIAL)
         .await
         .unwrap();
     assert!(
@@ -509,10 +495,10 @@ async fn attack_read_past_end_of_stream() {
         make_envelope(2, "B", b"2"),
         make_envelope(3, "C", b"3"),
     ];
-    store.append(&tid("s"), None, &envs).await.unwrap();
+    store.append(&sk("s"), None, &envs).await.unwrap();
 
     let mut stream = store
-        .read_stream(&tid("s"), Version::new(100).unwrap())
+        .read_stream(&sk("s"), Version::new(100).unwrap())
         .await
         .unwrap();
     assert!(
@@ -536,7 +522,7 @@ async fn attack_recovery_torture_100_streams_reopen_5_times() {
         let store = FjallStore::builder(&path).open().unwrap();
 
         for (stream_idx, current_total) in total_events_per_stream.iter_mut().enumerate() {
-            let sid_val = tid(&format!("torture_{stream_idx}"));
+            let sid_val = sk(&format!("torture_{stream_idx}"));
             let current = *current_total;
             let new_events = 5u64;
 
@@ -556,7 +542,7 @@ async fn attack_recovery_torture_100_streams_reopen_5_times() {
 
         // Verify all streams before closing
         for (stream_idx, expected) in total_events_per_stream.iter().enumerate() {
-            let sid_val = tid(&format!("torture_{stream_idx}"));
+            let sid_val = sk(&format!("torture_{stream_idx}"));
             let count = count_events(&store, &sid_val).await;
             assert_eq!(
                 count, *expected,
@@ -582,7 +568,7 @@ async fn attack_concurrent_append_storm_50_tasks() {
     for i in 0..50u64 {
         let store_clone = Arc::clone(&store);
         let handle = tokio::spawn(async move {
-            let sid_val = TestId(format!("concurrent_{i}"));
+            let sid_val = StreamKey::from_slice(format!("concurrent_{i}").as_bytes());
             let env = pending_envelope(Version::INITIAL)
                 .event_type(leak(&format!("Created_{i}")))
                 .payload(i.to_le_bytes().to_vec())
@@ -614,7 +600,7 @@ async fn attack_concurrent_append_storm_50_tasks() {
 
     // Verify all 50 streams are readable
     for i in 0..50u64 {
-        let sid_val = TestId(format!("concurrent_{i}"));
+        let sid_val = StreamKey::from_slice(format!("concurrent_{i}").as_bytes());
         let count = count_events(&store, &sid_val).await;
         assert_eq!(
             count, 1,
@@ -634,7 +620,7 @@ async fn attack_concurrent_append_same_stream_conflict() {
     for i in 0..10u64 {
         let store_clone = Arc::clone(&store);
         let handle = tokio::spawn(async move {
-            let sid_val = TestId("contested-stream".to_owned());
+            let sid_val = StreamKey::from_slice(b"contested-stream");
             let env = pending_envelope(Version::INITIAL)
                 .event_type(leak(&format!("Contested_{i}")))
                 .payload(i.to_le_bytes().to_vec())
@@ -667,7 +653,7 @@ async fn attack_concurrent_append_same_stream_conflict() {
     assert_eq!(other_errors, 0, "no other errors expected");
 
     // Verify the stream has exactly 1 event
-    let sid_val = tid("contested-stream");
+    let sid_val = sk("contested-stream");
     let count = count_events(&store, &sid_val).await;
     assert_eq!(count, 1, "contested stream should have exactly 1 event");
 }
@@ -685,7 +671,7 @@ async fn attack_version_gap_in_batch() {
         make_envelope(3, "C", b"3"), // skip version 2!
     ];
 
-    let result = store.append(&tid("gap"), None, &envs).await;
+    let result = store.append(&sk("gap"), None, &envs).await;
     assert!(result.is_err(), "version gap in batch must be rejected");
 }
 
@@ -698,7 +684,7 @@ async fn attack_version_duplicate_in_batch() {
         make_envelope(1, "B", b"2"), // duplicate version!
     ];
 
-    let result = store.append(&tid("dup"), None, &envs).await;
+    let result = store.append(&sk("dup"), None, &envs).await;
     assert!(
         result.is_err(),
         "duplicate version in batch must be rejected"
@@ -714,7 +700,7 @@ async fn attack_version_backwards_in_batch() {
         make_envelope(1, "A", b"1"), // wrong order!
     ];
 
-    let result = store.append(&tid("back"), Version::new(1), &envs).await;
+    let result = store.append(&sk("back"), Version::new(1), &envs).await;
     // This depends on validation: first envelope has version 2, expected is 2 (1+1) → OK
     // Second envelope has version 1, expected is 3 (1+1+1) → CONFLICT
     assert!(
@@ -729,27 +715,27 @@ async fn attack_empty_batch_does_not_advance_version() {
 
     // Create stream with 1 event
     store
-        .append(&tid("empty-batch"), None, &[make_envelope(1, "A", b"1")])
+        .append(&sk("empty-batch"), None, &[make_envelope(1, "A", b"1")])
         .await
         .unwrap();
 
     // Append empty batch
     store
-        .append(&tid("empty-batch"), Version::new(1), &[])
+        .append(&sk("empty-batch"), Version::new(1), &[])
         .await
         .unwrap();
 
     // Should still be able to append at version 2 (empty batch didn't advance)
     store
         .append(
-            &tid("empty-batch"),
+            &sk("empty-batch"),
             Version::new(1),
             &[make_envelope(2, "B", b"2")],
         )
         .await
         .unwrap();
 
-    let count = count_events(&store, &tid("empty-batch")).await;
+    let count = count_events(&store, &sk("empty-batch")).await;
     assert_eq!(count, 2, "should have exactly 2 events after empty batch");
 }
 
@@ -765,7 +751,7 @@ async fn attack_empty_batch_does_not_advance_version() {
 async fn append_assigns_monotonic_global_seq_across_streams() {
     let (store, _dir) = temp_store();
 
-    async fn read_global_seqs(store: &FjallStore, stream_id: &TestId) -> Vec<u64> {
+    async fn read_global_seqs(store: &FjallStore, stream_id: &StreamKey) -> Vec<u64> {
         let mut stream = store
             .read_stream(stream_id, Version::INITIAL)
             .await
@@ -781,7 +767,7 @@ async fn append_assigns_monotonic_global_seq_across_streams() {
     // Append 1: two events to stream "a" -> global_seq 1, 2.
     store
         .append(
-            &tid("a"),
+            &sk("a"),
             None,
             &[make_envelope(1, "A1", b"a1"), make_envelope(2, "A2", b"a2")],
         )
@@ -790,22 +776,22 @@ async fn append_assigns_monotonic_global_seq_across_streams() {
 
     // Append 2: one event to a different stream "b" -> global_seq 3.
     store
-        .append(&tid("b"), None, &[make_envelope(1, "B1", b"b1")])
+        .append(&sk("b"), None, &[make_envelope(1, "B1", b"b1")])
         .await
         .unwrap();
 
     // Append 3: continue stream "a" -> global_seq 4, 5.
     store
         .append(
-            &tid("a"),
+            &sk("a"),
             Version::new(2),
             &[make_envelope(3, "A3", b"a3"), make_envelope(4, "A4", b"a4")],
         )
         .await
         .unwrap();
 
-    let seqs_a = read_global_seqs(&store, &tid("a")).await;
-    let seqs_b = read_global_seqs(&store, &tid("b")).await;
+    let seqs_a = read_global_seqs(&store, &sk("a")).await;
+    let seqs_b = read_global_seqs(&store, &sk("b")).await;
 
     // Stream "a" got events at append positions 1,2 then 4,5.
     assert_eq!(
@@ -846,7 +832,7 @@ async fn attack_recovery_stream_id_counter_correctness() {
     {
         let store = FjallStore::builder(&path).open().unwrap();
         for i in 0..stream_count {
-            let sid_val = tid(&format!("recovery_{i}"));
+            let sid_val = sk(&format!("recovery_{i}"));
             let env = make_envelope(1, "Init", &i.to_le_bytes());
             store.append(&sid_val, None, &[env]).await.unwrap();
         }
@@ -856,13 +842,13 @@ async fn attack_recovery_stream_id_counter_correctness() {
     {
         let store = FjallStore::builder(&path).open().unwrap();
         // Create one more stream — should get a unique numeric ID
-        let sid_val = tid(&format!("recovery_{stream_count}"));
+        let sid_val = sk(&format!("recovery_{stream_count}"));
         let env = make_envelope(1, "Init", b"new");
         store.append(&sid_val, None, &[env]).await.unwrap();
 
         // Verify ALL streams are readable
         for i in 0..=stream_count {
-            let sid_val = tid(&format!("recovery_{i}"));
+            let sid_val = sk(&format!("recovery_{i}"));
             let count = count_events(&store, &sid_val).await;
             assert_eq!(count, 1, "stream recovery_{i} should have 1 event");
         }
@@ -879,14 +865,14 @@ async fn attack_empty_batch_to_nonexistent_stream() {
 
     // Append empty batch to nonexistent stream with INITIAL version
     // Should succeed (no-op) because the early return skips all validation
-    let result = store.append(&tid("phantom"), None, &[]).await;
+    let result = store.append(&sk("phantom"), None, &[]).await;
     assert!(
         result.is_ok(),
         "empty batch to nonexistent stream should be no-op"
     );
 
     // Stream should still not exist (no metadata written)
-    let count = count_events(&store, &tid("phantom")).await;
+    let count = count_events(&store, &sk("phantom")).await;
     assert_eq!(count, 0, "phantom stream should have 0 events");
 }
 
@@ -896,7 +882,7 @@ async fn attack_empty_batch_wrong_version_to_nonexistent() {
     // This means you can "succeed" with a wrong expected_version on an empty batch.
     let (store, _dir) = temp_store();
 
-    let result = store.append(&tid("phantom2"), Version::new(999), &[]).await;
+    let result = store.append(&sk("phantom2"), Version::new(999), &[]).await;
     // The early return at line 61 fires BEFORE any version check.
     // This is arguably a bug: it should still validate expected_version
     // against the actual stream state, even for empty batches.
@@ -916,7 +902,7 @@ async fn attack_empty_batch_wrong_version_to_nonexistent() {
 #[tokio::test]
 async fn attack_large_batch_1000_events() {
     let (store, _dir) = temp_store();
-    let sid_val = tid("large-batch");
+    let sid_val = sk("large-batch");
 
     let envelopes: Vec<_> = (1..=1000u64)
         .map(|v| make_envelope(v, "Tick", &v.to_le_bytes()))
@@ -941,7 +927,7 @@ async fn attack_large_batch_1000_events() {
 async fn attack_reopen_10_times_with_appends() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db");
-    let sid_val = tid("reopen-torture");
+    let sid_val = sk("reopen-torture");
 
     for cycle in 0..10u64 {
         let store = FjallStore::builder(&path).open().unwrap();
@@ -998,7 +984,7 @@ fn attack_schema_version_zero_rejected_by_type_system() {
 async fn attack_concurrent_reads_and_writes() {
     let (store, _dir) = temp_store();
     let store = Arc::new(store);
-    let sid_val = tid("concurrent-rw");
+    let sid_val = sk("concurrent-rw");
 
     // Pre-populate with 100 events
     let initial_envs: Vec<_> = (1..=100u64)
@@ -1067,10 +1053,10 @@ async fn attack_custom_builder_config_still_works() {
 
     let env = make_envelope(1, "A", b"data");
     store
-        .append(&tid("custom-config"), None, &[env])
+        .append(&sk("custom-config"), None, &[env])
         .await
         .unwrap();
 
-    let count = count_events(&store, &tid("custom-config")).await;
+    let count = count_events(&store, &sk("custom-config")).await;
     assert_eq!(count, 1, "custom config store should work normally");
 }

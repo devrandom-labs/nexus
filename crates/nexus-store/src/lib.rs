@@ -106,6 +106,7 @@ pub mod snapshot;
 pub mod state;
 pub mod store;
 pub mod stream;
+pub mod stream_id;
 #[cfg(feature = "subscription")]
 pub mod subscription;
 #[cfg(feature = "subscription")]
@@ -166,6 +167,7 @@ pub use state::{
 };
 pub use store::{GlobalSeq, RawEventStore, Store};
 pub use stream::EventStream;
+pub use stream_id::StreamKey;
 // Re-export the `Stream` trait from `futures-core` (the small, near-frozen
 // definitional crate) rather than `futures`. `futures::Stream` *is* this trait,
 // so our public `EventStream` / `subscribe*` surface is married to

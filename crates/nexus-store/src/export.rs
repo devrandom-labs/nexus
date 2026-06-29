@@ -32,12 +32,12 @@
 //! right stream; import then ignores each event's `global_seq`. See issue
 //! #145 §5.
 
-use bytes::Bytes;
 use futures::Stream;
-use nexus::{Id, Version};
+use nexus::Version;
 
 use crate::store::{RawEventStore, Store};
 use crate::stream::EventStream;
+use crate::stream_id::StreamKey;
 
 /// Enumerate the stream ids present in a store.
 ///
@@ -53,7 +53,7 @@ use crate::stream::EventStream;
 /// `streams` partition; in-memory: its map; postgres: `SELECT DISTINCT`).
 pub trait StreamLister: RawEventStore {
     /// The stream of stream ids.
-    type StreamList: Stream<Item = Result<Bytes, Self::Error>> + Send + 'static;
+    type StreamList: Stream<Item = Result<StreamKey, Self::Error>> + Send + 'static;
 
     /// Open a one-shot stream over every stream id in the store, in no
     /// guaranteed order, terminating when exhausted.
@@ -91,7 +91,7 @@ pub trait EventExporter: RawEventStore {
     /// Open a per-stream export of stream `id`, starting at `from` (inclusive).
     fn export_stream(
         &self,
-        id: &impl Id,
+        id: &StreamKey,
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::ExportStream, Self::Error>> + Send;
 }
@@ -107,7 +107,7 @@ impl<S: RawEventStore> EventExporter for S {
 
     fn export_stream(
         &self,
-        id: &impl Id,
+        id: &StreamKey,
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::ExportStream, Self::Error>> + Send {
         self.read_stream(id, from)
@@ -148,26 +148,10 @@ mod tests {
     // EventExporter, the adapter impl for StreamLister.
     assert_impl_all!(InMemoryStore: EventExporter, StreamLister, RawEventStore);
 
-    // ── test Id ──────────────────────────────────────────────────────────────
+    // ── test stream key ───────────────────────────────────────────────────────
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct Tid(String);
-    impl std::fmt::Display for Tid {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-    impl AsRef<[u8]> for Tid {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-    impl nexus::Id for Tid {
-        const BYTE_LEN: usize = 0;
-    }
-
-    fn tid(s: &str) -> Tid {
-        Tid(s.to_owned())
+    fn sk(s: &str) -> StreamKey {
+        StreamKey::from_slice(s.as_bytes())
     }
 
     fn env(v: u64, payload: &[u8]) -> crate::envelope::PendingEnvelope {
@@ -178,7 +162,7 @@ mod tests {
             .build()
     }
 
-    async fn append_one(store: &InMemoryStore, id: &Tid, v: u64, payload: &[u8]) {
+    async fn append_one(store: &InMemoryStore, id: &StreamKey, v: u64, payload: &[u8]) {
         let expected = Version::new(v - 1);
         store
             .append(id, expected, &[env(v, payload)])
@@ -186,7 +170,7 @@ mod tests {
             .expect("append succeeds");
     }
 
-    async fn seed(store: &InMemoryStore, id: &Tid, count: u64) {
+    async fn seed(store: &InMemoryStore, id: &StreamKey, count: u64) {
         for v in 1..=count {
             append_one(store, id, v, format!("payload-{v}").as_bytes()).await;
         }
@@ -194,7 +178,7 @@ mod tests {
 
     async fn collect_export(
         store: &InMemoryStore,
-        id: &Tid,
+        id: &StreamKey,
         from: Version,
     ) -> Vec<PersistedEnvelope> {
         let stream = store.export_stream(id, from).await.expect("export opens");
@@ -213,7 +197,7 @@ mod tests {
         // The core contract: export is a verbatim pass-through of read_stream.
         // Same versions, global_seqs, schema, event_type, payload, metadata.
         let store = InMemoryStore::new();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         seed(&store, &id, 5).await;
 
         let exported = collect_export(&store, &id, Version::INITIAL).await;
@@ -244,7 +228,7 @@ mod tests {
     #[tokio::test]
     async fn export_preserves_versions_and_payloads_in_order() {
         let store = InMemoryStore::new();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         seed(&store, &id, 5).await;
 
         let exported = collect_export(&store, &id, Version::INITIAL).await;
@@ -260,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn exporting_the_same_stream_twice_is_identical() {
         let store = InMemoryStore::new();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         seed(&store, &id, 4).await;
 
         let first = collect_export(&store, &id, Version::INITIAL).await;
@@ -277,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn export_carries_metadata_and_schema_verbatim() {
         let store = InMemoryStore::new();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         let pending = pending_envelope(Version::INITIAL)
             .event_type("Created")
             .payload(b"body".to_vec())
@@ -304,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn export_empty_stream_terminates_and_does_not_hang() {
         let store = InMemoryStore::new();
-        let id = tid("never-appended");
+        let id = sk("never-appended");
         let mut stream = store
             .export_stream(&id, Version::INITIAL)
             .await
@@ -318,7 +302,7 @@ mod tests {
     #[tokio::test]
     async fn export_from_past_the_head_is_empty() {
         let store = InMemoryStore::new();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         seed(&store, &id, 3).await;
 
         let exported = collect_export(&store, &id, Version::new(10).expect("nonzero")).await;
@@ -330,7 +314,7 @@ mod tests {
         // Pins the resolved semantics: `from` is INCLUSIVE (matches
         // read_stream). from=3 on a 5-event stream yields [3,4,5].
         let store = InMemoryStore::new();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         seed(&store, &id, 5).await;
 
         let exported = collect_export(&store, &id, Version::new(3).expect("nonzero")).await;
@@ -341,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn export_single_event_stream_yields_one() {
         let store = InMemoryStore::new();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         seed(&store, &id, 1).await;
 
         let exported = collect_export(&store, &id, Version::INITIAL).await;
@@ -357,9 +341,9 @@ mod tests {
     async fn export_unknown_stream_is_empty_not_error() {
         let store = InMemoryStore::new();
         // Seed a different stream so the store is non-empty.
-        seed(&store, &tid("other"), 2).await;
+        seed(&store, &sk("other"), 2).await;
 
-        let exported = collect_export(&store, &tid("does-not-exist"), Version::INITIAL).await;
+        let exported = collect_export(&store, &sk("does-not-exist"), Version::INITIAL).await;
         assert!(exported.is_empty());
     }
 
@@ -367,8 +351,8 @@ mod tests {
     async fn export_handles_empty_and_unusual_stream_ids() {
         let store = InMemoryStore::new();
         // Empty id and a long id are both structurally legal stream ids.
-        let empty = tid("");
-        let long = tid(&"x".repeat(300));
+        let empty = sk("");
+        let long = sk(&"x".repeat(300));
         seed(&store, &empty, 2).await;
         seed(&store, &long, 3).await;
 
@@ -393,7 +377,7 @@ mod tests {
         // increasing, each event well-formed (payload matches its version) —
         // never a gap, never a torn event.
         let store = Arc::new(InMemoryStore::new());
-        let id = tid("race");
+        let id = sk("race");
         let n = 200u64;
 
         // Seed v1 BEFORE the race. Without this, the exporter can open and drain
@@ -458,7 +442,7 @@ mod tests {
     async fn collect_stream_ids(store: &InMemoryStore) -> HashSet<Vec<u8>> {
         let stream = store.list_streams().await.expect("list opens");
         stream
-            .map(|r| r.expect("no list error").to_vec())
+            .map(|r| r.expect("no list error").as_bytes().to_vec())
             .collect::<Vec<_>>()
             .await
             .into_iter()
@@ -468,9 +452,9 @@ mod tests {
     #[tokio::test]
     async fn list_streams_returns_exactly_the_appended_ids() {
         let store = InMemoryStore::new();
-        seed(&store, &tid("alpha"), 1).await;
-        seed(&store, &tid("beta"), 2).await;
-        seed(&store, &tid("gamma"), 3).await;
+        seed(&store, &sk("alpha"), 1).await;
+        seed(&store, &sk("beta"), 2).await;
+        seed(&store, &sk("gamma"), 3).await;
 
         let ids = collect_stream_ids(&store).await;
         let expected: HashSet<Vec<u8>> = [b"alpha".to_vec(), b"beta".to_vec(), b"gamma".to_vec()]
@@ -489,11 +473,11 @@ mod tests {
     #[tokio::test]
     async fn list_streams_lists_each_stream_once_regardless_of_event_count() {
         let store = InMemoryStore::new();
-        seed(&store, &tid("busy"), 50).await;
+        seed(&store, &sk("busy"), 50).await;
 
         let stream = store.list_streams().await.expect("opens");
         let all: Vec<Vec<u8>> = stream
-            .map(|r| r.expect("no error").to_vec())
+            .map(|r| r.expect("no error").as_bytes().to_vec())
             .collect::<Vec<_>>()
             .await;
         assert_eq!(all, vec![b"busy".to_vec()], "one entry, no per-event dupes");
@@ -511,7 +495,7 @@ mod tests {
             rt.block_on(async {
                 let store = InMemoryStore::new();
                 for s in &ids {
-                    append_one(&store, &tid(s), 1, b"p").await;
+                    append_one(&store, &sk(s), 1, b"p").await;
                 }
                 let listed = collect_stream_ids(&store).await;
                 let oracle: HashSet<Vec<u8>> =
@@ -541,7 +525,7 @@ mod tests {
         // The handle itself appends, lists, and exports — never `.raw()`.
         let store = Store::new(InMemoryStore::new());
         store
-            .append(&tid("acct-1"), None, &[env(1, b"x")])
+            .append(&sk("acct-1"), None, &[env(1, b"x")])
             .await
             .expect("append via the handle");
 
@@ -549,7 +533,7 @@ mod tests {
             .list_streams()
             .await
             .expect("list via the handle")
-            .map(|r| r.expect("no list error").to_vec())
+            .map(|r| r.expect("no list error").as_bytes().to_vec())
             .collect::<Vec<_>>()
             .await
             .into_iter()
@@ -557,7 +541,7 @@ mod tests {
         assert_eq!(ids, [b"acct-1".to_vec()].into_iter().collect());
 
         let exported: Vec<PersistedEnvelope> = store
-            .export_stream(&tid("acct-1"), Version::INITIAL)
+            .export_stream(&sk("acct-1"), Version::INITIAL)
             .await
             .expect("export via the handle")
             .map(|r| r.expect("no read error"))

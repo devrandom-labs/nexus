@@ -35,7 +35,6 @@ use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
 use std::collections::HashMap;
-use std::fmt;
 use tokio::sync::Mutex;
 
 fn build_persisted(
@@ -67,25 +66,6 @@ type TestStoreError = StoreError<InMemoryStoreError, std::io::Error, std::io::Er
 
 fn label(s: &str) -> ErrorId {
     ErrorId::from_display(&s)
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(String);
-impl fmt::Display for TestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl nexus::Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
-fn tid(s: &str) -> TestId {
-    TestId(s.to_owned())
 }
 
 // ============================================================================
@@ -145,7 +125,7 @@ impl RawEventStore for ProbeStore {
 
     async fn append(
         &self,
-        id: &impl nexus::Id,
+        id: &nexus_store::StreamKey,
         expected_version: Option<Version>,
         envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
@@ -175,7 +155,7 @@ impl RawEventStore for ProbeStore {
 
     async fn read_stream(
         &self,
-        id: &impl nexus::Id,
+        id: &nexus_store::StreamKey,
         from: Version,
     ) -> Result<Self::Stream, Self::Error> {
         let events = self
@@ -289,7 +269,13 @@ async fn append_rejects_backwards_versions() {
             .build(),
     ];
 
-    let result = store.append(&tid("s1"), None, &envelopes).await;
+    let result = store
+        .append(
+            &nexus_store::StreamKey::from_slice("s1".as_bytes()),
+            None,
+            &envelopes,
+        )
+        .await;
     assert!(
         result.is_err(),
         "Adapter must reject non-sequential versions"
@@ -350,7 +336,7 @@ proptest! {
                 })
                 .collect();
 
-            let result = store.append(&tid("s1"), None, &envelopes).await;
+            let result = store.append(&nexus_store::StreamKey::from_slice("s1".as_bytes()), None, &envelopes).await;
 
             // Check if versions are actually sequential from 1
             let is_sequential = versions.iter().enumerate().all(|(i, &v)| v == (i as u64) + 1);

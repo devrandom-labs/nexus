@@ -24,11 +24,11 @@
 )]
 
 use std::collections::BTreeSet;
-use std::fmt;
 
 use futures::StreamExt;
-use nexus::{Id, Version};
+use nexus::Version;
 use nexus_fjall::FjallStore;
+use nexus_store::StreamKey;
 use nexus_store::cbor::{
     ChunkError, decode_chunk, encode_block, encode_header, encode_section_heading,
 };
@@ -37,30 +37,13 @@ use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{AbortReason, Atomicity, EventImporter, ImportError, StreamOutcome};
 use nexus_store::store::{GlobalSeq, RawEventStore};
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct Tid(String);
-
-impl fmt::Display for Tid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for Tid {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl Id for Tid {
-    const BYTE_LEN: usize = 0;
+fn sk(s: &str) -> StreamKey {
+    StreamKey::from_slice(s.as_bytes())
 }
 
-fn tid(s: &str) -> Tid {
-    Tid(s.to_owned())
-}
-
-/// Route a section's origin id bytes straight back to the same target id.
-fn identity_route(origin: &[u8]) -> Tid {
-    Tid(String::from_utf8(origin.to_vec()).expect("utf8 origin"))
+/// Route a section's origin id bytes straight back to the same target key.
+fn identity_route(origin: &[u8]) -> StreamKey {
+    StreamKey::from_slice(origin)
 }
 
 fn open_store(path: &std::path::Path) -> FjallStore {
@@ -70,7 +53,7 @@ fn open_store(path: &std::path::Path) -> FjallStore {
 /// Append one event with the given fields, advancing the stream by one.
 async fn append_one(
     store: &FjallStore,
-    id: &Tid,
+    id: &StreamKey,
     version: u64,
     event_type: &'static str,
     metadata: Option<&[u8]>,
@@ -89,7 +72,7 @@ async fn append_one(
 }
 
 /// Drain a stream into owned envelopes (whole stream from v1).
-async fn collect_stream(store: &FjallStore, id: &Tid) -> Vec<PersistedEnvelope> {
+async fn collect_stream(store: &FjallStore, id: &StreamKey) -> Vec<PersistedEnvelope> {
     store
         .export_stream(id, Version::INITIAL)
         .await
@@ -108,7 +91,7 @@ async fn build_chunk(store: &FjallStore) -> Vec<u8> {
         .list_streams()
         .await
         .expect("list opens")
-        .map(|r| r.expect("no list error").to_vec())
+        .map(|r| r.expect("no list error").as_bytes().to_vec())
         .collect::<Vec<_>>()
         .await;
     ids.sort();
@@ -128,7 +111,11 @@ async fn build_chunk(store: &FjallStore) -> Vec<u8> {
 /// Assert two stores hold byte-identical streams **modulo `global_seq`** (export
 /// preserves version/schema/type/payload/metadata; import re-stamps a fresh
 /// `global_seq` on re-append).
-async fn assert_streams_equal_modulo_global_seq(src: &FjallStore, dst: &FjallStore, id: &Tid) {
+async fn assert_streams_equal_modulo_global_seq(
+    src: &FjallStore,
+    dst: &FjallStore,
+    id: &StreamKey,
+) {
     let a = collect_stream(src, id).await;
     let b = collect_stream(dst, id).await;
     assert_eq!(a.len(), b.len(), "stream {id} length differs");
@@ -153,10 +140,10 @@ async fn persistent_round_trip_through_a_file_preserves_streams() {
 
     // 1. Seed a source store with two streams of varied shape.
     let src = open_store(&src_dir.path().join("src-db"));
-    append_one(&src, &tid("task-1"), 1, "Created", Some(b"hlc=1"), b"alpha").await;
-    append_one(&src, &tid("task-1"), 2, "Updated", None, b"beta").await;
-    append_one(&src, &tid("task-1"), 3, "Closed", Some(b"hlc=3"), b"gamma").await;
-    append_one(&src, &tid("task-2"), 1, "Created", None, b"solo").await;
+    append_one(&src, &sk("task-1"), 1, "Created", Some(b"hlc=1"), b"alpha").await;
+    append_one(&src, &sk("task-1"), 2, "Updated", None, b"beta").await;
+    append_one(&src, &sk("task-1"), 3, "Closed", Some(b"hlc=3"), b"gamma").await;
+    append_one(&src, &sk("task-2"), 1, "Created", None, b"solo").await;
 
     // 2 + 3. Export + CBOR-encode to a REAL file on disk.
     let chunk = build_chunk(&src).await;
@@ -176,8 +163,8 @@ async fn persistent_round_trip_through_a_file_preserves_streams() {
     assert!(report.all_complete(), "every stream restored");
 
     // 6. Streams are byte-equal modulo global_seq.
-    assert_streams_equal_modulo_global_seq(&src, &dst, &tid("task-1")).await;
-    assert_streams_equal_modulo_global_seq(&src, &dst, &tid("task-2")).await;
+    assert_streams_equal_modulo_global_seq(&src, &dst, &sk("task-1")).await;
+    assert_streams_equal_modulo_global_seq(&src, &dst, &sk("task-2")).await;
 
     // And global_seq is genuinely RE-STAMPED: the destination's $all sequence
     // is a fresh contiguous 1..=4, independent of the source's values.
@@ -204,8 +191,8 @@ async fn round_trip_survives_source_store_close_before_export() {
     let db = dir.path().join("db");
     {
         let src = open_store(&db);
-        append_one(&src, &tid("s"), 1, "E", None, b"one").await;
-        append_one(&src, &tid("s"), 2, "E", None, b"two").await;
+        append_one(&src, &sk("s"), 1, "E", None, b"one").await;
+        append_one(&src, &sk("s"), 2, "E", None, b"two").await;
     }
     let reopened = open_store(&db);
     let chunk = build_chunk(&reopened).await;
@@ -215,7 +202,7 @@ async fn round_trip_survives_source_store_close_before_export() {
     dst.import(&sections, identity_route, Atomicity::PerStream)
         .await
         .expect("import");
-    assert_streams_equal_modulo_global_seq(&reopened, &dst, &tid("s")).await;
+    assert_streams_equal_modulo_global_seq(&reopened, &dst, &sk("s")).await;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -232,8 +219,8 @@ async fn on_disk_block_corruption_imports_as_stream_corrupt_not_malformed() {
     let chunk_file = dir.path().join("backup.nxch");
 
     let src = open_store(&dir.path().join("src"));
-    append_one(&src, &tid("s"), 1, "E", None, b"good-one").await;
-    append_one(&src, &tid("s"), 2, "E", None, b"good-two").await;
+    append_one(&src, &sk("s"), 1, "E", None, b"good-one").await;
+    append_one(&src, &sk("s"), 2, "E", None, b"good-two").await;
     let chunk = build_chunk(&src).await;
     std::fs::write(&chunk_file, &chunk).expect("write");
 
@@ -264,7 +251,7 @@ async fn on_disk_block_corruption_imports_as_stream_corrupt_not_malformed() {
         "good prefix applied, corrupt block halts the stream",
     );
     // The store holds exactly the good prefix [v1].
-    let restored = collect_stream(&dst, &tid("s")).await;
+    let restored = collect_stream(&dst, &sk("s")).await;
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].version(), Version::new(1).unwrap());
     assert_eq!(restored[0].payload(), b"good-one");
@@ -277,8 +264,8 @@ async fn on_disk_block_corruption_aborts_whole_chunk_restore() {
     // (cross-partition rollback on the persistent adapter).
     let dir = tempfile::tempdir().unwrap();
     let src = open_store(&dir.path().join("src"));
-    append_one(&src, &tid("s"), 1, "E", None, b"good-one").await;
-    append_one(&src, &tid("s"), 2, "E", None, b"good-two").await;
+    append_one(&src, &sk("s"), 1, "E", None, b"good-one").await;
+    append_one(&src, &sk("s"), 2, "E", None, b"good-two").await;
     let mut chunk = build_chunk(&src).await;
     let last = chunk.len() - 1;
     chunk[last] ^= 0xFF; // corrupt the last block's body
@@ -291,7 +278,7 @@ async fn on_disk_block_corruption_aborts_whole_chunk_restore() {
         .expect_err("whole-chunk corruption must abort");
     match err {
         ImportError::Aborted { stream, reason } => {
-            assert_eq!(stream, tid("s"));
+            assert_eq!(stream, sk("s"));
             assert_eq!(reason, AbortReason::Corrupt);
         }
         other => panic!("expected Aborted/Corrupt, got {other:?}"),
@@ -301,7 +288,7 @@ async fn on_disk_block_corruption_aborts_whole_chunk_restore() {
         .list_streams()
         .await
         .unwrap()
-        .map(|r| r.unwrap().to_vec())
+        .map(|r| r.unwrap().as_bytes().to_vec())
         .collect::<Vec<_>>()
         .await;
     assert!(ids.is_empty(), "aborted whole-chunk restore wrote nothing");
@@ -320,7 +307,7 @@ async fn malformed_chunk_framing_is_a_decode_error_not_a_corrupt_block() {
     // A real header with a flipped magic byte is also Malformed.
     let dir = tempfile::tempdir().unwrap();
     let src = open_store(&dir.path().join("src"));
-    append_one(&src, &tid("s"), 1, "E", None, b"x").await;
+    append_one(&src, &sk("s"), 1, "E", None, b"x").await;
     let mut chunk = build_chunk(&src).await;
     chunk[3] ^= 0xFF; // the magic is the first bytes of the header map
     match decode_chunk(&chunk) {
@@ -339,29 +326,29 @@ async fn non_injective_route_aborts_whole_chunk_no_corruption_on_disk() {
     // abort with nothing committed — never a concatenated [1,2,1,2] stream.
     let dir = tempfile::tempdir().unwrap();
     let src = open_store(&dir.path().join("src"));
-    append_one(&src, &tid("o1"), 1, "E", None, b"a").await;
-    append_one(&src, &tid("o1"), 2, "E", None, b"b").await;
-    append_one(&src, &tid("o2"), 1, "E", None, b"c").await;
-    append_one(&src, &tid("o2"), 2, "E", None, b"d").await;
+    append_one(&src, &sk("o1"), 1, "E", None, b"a").await;
+    append_one(&src, &sk("o1"), 2, "E", None, b"b").await;
+    append_one(&src, &sk("o2"), 1, "E", None, b"c").await;
+    append_one(&src, &sk("o2"), 2, "E", None, b"d").await;
     let chunk = build_chunk(&src).await;
     let sections = decode_chunk(&chunk).expect("decode");
 
     let dst = open_store(&dir.path().join("dst"));
-    let to_same = |_origin: &[u8]| tid("merged");
+    let to_same = |_origin: &[u8]| sk("merged");
     let err = dst
         .import(&sections, to_same, Atomicity::WholeChunk)
         .await
         .expect_err("non-injective route must abort");
     assert!(matches!(err, ImportError::Aborted { .. }));
     // The target never received the corrupt concatenation.
-    assert!(collect_stream(&dst, &tid("merged")).await.is_empty());
+    assert!(collect_stream(&dst, &sk("merged")).await.is_empty());
 
     // Sanity: the source really did hold two distinct streams.
     let origins: BTreeSet<Vec<u8>> = src
         .list_streams()
         .await
         .unwrap()
-        .map(|r| r.unwrap().to_vec())
+        .map(|r| r.unwrap().as_bytes().to_vec())
         .collect::<Vec<_>>()
         .await
         .into_iter()

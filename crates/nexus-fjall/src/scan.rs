@@ -229,8 +229,9 @@ impl<S: ScanStrategy + Unpin> futures::Stream for ScanCursor<S> {
 mod tests {
     use super::*;
     use crate::store::FjallStore;
-    use crate::store::read_test_helpers::{Tid, temp_store, tid};
+    use crate::store::read_test_helpers::{sk, temp_store};
     use futures::StreamExt;
+    use nexus_store::StreamKey;
     use nexus_store::envelope::pending_envelope;
     use nexus_store::store::RawEventStore;
     use nexus_store::value::{EventType, Payload, SchemaVersion};
@@ -252,7 +253,7 @@ mod tests {
 
     async fn append_versions(
         store: &FjallStore,
-        id: &Tid,
+        id: &StreamKey,
         versions: std::ops::RangeInclusive<u64>,
     ) {
         for v in versions {
@@ -268,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn scan_cursor_yields_rows_in_order() {
         let (store, _dir) = temp_store();
-        let id = tid("s");
+        let id = sk("s");
         append_versions(&store, &id, 1..=3).await;
 
         let cursor = ScanCursor::open(
@@ -291,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn scan_cursor_opens_from_midpoint() {
         let (store, _dir) = temp_store();
-        let id = tid("s");
+        let id = sk("s");
         append_versions(&store, &id, 1..=5).await;
 
         let cursor = ScanCursor::open(
@@ -314,8 +315,8 @@ mod tests {
     #[tokio::test]
     async fn scan_cursor_global_yields_ascending_global_seq() {
         let (store, _dir) = temp_store();
-        let a = tid("a");
-        let b = tid("b");
+        let a = sk("a");
+        let b = sk("b");
 
         // Interleave appends across two streams so global_seq order differs
         // from per-stream version order.
@@ -341,26 +342,10 @@ mod tests {
         }
     }
 
-    /// A minimal [`nexus::Id`] over borrowed bytes, used only to feed
+    /// A [`StreamKey`] over borrowed bytes, used only to feed
     /// [`OwnedStreamId::from_id`] in tests.
-    fn label_id(bytes: &[u8]) -> TestId {
-        TestId(bytes.to_vec())
-    }
-
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct TestId(Vec<u8>);
-    impl std::fmt::Display for TestId {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", String::from_utf8_lossy(&self.0))
-        }
-    }
-    impl AsRef<[u8]> for TestId {
-        fn as_ref(&self) -> &[u8] {
-            &self.0
-        }
-    }
-    impl nexus::Id for TestId {
-        const BYTE_LEN: usize = 0;
+    fn label_id(bytes: &[u8]) -> StreamKey {
+        StreamKey::from_slice(bytes)
     }
 
     fn row(id: &[u8], version: u64, global_seq: u64, et: &str, payload: &[u8]) -> (Slice, Slice) {

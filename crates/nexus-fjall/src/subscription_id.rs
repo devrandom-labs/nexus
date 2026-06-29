@@ -4,6 +4,7 @@
 //! re-reads the generic subscription loop performs.
 
 use nexus::Id;
+use nexus_store::StreamKey;
 
 /// Owned byte-key wrapper to satisfy the [`Id`] trait's `'static` bound
 /// when re-reading from the store during subscription refills.
@@ -11,8 +12,8 @@ use nexus::Id;
 pub struct OwnedStreamId(Vec<u8>);
 
 impl OwnedStreamId {
-    /// Create from any [`Id`] by capturing its byte representation.
-    pub fn from_id(id: &impl Id) -> Self {
+    /// Create from any stream key by capturing its byte representation.
+    pub fn from_id(id: &StreamKey) -> Self {
         Self(id.as_ref().to_vec())
     }
 }

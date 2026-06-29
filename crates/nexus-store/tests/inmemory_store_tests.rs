@@ -3,50 +3,18 @@
 #![allow(clippy::panic, reason = "tests")]
 
 use futures::StreamExt;
-use nexus::{Id, Version};
+use nexus::Version;
 use nexus_store::AppendError;
+use nexus_store::StreamKey;
 use nexus_store::pending_envelope;
 use nexus_store::store::{GlobalSeq, RawEventStore};
 use nexus_store::testing::InMemoryStore;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(&'static str);
-impl std::fmt::Display for TestId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
-
-/// An owned-`String` id so tests can build labels longer than the 64-byte
-/// `ErrorId` cap (the static-str [`TestId`] above can't carry a 200-byte id).
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct LongId(String);
-impl std::fmt::Display for LongId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for LongId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl Id for LongId {
-    const BYTE_LEN: usize = 0;
-}
-
 #[tokio::test]
 async fn append_conflict_truncates_overlong_stream_id_with_ellipsis() {
     let store = InMemoryStore::new();
-    let long = LongId("y".repeat(200));
+    // An overlong id so the conflict label exceeds the 64-byte `ErrorId` cap.
+    let long = StreamKey::from_slice("y".repeat(200).as_bytes());
     let env = pending_envelope(Version::new(1).unwrap())
         .event_type("E")
         .payload(b"p".to_vec())
@@ -80,12 +48,12 @@ async fn append_and_read_back() {
         .expect("valid payload")
         .build();
     store
-        .append(&TestId("stream-1"), None, &[envelope])
+        .append(&StreamKey::from_slice(b"stream-1"), None, &[envelope])
         .await
         .unwrap();
 
     let mut stream = store
-        .read_stream(&TestId("stream-1"), Version::INITIAL)
+        .read_stream(&StreamKey::from_slice(b"stream-1"), Version::INITIAL)
         .await
         .unwrap();
     let env = stream.next().await.unwrap().unwrap();
@@ -117,11 +85,14 @@ async fn read_from_version_filters_correctly() {
             .expect("valid payload")
             .build(),
     ];
-    store.append(&TestId("s1"), None, &envelopes).await.unwrap();
+    store
+        .append(&StreamKey::from_slice(b"s1"), None, &envelopes)
+        .await
+        .unwrap();
 
     // Read from version 2 -- should get events 2 and 3.
     let mut stream = store
-        .read_stream(&TestId("s1"), Version::new(2).unwrap())
+        .read_stream(&StreamKey::from_slice(b"s1"), Version::new(2).unwrap())
         .await
         .unwrap();
 
@@ -156,7 +127,10 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
             .expect("valid payload")
             .build(),
     ];
-    store.append(&TestId("a"), None, &batch_a).await.unwrap();
+    store
+        .append(&StreamKey::from_slice(b"a"), None, &batch_a)
+        .await
+        .unwrap();
 
     // Second append: a single event on a *different* stream "b". Continues
     // from where stream "a" left off — seq 3, not reset to 1.
@@ -167,11 +141,14 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
             .expect("valid payload")
             .build(),
     ];
-    store.append(&TestId("b"), None, &batch_b).await.unwrap();
+    store
+        .append(&StreamKey::from_slice(b"b"), None, &batch_b)
+        .await
+        .unwrap();
 
     // Read stream "a" back: seq 1 then seq 2.
     let mut stream_a = store
-        .read_stream(&TestId("a"), Version::INITIAL)
+        .read_stream(&StreamKey::from_slice(b"a"), Version::INITIAL)
         .await
         .unwrap();
     let a1 = stream_a.next().await.unwrap().unwrap();
@@ -185,7 +162,7 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
     // Read stream "b" back: seq 3, proving the counter is store-global and
     // does not reset per stream.
     let mut stream_b = store
-        .read_stream(&TestId("b"), Version::INITIAL)
+        .read_stream(&StreamKey::from_slice(b"b"), Version::INITIAL)
         .await
         .unwrap();
     let b1 = stream_b.next().await.unwrap().unwrap();

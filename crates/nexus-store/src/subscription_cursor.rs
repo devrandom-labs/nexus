@@ -151,15 +151,16 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
-    use crate::catchup::{AllCatchup, Catchup, OwnedSubId, StreamCatchup};
+    use crate::catchup::{AllCatchup, Catchup, StreamCatchup};
     use crate::envelope::pending_envelope;
     use crate::store::{GlobalSeq, RawEventStore};
+    use crate::stream_id::StreamKey;
     use crate::testing::InMemoryStore;
 
     const MUST_DELIVER: Duration = Duration::from_secs(5);
 
     /// Append events with versions `lo..=hi` to stream `id`.
-    async fn seed_range(store: &InMemoryStore, id: &OwnedSubId, lo: u64, hi: u64) {
+    async fn seed_range(store: &InMemoryStore, id: &StreamKey, lo: u64, hi: u64) {
         for v in lo..=hi {
             let env = pending_envelope(Version::new(v).unwrap())
                 .event_type("E")
@@ -174,7 +175,7 @@ mod tests {
     #[tokio::test]
     async fn catch_up_yields_backlog_in_order() {
         let store = Arc::new(InMemoryStore::new());
-        let id = OwnedSubId::new(b"s");
+        let id = StreamKey::from_slice(b"s");
         seed_range(&store, &id, 1, 5).await;
 
         let catchup = StreamCatchup::new(Arc::clone(&store), b"s").unwrap();
@@ -196,7 +197,7 @@ mod tests {
     #[tokio::test]
     async fn live_tail_sees_post_subscribe_append() {
         let store = Arc::new(InMemoryStore::new());
-        let id = OwnedSubId::new(b"s");
+        let id = StreamKey::from_slice(b"s");
         seed_range(&store, &id, 1, 1).await;
 
         let catchup = StreamCatchup::new(Arc::clone(&store), b"s").unwrap();
@@ -214,7 +215,7 @@ mod tests {
         // Append version 2 after the cursor is parked.
         let writer = Arc::clone(&store);
         let appender = tokio::spawn(async move {
-            seed_range(&writer, &OwnedSubId::new(b"s"), 2, 2).await;
+            seed_range(&writer, &StreamKey::from_slice(b"s"), 2, 2).await;
         });
 
         let second = timeout(MUST_DELIVER, cursor.next())
@@ -236,7 +237,7 @@ mod tests {
     async fn chunk_boundary_no_duplicate_no_gap() {
         let total = u64::try_from(CATCHUP_CHUNK).unwrap() + 3;
         let store = Arc::new(InMemoryStore::new());
-        let id = OwnedSubId::new(b"s");
+        let id = StreamKey::from_slice(b"s");
         seed_range(&store, &id, 1, total).await;
 
         let catchup = StreamCatchup::new(Arc::clone(&store), b"s").unwrap();
@@ -261,8 +262,8 @@ mod tests {
     async fn all_catchup_yields_global_order_then_live_append() {
         let store = Arc::new(InMemoryStore::new());
         // Interleave across two streams so global_seq spans both: a@1, b@1, a@2.
-        seed_range(&store, &OwnedSubId::new(b"a"), 1, 1).await;
-        seed_range(&store, &OwnedSubId::new(b"b"), 1, 1).await;
+        seed_range(&store, &StreamKey::from_slice(b"a"), 1, 1).await;
+        seed_range(&store, &StreamKey::from_slice(b"b"), 1, 1).await;
         // a@2 builds on a's head (expected version 1).
         let env = pending_envelope(Version::new(2).unwrap())
             .event_type("E")
@@ -270,7 +271,7 @@ mod tests {
             .unwrap()
             .build();
         store
-            .append(&OwnedSubId::new(b"a"), Version::new(1), &[env])
+            .append(&StreamKey::from_slice(b"a"), Version::new(1), &[env])
             .await
             .unwrap();
 
@@ -303,7 +304,7 @@ mod tests {
                 .unwrap()
                 .build();
             writer
-                .append(&OwnedSubId::new(b"b"), Version::new(1), &[env])
+                .append(&StreamKey::from_slice(b"b"), Version::new(1), &[env])
                 .await
                 .unwrap();
         });
@@ -381,7 +382,7 @@ mod tests {
     async fn scan_item_error_is_surfaced_in_order() {
         // Read back a real PersistedEnvelope to feed the mock's Ok item.
         let store = Arc::new(InMemoryStore::new());
-        seed_range(&store, &OwnedSubId::new(b"s"), 1, 1).await;
+        seed_range(&store, &StreamKey::from_slice(b"s"), 1, 1).await;
         let ok_env = store
             .read_all(GlobalSeq::INITIAL)
             .await

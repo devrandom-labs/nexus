@@ -2,11 +2,12 @@ use core::fmt;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use nexus::{Id, Version};
+use nexus::Version;
 
 use crate::envelope::PendingEnvelope;
 use crate::error::AppendError;
 use crate::stream::EventStream;
+use crate::stream_id::StreamKey;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Store<S> — Arc-wrapped handle to a RawEventStore backend
@@ -64,11 +65,11 @@ impl<S> Store<S> {
     ///
     /// ```ignore
     /// use futures::TryStreamExt;
-    /// use nexus_store::{RawEventStore, Store};
+    /// use nexus_store::{RawEventStore, Store, StreamKey};
     ///
     /// async fn count_events<S: RawEventStore>(
     ///     store: &Store<S>,
-    ///     id: &impl nexus::Id,
+    ///     id: &StreamKey,
     ///     from: nexus::Version,
     /// ) -> Result<usize, MyError> {
     ///     let stream = store.raw().read_stream(id, from).await.map_err(MyError::Adapter)?;
@@ -175,7 +176,7 @@ pub trait RawEventStore: Send + Sync {
     /// the read path via `PersistedEnvelope::global_seq`.
     fn append(
         &self,
-        id: &impl Id,
+        id: &StreamKey,
         expected_version: Option<Version>,
         envelopes: &[PendingEnvelope],
     ) -> impl std::future::Future<Output = Result<(), AppendError<Self::Error>>> + Send;
@@ -204,7 +205,7 @@ pub trait RawEventStore: Send + Sync {
     /// cursor rather than fixed-size batches.
     fn read_stream(
         &self,
-        id: &impl Id,
+        id: &StreamKey,
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::Stream, Self::Error>> + Send;
 
@@ -277,14 +278,18 @@ impl<S: RawEventStore> RawEventStore for Store<S> {
 
     async fn append(
         &self,
-        id: &impl Id,
+        id: &StreamKey,
         expected_version: Option<Version>,
         envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
         self.raw().append(id, expected_version, envelopes).await
     }
 
-    async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
+    async fn read_stream(
+        &self,
+        id: &StreamKey,
+        from: Version,
+    ) -> Result<Self::Stream, Self::Error> {
         self.raw().read_stream(id, from).await
     }
 

@@ -30,12 +30,13 @@
 //! ingest impl is a later card.
 
 use bytes::Bytes;
-use nexus::{Id, Version};
+use nexus::Version;
 use thiserror::Error;
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::store::{RawEventStore, Store};
+use crate::stream_id::StreamKey;
 
 /// Atomicity granularity for an import — a caller policy, not a format
 /// property. The same chunk imports either way.
@@ -97,9 +98,9 @@ impl StreamOutcome {
 /// One stream's outcome within an import, tagged with the caller's target
 /// stream id (echoed verbatim — import owns no naming policy).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamReport<I> {
-    /// The caller-supplied target stream id this outcome is for.
-    pub stream: I,
+pub struct StreamReport {
+    /// The target [`StreamKey`] this outcome is for.
+    pub stream: StreamKey,
     /// What happened to it.
     pub outcome: StreamOutcome,
 }
@@ -109,26 +110,26 @@ pub struct StreamReport<I> {
 /// In first-seen order. Describes only work that actually ran (a whole-chunk
 /// abort is an [`ImportError`], not a report of "nothing happened").
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportReport<I> {
-    streams: Vec<StreamReport<I>>,
+pub struct ImportReport {
+    streams: Vec<StreamReport>,
 }
 
-impl<I> ImportReport<I> {
+impl ImportReport {
     /// Build a report from per-stream outcomes.
     #[must_use]
-    pub const fn new(streams: Vec<StreamReport<I>>) -> Self {
+    pub const fn new(streams: Vec<StreamReport>) -> Self {
         Self { streams }
     }
 
     /// All per-stream outcomes, in first-seen order.
     #[must_use]
-    pub fn streams(&self) -> &[StreamReport<I>] {
+    pub fn streams(&self) -> &[StreamReport] {
         &self.streams
     }
 
     /// The streams the sync loop must act on — everything that isn't
     /// [`StreamOutcome::Complete`].
-    pub fn unfinished(&self) -> impl Iterator<Item = &StreamReport<I>> {
+    pub fn unfinished(&self) -> impl Iterator<Item = &StreamReport> {
         self.streams.iter().filter(|s| !s.outcome.is_complete())
     }
 
@@ -152,11 +153,10 @@ pub enum AbortReason {
 }
 
 /// A whole-operation import failure — distinct from the *expected* per-stream
-/// outcomes carried in an [`ImportReport`]. `E` is the underlying store
-/// error; `I` is the caller's target stream-id type.
+/// outcomes carried in an [`ImportReport`]. `E` is the underlying store error.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum ImportError<E, I> {
+pub enum ImportError<E> {
     /// Chunk header unreadable: bad magic, unknown format-version, or a
     /// structurally unparseable block. Distinct from a per-block checksum
     /// failure (that is a per-stream [`StreamOutcome::Corrupt`]).
@@ -165,8 +165,11 @@ pub enum ImportError<E, I> {
     /// Whole-chunk atomicity only: a bad block rolled the entire chunk back —
     /// nothing was written. `stream` is the first offender; retry the whole
     /// chunk. (Per-stream atomicity never aborts — it reports per stream.)
-    #[error("chunk aborted at stream {stream:?}: {reason}")]
-    Aborted { stream: I, reason: AbortReason },
+    #[error("chunk aborted at stream {stream}: {reason}")]
+    Aborted {
+        stream: StreamKey,
+        reason: AbortReason,
+    },
     /// The underlying store transaction failed.
     #[error(transparent)]
     Store(E),
@@ -206,9 +209,9 @@ pub enum ImportBlock {
 /// head the target stream must currently be at (`None` = the stream must be
 /// fresh). Built by the importer's per-section planner.
 #[derive(Debug, Clone)]
-pub struct PlannedAppend<I> {
-    /// The resolved target stream id.
-    pub target: I,
+pub struct PlannedAppend {
+    /// The resolved target [`StreamKey`].
+    pub target: StreamKey,
     /// The version the target must currently be at (`None` = fresh stream).
     pub expected_version: Option<Version>,
     /// The contiguous run to append, in version order (always non-empty).
@@ -259,9 +262,9 @@ pub enum AtomicAppendError<E> {
 /// - On any failure, **no** write is applied.
 pub trait AtomicAppend: RawEventStore {
     /// Append every write atomically. See the trait contract.
-    fn atomic_append_many<I: Id>(
+    fn atomic_append_many(
         &self,
-        writes: &[PlannedAppend<I>],
+        writes: &[PlannedAppend],
     ) -> impl std::future::Future<Output = Result<(), AtomicAppendError<Self::Error>>> + Send;
 }
 
@@ -270,9 +273,9 @@ pub trait AtomicAppend: RawEventStore {
 /// free via the blanket impl below — so a handle holder can `store.import(..)`
 /// without `.raw()`.
 impl<S: AtomicAppend> AtomicAppend for Store<S> {
-    async fn atomic_append_many<I: Id>(
+    async fn atomic_append_many(
         &self,
-        writes: &[PlannedAppend<I>],
+        writes: &[PlannedAppend],
     ) -> Result<(), AtomicAppendError<Self::Error>> {
         self.raw().atomic_append_many(writes).await
     }
@@ -296,15 +299,18 @@ impl<S: AtomicAppend> AtomicAppend for Store<S> {
 /// rolled back. Empty sections produce no report entry.
 pub trait EventImporter: RawEventStore + AtomicAppend {
     /// Import per-stream sections onto caller-routed target streams.
-    fn import<I, R>(
+    ///
+    /// `route` maps each section's origin id bytes to a target [`StreamKey`]
+    /// (e.g. `task-123` → `phone:task-123`); for an identity restore it is
+    /// simply [`StreamKey::from_slice`].
+    fn import<R>(
         &self,
         sections: &[StreamSection],
         route: R,
         atomicity: Atomicity,
-    ) -> impl std::future::Future<Output = Result<ImportReport<I>, ImportError<Self::Error, I>>> + Send
+    ) -> impl std::future::Future<Output = Result<ImportReport, ImportError<Self::Error>>> + Send
     where
-        I: Id,
-        R: Fn(&[u8]) -> I + Send;
+        R: Fn(&[u8]) -> StreamKey + Send;
 }
 
 // =============================================================================
@@ -408,15 +414,14 @@ fn plan_section(section: &StreamSection) -> Result<SectionPlan, PlanError> {
 // =============================================================================
 
 impl<S: RawEventStore + AtomicAppend> EventImporter for S {
-    async fn import<I, R>(
+    async fn import<R>(
         &self,
         sections: &[StreamSection],
         route: R,
         atomicity: Atomicity,
-    ) -> Result<ImportReport<I>, ImportError<Self::Error, I>>
+    ) -> Result<ImportReport, ImportError<Self::Error>>
     where
-        I: Id,
-        R: Fn(&[u8]) -> I + Send,
+        R: Fn(&[u8]) -> StreamKey + Send,
     {
         match atomicity {
             Atomicity::PerStream => import_per_stream(self, sections, route).await,
@@ -436,15 +441,14 @@ impl<S: RawEventStore + AtomicAppend> EventImporter for S {
 /// An empty section (no blocks) produces no `StreamReport` entry; a caller
 /// correlating sections to report entries must not assume positional
 /// correspondence.
-async fn import_per_stream<S, I, R>(
+async fn import_per_stream<S, R>(
     store: &S,
     sections: &[StreamSection],
     route: R,
-) -> Result<ImportReport<I>, ImportError<S::Error, I>>
+) -> Result<ImportReport, ImportError<S::Error>>
 where
     S: RawEventStore,
-    I: Id,
-    R: Fn(&[u8]) -> I + Send,
+    R: Fn(&[u8]) -> StreamKey + Send,
 {
     let mut reports = Vec::with_capacity(sections.len());
     for section in sections {
@@ -493,18 +497,17 @@ where
 /// lands. First offender (section order, then block order) wins.
 ///
 /// [`WholeChunk`]: Atomicity::WholeChunk
-async fn import_whole_chunk<S, I, R>(
+async fn import_whole_chunk<S, R>(
     store: &S,
     sections: &[StreamSection],
     route: R,
-) -> Result<ImportReport<I>, ImportError<S::Error, I>>
+) -> Result<ImportReport, ImportError<S::Error>>
 where
     S: RawEventStore + AtomicAppend,
-    I: Id,
-    R: Fn(&[u8]) -> I + Send,
+    R: Fn(&[u8]) -> StreamKey + Send,
 {
     // Phase 1 — plan every section purely. Any halt is a hard abort here.
-    let mut writes: Vec<PlannedAppend<I>> = Vec::with_capacity(sections.len());
+    let mut writes: Vec<PlannedAppend> = Vec::with_capacity(sections.len());
     let mut firsts: Vec<Version> = Vec::with_capacity(sections.len());
     let mut lasts: Vec<Version> = Vec::with_capacity(sections.len());
     for section in sections {
@@ -611,9 +614,9 @@ mod tests {
         Version::new(n).expect("test version must be nonzero")
     }
 
-    fn report(stream: &str, outcome: StreamOutcome) -> StreamReport<String> {
+    fn report(stream: &str, outcome: StreamOutcome) -> StreamReport {
         StreamReport {
-            stream: stream.to_owned(),
+            stream: StreamKey::from_slice(stream.as_bytes()),
             outcome,
         }
     }
@@ -623,9 +626,9 @@ mod tests {
     assert_impl_all!(StreamOutcome: Send, Sync, Copy, Clone);
     assert_impl_all!(Atomicity: Send, Sync, Copy, Clone);
     assert_impl_all!(AbortReason: Send, Sync, Clone);
-    assert_impl_all!(StreamReport<String>: Send, Sync, Clone);
-    assert_impl_all!(ImportReport<String>: Send, Sync, Clone);
-    assert_impl_all!(ImportError<std::io::Error, String>: Send, Sync);
+    assert_impl_all!(StreamReport: Send, Sync, Clone);
+    assert_impl_all!(ImportReport: Send, Sync, Clone);
+    assert_impl_all!(ImportError<std::io::Error>: Send, Sync);
 
     // ── Atomicity: equality + Copy semantics ────────────────────────────────
 
@@ -691,7 +694,7 @@ mod tests {
 
     #[test]
     fn empty_report_is_vacuously_all_complete_with_no_unfinished() {
-        let report: ImportReport<String> = ImportReport::new(Vec::new());
+        let report: ImportReport = ImportReport::new(Vec::new());
         assert!(report.streams().is_empty());
         assert!(report.all_complete());
         assert_eq!(report.unfinished().count(), 0);
@@ -731,12 +734,24 @@ mod tests {
         let report = ImportReport::new(streams);
 
         // streams() preserves first-seen order and full set.
-        let all_ids: Vec<&str> = report.streams().iter().map(|s| s.stream.as_str()).collect();
-        assert_eq!(all_ids, ["done-1", "corrupt", "done-2", "mismatch"]);
+        let all_ids: Vec<&[u8]> = report
+            .streams()
+            .iter()
+            .map(|s| s.stream.as_bytes())
+            .collect();
+        assert_eq!(
+            all_ids,
+            [
+                b"done-1".as_ref(),
+                b"corrupt".as_ref(),
+                b"done-2".as_ref(),
+                b"mismatch".as_ref()
+            ]
+        );
 
         // unfinished() is EXACTLY the two non-Complete streams, in order.
-        let unfinished_ids: Vec<&str> = report.unfinished().map(|s| s.stream.as_str()).collect();
-        assert_eq!(unfinished_ids, ["corrupt", "mismatch"]);
+        let unfinished_ids: Vec<&[u8]> = report.unfinished().map(|s| s.stream.as_bytes()).collect();
+        assert_eq!(unfinished_ids, [b"corrupt".as_ref(), b"mismatch".as_ref()]);
 
         assert!(!report.all_complete());
     }
@@ -768,29 +783,30 @@ mod tests {
 
     #[test]
     fn import_error_malformed_display_is_exact() {
-        let err: ImportError<std::io::Error, String> = ImportError::Malformed("bad magic");
+        let err: ImportError<std::io::Error> = ImportError::Malformed("bad magic");
         assert_eq!(err.to_string(), "malformed chunk: bad magic");
     }
 
     #[test]
-    fn import_error_aborted_display_formats_stream_debug_and_reason() {
-        let err: ImportError<std::io::Error, String> = ImportError::Aborted {
-            stream: "phone:task-123".to_owned(),
+    fn import_error_aborted_display_formats_stream_and_reason() {
+        let err: ImportError<std::io::Error> = ImportError::Aborted {
+            stream: StreamKey::from_slice(b"phone:task-123"),
             reason: AbortReason::Mismatch {
                 expected: v(2),
                 got: v(5),
             },
         };
-        // {stream:?} → quoted Debug of String; reason via its Display.
+        // {stream} → StreamKey's Display (the UTF-8 string, unquoted); reason
+        // via its own Display.
         assert_eq!(
             err.to_string(),
-            "chunk aborted at stream \"phone:task-123\": version mismatch (expected 2, got 5)",
+            "chunk aborted at stream phone:task-123: version mismatch (expected 2, got 5)",
         );
     }
 
     #[test]
     fn import_error_version_overflow_display_is_exact() {
-        let err: ImportError<std::io::Error, String> = ImportError::VersionOverflow;
+        let err: ImportError<std::io::Error> = ImportError::VersionOverflow;
         assert_eq!(err.to_string(), "version overflow");
     }
 
@@ -806,7 +822,7 @@ mod tests {
         #[error("store failed")]
         struct DummyStore(#[source] RootCause);
 
-        let err: ImportError<DummyStore, String> = ImportError::Store(DummyStore(RootCause));
+        let err: ImportError<DummyStore> = ImportError::Store(DummyStore(RootCause));
 
         // transparent → Display equals the inner store error's Display.
         assert_eq!(err.to_string(), "store failed");
@@ -822,14 +838,14 @@ mod tests {
         // Error-chain shape pin: `Store` is the ONLY source-forwarding variant.
         // `Aborted` deliberately interpolates its `reason` into the message
         // (not `#[source]`), so it terminates the chain too.
-        let malformed: ImportError<std::io::Error, String> = ImportError::Malformed("x");
+        let malformed: ImportError<std::io::Error> = ImportError::Malformed("x");
         assert!(malformed.source().is_none());
 
-        let overflow: ImportError<std::io::Error, String> = ImportError::VersionOverflow;
+        let overflow: ImportError<std::io::Error> = ImportError::VersionOverflow;
         assert!(overflow.source().is_none());
 
-        let aborted: ImportError<std::io::Error, String> = ImportError::Aborted {
-            stream: "s".to_owned(),
+        let aborted: ImportError<std::io::Error> = ImportError::Aborted {
+            stream: StreamKey::from_slice(b"s"),
             reason: AbortReason::Corrupt,
         };
         assert!(aborted.source().is_none());
@@ -837,23 +853,8 @@ mod tests {
 
     // ── AtomicAppend helpers and tests ───────────────────────────────────────
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct Tid(String);
-    impl std::fmt::Display for Tid {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-    impl AsRef<[u8]> for Tid {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-    impl nexus::Id for Tid {
-        const BYTE_LEN: usize = 0;
-    }
-    fn tid(s: &str) -> Tid {
-        Tid(s.to_owned())
+    fn sk(s: &str) -> StreamKey {
+        StreamKey::from_slice(s.as_bytes())
     }
 
     fn pending(ver: u64, payload: &[u8]) -> PendingEnvelope {
@@ -864,15 +865,15 @@ mod tests {
             .build()
     }
 
-    fn planned(target: &str, expected: Option<u64>, versions: &[u64]) -> PlannedAppend<Tid> {
+    fn planned(target: &str, expected: Option<u64>, versions: &[u64]) -> PlannedAppend {
         PlannedAppend {
-            target: tid(target),
+            target: sk(target),
             expected_version: expected.and_then(Version::new),
             events: versions.iter().map(|n| pending(*n, b"p")).collect(),
         }
     }
 
-    async fn head_len(store: &crate::testing::InMemoryStore, id: &Tid) -> usize {
+    async fn head_len(store: &crate::testing::InMemoryStore, id: &StreamKey) -> usize {
         store
             .read_stream(id, Version::INITIAL)
             .await
@@ -888,8 +889,8 @@ mod tests {
         let store = crate::testing::InMemoryStore::new();
         let writes = vec![planned("a", None, &[1, 2]), planned("b", None, &[1])];
         store.atomic_append_many(&writes).await.expect("commits");
-        assert_eq!(head_len(&store, &tid("a")).await, 2);
-        assert_eq!(head_len(&store, &tid("b")).await, 1);
+        assert_eq!(head_len(&store, &sk("a")).await, 2);
+        assert_eq!(head_len(&store, &sk("b")).await, 1);
     }
 
     #[tokio::test]
@@ -898,7 +899,7 @@ mod tests {
         let store = crate::testing::InMemoryStore::new();
         // Pre-seed "b" to v1 so the second write (expecting fresh) conflicts.
         store
-            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .append(&sk("b"), None, &[pending(1, b"seed")])
             .await
             .expect("seed");
 
@@ -918,8 +919,8 @@ mod tests {
             AtomicAppendError::Store(_) => panic!("expected Conflict, got Store"),
         }
         // Atomicity: NOTHING landed — "a" must still be empty.
-        assert_eq!(head_len(&store, &tid("a")).await, 0, "rolled back");
-        assert_eq!(head_len(&store, &tid("b")).await, 1, "unchanged");
+        assert_eq!(head_len(&store, &sk("a")).await, 0, "rolled back");
+        assert_eq!(head_len(&store, &sk("b")).await, 1, "unchanged");
     }
 
     // ── per-section planner ──────────────────────────────────────────────────
@@ -1076,11 +1077,11 @@ mod tests {
 
     // ── EventImporter PerStream behavioral tests ─────────────────────────────
 
-    fn identity_route(origin: &[u8]) -> Tid {
-        Tid(String::from_utf8(origin.to_vec()).expect("utf8 origin"))
+    fn identity_route(origin: &[u8]) -> StreamKey {
+        StreamKey::from_slice(origin)
     }
 
-    async fn versions(store: &crate::testing::InMemoryStore, id: &Tid) -> Vec<u64> {
+    async fn versions(store: &crate::testing::InMemoryStore, id: &StreamKey) -> Vec<u64> {
         store
             .read_stream(id, Version::INITIAL)
             .await
@@ -1105,8 +1106,8 @@ mod tests {
 
         assert!(report.all_complete());
         assert_eq!(report.streams().len(), 2);
-        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2, 3]);
-        assert_eq!(versions(&store, &tid("b")).await, vec![1, 2]);
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2, 3]);
+        assert_eq!(versions(&store, &sk("b")).await, vec![1, 2]);
         assert_eq!(
             report.streams()[0].outcome,
             StreamOutcome::Complete { version: v(3) }
@@ -1119,7 +1120,7 @@ mod tests {
         let store = crate::testing::InMemoryStore::new();
         for n in 1..=3 {
             store
-                .append(&tid("a"), Version::new(n - 1), &[pending(n, b"seed")])
+                .append(&sk("a"), Version::new(n - 1), &[pending(n, b"seed")])
                 .await
                 .expect("seed");
         }
@@ -1136,7 +1137,7 @@ mod tests {
                 got: v(2)
             }
         );
-        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2, 3]);
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2, 3]);
     }
 
     #[tokio::test]
@@ -1156,11 +1157,7 @@ mod tests {
                 got: v(4)
             }
         );
-        assert_eq!(
-            versions(&store, &tid("a")).await,
-            vec![1, 2],
-            "v4 held back"
-        );
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2], "v4 held back");
     }
 
     #[tokio::test]
@@ -1182,7 +1179,7 @@ mod tests {
                 reached: Some(v(2))
             }
         );
-        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2]);
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2]);
     }
 
     #[tokio::test]
@@ -1198,7 +1195,7 @@ mod tests {
             report.streams()[0].outcome,
             StreamOutcome::Corrupt { reached: None }
         );
-        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &sk("a")).await, Vec::<u64>::new());
     }
 
     #[tokio::test]
@@ -1243,7 +1240,7 @@ mod tests {
 
         async fn append(
             &self,
-            id: &impl nexus::Id,
+            id: &StreamKey,
             expected_version: Option<Version>,
             envelopes: &[crate::envelope::PendingEnvelope],
         ) -> Result<(), AppendError<Self::Error>> {
@@ -1257,7 +1254,7 @@ mod tests {
 
         async fn read_stream(
             &self,
-            id: &impl nexus::Id,
+            id: &StreamKey,
             from: Version,
         ) -> Result<Self::Stream, Self::Error> {
             self.inner.read_stream(id, from).await
@@ -1272,9 +1269,9 @@ mod tests {
     }
 
     impl crate::import::AtomicAppend for FailingAppendStore {
-        async fn atomic_append_many<I: nexus::Id>(
+        async fn atomic_append_many(
             &self,
-            writes: &[crate::import::PlannedAppend<I>],
+            writes: &[crate::import::PlannedAppend],
         ) -> Result<(), crate::import::AtomicAppendError<Self::Error>> {
             self.inner.atomic_append_many(writes).await
         }
@@ -1297,7 +1294,7 @@ mod tests {
             .expect_err("store error must surface");
         assert!(matches!(err, ImportError::Store(_)));
         // No cross-stream rollback: section "a" stayed committed.
-        assert_eq!(versions(&store.inner, &tid("a")).await, vec![1, 2]);
+        assert_eq!(versions(&store.inner, &sk("a")).await, vec![1, 2]);
     }
 
     // ── EventImporter WholeChunk behavioral tests ────────────────────────────
@@ -1315,8 +1312,8 @@ mod tests {
             .await
             .expect("import ok");
         assert!(report.all_complete());
-        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2]);
-        assert_eq!(versions(&store, &tid("b")).await, vec![1]);
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2]);
+        assert_eq!(versions(&store, &sk("b")).await, vec![1]);
     }
 
     #[tokio::test]
@@ -1333,14 +1330,14 @@ mod tests {
             .expect_err("aborts");
         match err {
             ImportError::Aborted { stream, reason } => {
-                assert_eq!(stream, tid("b"));
+                assert_eq!(stream, sk("b"));
                 assert_eq!(reason, AbortReason::Corrupt);
             }
             other => panic!("expected Aborted, got {other:?}"),
         }
         // Atomicity: NOTHING landed — even the clean section "a" must be empty.
-        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
-        assert_eq!(versions(&store, &tid("b")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &sk("a")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &sk("b")).await, Vec::<u64>::new());
     }
 
     #[tokio::test]
@@ -1354,7 +1351,7 @@ mod tests {
             .expect_err("aborts");
         match err {
             ImportError::Aborted { stream, reason } => {
-                assert_eq!(stream, tid("a"));
+                assert_eq!(stream, sk("a"));
                 assert_eq!(
                     reason,
                     AbortReason::Mismatch {
@@ -1365,7 +1362,7 @@ mod tests {
             }
             other => panic!("expected Aborted, got {other:?}"),
         }
-        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &sk("a")).await, Vec::<u64>::new());
     }
 
     #[tokio::test]
@@ -1374,7 +1371,7 @@ mod tests {
         let store = crate::testing::InMemoryStore::new();
         for n in 1..=2 {
             store
-                .append(&tid("a"), Version::new(n - 1), &[pending(n, b"seed")])
+                .append(&sk("a"), Version::new(n - 1), &[pending(n, b"seed")])
                 .await
                 .expect("seed");
         }
@@ -1385,7 +1382,7 @@ mod tests {
             .expect_err("aborts");
         match err {
             ImportError::Aborted { stream, reason } => {
-                assert_eq!(stream, tid("a"));
+                assert_eq!(stream, sk("a"));
                 // store head 2 → wanted v3 next; offered v1.
                 assert_eq!(
                     reason,
@@ -1397,7 +1394,7 @@ mod tests {
             }
             other => panic!("expected Aborted, got {other:?}"),
         }
-        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2], "unchanged");
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2], "unchanged");
     }
 
     #[tokio::test]
@@ -1411,7 +1408,7 @@ mod tests {
             .expect_err("aborts");
         assert!(matches!(
             err,
-            ImportError::Aborted { ref stream, reason: AbortReason::Corrupt } if *stream == tid("a")
+            ImportError::Aborted { ref stream, reason: AbortReason::Corrupt } if *stream == sk("a")
         ));
     }
 
@@ -1422,7 +1419,7 @@ mod tests {
         // Pre-seed "b" to v1 so the SECOND write conflicts (index 1), while "a"
         // (index 0) would be fine — exercises index > 0 in the Conflict arm.
         store
-            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .append(&sk("b"), None, &[pending(1, b"seed")])
             .await
             .expect("seed");
         let sections = vec![
@@ -1437,7 +1434,7 @@ mod tests {
             ImportError::Aborted { stream, reason } => {
                 assert_eq!(
                     stream,
-                    tid("b"),
+                    sk("b"),
                     "must report the conflicting SECOND section"
                 );
                 // "b" head is 1 → wanted v2 next; offered v1.
@@ -1452,8 +1449,8 @@ mod tests {
             other => panic!("expected Aborted, got {other:?}"),
         }
         // All-or-nothing: the clean section "a" must NOT have landed.
-        assert_eq!(versions(&store, &tid("a")).await, Vec::<u64>::new());
-        assert_eq!(versions(&store, &tid("b")).await, vec![1], "unchanged");
+        assert_eq!(versions(&store, &sk("a")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &sk("b")).await, vec![1], "unchanged");
     }
 
     #[tokio::test]
@@ -1468,8 +1465,8 @@ mod tests {
         assert!(report.all_complete());
         // The empty section produces NO report entry; only "b".
         assert_eq!(report.streams().len(), 1);
-        assert_eq!(report.streams()[0].stream, tid("b"));
-        assert_eq!(versions(&store, &tid("b")).await, vec![1, 2]);
+        assert_eq!(report.streams()[0].stream, sk("b"));
+        assert_eq!(versions(&store, &sk("b")).await, vec![1, 2]);
     }
 
     // ── Defensive boundary: non-injective route (two origins → one target) ────
@@ -1484,14 +1481,14 @@ mod tests {
             section("o1", vec![evt(1), evt(2)]),
             section("o2", vec![evt(1), evt(2)]),
         ];
-        let to_same = |_origin: &[u8]| tid("T");
+        let to_same = |_origin: &[u8]| sk("T");
         let err = store
             .import(&sections, to_same, Atomicity::WholeChunk)
             .await
             .expect_err("non-injective route must abort");
         assert!(matches!(err, ImportError::Aborted { .. }));
         // All-or-nothing + no corruption: T is empty, definitely not [1,2,1,2].
-        assert_eq!(versions(&store, &tid("T")).await, Vec::<u64>::new());
+        assert_eq!(versions(&store, &sk("T")).await, Vec::<u64>::new());
     }
 
     #[tokio::test]
@@ -1504,13 +1501,13 @@ mod tests {
             section("o1", vec![evt(1), evt(2)]),
             section("o2", vec![evt(1), evt(2)]),
         ];
-        let to_same = |_origin: &[u8]| tid("T");
+        let to_same = |_origin: &[u8]| sk("T");
         let report = store
             .import(&sections, to_same, Atomicity::PerStream)
             .await
             .expect("import ok");
         assert_eq!(
-            versions(&store, &tid("T")).await,
+            versions(&store, &sk("T")).await,
             vec![1, 2],
             "no [1,2,1,2] corruption — second section rejected, not appended"
         );
@@ -1563,7 +1560,7 @@ mod tests {
     async fn export_section(store: &crate::testing::InMemoryStore, origin: &str) -> StreamSection {
         use crate::export::EventExporter;
         let blocks = store
-            .export_stream(&tid(origin), Version::INITIAL)
+            .export_stream(&sk(origin), Version::INITIAL)
             .await
             .expect("export opens")
             .map(|r| ImportBlock::Event(r.expect("no read error")))
@@ -1579,12 +1576,12 @@ mod tests {
         let source = crate::testing::InMemoryStore::new();
         for n in 1..=3 {
             source
-                .append(&tid("acct-1"), Version::new(n - 1), &[pending(n, b"a")])
+                .append(&sk("acct-1"), Version::new(n - 1), &[pending(n, b"a")])
                 .await
                 .expect("seed a");
         }
         source
-            .append(&tid("acct-2"), None, &[pending(1, b"b")])
+            .append(&sk("acct-2"), None, &[pending(1, b"b")])
             .await
             .expect("seed b");
 
@@ -1599,7 +1596,7 @@ mod tests {
         // global_seqs than the source — makes the restamp observable (a bug that
         // copied the source global_seq verbatim would now be caught).
         target
-            .append(&tid("warmup"), None, &[pending(1, b"warmup")])
+            .append(&sk("warmup"), None, &[pending(1, b"warmup")])
             .await
             .expect("warmup seed");
         let report = target
@@ -1612,14 +1609,14 @@ mod tests {
         // metadata/schema for every event of every stream.
         for origin in ["acct-1", "acct-2"] {
             let src: Vec<PersistedEnvelope> = source
-                .read_stream(&tid(origin), Version::INITIAL)
+                .read_stream(&sk(origin), Version::INITIAL)
                 .await
                 .expect("read")
                 .map(|r| r.expect("ok"))
                 .collect()
                 .await;
             let dst: Vec<PersistedEnvelope> = target
-                .read_stream(&tid(origin), Version::INITIAL)
+                .read_stream(&sk(origin), Version::INITIAL)
                 .await
                 .expect("read")
                 .map(|r| r.expect("ok"))
@@ -1664,7 +1661,7 @@ mod tests {
                 got: v(1)
             }
         );
-        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2, 3], "no dupes");
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2, 3], "no dupes");
     }
 
     #[tokio::test]
@@ -1682,7 +1679,7 @@ mod tests {
             .expect_err("re-import aborts");
         match err {
             ImportError::Aborted { stream, reason } => {
-                assert_eq!(stream, tid("a"));
+                assert_eq!(stream, sk("a"));
                 assert_eq!(
                     reason,
                     AbortReason::Mismatch {
@@ -1693,7 +1690,7 @@ mod tests {
             }
             other => panic!("expected Aborted, got {other:?}"),
         }
-        assert_eq!(versions(&store, &tid("a")).await, vec![1, 2], "no dupes");
+        assert_eq!(versions(&store, &sk("a")).await, vec![1, 2], "no dupes");
     }
 
     // ── Linearizability: concurrent import vs direct writer (CLAUDE rule 7 §4) ─
@@ -1717,7 +1714,7 @@ mod tests {
             for vn in 1..=n {
                 // Conflicts are expected once the importer wins; ignore them.
                 let _ = writer_store
-                    .append(&tid("race"), Version::new(vn - 1), &[pending(vn, b"w")])
+                    .append(&sk("race"), Version::new(vn - 1), &[pending(vn, b"w")])
                     .await;
             }
         });
@@ -1748,7 +1745,7 @@ mod tests {
         }
 
         // Whatever the interleaving, the final stream is a gapless prefix from 1.
-        let final_versions = versions(&store, &tid("race")).await;
+        let final_versions = versions(&store, &sk("race")).await;
         for (expected, got) in (1u64..).zip(final_versions.iter()) {
             assert_eq!(*got, expected, "stream must be a gapless prefix from 1");
         }
@@ -1785,7 +1782,7 @@ mod tests {
                 .expect("runtime");
             rt.block_on(async {
                 let store = crate::testing::InMemoryStore::new();
-                let id = tid("m");
+                let id = sk("m");
                 // Model: next expected version (1 = fresh).
                 let mut next: u64 = 1;
 

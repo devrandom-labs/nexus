@@ -10,36 +10,17 @@
     reason = "test harness — relaxed lints for test code"
 )]
 
-use std::fmt;
 use std::num::NonZeroU32;
 
-use nexus::{Id, Version};
+use nexus::Version;
 use nexus_fjall::FjallStore;
+use nexus_store::StreamKey;
 use nexus_store::state::SnapshotStore;
 
 const SV1: NonZeroU32 = NonZeroU32::MIN;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(String);
-
-impl fmt::Display for TestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
-
-fn tid(s: &str) -> TestId {
-    TestId(s.to_owned())
+fn sk(s: &str) -> StreamKey {
+    StreamKey::from_slice(s.as_bytes())
 }
 
 fn temp_store() -> (FjallStore, tempfile::TempDir) {
@@ -49,7 +30,7 @@ fn temp_store() -> (FjallStore, tempfile::TempDir) {
 }
 
 /// Helper: append events to create a stream so snapshots have something to reference.
-async fn setup_stream(store: &FjallStore, id: &TestId, event_count: u64) {
+async fn setup_stream(store: &FjallStore, id: &StreamKey, event_count: u64) {
     use nexus_store::envelope::pending_envelope;
     use nexus_store::store::RawEventStore;
 
@@ -71,7 +52,7 @@ async fn setup_stream(store: &FjallStore, id: &TestId, event_count: u64) {
 #[tokio::test]
 async fn commit_then_hydrate_roundtrips() {
     let (store, _dir) = temp_store();
-    let id = tid("agg-1");
+    let id = sk("agg-1");
     setup_stream(&store, &id, 5).await;
 
     store
@@ -87,7 +68,7 @@ async fn commit_then_hydrate_roundtrips() {
 #[tokio::test]
 async fn commit_overwrites_previous_snapshot() {
     let (store, _dir) = temp_store();
-    let id = tid("agg-1");
+    let id = sk("agg-1");
     setup_stream(&store, &id, 10).await;
 
     store
@@ -115,7 +96,7 @@ async fn commit_overwrites_previous_snapshot() {
 async fn snapshot_persists_across_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("db");
-    let id = tid("agg-1");
+    let id = sk("agg-1");
 
     // First session: create stream + snapshot
     {
@@ -141,14 +122,14 @@ async fn snapshot_persists_across_reopen() {
 #[tokio::test]
 async fn hydrate_unknown_id_returns_none() {
     let (store, _dir) = temp_store();
-    let result = store.hydrate(&tid("nope"), SV1).await.unwrap();
+    let result = store.hydrate(&sk("nope"), SV1).await.unwrap();
     assert!(result.is_none());
 }
 
 #[tokio::test]
 async fn hydrate_id_without_snapshot_returns_none() {
     let (store, _dir) = temp_store();
-    let id = tid("agg-1");
+    let id = sk("agg-1");
     setup_stream(&store, &id, 3).await;
 
     let result = store.hydrate(&id, SV1).await.unwrap();
@@ -160,12 +141,12 @@ async fn commit_without_event_stream_is_persisted() {
     let (store, _dir) = temp_store();
     // No event stream exists — commit writes the snapshot unconditionally.
     store
-        .commit(&tid("nope"), SV1, Version::new(1).unwrap(), &vec![1])
+        .commit(&sk("nope"), SV1, Version::new(1).unwrap(), &vec![1])
         .await
         .unwrap();
 
     // And hydrate reads it back regardless of stream existence.
-    let (version, state) = store.hydrate(&tid("nope"), SV1).await.unwrap().unwrap();
+    let (version, state) = store.hydrate(&sk("nope"), SV1).await.unwrap().unwrap();
     assert_eq!(version, Version::new(1).unwrap());
     assert_eq!(state, vec![1]);
 }
@@ -175,8 +156,8 @@ async fn commit_without_event_stream_is_persisted() {
 #[tokio::test]
 async fn different_streams_have_separate_snapshots() {
     let (store, _dir) = temp_store();
-    let id1 = tid("agg-1");
-    let id2 = tid("agg-2");
+    let id1 = sk("agg-1");
+    let id2 = sk("agg-2");
     setup_stream(&store, &id1, 5).await;
     setup_stream(&store, &id2, 10).await;
 

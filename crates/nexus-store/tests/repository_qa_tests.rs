@@ -860,7 +860,11 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
         .expect("valid payload")
         .build(); // schema_version defaults to 1
     raw_store
-        .append(&CounterId("counter-1".into()), None, &[legacy])
+        .append(
+            &nexus_store::StreamKey::from_slice("counter-1".as_bytes()),
+            None,
+            &[legacy],
+        )
         .await
         .unwrap();
 
@@ -897,7 +901,11 @@ async fn d4_upcaster_must_not_double_apply_to_new_events() {
         .expect("valid payload")
         .build(); // schema_version defaults to 1
     raw_store
-        .append(&CounterId("counter-1".into()), None, &[legacy])
+        .append(
+            &nexus_store::StreamKey::from_slice("counter-1".as_bytes()),
+            None,
+            &[legacy],
+        )
         .await
         .unwrap();
 
@@ -1478,12 +1486,19 @@ async fn d11_schema_version_always_one() {
             .build(),
     ];
     store
-        .append(&CounterId("counter-1".into()), None, &envelopes)
+        .append(
+            &nexus_store::StreamKey::from_slice("counter-1".as_bytes()),
+            None,
+            &envelopes,
+        )
         .await
         .unwrap();
 
     let mut stream = store
-        .read_stream(&CounterId("counter-1".into()), Version::INITIAL)
+        .read_stream(
+            &nexus_store::StreamKey::from_slice("counter-1".as_bytes()),
+            Version::INITIAL,
+        )
         .await
         .unwrap();
     let env1 = stream.next().await.unwrap().unwrap();

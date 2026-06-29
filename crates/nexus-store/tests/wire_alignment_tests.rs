@@ -22,53 +22,12 @@
     reason = "tests inline const ET_LENGTHS at the only use site"
 )]
 
-use std::fmt;
-
 use bytes::Bytes;
 use futures::StreamExt;
-use nexus::{Id, Version};
+use nexus::Version;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{PendingEnvelope, pending_envelope};
-
-#[derive(Clone)]
-struct TestId(String);
-
-impl fmt::Display for TestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl fmt::Debug for TestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TestId({:?})", self.0)
-    }
-}
-
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl core::hash::Hash for TestId {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
-
-impl PartialEq for TestId {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Eq for TestId {}
-
-impl Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
+use nexus_store::{PendingEnvelope, StreamKey, pending_envelope};
 
 const ALIGN: usize = 16;
 
@@ -97,7 +56,7 @@ fn assert_payload_aligned(env: &nexus_store::PersistedEnvelope) {
 #[tokio::test]
 async fn sequence_payloads_are_aligned_across_a_single_stream() {
     let store = InMemoryStore::new();
-    let id = TestId("seq".into());
+    let id = StreamKey::from_slice(b"seq");
     let envelopes: Vec<_> = (1..=20).map(|n| build_envelope(n, "E", 42)).collect();
     store.append(&id, None, &envelopes).await.unwrap();
 
@@ -118,7 +77,7 @@ async fn sequence_payloads_are_aligned_across_a_single_stream() {
 #[tokio::test]
 async fn lifecycle_clone_then_read_preserves_alignment() {
     let store = std::sync::Arc::new(InMemoryStore::new());
-    let id = TestId("lc".into());
+    let id = StreamKey::from_slice(b"lc");
     store
         .append(&id, None, &[build_envelope(1, "E", 7)])
         .await
@@ -147,7 +106,7 @@ async fn boundary_event_type_lengths_around_alignment_boundary_all_aligned() {
     // We exercise event_type lengths around the 16-byte boundaries to
     // confirm the padding logic is correct at the seam.
     let store = InMemoryStore::new();
-    let id = TestId("boundary".into());
+    let id = StreamKey::from_slice(b"boundary");
     // Padding kicks in at header_len % 16 != 0. We pick a range of
     // event_type lengths that put the header at various positions inside
     // a 16-byte window.
@@ -179,7 +138,7 @@ async fn linearizability_concurrent_writer_aligned_payloads() {
     use tokio::sync::Barrier;
 
     let store = Arc::new(InMemoryStore::new());
-    let id = TestId("lin".into());
+    let id = StreamKey::from_slice(b"lin");
 
     // Pre-seed one event so the reader has something to consume.
     store

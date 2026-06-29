@@ -11,11 +11,11 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
+use nexus_store::StreamKey;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::value::{EventType, Payload, SchemaVersion};
 use nexus_store::wire;
-use std::fmt;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -23,23 +23,8 @@ use tokio::runtime::Runtime;
 // Helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct BenchId(String);
-impl fmt::Display for BenchId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for BenchId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl nexus::Id for BenchId {
-    const BYTE_LEN: usize = 0;
-}
-fn bid(s: &str) -> BenchId {
-    BenchId(s.to_owned())
+fn sk(s: &str) -> StreamKey {
+    StreamKey::from_slice(s.as_bytes())
 }
 
 fn make_envelope(version: u64, payload: &[u8]) -> nexus_store::PendingEnvelope {
@@ -160,7 +145,7 @@ fn append_batch_throughput(c: &mut Criterion) {
                 |(store, _dir, envs)| {
                     rt.block_on(async {
                         store
-                            .append(&bid("bench-stream"), None, &envs)
+                            .append(&sk("bench-stream"), None, &envs)
                             .await
                             .unwrap();
                     });
@@ -191,7 +176,7 @@ fn append_sequential_throughput(c: &mut Criterion) {
                         let env = make_envelope(v, &event_payload);
                         let expected = if v == 1 { None } else { Version::new(v - 1) };
                         store
-                            .append(&bid("bench-stream"), expected, &[env])
+                            .append(&sk("bench-stream"), expected, &[env])
                             .await
                             .unwrap();
                     }
@@ -219,7 +204,7 @@ fn read_throughput(c: &mut Criterion) {
             let envs = make_envelopes(count, &event_payload);
             rt.block_on(async {
                 store
-                    .append(&bid("bench-stream"), None, &envs)
+                    .append(&sk("bench-stream"), None, &envs)
                     .await
                     .unwrap();
             });
@@ -227,7 +212,7 @@ fn read_throughput(c: &mut Criterion) {
             b.iter(|| {
                 rt.block_on(async {
                     let mut stream = store
-                        .read_stream(&bid("bench-stream"), Version::INITIAL)
+                        .read_stream(&sk("bench-stream"), Version::INITIAL)
                         .await
                         .unwrap();
                     while let Some(item) = stream.next().await {
@@ -274,7 +259,8 @@ fn lifecycle_benchmarks(c: &mut Criterion) {
                             let store = FjallStore::builder(&db_path).open().unwrap();
                             rt.block_on(async {
                                 for i in 0..stream_count {
-                                    let id = BenchId(format!("stream-{i}"));
+                                    let id =
+                                        StreamKey::from_slice(format!("stream-{i}").as_bytes());
                                     let env = make_envelope(1, &event_payload);
                                     store.append(&id, None, &[env]).await.unwrap();
                                 }
