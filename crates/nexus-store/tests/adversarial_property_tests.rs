@@ -117,25 +117,6 @@ fn label(s: &str) -> ErrorId {
     ErrorId::from_display(&s)
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct StreamName(String);
-impl fmt::Display for StreamName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for StreamName {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl nexus::Id for StreamName {
-    const BYTE_LEN: usize = 0;
-}
-fn sn(s: &str) -> StreamName {
-    StreamName(s.to_owned())
-}
-
 // ============================================================================
 // Test Domain Types (minimal aggregate for integration tests)
 // ============================================================================
@@ -294,9 +275,12 @@ fn build_envelopes_from(start_version: u64, payloads: &[Vec<u8>]) -> Vec<Pending
         .collect()
 }
 
-async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamName) -> Vec<Vec<u8>> {
+async fn read_all_payloads(
+    store: &InMemoryStore,
+    stream_id: &nexus_store::StreamKey,
+) -> Vec<Vec<u8>> {
     let mut stream = store
-        .read_stream(stream_id, Version::INITIAL)
+        .read_stream(&stream_id, Version::INITIAL)
         .await
         .unwrap();
     let mut payloads = Vec::new();
@@ -307,9 +291,9 @@ async fn read_all_payloads(store: &InMemoryStore, stream_id: &StreamName) -> Vec
     payloads
 }
 
-async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamName) -> Vec<u64> {
+async fn read_all_versions(store: &InMemoryStore, stream_id: &nexus_store::StreamKey) -> Vec<u64> {
     let mut stream = store
-        .read_stream(stream_id, Version::INITIAL)
+        .read_stream(&stream_id, Version::INITIAL)
         .await
         .unwrap();
     let mut versions = Vec::new();
@@ -324,10 +308,10 @@ async fn read_all_versions(store: &InMemoryStore, stream_id: &StreamName) -> Vec
 // Strategies
 // ============================================================================
 
-fn stream_id_strategy() -> impl Strategy<Value = StreamName> {
+fn stream_id_strategy() -> impl Strategy<Value = nexus_store::StreamKey> {
     prop::string::string_regex("[a-z][a-z0-9_-]{0,29}")
         .unwrap()
-        .prop_map(StreamName)
+        .prop_map(|s| nexus_store::StreamKey::from_slice(s.as_bytes()))
 }
 
 fn payloads_strategy() -> impl Strategy<Value = Vec<Vec<u8>>> {
@@ -570,6 +554,7 @@ proptest! {
             );
             let result = store.append(
                 &stream_id,
+
                 Version::new(wrong_version),
                 &new_envelopes,
             ).await;
@@ -776,8 +761,8 @@ proptest! {
             let envelopes_a = build_envelopes(&payloads_a);
             let envelopes_b = build_envelopes(&payloads_b);
 
-            store.append(&id_a, None, &envelopes_a).await.unwrap();
-            store.append(&id_b, None, &envelopes_b).await.unwrap();
+            store.append(&nexus_store::StreamKey::from_slice(id_a.as_ref()), None, &envelopes_a).await.unwrap();
+            store.append(&nexus_store::StreamKey::from_slice(id_b.as_ref()), None, &envelopes_b).await.unwrap();
 
             let read_a = read_all_payloads(&store, &id_a).await;
             let read_b = read_all_payloads(&store, &id_b).await;
@@ -1090,7 +1075,11 @@ async fn attack_event_store_transforms_applied_on_load() {
             .build(),
     ];
     raw_store
-        .append(&sn("test-1"), None, &envelopes)
+        .append(
+            &nexus_store::StreamKey::from_slice("test-1".as_bytes()),
+            None,
+            &envelopes,
+        )
         .await
         .unwrap();
 
@@ -1157,7 +1146,7 @@ proptest! {
             for op in &ops {
                 match op {
                     ModelOp::Append { stream_id, payloads } => {
-                        let id = StreamName(stream_id.clone());
+                        let id = nexus_store::StreamKey::from_slice(stream_id.clone().as_bytes());
                         let model_stream = model.entry(stream_id.clone()).or_default();
                         let start_version = u64::try_from(model_stream.len()).unwrap();
                         let expected_version = Version::new(start_version);
@@ -1167,13 +1156,13 @@ proptest! {
                             payloads,
                         );
 
-                        let result = store.append(&id, expected_version, &envelopes).await;
+                        let result = store.append(&nexus_store::StreamKey::from_slice(id.as_ref()), expected_version, &envelopes).await;
                         prop_assert!(result.is_ok(), "append should succeed for model-valid operation");
 
                         model_stream.extend(payloads.iter().cloned());
                     }
                     ModelOp::Read { stream_id } => {
-                        let id = StreamName(stream_id.clone());
+                        let id = nexus_store::StreamKey::from_slice(stream_id.clone().as_bytes());
                         let expected = model.get(stream_id).cloned().unwrap_or_default();
                         let actual = read_all_payloads(&store, &id).await;
 
@@ -1225,6 +1214,7 @@ proptest! {
 
                 store.append(
                     &stream_id,
+
                     Version::new(total_events),
                     &envelopes,
                 ).await.unwrap();
@@ -1262,7 +1252,7 @@ proptest! {
         raw_stream_id in "[a-zA-Z0-9_./-]{0,100}",
     ) {
         // Any string can be used as an Id now. Test that evil IDs don't crash.
-        let stream_id = StreamName(raw_stream_id);
+        let stream_id = nexus_store::StreamKey::from_slice(raw_stream_id.as_bytes());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -1416,7 +1406,7 @@ proptest! {
                 let sid = stream_id.clone();
                 let expected = payloads.clone();
                 handles.push(tokio::spawn(async move {
-                    let mut stream = store.read_stream(&sid, Version::INITIAL).await.unwrap();
+                    let mut stream = store.read_stream(&nexus_store::StreamKey::from_slice(sid.as_ref()), Version::INITIAL).await.unwrap();
                     let mut read = Vec::new();
                     while let Some(__i) = stream.next().await { let env = __i.unwrap();
                         read.push(env.payload().to_vec());
@@ -1646,7 +1636,7 @@ proptest! {
 
             // Create many streams with many events
             for stream_idx in 0..num_streams {
-                let stream_id = StreamName(format!("stress-{}", stream_idx));
+                let stream_id = nexus_store::StreamKey::from_slice(format!("stress-{}", stream_idx).as_bytes());
                 let payloads: Vec<Vec<u8>> = (0..events_per_stream)
                     .map(|i| {
                         let mut p = vec![stream_idx as u8];
@@ -1661,7 +1651,7 @@ proptest! {
 
             // Verify each stream independently
             for stream_idx in 0..num_streams {
-                let stream_id = StreamName(format!("stress-{}", stream_idx));
+                let stream_id = nexus_store::StreamKey::from_slice(format!("stress-{}", stream_idx).as_bytes());
                 let read = read_all_payloads(&store, &stream_id).await;
                 prop_assert_eq!(
                     read.len(), events_per_stream,
@@ -1706,7 +1696,13 @@ async fn attack_concurrent_writers_exactly_one_wins() {
                 .expect("valid payload")
                 .build();
 
-            store.append(&sn("race-stream"), None, &[envelope]).await
+            store
+                .append(
+                    &nexus_store::StreamKey::from_slice("race-stream".as_bytes()),
+                    None,
+                    &[envelope],
+                )
+                .await
         }));
     }
 
@@ -1728,7 +1724,8 @@ async fn attack_concurrent_writers_exactly_one_wins() {
     );
 
     // The stream should have exactly 1 event
-    let payloads = read_all_payloads(&store, &sn("race-stream")).await;
+    let payloads =
+        read_all_payloads(&store, &nexus_store::StreamKey::from_slice(b"race-stream")).await;
     assert_eq!(payloads.len(), 1, "stream must have exactly 1 event");
 }
 
@@ -1912,19 +1909,19 @@ proptest! {
         rt.block_on(async {
             // Store A: write X first, then Y
             let store_a = InMemoryStore::new();
-            let sid_x = sn("x");
-            let sid_y = sn("y");
+            let sid_x = nexus_store::StreamKey::from_slice(b"x");
+            let sid_y = nexus_store::StreamKey::from_slice(b"y");
             let env_x = build_envelopes(&payloads_x);
             let env_y = build_envelopes(&payloads_y);
-            store_a.append(&sid_x, None, &env_x).await.unwrap();
-            store_a.append(&sid_y, None, &env_y).await.unwrap();
+            store_a.append(&nexus_store::StreamKey::from_slice(sid_x.as_ref()), None, &env_x).await.unwrap();
+            store_a.append(&nexus_store::StreamKey::from_slice(sid_y.as_ref()), None, &env_y).await.unwrap();
 
             // Store B: write Y first, then X
             let store_b = InMemoryStore::new();
             let env_x2 = build_envelopes(&payloads_x);
             let env_y2 = build_envelopes(&payloads_y);
-            store_b.append(&sid_y, None, &env_y2).await.unwrap();
-            store_b.append(&sid_x, None, &env_x2).await.unwrap();
+            store_b.append(&nexus_store::StreamKey::from_slice(sid_y.as_ref()), None, &env_y2).await.unwrap();
+            store_b.append(&nexus_store::StreamKey::from_slice(sid_x.as_ref()), None, &env_x2).await.unwrap();
 
             // Both stores should yield identical data for each stream
             let a_x = read_all_payloads(&store_a, &sid_x).await;

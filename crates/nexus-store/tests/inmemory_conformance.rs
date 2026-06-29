@@ -11,38 +11,18 @@
 
 use std::num::NonZeroU32;
 
-use nexus::Id;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::value::SchemaVersion;
-use nexus_store::{PendingEnvelope, Version};
+use nexus_store::{PendingEnvelope, StreamKey, Version};
 use nexus_store_testing::{ConformanceRow, assert_event_stream_conformance};
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct StreamName(&'static str);
-
-impl std::fmt::Display for StreamName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-
-impl AsRef<[u8]> for StreamName {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl Id for StreamName {
-    const BYTE_LEN: usize = 0;
-}
 
 #[tokio::test]
 async fn inmemory_event_stream_conforms() {
     assert_event_stream_conformance(|rows: Vec<ConformanceRow>| async move {
         let store = InMemoryStore::new();
-        let stream_id = StreamName("conformance");
+        let stream_id = StreamKey::from_slice(b"conformance");
 
         if !rows.is_empty() {
             let envelopes: Vec<PendingEnvelope> = rows

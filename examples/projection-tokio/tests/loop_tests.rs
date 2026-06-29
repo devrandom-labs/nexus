@@ -181,7 +181,13 @@ async fn append_events(store: &Store<InMemoryStore>, stream_id: &TestId, events:
     let codec = TestEventCodec;
     let raw = store.raw();
     let current_len = {
-        let stream = raw.read_stream(stream_id, Version::INITIAL).await.unwrap();
+        let stream = raw
+            .read_stream(
+                &nexus_store::StreamKey::from_slice(stream_id.as_ref()),
+                Version::INITIAL,
+            )
+            .await
+            .unwrap();
         stream.count().await
     };
     let base_version = u64::try_from(current_len).unwrap();
@@ -201,7 +207,13 @@ async fn append_events(store: &Store<InMemoryStore>, stream_id: &TestId, events:
         .collect();
 
     let expected = Version::new(base_version).filter(|_| base_version > 0);
-    raw.append(stream_id, expected, &envelopes).await.unwrap();
+    raw.append(
+        &nexus_store::StreamKey::from_slice(stream_id.as_ref()),
+        expected,
+        &envelopes,
+    )
+    .await
+    .unwrap();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -815,7 +827,11 @@ async fn runner_returns_event_codec_error_on_bad_payload() {
         .build();
     store
         .raw()
-        .append(&stream_id, None, &[bad_envelope])
+        .append(
+            &nexus_store::StreamKey::from_slice(stream_id.as_ref()),
+            None,
+            &[bad_envelope],
+        )
         .await
         .unwrap();
 

@@ -17,28 +17,14 @@
 
 use bytes::Bytes;
 use futures::StreamExt;
-use nexus::{Id, Version};
+use nexus::Version;
 use nexus_fjall::FjallStore;
+use nexus_store::StreamKey;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct StreamName(&'static str);
-
-impl std::fmt::Display for StreamName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-
-impl AsRef<[u8]> for StreamName {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl Id for StreamName {
-    const BYTE_LEN: usize = 0;
+fn sk(s: &str) -> StreamKey {
+    StreamKey::from_slice(s.as_bytes())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -49,7 +35,7 @@ impl Id for StreamName {
 async fn metadata_roundtrips_across_multiple_events() {
     let dir = tempfile::tempdir().unwrap();
     let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
-    let id = StreamName("multi");
+    let id = sk("multi");
 
     let envs: Vec<_> = (1..=5u64)
         .map(|i| {
@@ -103,7 +89,7 @@ async fn metadata_survives_store_reopen() {
             .with_metadata(Bytes::from_static(b"important-meta"))
             .expect("valid metadata");
         store
-            .append(&StreamName("reopen-stream"), None, &[env])
+            .append(&sk("reopen-stream"), None, &[env])
             .await
             .unwrap();
     }
@@ -111,7 +97,7 @@ async fn metadata_survives_store_reopen() {
 
     let store = FjallStore::builder(&db_path).open().unwrap();
     let mut cursor = store
-        .read_stream(&StreamName("reopen-stream"), Version::INITIAL)
+        .read_stream(&sk("reopen-stream"), Version::INITIAL)
         .await
         .unwrap();
     let env = cursor.next().await.unwrap().expect("event present");
@@ -128,7 +114,7 @@ async fn metadata_survives_store_reopen() {
 async fn none_metadata_roundtrips_as_none() {
     let dir = tempfile::tempdir().unwrap();
     let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
-    let id = StreamName("none-meta");
+    let id = sk("none-meta");
 
     let pending = pending_envelope(Version::INITIAL)
         .event_type("X")

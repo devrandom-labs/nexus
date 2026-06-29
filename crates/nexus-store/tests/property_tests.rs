@@ -30,36 +30,16 @@
 )]
 
 use std::convert::Infallible;
-use std::fmt;
 
 use futures::StreamExt;
 use nexus::Version;
+use nexus_store::StreamKey;
 use nexus_store::envelope::PendingEnvelope;
 use nexus_store::pending_envelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 
 use proptest::prelude::*;
-
-// ============================================================================
-// Test ID type
-// ============================================================================
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(String);
-impl fmt::Display for TestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl nexus::Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
 
 // ============================================================================
 // Helper: build envelopes from payloads
@@ -90,10 +70,10 @@ fn build_envelopes(payloads: &[Vec<u8>]) -> Vec<PendingEnvelope> {
 // Property-based tests
 // ============================================================================
 
-fn stream_id_strategy() -> impl Strategy<Value = TestId> {
+fn stream_id_strategy() -> impl Strategy<Value = StreamKey> {
     prop::string::string_regex("[a-z][a-z0-9-]{0,19}")
         .unwrap()
-        .prop_map(TestId)
+        .prop_map(|s| StreamKey::from_slice(s.as_bytes()))
 }
 
 fn payloads_strategy() -> impl Strategy<Value = Vec<Vec<u8>>> {

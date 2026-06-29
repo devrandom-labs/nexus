@@ -53,7 +53,14 @@ async fn append_one(
     event_type: &'static str,
 ) {
     let envelope = make_envelope(version, event_type);
-    store.raw().append(id, expected, &[envelope]).await.unwrap();
+    store
+        .append(
+            &nexus_store::StreamKey::from_slice(id.as_ref()),
+            expected,
+            &[envelope],
+        )
+        .await
+        .unwrap();
 }
 
 /// Timeout duration for operations that should complete quickly.

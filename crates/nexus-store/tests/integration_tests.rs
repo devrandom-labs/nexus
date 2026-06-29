@@ -18,26 +18,10 @@
 #![allow(clippy::panic, reason = "tests use panic for error propagation")]
 
 use futures::StreamExt;
-use nexus::{Id, Version};
+use nexus::Version;
 use nexus_store::pending_envelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::{InMemoryStore, InMemoryStream};
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(&'static str);
-impl std::fmt::Display for TestId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
-    }
-}
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
 
 // =============================================================================
 // Helpers
@@ -84,20 +68,31 @@ async fn multi_batch_append_then_read_all() {
     // Batch 1: events with versions 1, 2, 3
     let batch1 = make_envelopes(1, 3);
     store
-        .append(&TestId("multi-batch-stream"), None, &batch1)
+        .append(
+            &nexus_store::StreamKey::from_slice("multi-batch-stream".as_bytes()),
+            None,
+            &batch1,
+        )
         .await
         .unwrap();
 
     // Batch 2: events with versions 4, 5, 6 — expected_version = 3
     let batch2 = make_envelopes(4, 3);
     store
-        .append(&TestId("multi-batch-stream"), Version::new(3), &batch2)
+        .append(
+            &nexus_store::StreamKey::from_slice("multi-batch-stream".as_bytes()),
+            Version::new(3),
+            &batch2,
+        )
         .await
         .unwrap();
 
     // Read all from the beginning (version 1 / INITIAL)
     let mut cursor = store
-        .read_stream(&TestId("multi-batch-stream"), Version::INITIAL)
+        .read_stream(
+            &nexus_store::StreamKey::from_slice("multi-batch-stream".as_bytes()),
+            Version::INITIAL,
+        )
         .await
         .unwrap();
     let events = collect_stream(&mut cursor).await;
@@ -113,13 +108,20 @@ async fn read_stream_from_version_filters_earlier() {
 
     let envelopes = make_envelopes(1, 5);
     store
-        .append(&TestId("filter-stream"), None, &envelopes)
+        .append(
+            &nexus_store::StreamKey::from_slice("filter-stream".as_bytes()),
+            None,
+            &envelopes,
+        )
         .await
         .unwrap();
 
     // Read starting from version 3
     let mut cursor = store
-        .read_stream(&TestId("filter-stream"), Version::new(3).unwrap())
+        .read_stream(
+            &nexus_store::StreamKey::from_slice("filter-stream".as_bytes()),
+            Version::new(3).unwrap(),
+        )
         .await
         .unwrap();
     let events = collect_stream(&mut cursor).await;
@@ -137,21 +139,33 @@ async fn concurrent_append_detects_conflict() {
     // Seed with 1 event
     let seed = make_envelopes(1, 1);
     store
-        .append(&TestId("conflict-stream"), None, &seed)
+        .append(
+            &nexus_store::StreamKey::from_slice("conflict-stream".as_bytes()),
+            None,
+            &seed,
+        )
         .await
         .unwrap();
 
     // Writer A: append event 2 with expected_version=1
     let writer_a = make_envelopes(2, 1);
     let result_a = store
-        .append(&TestId("conflict-stream"), Version::new(1), &writer_a)
+        .append(
+            &nexus_store::StreamKey::from_slice("conflict-stream".as_bytes()),
+            Version::new(1),
+            &writer_a,
+        )
         .await;
     assert!(result_a.is_ok(), "writer A should succeed");
 
     // Writer B: also tries with expected_version=1 (stale), should conflict
     let writer_b = make_envelopes(2, 1);
     let result_b = store
-        .append(&TestId("conflict-stream"), Version::new(1), &writer_b)
+        .append(
+            &nexus_store::StreamKey::from_slice("conflict-stream".as_bytes()),
+            Version::new(1),
+            &writer_b,
+        )
         .await;
     assert!(result_b.is_err(), "writer B should get a conflict error");
 
@@ -165,7 +179,10 @@ async fn concurrent_append_detects_conflict() {
 
     // Verify the stream only has the 2 events (seed + writer A)
     let mut cursor = store
-        .read_stream(&TestId("conflict-stream"), Version::INITIAL)
+        .read_stream(
+            &nexus_store::StreamKey::from_slice("conflict-stream".as_bytes()),
+            Version::INITIAL,
+        )
         .await
         .unwrap();
     let events = collect_stream(&mut cursor).await;
@@ -180,12 +197,19 @@ async fn large_batch_append_and_sequential_readback() {
 
     let envelopes = make_envelopes(1, count);
     store
-        .append(&TestId("large-batch-stream"), None, &envelopes)
+        .append(
+            &nexus_store::StreamKey::from_slice("large-batch-stream".as_bytes()),
+            None,
+            &envelopes,
+        )
         .await
         .unwrap();
 
     let mut cursor = store
-        .read_stream(&TestId("large-batch-stream"), Version::INITIAL)
+        .read_stream(
+            &nexus_store::StreamKey::from_slice("large-batch-stream".as_bytes()),
+            Version::INITIAL,
+        )
         .await
         .unwrap();
     let events = collect_stream(&mut cursor).await;
@@ -222,13 +246,20 @@ async fn read_from_future_version_returns_empty() {
     let store = InMemoryStore::new();
     let envelopes = make_envelopes(1, 3);
     store
-        .append(&TestId("future-version-stream"), None, &envelopes)
+        .append(
+            &nexus_store::StreamKey::from_slice("future-version-stream".as_bytes()),
+            None,
+            &envelopes,
+        )
         .await
         .unwrap();
 
     // Read from version 100 — no events exist at that version
     let mut cursor = store
-        .read_stream(&TestId("future-version-stream"), Version::new(100).unwrap())
+        .read_stream(
+            &nexus_store::StreamKey::from_slice("future-version-stream".as_bytes()),
+            Version::new(100).unwrap(),
+        )
         .await
         .unwrap();
     assert!(

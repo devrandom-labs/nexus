@@ -6,8 +6,9 @@ use crate::wire_key::{
     decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
 };
 use fjall::{Readable, Slice};
-use nexus::{ErrorId, Id, Version};
+use nexus::{ErrorId, Version};
 use nexus_store::PendingEnvelope;
+use nexus_store::StreamKey;
 use nexus_store::error::AppendError;
 use nexus_store::notify::{NotifyError, StreamNotifiers, WakeReg};
 use nexus_store::store::{GlobalSeq, RawEventStore};
@@ -68,7 +69,7 @@ impl FjallStore {
     fn read_version_raw(
         &self,
         tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &impl Id,
+        id: &StreamKey,
     ) -> Result<u64, FjallError> {
         tx.get(&self.streams, id.as_ref())
             .map_err(FjallError::Io)?
@@ -84,7 +85,7 @@ impl FjallStore {
     fn read_current_version(
         &self,
         tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &impl Id,
+        id: &StreamKey,
     ) -> Result<u64, AppendError<FjallError>> {
         self.read_version_raw(tx, id).map_err(AppendError::Store)
     }
@@ -95,7 +96,7 @@ impl FjallStore {
     fn check_optimistic(
         current: u64,
         expected: Option<Version>,
-        id: &impl Id,
+        id: &StreamKey,
     ) -> Result<(), AppendError<FjallError>> {
         if current == 0 {
             // New stream: expected_version must be None.
@@ -127,7 +128,7 @@ impl FjallStore {
     fn read_global_raw(
         &self,
         tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &impl Id,
+        id: &StreamKey,
     ) -> Result<u64, FjallError> {
         tx.get(&self.global, GLOBAL_SEQ_KEY)
             .map_err(FjallError::Io)?
@@ -148,7 +149,7 @@ impl FjallStore {
     fn read_current_global(
         &self,
         tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &impl Id,
+        id: &StreamKey,
     ) -> Result<u64, AppendError<FjallError>> {
         self.read_global_raw(tx, id).map_err(AppendError::Store)
     }
@@ -165,7 +166,7 @@ impl RawEventStore for FjallStore {
     )]
     async fn append(
         &self,
-        id: &impl Id,
+        id: &StreamKey,
         expected_version: Option<Version>,
         envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
@@ -278,7 +279,11 @@ impl RawEventStore for FjallStore {
         Ok(())
     }
 
-    async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
+    async fn read_stream(
+        &self,
+        id: &StreamKey,
+        from: Version,
+    ) -> Result<Self::Stream, Self::Error> {
         // A single bounded range scan; a nonexistent stream simply yields an
         // empty range, so no separate existence check is needed.
         ScanCursor::open(
@@ -302,8 +307,9 @@ impl RawEventStore for FjallStore {
 
 #[cfg(feature = "snapshot")]
 mod snapshot_impl {
-    use super::{ErrorId, FjallError, FjallStore, Id, Version};
+    use super::{ErrorId, FjallError, FjallStore, Version};
     use crate::snapshot::{decode_snapshot_value, encode_snapshot_value};
+    use nexus::Id;
     use nexus_store::state::SnapshotStore;
     use std::num::NonZeroU32;
 
@@ -371,8 +377,8 @@ mod snapshot_impl {
 #[cfg(feature = "import")]
 mod atomic_append_impl {
     use super::{
-        ErrorId, FjallError, FjallStore, GLOBAL_SEQ_KEY, Id, Slice, Version, encode_event_key,
-        encode_global_key, encode_stream_version, reason_label, wire,
+        ErrorId, FjallError, FjallStore, GLOBAL_SEQ_KEY, Slice, StreamKey, Version,
+        encode_event_key, encode_global_key, encode_stream_version, reason_label, wire,
     };
     use nexus_store::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
     use std::collections::HashMap;
@@ -384,8 +390,8 @@ mod atomic_append_impl {
     /// concrete error type so both `encode_event_key`'s `EncodeError` and
     /// `wire::encode_frame`'s `WireError` flow through one site (rule 3 — keep
     /// the source's structured detail rather than collapsing it).
-    fn invalid_input<I: Id, E: std::fmt::Display>(
-        target: &I,
+    fn invalid_input<E: std::fmt::Display>(
+        target: &StreamKey,
         version: u64,
         source: &E,
     ) -> AtomicAppendError<FjallError> {
@@ -403,10 +409,10 @@ mod atomic_append_impl {
         /// stream) conflict here instead of concatenating into a corrupt,
         /// non-monotonic stream (`AtomicAppend` distinct-targets contract). The
         /// projected head is keyed by raw id bytes — ids need not be UTF-8.
-        fn validate_atomic_writes<I: Id>(
+        fn validate_atomic_writes(
             &self,
             tx: &Tx<'_>,
-            writes: &[PlannedAppend<I>],
+            writes: &[PlannedAppend],
         ) -> Result<(), AtomicAppendError<FjallError>> {
             let mut projected: HashMap<Vec<u8>, u64> = HashMap::with_capacity(writes.len());
             for (index, w) in writes.iter().enumerate() {
@@ -454,10 +460,10 @@ mod atomic_append_impl {
         /// running counter shared across all streams (monotonic; gaps
         /// permitted). `writes` is non-empty (the caller returns early on
         /// empty), so `writes[0]` labels a corrupt global-counter error.
-        fn write_atomic_runs<I: Id>(
+        fn write_atomic_runs(
             &self,
             tx: &mut Tx<'_>,
-            writes: &[PlannedAppend<I>],
+            writes: &[PlannedAppend],
         ) -> Result<(), AtomicAppendError<FjallError>> {
             let current_global = self
                 .read_global_raw(tx, &writes[0].target)
@@ -511,9 +517,9 @@ mod atomic_append_impl {
             clippy::significant_drop_tightening,
             reason = "the single write_tx is held across validation + every insert + commit so the whole batch is one atomic transaction (rule 1)"
         )]
-        async fn atomic_append_many<I: Id>(
+        async fn atomic_append_many(
             &self,
-            writes: &[PlannedAppend<I>],
+            writes: &[PlannedAppend],
         ) -> Result<(), AtomicAppendError<FjallError>> {
             // Nothing to commit — don't open an empty transaction.
             if writes.is_empty() {
@@ -552,6 +558,7 @@ mod stream_lister_impl {
     use bytes::Bytes;
     use core::pin::Pin;
     use core::task::{Context, Poll};
+    use nexus_store::StreamKey;
     use nexus_store::export::StreamLister;
 
     /// A lazy cursor over the `streams` partition's keys — each key is one
@@ -568,15 +575,15 @@ mod stream_lister_impl {
     }
 
     impl StreamIdCursor {
-        fn poll_one(&mut self) -> Option<Result<Bytes, FjallError>> {
+        fn poll_one(&mut self) -> Option<Result<StreamKey, FjallError>> {
             if self.poisoned {
                 return None;
             }
             // `key()` loads the key only (no value): an id enumeration never
             // needs the stored version counter, and the `bytes_1` feature makes
-            // the `Slice → Bytes` conversion zero-copy.
+            // the `Slice → Bytes` conversion zero-copy into the `StreamKey`.
             match self.iter.next()?.key() {
-                Ok(key) => Some(Ok(Bytes::from(key))),
+                Ok(key) => Some(Ok(StreamKey::from_bytes(Bytes::from(key)))),
                 Err(e) => {
                     self.poisoned = true;
                     Some(Err(FjallError::Io(e)))
@@ -587,7 +594,7 @@ mod stream_lister_impl {
 
     // `fjall::Iter` is `Unpin`, so the cursor is `Unpin` and `get_mut()` is sound.
     impl futures::Stream for StreamIdCursor {
-        type Item = Result<Bytes, FjallError>;
+        type Item = Result<StreamKey, FjallError>;
 
         fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             Poll::Ready(self.get_mut().poll_one())
@@ -635,24 +642,10 @@ pub(crate) mod read_test_helpers {
     use super::*;
     use nexus_store::envelope::pending_envelope;
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    pub struct Tid(pub String);
-    impl std::fmt::Display for Tid {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-    impl AsRef<[u8]> for Tid {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-    impl nexus::Id for Tid {
-        const BYTE_LEN: usize = 0;
-    }
-
-    pub fn tid(s: &str) -> Tid {
-        Tid(s.to_owned())
+    /// Build a [`StreamKey`] for the in-crate tests — the byte-level store API
+    /// speaks `StreamKey` directly (issue #245).
+    pub fn sk(s: &str) -> StreamKey {
+        StreamKey::from_slice(s.as_bytes())
     }
 
     // Opens a default store. The cursor is a single lazy `fjall::Iter` that
@@ -663,7 +656,7 @@ pub(crate) mod read_test_helpers {
         (store, dir)
     }
 
-    pub async fn seed(store: &FjallStore, id: &Tid, count: u64) {
+    pub async fn seed(store: &FjallStore, id: &StreamKey, count: u64) {
         for v in 1..=count {
             let env = pending_envelope(Version::new(v).unwrap())
                 .event_type("E")
@@ -683,27 +676,8 @@ mod tests {
     use futures::StreamExt;
     use nexus_store::envelope::pending_envelope;
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct TestId(String);
-
-    impl std::fmt::Display for TestId {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-
-    impl AsRef<[u8]> for TestId {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-
-    impl nexus::Id for TestId {
-        const BYTE_LEN: usize = 0;
-    }
-
-    fn tid(s: &str) -> TestId {
-        TestId(s.to_owned())
+    fn sk(s: &str) -> StreamKey {
+        StreamKey::from_slice(s.as_bytes())
     }
 
     fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
@@ -727,7 +701,7 @@ mod tests {
         let (store, _dir) = temp_store();
         let env = make_envelope(1, "Created", b"payload");
 
-        let result = store.append(&tid("stream-1"), None, &[env]).await;
+        let result = store.append(&sk("stream-1"), None, &[env]).await;
         assert!(result.is_ok());
     }
 
@@ -740,7 +714,7 @@ mod tests {
             make_envelope(3, "Updated", b"p3"),
         ];
 
-        let result = store.append(&tid("stream-1"), None, &envs).await;
+        let result = store.append(&sk("stream-1"), None, &envs).await;
         assert!(result.is_ok());
     }
 
@@ -748,11 +722,11 @@ mod tests {
     async fn append_detects_version_conflict() {
         let (store, _dir) = temp_store();
         let env1 = make_envelope(1, "Created", b"p1");
-        store.append(&tid("stream-1"), None, &[env1]).await.unwrap();
+        store.append(&sk("stream-1"), None, &[env1]).await.unwrap();
 
         // Try appending with wrong expected version (None instead of Some(1)).
         let env2 = make_envelope(1, "Duplicate", b"p2");
-        let result = store.append(&tid("stream-1"), None, &[env2]).await;
+        let result = store.append(&sk("stream-1"), None, &[env2]).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             AppendError::Conflict {
@@ -777,7 +751,7 @@ mod tests {
         let env = make_envelope(1, "E", b"p");
         // New stream + Some(expected) → immediate optimistic-concurrency conflict.
         let err = store
-            .append(&tid(&long), Version::new(1), &[env])
+            .append(&sk(&long), Version::new(1), &[env])
             .await
             .unwrap_err();
         match err {
@@ -799,9 +773,7 @@ mod tests {
         let (store, _dir) = temp_store();
         let env = make_envelope(6, "Created", b"payload");
 
-        let result = store
-            .append(&tid("stream-1"), Version::new(5), &[env])
-            .await;
+        let result = store.append(&sk("stream-1"), Version::new(5), &[env]).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             AppendError::Conflict {
@@ -819,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn append_writes_events_global_index() {
         let (store, _dir) = temp_store();
-        let id = tid("acct-1");
+        let id = sk("acct-1");
         let env = pending_envelope(Version::new(1).unwrap())
             .event_type("Created")
             .payload(b"x".to_vec())
@@ -850,10 +822,10 @@ mod tests {
             make_envelope(1, "Created", b"p1"),
             make_envelope(2, "Updated", b"p2"),
         ];
-        store.append(&tid("stream-1"), None, &envs).await.unwrap();
+        store.append(&sk("stream-1"), None, &envs).await.unwrap();
 
         let mut stream = store
-            .read_stream(&tid("stream-1"), Version::new(1).unwrap())
+            .read_stream(&sk("stream-1"), Version::new(1).unwrap())
             .await
             .unwrap();
 
@@ -880,16 +852,16 @@ mod tests {
     async fn version_tracks_across_appends() {
         let (store, _dir) = temp_store();
         store
-            .append(&tid("s"), None, &[make_envelope(1, "A", b"")])
+            .append(&sk("s"), None, &[make_envelope(1, "A", b"")])
             .await
             .unwrap();
         store
-            .append(&tid("s"), Version::new(1), &[make_envelope(2, "B", b"")])
+            .append(&sk("s"), Version::new(1), &[make_envelope(2, "B", b"")])
             .await
             .unwrap();
 
         let mut stream = store
-            .read_stream(&tid("s"), Version::new(1).unwrap())
+            .read_stream(&sk("s"), Version::new(1).unwrap())
             .await
             .unwrap();
         {
@@ -907,7 +879,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_yields_all_rows_in_order() {
-        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
+        use crate::store::read_test_helpers::{seed, sk as btid, temp_store};
         let (store, _dir) = temp_store();
         let id = btid("s");
         seed(&store, &id, 14).await;
@@ -921,7 +893,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_terminates_at_end_of_stream() {
-        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
+        use crate::store::read_test_helpers::{seed, sk as btid, temp_store};
         let (store, _dir) = temp_store();
         let id = btid("s");
         seed(&store, &id, 8).await;
@@ -936,7 +908,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_from_midpoint() {
-        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
+        use crate::store::read_test_helpers::{seed, sk as btid, temp_store};
         let (store, _dir) = temp_store();
         let id = btid("s");
         seed(&store, &id, 10).await;
@@ -955,7 +927,7 @@ mod tests {
     async fn read_reopened_store_recovers_all() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
-        let id = tid("s");
+        let id = sk("s");
         {
             let store = FjallStore::builder(&path).open().unwrap();
             for v in 1..=10u64 {
@@ -981,8 +953,8 @@ mod tests {
     async fn read_all_yields_global_order_across_streams() {
         let dir = tempfile::tempdir().unwrap();
         let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
-        let a = TestId("a".to_owned());
-        let b = TestId("b".to_owned());
+        let a = sk("a");
+        let b = sk("b");
 
         let mk = |v: u64, p: &[u8]| {
             pending_envelope(Version::new(v).unwrap())
@@ -1018,7 +990,7 @@ mod tests {
     async fn read_all_from_is_inclusive() {
         let dir = tempfile::tempdir().unwrap();
         let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
-        let a = TestId("a".to_owned());
+        let a = sk("a");
         let mk = |v: u64| {
             #[allow(
                 clippy::as_conversions,
@@ -1053,7 +1025,7 @@ mod tests {
     async fn read_all_survives_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
-        let a = TestId("a".to_owned());
+        let a = sk("a");
         {
             let store = FjallStore::builder(&path).open().unwrap();
             let env = pending_envelope(Version::new(1).unwrap())
@@ -1079,7 +1051,7 @@ mod tests {
     )]
     #[tokio::test]
     async fn reader_sees_monotonic_gapfree_while_writer_appends() {
-        use crate::store::read_test_helpers::{seed, temp_store, tid as btid};
+        use crate::store::read_test_helpers::{seed, sk as btid, temp_store};
         use std::sync::Arc as StdArc;
         use tokio::sync::Barrier;
 
@@ -1151,7 +1123,7 @@ mod tests {
 #[allow(clippy::panic, reason = "test code")]
 mod atomic_append_tests {
     use super::*;
-    use crate::store::read_test_helpers::{Tid, temp_store, tid};
+    use crate::store::read_test_helpers::{sk, temp_store};
     use futures::StreamExt;
     use nexus_store::envelope::pending_envelope;
     use nexus_store::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
@@ -1166,15 +1138,15 @@ mod atomic_append_tests {
             .build()
     }
 
-    fn planned(target: &str, expected: Option<u64>, versions: &[u64]) -> PlannedAppend<Tid> {
+    fn planned(target: &str, expected: Option<u64>, versions: &[u64]) -> PlannedAppend {
         PlannedAppend {
-            target: tid(target),
+            target: sk(target),
             expected_version: expected.and_then(Version::new),
             events: versions.iter().map(|n| pending(*n, b"p")).collect(),
         }
     }
 
-    async fn read_versions(store: &FjallStore, id: &Tid) -> Vec<u64> {
+    async fn read_versions(store: &FjallStore, id: &StreamKey) -> Vec<u64> {
         let mut stream = store.read_stream(id, Version::INITIAL).await.unwrap();
         let mut out = Vec::new();
         while let Some(item) = stream.next().await {
@@ -1189,7 +1161,7 @@ mod atomic_append_tests {
         ks.inner().iter().count()
     }
 
-    fn stream_counter(store: &FjallStore, id: &Tid) -> Option<u64> {
+    fn stream_counter(store: &FjallStore, id: &StreamKey) -> Option<u64> {
         store
             .streams
             .inner()
@@ -1225,15 +1197,15 @@ mod atomic_append_tests {
         let writes = vec![planned("a", None, &[1, 2]), planned("b", None, &[1])];
         store.atomic_append_many(&writes).await.unwrap();
 
-        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2]);
-        assert_eq!(read_versions(&store, &tid("b")).await, vec![1]);
+        assert_eq!(read_versions(&store, &sk("a")).await, vec![1, 2]);
+        assert_eq!(read_versions(&store, &sk("b")).await, vec![1]);
         // Three events total → events + events_global each hold 3 rows, and the
         // shared global counter advanced to 3.
         assert_eq!(row_count(&store.events), 3);
         assert_eq!(row_count(&store.events_global), 3);
         assert_eq!(global_counter(&store), Some(3));
-        assert_eq!(stream_counter(&store, &tid("a")), Some(2));
-        assert_eq!(stream_counter(&store, &tid("b")), Some(1));
+        assert_eq!(stream_counter(&store, &sk("a")), Some(2));
+        assert_eq!(stream_counter(&store, &sk("b")), Some(1));
     }
 
     #[tokio::test]
@@ -1246,11 +1218,11 @@ mod atomic_append_tests {
             .await
             .unwrap();
         store
-            .append(&tid("a"), Version::new(2), &[pending(3, b"p")])
+            .append(&sk("a"), Version::new(2), &[pending(3, b"p")])
             .await
             .unwrap();
 
-        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2, 3]);
+        assert_eq!(read_versions(&store, &sk("a")).await, vec![1, 2, 3]);
         // global_seq is contiguous across the two paths: 1,2 (atomic) then 3.
         assert_eq!(global_counter(&store), Some(3));
         let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
@@ -1264,7 +1236,7 @@ mod atomic_append_tests {
     #[tokio::test]
     async fn empty_writes_commit_nothing() {
         let (store, _dir) = temp_store();
-        store.atomic_append_many::<Tid>(&[]).await.unwrap();
+        store.atomic_append_many(&[]).await.unwrap();
         assert_eq!(partition_snapshot(&store), (0, 0, None));
     }
 
@@ -1282,12 +1254,12 @@ mod atomic_append_tests {
                 .unwrap();
         }
         let store = FjallStore::builder(&path).open().unwrap();
-        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2]);
-        assert_eq!(read_versions(&store, &tid("b")).await, vec![1]);
+        assert_eq!(read_versions(&store, &sk("a")).await, vec![1, 2]);
+        assert_eq!(read_versions(&store, &sk("b")).await, vec![1]);
         // A post-reopen normal append continues the global sequence (4th event
         // → global_seq 4), proving the counter persisted.
         store
-            .append(&tid("a"), Version::new(2), &[pending(3, b"p")])
+            .append(&sk("a"), Version::new(2), &[pending(3, b"p")])
             .await
             .unwrap();
         assert_eq!(global_counter(&store), Some(4));
@@ -1304,7 +1276,7 @@ mod atomic_append_tests {
         // EVERY partition byte-identical to the pre-import snapshot.
         let (store, _dir) = temp_store();
         store
-            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .append(&sk("b"), None, &[pending(1, b"seed")])
             .await
             .unwrap();
         let before = partition_snapshot(&store);
@@ -1323,10 +1295,10 @@ mod atomic_append_tests {
 
         // Nothing landed anywhere: "a" has no events + no version counter, the
         // event/global row counts and the global seq counter are unchanged.
-        assert_eq!(read_versions(&store, &tid("a")).await, Vec::<u64>::new());
-        assert_eq!(stream_counter(&store, &tid("a")), None);
-        assert_eq!(read_versions(&store, &tid("b")).await, vec![1], "b intact");
-        assert_eq!(stream_counter(&store, &tid("b")), Some(1));
+        assert_eq!(read_versions(&store, &sk("a")).await, Vec::<u64>::new());
+        assert_eq!(stream_counter(&store, &sk("a")), None);
+        assert_eq!(read_versions(&store, &sk("b")).await, vec![1], "b intact");
+        assert_eq!(stream_counter(&store, &sk("b")), Some(1));
         assert_eq!(
             partition_snapshot(&store),
             before,
@@ -1352,7 +1324,7 @@ mod atomic_append_tests {
             other => panic!("expected Conflict, got {other}"),
         }
         // All-or-nothing: "t" is empty, definitely not [1,2,1,2].
-        assert_eq!(read_versions(&store, &tid("t")).await, Vec::<u64>::new());
+        assert_eq!(read_versions(&store, &sk("t")).await, Vec::<u64>::new());
         assert_eq!(partition_snapshot(&store), (0, 0, None));
     }
 
@@ -1401,7 +1373,7 @@ mod atomic_append_tests {
         // stream mid-growth; every observation must be a contiguous 1..=len
         // prefix (no gap/reorder/dup) and never exceed the 3 appended events.
         for _ in 0..64u32 {
-            let seen = read_versions(&store, &tid("a")).await;
+            let seen = read_versions(&store, &sk("a")).await;
             let valid_prefix: Vec<u64> = (1u64..).take(seen.len()).collect();
             assert_eq!(
                 seen, valid_prefix,
@@ -1413,7 +1385,7 @@ mod atomic_append_tests {
             );
         }
         handle.await.unwrap();
-        assert_eq!(read_versions(&store, &tid("a")).await, vec![1, 2, 3]);
+        assert_eq!(read_versions(&store, &sk("a")).await, vec![1, 2, 3]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1426,11 +1398,11 @@ mod atomic_append_tests {
         let (raw, _dir) = temp_store();
         let store = StdArc::new(raw);
         store
-            .append(&tid("a"), None, &[pending(1, b"seed")])
+            .append(&sk("a"), None, &[pending(1, b"seed")])
             .await
             .unwrap();
         store
-            .append(&tid("b"), None, &[pending(1, b"seed")])
+            .append(&sk("b"), None, &[pending(1, b"seed")])
             .await
             .unwrap();
 
@@ -1446,7 +1418,7 @@ mod atomic_append_tests {
 
         barrier.wait().await;
         for _ in 0..64u32 {
-            let seen = read_versions(&store, &tid("a")).await;
+            let seen = read_versions(&store, &sk("a")).await;
             assert_eq!(
                 seen,
                 vec![1],
@@ -1454,7 +1426,7 @@ mod atomic_append_tests {
             );
         }
         handle.await.unwrap();
-        assert_eq!(read_versions(&store, &tid("a")).await, vec![1]);
+        assert_eq!(read_versions(&store, &sk("a")).await, vec![1]);
     }
 }
 
@@ -1466,7 +1438,7 @@ mod atomic_append_tests {
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod stream_lister_tests {
     use super::*;
-    use crate::store::read_test_helpers::{seed, temp_store, tid};
+    use crate::store::read_test_helpers::{seed, sk, temp_store};
     use futures::StreamExt;
     use nexus_store::export::StreamLister;
     use std::collections::HashSet;
@@ -1474,7 +1446,7 @@ mod stream_lister_tests {
     async fn list_ids(store: &FjallStore) -> HashSet<Vec<u8>> {
         let stream = store.list_streams().await.unwrap();
         stream
-            .map(|r| r.unwrap().to_vec())
+            .map(|r| r.unwrap().as_bytes().to_vec())
             .collect::<Vec<_>>()
             .await
             .into_iter()
@@ -1484,9 +1456,9 @@ mod stream_lister_tests {
     #[tokio::test]
     async fn lists_exactly_the_appended_ids() {
         let (store, _dir) = temp_store();
-        seed(&store, &tid("alpha"), 1).await;
-        seed(&store, &tid("beta"), 2).await;
-        seed(&store, &tid("gamma"), 3).await;
+        seed(&store, &sk("alpha"), 1).await;
+        seed(&store, &sk("beta"), 2).await;
+        seed(&store, &sk("gamma"), 3).await;
 
         let ids = list_ids(&store).await;
         let expected: HashSet<Vec<u8>> = [b"alpha".to_vec(), b"beta".to_vec(), b"gamma".to_vec()]
@@ -1506,10 +1478,10 @@ mod stream_lister_tests {
         // A 50-event stream is one id, not 50 — the lister scans the `streams`
         // partition (one row per stream), never the `events` partition.
         let (store, _dir) = temp_store();
-        seed(&store, &tid("busy"), 50).await;
+        seed(&store, &sk("busy"), 50).await;
         let stream = store.list_streams().await.unwrap();
         let all: Vec<Vec<u8>> = stream
-            .map(|r| r.unwrap().to_vec())
+            .map(|r| r.unwrap().as_bytes().to_vec())
             .collect::<Vec<_>>()
             .await;
         assert_eq!(all, vec![b"busy".to_vec()]);
@@ -1521,8 +1493,8 @@ mod stream_lister_tests {
         let path = dir.path().join("db");
         {
             let store = FjallStore::builder(&path).open().unwrap();
-            seed(&store, &tid("a"), 1).await;
-            seed(&store, &tid("b"), 1).await;
+            seed(&store, &sk("a"), 1).await;
+            seed(&store, &sk("b"), 1).await;
         }
         let store = FjallStore::builder(&path).open().unwrap();
         let ids = list_ids(&store).await;
@@ -1537,8 +1509,8 @@ mod stream_lister_tests {
         // boundary the lister must round-trip faithfully.
         let (store, _dir) = temp_store();
         let long = "x".repeat(300);
-        seed(&store, &tid(&long), 1).await;
-        seed(&store, &tid("short"), 1).await;
+        seed(&store, &sk(&long), 1).await;
+        seed(&store, &sk("short"), 1).await;
         let ids = list_ids(&store).await;
         assert!(ids.contains(long.as_bytes()));
         assert!(ids.contains(b"short".as_slice()));

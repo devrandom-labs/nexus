@@ -25,6 +25,7 @@ use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_store::PendingEnvelope;
+use nexus_store::StreamKey;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::error::AppendError;
 use nexus_store::store::RawEventStore;
@@ -205,23 +206,8 @@ struct FjallSut {
 // Helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(String);
-impl std::fmt::Display for TestId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-impl nexus::Id for TestId {
-    const BYTE_LEN: usize = 0;
-}
-fn tid(s: &str) -> TestId {
-    TestId(s.to_owned())
+fn sk(s: &str) -> StreamKey {
+    StreamKey::from_slice(s.as_bytes())
 }
 
 fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
@@ -269,7 +255,7 @@ impl StateMachineTest for FjallStateMachineTest {
     ) -> Self::SystemUnderTest {
         match transition {
             Transition::CreateStream { ref stream_name } => {
-                let stream_id = tid(stream_name);
+                let stream_id = sk(stream_name);
                 let model_events = ref_state.streams.get(stream_name);
                 let model_len = model_events.map_or(0, Vec::len);
 
@@ -298,7 +284,7 @@ impl StateMachineTest for FjallStateMachineTest {
                 ref stream_name,
                 count,
             } => {
-                let stream_id = tid(stream_name);
+                let stream_id = sk(stream_name);
                 let model_events = &ref_state.streams[stream_name];
 
                 // The model already has the new events appended. The last
@@ -332,7 +318,7 @@ impl StateMachineTest for FjallStateMachineTest {
             }
 
             Transition::AppendConflict { ref stream_name } => {
-                let stream_id = tid(stream_name);
+                let stream_id = sk(stream_name);
                 let model_events = &ref_state.streams[stream_name];
                 let current_version = model_events.last().map_or(0, |(v, _, _)| *v);
 
@@ -377,7 +363,7 @@ impl StateMachineTest for FjallStateMachineTest {
                 let model_events = &ref_state.streams[stream_name];
                 if model_events.is_empty() {
                     // Empty stream: reading from version 1 yields nothing.
-                    let stream_id = tid(stream_name);
+                    let stream_id = sk(stream_name);
                     let result = sut
                         .rt
                         .block_on(sut.store.read_stream(&stream_id, Version::INITIAL));
@@ -395,7 +381,7 @@ impl StateMachineTest for FjallStateMachineTest {
                         .filter(|(v, _, _)| *v >= from_version)
                         .collect();
 
-                    let stream_id = tid(stream_name);
+                    let stream_id = sk(stream_name);
                     let result = sut.rt.block_on(
                         sut.store
                             .read_stream(&stream_id, Version::new(from_version).unwrap()),
@@ -437,7 +423,7 @@ impl StateMachineTest for FjallStateMachineTest {
             }
 
             Transition::AppendEmptyBatch { ref stream_name } => {
-                let stream_id = tid(stream_name);
+                let stream_id = sk(stream_name);
                 let model_events = ref_state.streams.get(stream_name);
                 let current_version = model_events
                     .and_then(|evts| evts.last())
@@ -459,7 +445,7 @@ impl StateMachineTest for FjallStateMachineTest {
 
 /// Helper: read all events from a stream and verify they match the model.
 fn verify_stream(sut: &FjallSut, stream_name: &str, model_events: &[ModelEvent]) {
-    let stream_id = tid(stream_name);
+    let stream_id = sk(stream_name);
     let result = sut
         .rt
         .block_on(sut.store.read_stream(&stream_id, Version::INITIAL));

@@ -24,7 +24,7 @@ use futures::StreamExt;
 use nexus::*;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
-use nexus_store::{Decode, Encode, pending_envelope};
+use nexus_store::{Decode, Encode, StreamKey, pending_envelope};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -245,7 +245,7 @@ async fn load_events(
     id: &AccountId,
 ) -> Vec<VersionedEvent<AccountEvent>> {
     let mut stream = store
-        .read_stream(id, Version::INITIAL)
+        .read_stream(&StreamKey::from_slice(id.as_ref()), Version::INITIAL)
         .await
         .expect("read_stream should succeed");
 
@@ -330,7 +330,11 @@ async fn main() {
     all_envelopes.append(&mut even_more);
 
     store
-        .append(&alice_id, None, &all_envelopes)
+        .append(
+            &StreamKey::from_slice(alice_id.as_ref()),
+            None,
+            &all_envelopes,
+        )
         .await
         .expect("append should succeed");
 
@@ -369,7 +373,11 @@ async fn main() {
     let base = account.version().map_or(0, |v| v.as_u64());
     let envelopes = encode_decided(&codec, &decided, base);
     store
-        .append(&alice_id, expected_version, &envelopes)
+        .append(
+            &StreamKey::from_slice(alice_id.as_ref()),
+            expected_version,
+            &envelopes,
+        )
         .await
         .expect("append should succeed");
 

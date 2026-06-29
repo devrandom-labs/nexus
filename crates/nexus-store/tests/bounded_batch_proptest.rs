@@ -9,30 +9,12 @@
 
 use futures::StreamExt;
 use nexus::Version;
+use nexus_store::StreamKey;
 use nexus_store::batch::BatchSize;
 use nexus_store::envelope::pending_envelope;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 use proptest::prelude::*;
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct Tid(String);
-
-impl std::fmt::Display for Tid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl AsRef<[u8]> for Tid {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl nexus::Id for Tid {
-    const BYTE_LEN: usize = 0;
-}
 
 fn batch_strategy() -> impl Strategy<Value = usize> {
     prop_oneof![
@@ -63,7 +45,7 @@ proptest! {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let store = InMemoryStore::with_batch_size(BatchSize::new(batch).unwrap());
-            let id = Tid("s".into());
+            let id = StreamKey::from_slice(b"s");
             for v in 1..=len {
                 let env = pending_envelope(Version::new(v).unwrap())
                     .event_type("E")

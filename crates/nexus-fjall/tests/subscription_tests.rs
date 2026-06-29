@@ -14,35 +14,14 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use nexus::{Id, Version};
+use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_store::store::RawEventStore;
-use nexus_store::{PendingEnvelope, Store, Subscription, pending_envelope};
+use nexus_store::{PendingEnvelope, Store, StreamKey, Subscription, pending_envelope};
 use tokio::time::timeout;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct TestId(String);
-
-impl TestId {
-    fn new(s: &str) -> Self {
-        Self(s.to_owned())
-    }
-}
-
-impl std::fmt::Display for TestId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl AsRef<[u8]> for TestId {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
-}
-
-impl Id for TestId {
-    const BYTE_LEN: usize = 0;
+fn sk(s: &str) -> StreamKey {
+    StreamKey::from_slice(s.as_bytes())
 }
 
 fn make_envelope(version: u64, event_type: &'static str, payload: &[u8]) -> PendingEnvelope {
@@ -62,13 +41,13 @@ fn temp_store() -> (FjallStore, tempfile::TempDir) {
 /// Helper: append a single event to a stream, with expected version.
 async fn append_one(
     store: &Store<FjallStore>,
-    id: &TestId,
+    id: &StreamKey,
     version: u64,
     expected: Option<Version>,
     event_type: &'static str,
 ) {
     let envelope = make_envelope(version, event_type, format!("payload-{version}").as_bytes());
-    store.raw().append(id, expected, &[envelope]).await.unwrap();
+    store.append(id, expected, &[envelope]).await.unwrap();
 }
 
 /// Timeout duration for operations that should complete quickly.
@@ -82,7 +61,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 async fn subscribe_catchup_then_live() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("stream-1");
+    let id = sk("stream-1");
 
     // Pre-populate 2 events.
     append_one(&store, &id, 1, None, "E1").await;
@@ -127,7 +106,7 @@ async fn subscribe_catchup_then_live() {
 async fn subscribe_from_checkpoint() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("stream-1");
+    let id = sk("stream-1");
 
     // Pre-populate 3 events.
     append_one(&store, &id, 1, None, "E1").await;
@@ -157,7 +136,7 @@ async fn subscribe_from_checkpoint() {
 async fn drop_and_resubscribe() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("stream-1");
+    let id = sk("stream-1");
 
     // Append event 1.
     append_one(&store, &id, 1, None, "E1").await;
@@ -207,7 +186,7 @@ async fn drop_and_resubscribe() {
 async fn write_close_reopen_subscribe() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("db");
-    let id = TestId::new("stream-1");
+    let id = sk("stream-1");
 
     // Phase 1: Open, append events, close.
     {
@@ -249,7 +228,7 @@ async fn write_close_reopen_subscribe() {
 async fn subscribe_to_nonexistent_stream_waits() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("ghost-stream");
+    let id = sk("ghost-stream");
 
     let stream = Subscription::new(&store).subscribe(&id, None).unwrap();
     futures::pin_mut!(stream);
@@ -275,7 +254,7 @@ async fn subscribe_to_nonexistent_stream_waits() {
 async fn subscribe_from_beyond_head() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("stream-1");
+    let id = sk("stream-1");
 
     // Append 2 events (head is at version 2).
     append_one(&store, &id, 1, None, "E1").await;
@@ -315,7 +294,7 @@ async fn subscribe_from_beyond_head() {
 async fn concurrent_append_and_subscribe() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("concurrent-stream");
+    let id = sk("concurrent-stream");
     let event_count: u64 = 50;
 
     let stream = Subscription::new(&store).subscribe(&id, None).unwrap();
@@ -361,7 +340,7 @@ async fn concurrent_append_and_subscribe() {
 async fn append_during_catchup_no_loss() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("stream-1");
+    let id = sk("stream-1");
 
     // Pre-populate 20 events.
     for i in 1..=20u64 {
@@ -400,7 +379,7 @@ async fn append_during_catchup_no_loss() {
 async fn multiple_subscribers_same_stream() {
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("shared-stream");
+    let id = sk("shared-stream");
 
     // Two subscribers to the same stream.
     let sub = Subscription::new(&store);
@@ -441,7 +420,7 @@ async fn subscription_cursor_is_static() {
     fn assert_static<T: 'static>(_: &T) {}
     let (store, _dir) = temp_store();
     let store = Store::new(store);
-    let id = TestId::new("s-1");
+    let id = sk("s-1");
     let sub = Subscription::new(&store).subscribe(&id, None).unwrap();
     assert_static(&sub);
 }

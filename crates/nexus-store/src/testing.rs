@@ -9,8 +9,9 @@ use crate::wake::WakeSource;
 use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
 use nexus::ErrorId;
-use nexus::Id;
 use nexus::Version;
+
+use crate::stream_id::StreamKey;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -319,7 +320,7 @@ impl RawEventStore for InMemoryStore {
 
     async fn append(
         &self,
-        id: &impl Id,
+        id: &StreamKey,
         expected_version: Option<Version>,
         envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
@@ -404,7 +405,11 @@ impl RawEventStore for InMemoryStore {
         Ok(())
     }
 
-    async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
+    async fn read_stream(
+        &self,
+        id: &StreamKey,
+        from: Version,
+    ) -> Result<Self::Stream, Self::Error> {
         let state = ReadState {
             streams: Arc::clone(&self.streams),
             stream_id: id.to_string(),
@@ -544,14 +549,16 @@ impl WakeSource for InMemoryStore {
 /// is acceptable; a real adapter (fjall, postgres) streams them lazily.
 #[cfg(feature = "export")]
 impl crate::export::StreamLister for InMemoryStore {
-    type StreamList = futures::stream::Iter<std::vec::IntoIter<Result<Bytes, InMemoryStoreError>>>;
+    type StreamList = futures::stream::Iter<
+        std::vec::IntoIter<Result<crate::stream_id::StreamKey, InMemoryStoreError>>,
+    >;
 
     async fn list_streams(&self) -> Result<Self::StreamList, Self::Error> {
-        let ids: Vec<Result<Bytes, InMemoryStoreError>> = {
+        let ids: Vec<Result<crate::stream_id::StreamKey, InMemoryStoreError>> = {
             let guard = self.streams.lock().await;
             guard
                 .keys()
-                .map(|k| Ok(Bytes::copy_from_slice(k.as_bytes())))
+                .map(|k| Ok(crate::stream_id::StreamKey::from_slice(k.as_bytes())))
                 .collect()
         };
         Ok(futures::stream::iter(ids))
@@ -570,9 +577,9 @@ impl crate::export::StreamLister for InMemoryStore {
 /// `append`'s lock order (`streams` → `next_global_seq` → `global_index`).
 #[cfg(feature = "import")]
 impl crate::import::AtomicAppend for InMemoryStore {
-    async fn atomic_append_many<I: Id>(
+    async fn atomic_append_many(
         &self,
-        writes: &[crate::import::PlannedAppend<I>],
+        writes: &[crate::import::PlannedAppend],
     ) -> Result<(), crate::import::AtomicAppendError<Self::Error>> {
         use crate::import::AtomicAppendError;
 
@@ -714,22 +721,6 @@ mod bounded_read_tests {
     use crate::envelope::pending_envelope;
     use futures::StreamExt;
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct Tid(String);
-    impl std::fmt::Display for Tid {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-    impl AsRef<[u8]> for Tid {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-    impl nexus::Id for Tid {
-        const BYTE_LEN: usize = 0;
-    }
-
     fn env(v: u64) -> PendingEnvelope {
         pending_envelope(Version::new(v).unwrap())
             .event_type("E")
@@ -738,7 +729,7 @@ mod bounded_read_tests {
             .build()
     }
 
-    async fn seed(store: &InMemoryStore, id: &Tid, count: u64) {
+    async fn seed(store: &InMemoryStore, id: &StreamKey, count: u64) {
         for v in 1..=count {
             let expected = Version::new(v - 1);
             store.append(id, expected, &[env(v)]).await.unwrap();
@@ -748,7 +739,7 @@ mod bounded_read_tests {
     #[tokio::test]
     async fn read_yields_all_events_across_refills() {
         let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
-        let id = Tid("s".into());
+        let id = StreamKey::from_slice(b"s");
         seed(&store, &id, 14).await;
 
         let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
@@ -762,7 +753,7 @@ mod bounded_read_tests {
     #[tokio::test]
     async fn read_terminates_at_exact_batch_boundary() {
         let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
-        let id = Tid("s".into());
+        let id = StreamKey::from_slice(b"s");
         seed(&store, &id, 4).await;
 
         let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
@@ -776,7 +767,7 @@ mod bounded_read_tests {
     #[tokio::test]
     async fn read_empty_stream_yields_nothing() {
         let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
-        let id = Tid("missing".into());
+        let id = StreamKey::from_slice(b"missing");
         let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
         assert!(stream.next().await.is_none());
     }
@@ -784,7 +775,7 @@ mod bounded_read_tests {
     #[tokio::test]
     async fn read_from_midpoint_resumes_correctly() {
         let store = InMemoryStore::with_batch_size(BatchSize::new(3).unwrap());
-        let id = Tid("s".into());
+        let id = StreamKey::from_slice(b"s");
         seed(&store, &id, 10).await;
         let mut stream = store
             .read_stream(&id, Version::new(6).unwrap())
@@ -805,7 +796,7 @@ mod bounded_read_tests {
     #[tokio::test]
     async fn read_stays_none_after_exhaustion() {
         let store = InMemoryStore::with_batch_size(BatchSize::new(4).unwrap());
-        let id = Tid("s".into());
+        let id = StreamKey::from_slice(b"s");
         seed(&store, &id, 5).await;
         let mut stream = store.read_stream(&id, Version::INITIAL).await.unwrap();
         let mut count = 0u64;
@@ -832,24 +823,8 @@ mod global_read_tests {
     use crate::envelope::pending_envelope;
     use futures::StreamExt;
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct Tid(String);
-    impl std::fmt::Display for Tid {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-    impl AsRef<[u8]> for Tid {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-    impl nexus::Id for Tid {
-        const BYTE_LEN: usize = 0;
-    }
-
-    fn tid(s: &str) -> Tid {
-        Tid(s.to_owned())
+    fn sk(s: &str) -> StreamKey {
+        StreamKey::from_slice(s.as_bytes())
     }
 
     async fn append_one(
@@ -865,7 +840,7 @@ mod global_read_tests {
             .unwrap()
             .build();
         store
-            .append(&tid(id), expected.and_then(Version::new), &[env])
+            .append(&sk(id), expected.and_then(Version::new), &[env])
             .await
             .unwrap();
     }
@@ -986,22 +961,6 @@ mod bounded_subscription_tests {
     use crate::envelope::pending_envelope;
     use futures::StreamExt;
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct Tid(String);
-    impl std::fmt::Display for Tid {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-    impl AsRef<[u8]> for Tid {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-    impl nexus::Id for Tid {
-        const BYTE_LEN: usize = 0;
-    }
-
     fn env(v: u64) -> PendingEnvelope {
         pending_envelope(Version::new(v).unwrap())
             .event_type("E")
@@ -1014,7 +973,7 @@ mod bounded_subscription_tests {
     async fn subscription_drains_many_batches_then_sees_new_event() {
         // batch_size 4; pre-seed 40 (10× batch_size backlog, 10 full refills), then push 1 live.
         let store = Store::new(InMemoryStore::with_batch_size(BatchSize::new(4).unwrap()));
-        let id = Tid("s".into());
+        let id = StreamKey::from_slice(b"s");
         for v in 1..=40 {
             store
                 .raw()
@@ -1055,29 +1014,13 @@ mod wake_source_tests {
     use std::time::Duration;
     use tokio::time::timeout;
 
-    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-    struct Tid(String);
-    impl std::fmt::Display for Tid {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.0)
-        }
-    }
-    impl AsRef<[u8]> for Tid {
-        fn as_ref(&self) -> &[u8] {
-            self.0.as_bytes()
-        }
-    }
-    impl nexus::Id for Tid {
-        const BYTE_LEN: usize = 0;
-    }
-
     /// An `append` to a stream must wake a per-stream registration armed before
     /// the append — proving `InMemoryStore`'s `WakeSource` impl routes through
     /// the same `StreamNotifiers` that `append` wakes after a commit.
     #[tokio::test]
     async fn inmemory_wakes_registration_on_append() {
         let store = InMemoryStore::new();
-        let id = Tid("s".into());
+        let id = StreamKey::from_slice(b"s");
         let reg = WakeSource::register(&store, Some(id.as_ref())).unwrap();
         let wait = reg.arm();
         let env = pending_envelope(Version::INITIAL)

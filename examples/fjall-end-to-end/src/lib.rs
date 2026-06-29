@@ -70,7 +70,7 @@ use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{Atomicity, EventImporter, StreamOutcome};
 use nexus_store::repository::Repository;
 use nexus_store::store::{RawEventStore, Store};
-use nexus_store::{PersistedEnvelope, Subscription};
+use nexus_store::{PersistedEnvelope, StreamKey, Subscription};
 
 use domain::{AccountEvent, AccountId, AccountState, BankAccount, Deposit, OpenAccount, Withdraw};
 
@@ -276,34 +276,29 @@ pub struct RoundTripOutcome {
     pub malformed_detected: bool,
 }
 
-/// Map a section's origin id bytes back to the same target id (the ids are
-/// UTF-8 account names).
-fn identity_route(origin: &[u8]) -> AccountId {
-    AccountId(String::from_utf8_lossy(origin).into_owned())
-}
-
 /// Build a CBOR backup chunk from every stream in `store`, via the handle's own
 /// `list_streams` + `export_stream` — the production export path, directly on
 /// the `Store` handle (no `.raw()`, #247). Streams are sorted for a
 /// deterministic layout.
+///
+/// `list_streams` yields [`StreamKey`]s, which flow straight back into
+/// `export_stream` — no domain-id reconstruction, no `from_utf8` round-trip
+/// (#245).
 async fn build_chunk(store: &Store<FjallStore>) -> Result<Vec<u8>, BoxErr> {
-    let mut ids: Vec<Vec<u8>> = store
+    let mut ids: Vec<StreamKey> = store
         .list_streams()
         .await?
-        .map(|r| r.map(|b| b.to_vec()))
         .collect::<Vec<_>>()
         .await
         .into_iter()
         .collect::<Result<_, _>>()?;
-    ids.sort();
+    ids.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
 
     let mut chunk = Vec::new();
     chunk.extend_from_slice(&encode_header(None)?);
-    for id_bytes in ids {
-        chunk.extend_from_slice(&encode_section_heading(&id_bytes)?);
-        let mut events = store
-            .export_stream(&identity_route(&id_bytes), Version::INITIAL)
-            .await?;
+    for id in ids {
+        chunk.extend_from_slice(&encode_section_heading(id.as_bytes())?);
+        let mut events = store.export_stream(&id, Version::INITIAL).await?;
         while let Some(item) = events.next().await {
             chunk.extend_from_slice(&encode_block(&item?)?);
         }
@@ -348,7 +343,7 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
     let dst = FjallStore::builder(work_dir.join("dst"))
         .open()?
         .into_store();
-    dst.import(&sections, identity_route, Atomicity::WholeChunk)
+    dst.import(&sections, StreamKey::from_slice, Atomicity::WholeChunk)
         .await?;
 
     // 4. Rehydrate each aggregate from the destination and compare to source.
@@ -375,7 +370,11 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
         .open()?
         .into_store();
     let report = probe
-        .import(&corrupt_sections, identity_route, Atomicity::PerStream)
+        .import(
+            &corrupt_sections,
+            StreamKey::from_slice,
+            Atomicity::PerStream,
+        )
         .await?;
     let corrupt_outcome = report
         .streams()

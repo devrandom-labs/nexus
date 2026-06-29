@@ -30,7 +30,7 @@ use nexus_store::Store;
 use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
-use nexus_store::{Decode, Encode, pending_envelope};
+use nexus_store::{Decode, Encode, StreamKey, pending_envelope};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -240,7 +240,7 @@ async fn main() {
     // --- Step 4: Append to the store ---
     println!("Step 4: Append envelopes to InMemoryStore");
     store
-        .append(&stream_id, None, &envelopes)
+        .append(&StreamKey::from_slice(stream_id.as_ref()), None, &envelopes)
         .await
         .expect("append should succeed");
     println!(
@@ -275,7 +275,11 @@ async fn main() {
             .build();
 
         store
-            .append(&stream_id, Version::new(3), &[legacy_envelope])
+            .append(
+                &StreamKey::from_slice(stream_id.as_ref()),
+                Version::new(3),
+                &[legacy_envelope],
+            )
             .await
             .expect("append legacy event should succeed");
         println!("  Inserted legacy event at version 4");
@@ -285,7 +289,7 @@ async fn main() {
     // --- Step 5: Read back from the store ---
     println!("Step 5: Read events back from InMemoryStore");
     let mut event_stream = store
-        .read_stream(&stream_id, Version::INITIAL)
+        .read_stream(&StreamKey::from_slice(stream_id.as_ref()), Version::INITIAL)
         .await
         .expect("read should succeed");
 
@@ -359,7 +363,7 @@ async fn main() {
         .build();
     typed_store
         .raw()
-        .append(&TodoId("todo-2".to_owned()), None, &[envelope])
+        .append(&StreamKey::from_slice(b"todo-2"), None, &[envelope])
         .await
         .expect("append should succeed");
 
@@ -375,7 +379,7 @@ async fn main() {
     }
     let raw_stream = typed_store
         .raw()
-        .read_stream(&TodoId("todo-2".to_owned()), Version::INITIAL)
+        .read_stream(&StreamKey::from_slice(b"todo-2"), Version::INITIAL)
         .await
         .expect("read_stream should succeed");
     let codec_ref = &codec;

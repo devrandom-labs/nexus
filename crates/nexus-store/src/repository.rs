@@ -20,6 +20,7 @@ use crate::codec::{Decode, Encode};
 use crate::envelope::{PersistedEnvelope, pending_envelope};
 use crate::error::{AppendError, LoadWithError, StoreError};
 use crate::store::{RawEventStore, Store};
+use crate::stream_id::StreamKey;
 use crate::upcasting::EventMorsel;
 use crate::value::SchemaVersion;
 
@@ -261,7 +262,7 @@ where
 
         let raw_stream = store
             .raw()
-            .read_stream(root.id(), from)
+            .read_stream(&StreamKey::from_slice(root.id().as_ref()), from)
             .await
             .map_err(StoreError::Adapter)?;
 
@@ -354,7 +355,7 @@ impl<S, C, A> EventStore<S, C, A> {
 
         let raw_stream = store
             .raw()
-            .read_stream(root.id(), Version::INITIAL)
+            .read_stream(&StreamKey::from_slice(root.id().as_ref()), Version::INITIAL)
             .await
             .map_err(|e| LoadWithError::Store(StoreError::Adapter(e)))?;
 
@@ -479,7 +480,11 @@ where
 
     store
         .raw()
-        .append(aggregate.id(), expected_version, &envelopes)
+        .append(
+            &StreamKey::from_slice(aggregate.id().as_ref()),
+            expected_version,
+            &envelopes,
+        )
         .await
         .map_err(|err| match err {
             AppendError::Conflict {
@@ -562,7 +567,7 @@ where
 
         let raw_stream = store
             .raw()
-            .read_stream(root.id(), from)
+            .read_stream(&StreamKey::from_slice(root.id().as_ref()), from)
             .await
             .map_err(StoreError::Adapter)?;
 
@@ -647,7 +652,7 @@ impl<S, C, A> ZeroCopyEventStore<S, C, A> {
 
         let raw_stream = store
             .raw()
-            .read_stream(root.id(), Version::INITIAL)
+            .read_stream(&StreamKey::from_slice(root.id().as_ref()), Version::INITIAL)
             .await
             .map_err(|e| LoadWithError::Store(StoreError::Adapter(e)))?;
 
@@ -771,7 +776,11 @@ where
 
     store
         .raw()
-        .append(aggregate.id(), expected_version, &envelopes)
+        .append(
+            &StreamKey::from_slice(aggregate.id().as_ref()),
+            expected_version,
+            &envelopes,
+        )
         .await
         .map_err(|err| match err {
             AppendError::Conflict {

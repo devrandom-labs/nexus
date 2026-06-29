@@ -11,10 +11,11 @@
 use core::future::Future;
 use std::sync::Arc;
 
-use nexus::{Id, Version};
+use nexus::Version;
 
 use crate::envelope::PersistedEnvelope;
 use crate::store::{GlobalSeq, RawEventStore};
+use crate::stream_id::StreamKey;
 use crate::wake::{WakeRegistration, WakeSource};
 
 /// One subscription target's catchup behaviour: a bounded position-keyed scan
@@ -53,42 +54,15 @@ pub trait Catchup: Send {
     fn next_pos(resume: Option<Self::Position>) -> Option<Self::Position>;
 }
 
-/// Owned id satisfying [`Id`]'s `'static` bound across reopened scans.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct OwnedSubId(Vec<u8>);
-
-impl core::fmt::Display for OwnedSubId {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match core::str::from_utf8(&self.0) {
-            Ok(s) => f.write_str(s),
-            Err(_) => write!(f, "<{} bytes>", self.0.len()),
-        }
-    }
-}
-
-impl AsRef<[u8]> for OwnedSubId {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl Id for OwnedSubId {
-    // `OwnedSubId` is variable-length, so it has no fixed `BYTE_LEN`. The
-    // in-process wake path never reads this constant, so it is `0` by the
-    // established workspace convention for variable-length ids.
-    const BYTE_LEN: usize = 0;
-}
-
-impl OwnedSubId {
-    pub fn new(bytes: &[u8]) -> Self {
-        Self(bytes.to_vec())
-    }
-}
-
 /// Per-stream catchup: scans one stream by [`Version`], waits on that stream.
+///
+/// The stream key is held as an owned [`StreamKey`] — it satisfies the
+/// `'static` bound the reopened scans need across refills, and it is exactly
+/// the type [`RawEventStore::read_stream`] consumes, so no per-refill
+/// conversion is required.
 pub struct StreamCatchup<S: RawEventStore + WakeSource> {
     store: Arc<S>,
-    id: OwnedSubId,
+    id: StreamKey,
     reg: <S as WakeSource>::Registration,
 }
 
@@ -101,7 +75,7 @@ impl<S: RawEventStore + WakeSource> StreamCatchup<S> {
         let reg = store.register(Some(id_bytes))?;
         Ok(Self {
             store,
-            id: OwnedSubId::new(id_bytes),
+            id: StreamKey::from_slice(id_bytes),
             reg,
         })
     }
@@ -194,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn stream_catchup_reads_from_initial() {
         let store = Arc::new(InMemoryStore::new());
-        let id = OwnedSubId::new(b"s");
+        let id = StreamKey::from_slice(b"s");
 
         for v in 1u64..=3 {
             let env = pending_envelope(Version::new(v).unwrap())
@@ -290,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn reopen_does_not_redeliver_last_event() {
         let store = Arc::new(InMemoryStore::new());
-        let id = OwnedSubId::new(b"s");
+        let id = StreamKey::from_slice(b"s");
 
         for v in 1u64..=3 {
             let env = pending_envelope(Version::new(v).unwrap())
