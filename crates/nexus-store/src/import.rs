@@ -35,7 +35,7 @@ use thiserror::Error;
 
 use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
-use crate::store::RawEventStore;
+use crate::store::{RawEventStore, Store};
 
 /// Atomicity granularity for an import — a caller policy, not a format
 /// property. The same chunk imports either way.
@@ -263,6 +263,19 @@ pub trait AtomicAppend: RawEventStore {
         &self,
         writes: &[PlannedAppend<I>],
     ) -> impl std::future::Future<Output = Result<(), AtomicAppendError<Self::Error>>> + Send;
+}
+
+/// `Store<S>` forwards [`AtomicAppend`] to its inner backend (issue #247). With
+/// `Store<S>` already a [`RawEventStore`], this gives it [`EventImporter`] for
+/// free via the blanket impl below — so a handle holder can `store.import(..)`
+/// without `.raw()`.
+impl<S: AtomicAppend> AtomicAppend for Store<S> {
+    async fn atomic_append_many<I: Id>(
+        &self,
+        writes: &[PlannedAppend<I>],
+    ) -> Result<(), AtomicAppendError<Self::Error>> {
+        self.raw().atomic_append_many(writes).await
+    }
 }
 
 /// Place decoded events onto caller-routed target streams, picky per stream,
@@ -1512,6 +1525,37 @@ mod tests {
                 got: v(1)
             }
         );
+    }
+
+    // ── #247: the Store handle is the front door — import, no .raw() ─────────
+
+    #[tokio::test]
+    async fn store_handle_imports_without_raw() {
+        use crate::import::{AtomicAppend, EventImporter};
+        use crate::store::Store;
+        // The handle itself imports and atomic-appends — never `.raw()`.
+        let store = Store::new(crate::testing::InMemoryStore::new());
+        let sections = vec![section("a", vec![evt(1), evt(2)])];
+        let report = store
+            .import(&sections, identity_route, Atomicity::PerStream)
+            .await
+            .expect("import via the handle");
+        assert!(report.all_complete());
+        assert_eq!(
+            report.streams()[0].outcome,
+            StreamOutcome::Complete { version: v(2) }
+        );
+        store
+            .atomic_append_many(&[planned("b", None, &[1])])
+            .await
+            .expect("atomic append via the handle");
+
+        // Substitutable: generic `EventImporter`/`AtomicAppend`-bounded code
+        // accepts the handle directly (the structural win of #247).
+        fn assert_importer<I: EventImporter>(_: &I) {}
+        fn assert_atomic<A: AtomicAppend>(_: &A) {}
+        assert_importer(&store);
+        assert_atomic(&store);
     }
 
     // ── Round-trip + idempotency (Card-1 export ↔ Card-2 import) ────────────
