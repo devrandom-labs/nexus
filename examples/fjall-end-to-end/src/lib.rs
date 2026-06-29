@@ -69,7 +69,7 @@ use nexus_store::cbor::{decode_chunk, encode_block, encode_header, encode_sectio
 use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{Atomicity, EventImporter, StreamOutcome};
 use nexus_store::repository::Repository;
-use nexus_store::store::RawEventStore;
+use nexus_store::store::{RawEventStore, Store};
 use nexus_store::{PersistedEnvelope, Subscription};
 
 use domain::{AccountEvent, AccountId, AccountState, BankAccount, Deposit, OpenAccount, Withdraw};
@@ -282,10 +282,11 @@ fn identity_route(origin: &[u8]) -> AccountId {
     AccountId(String::from_utf8_lossy(origin).into_owned())
 }
 
-/// Build a CBOR backup chunk from every stream in `store`, via the store's own
-/// `list_streams` + `export_stream` — the production export path. Streams are
-/// sorted for a deterministic layout.
-async fn build_chunk(store: &FjallStore) -> Result<Vec<u8>, BoxErr> {
+/// Build a CBOR backup chunk from every stream in `store`, via the handle's own
+/// `list_streams` + `export_stream` — the production export path, directly on
+/// the `Store` handle (no `.raw()`, #247). Streams are sorted for a
+/// deterministic layout.
+async fn build_chunk(store: &Store<FjallStore>) -> Result<Vec<u8>, BoxErr> {
     let mut ids: Vec<Vec<u8>> = store
         .list_streams()
         .await?
@@ -338,7 +339,7 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
     }
 
     // 2. Export every stream through the CBOR box to a real file on disk.
-    let chunk = build_chunk(src.raw()).await?;
+    let chunk = build_chunk(&src).await?;
     let chunk_path = work_dir.join("backup.nxch");
     std::fs::write(&chunk_path, &chunk)?;
 
@@ -347,8 +348,7 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
     let dst = FjallStore::builder(work_dir.join("dst"))
         .open()?
         .into_store();
-    dst.raw()
-        .import(&sections, identity_route, Atomicity::WholeChunk)
+    dst.import(&sections, identity_route, Atomicity::WholeChunk)
         .await?;
 
     // 4. Rehydrate each aggregate from the destination and compare to source.
@@ -375,7 +375,6 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
         .open()?
         .into_store();
     let report = probe
-        .raw()
         .import(&corrupt_sections, identity_route, Atomicity::PerStream)
         .await?;
     let corrupt_outcome = report

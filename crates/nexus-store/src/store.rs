@@ -250,6 +250,50 @@ pub trait RawEventStore: Send + Sync {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Store<S> as a delegating RawEventStore — the front door (issue #247)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// `Store<S>` is itself a [`RawEventStore`], forwarding every method to its
+/// inner backend.
+///
+/// This makes the handle the front door: `store.append(..)` / `read_stream` /
+/// `read_all` work directly, and — because [`EventExporter`] and
+/// [`EventImporter`] are blanket-impl'd for every `RawEventStore` (and
+/// `RawEventStore + AtomicAppend`) — `store.export_stream(..)` /
+/// `store.import(..)` come for free once `Store<S>` also forwards
+/// [`StreamLister`] / [`AtomicAppend`] (in the `export` / `import` modules). So
+/// a `Store<S>` holder never needs `.raw()` to back up or restore, and a
+/// `Store<S>` is substitutable wherever a `RawEventStore`-bounded value is
+/// expected. `.raw()` remains the escape hatch for reaching the concrete `&S`.
+///
+/// [`EventExporter`]: crate::export::EventExporter
+/// [`EventImporter`]: crate::import::EventImporter
+/// [`StreamLister`]: crate::export::StreamLister
+/// [`AtomicAppend`]: crate::import::AtomicAppend
+impl<S: RawEventStore> RawEventStore for Store<S> {
+    type Error = S::Error;
+    type Stream = S::Stream;
+    type AllStream = S::AllStream;
+
+    async fn append(
+        &self,
+        id: &impl Id,
+        expected_version: Option<Version>,
+        envelopes: &[PendingEnvelope],
+    ) -> Result<(), AppendError<Self::Error>> {
+        self.raw().append(id, expected_version, envelopes).await
+    }
+
+    async fn read_stream(&self, id: &impl Id, from: Version) -> Result<Self::Stream, Self::Error> {
+        self.raw().read_stream(id, from).await
+    }
+
+    async fn read_all(&self, from: GlobalSeq) -> Result<Self::AllStream, Self::Error> {
+        self.raw().read_all(from).await
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // GlobalSeq — store-local global sequence number
 // ═══════════════════════════════════════════════════════════════════════════
 

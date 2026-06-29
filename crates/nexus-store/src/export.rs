@@ -36,7 +36,7 @@ use bytes::Bytes;
 use futures::Stream;
 use nexus::{Id, Version};
 
-use crate::store::RawEventStore;
+use crate::store::{RawEventStore, Store};
 use crate::stream::EventStream;
 
 /// Enumerate the stream ids present in a store.
@@ -111,6 +111,18 @@ impl<S: RawEventStore> EventExporter for S {
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::ExportStream, Self::Error>> + Send {
         self.read_stream(id, from)
+    }
+}
+
+/// `Store<S>` forwards [`StreamLister`] to its inner backend (issue #247), so a
+/// handle holder can `store.list_streams()` without `.raw()`. `EventExporter`
+/// then applies to `Store<S>` via the blanket impl above (`Store<S>` is itself a
+/// [`RawEventStore`]).
+impl<S: StreamLister> StreamLister for Store<S> {
+    type StreamList = S::StreamList;
+
+    async fn list_streams(&self) -> Result<Self::StreamList, Self::Error> {
+        self.raw().list_streams().await
     }
 }
 
@@ -519,5 +531,46 @@ mod tests {
         assert_err_type(&store);
         // The GlobalSeq import keeps the path exercised in tests that need it.
         let _ = GlobalSeq::INITIAL;
+    }
+
+    // ── #247: the Store handle is the front door — list/export, no .raw() ────
+
+    #[tokio::test]
+    async fn store_handle_lists_and_exports_without_raw() {
+        use crate::store::{RawEventStore, Store};
+        // The handle itself appends, lists, and exports — never `.raw()`.
+        let store = Store::new(InMemoryStore::new());
+        store
+            .append(&tid("acct-1"), None, &[env(1, b"x")])
+            .await
+            .expect("append via the handle");
+
+        let ids: HashSet<Vec<u8>> = store
+            .list_streams()
+            .await
+            .expect("list via the handle")
+            .map(|r| r.expect("no list error").to_vec())
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect();
+        assert_eq!(ids, [b"acct-1".to_vec()].into_iter().collect());
+
+        let exported: Vec<PersistedEnvelope> = store
+            .export_stream(&tid("acct-1"), Version::INITIAL)
+            .await
+            .expect("export via the handle")
+            .map(|r| r.expect("no read error"))
+            .collect()
+            .await;
+        assert_eq!(exported.len(), 1);
+        assert_eq!(exported[0].version(), Version::INITIAL);
+
+        // Substitutable: generic `StreamLister`/`EventExporter`-bounded code
+        // accepts the handle directly (the structural win of #247).
+        fn assert_lister<L: StreamLister>(_: &L) {}
+        fn assert_exporter<E: EventExporter>(_: &E) {}
+        assert_lister(&store);
+        assert_exporter(&store);
     }
 }
