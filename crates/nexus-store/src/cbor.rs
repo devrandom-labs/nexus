@@ -70,6 +70,16 @@ pub enum SectionError<E, R> {
     Read(#[source] R),
 }
 
+/// Widen a scratch-buffer (`Vec`) encode error into the writer's error domain.
+///
+/// The `Vec` sink's write error is `Infallible`, so this path is unreachable; it
+/// only satisfies the type checker, preserving the error's `Display` message. A
+/// `Custom`-variant source chain would be dropped, but a `Vec` sink only ever
+/// produces `Message` errors, so none can reach here.
+fn widen_encode_err<E>(e: minicbor::encode::Error<Infallible>) -> WriteError<E> {
+    WriteError::Encode(minicbor::encode::Error::message(e))
+}
+
 /// The decoded chunk header — what [`decode_header`] returns.
 #[derive(Debug, Clone)]
 pub struct ChunkHeader {
@@ -161,10 +171,58 @@ impl<W: minicbor::encode::Write> ChunkWriter<W> {
         Ok(Self { enc })
     }
 
+    /// Begin a section for `stream_id`, recording the id once.
+    ///
+    /// Borrows `&mut self`, so the previous section's [`SectionWriter`] must be
+    /// dropped first — sections cannot interleave.
+    ///
+    /// # Errors
+    /// Returns [`WriteError`] if writing the heading to the sink fails.
+    pub fn section(
+        &mut self,
+        stream_id: &[u8],
+    ) -> Result<SectionWriter<'_, W>, WriteError<W::Error>> {
+        self.enc.encode(HeadingRepr { stream_id })?;
+        Ok(SectionWriter { enc: &mut self.enc })
+    }
+
     /// Recover the sink. NOT a format "finish" (a CBOR sequence has no
     /// terminator) — this just hands back everything written so far.
     pub fn into_sink(self) -> W {
         self.enc.into_writer()
+    }
+}
+
+/// A section whose heading is open.
+///
+/// The ONLY type that can write blocks, so "block before heading" is un-nameable
+/// — a compile error, not a runtime check. Obtained from [`ChunkWriter::section`].
+pub struct SectionWriter<'a, W> {
+    enc: &'a mut Encoder<W>,
+}
+
+impl<W: minicbor::encode::Write> SectionWriter<'_, W> {
+    /// Append one event as a block `[crc32c(body), body]`.
+    ///
+    /// The crc covers exactly the body bstr bytes.
+    ///
+    /// # Errors
+    /// Returns [`WriteError`] if writing the block to the sink fails.
+    pub fn block(&mut self, event: &PersistedEnvelope) -> Result<&mut Self, WriteError<W::Error>> {
+        let body = BodyRepr {
+            version: event.version().as_u64(),
+            schema_version: event.schema_version(),
+            event_type: event.event_type(),
+            metadata: event.metadata(),
+            payload: event.payload(),
+        };
+        // Scratch-encode the body so it can be CRC'd before it is written.
+        let body_bytes = minicbor::to_vec(&body).map_err(widen_encode_err)?;
+        self.enc.encode(BlockRepr {
+            crc: crc32c::crc32c(&body_bytes),
+            body: &body_bytes,
+        })?;
+        Ok(self)
     }
 }
 
@@ -375,6 +433,57 @@ mod tests {
     use crate::stream_id::StreamKey;
     use crate::testing::InMemoryStore;
     use futures::StreamExt;
+
+    #[test]
+    fn writer_multi_section_round_trips() {
+        let mut w = ChunkWriter::new(Vec::new(), Some(b"dev")).expect("new");
+        {
+            let mut s = w.section(b"task-1").expect("section");
+            s.block(&persisted(1, 1, "E", None, b"a1")).expect("block");
+            s.block(&persisted(2, 1, "E", Some(b"m"), b"a2"))
+                .expect("block");
+        }
+        {
+            let mut s = w.section(b"task-2").expect("section");
+            s.block(&persisted(1, 2, "E", None, b"b1")).expect("block");
+        }
+        let chunk = Bytes::from(w.into_sink());
+
+        let sections = decode_chunk(&chunk).expect("decode");
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].origin.as_ref(), b"task-1");
+        assert_eq!(sections[0].blocks.len(), 2);
+        assert_eq!(sections[1].origin.as_ref(), b"task-2");
+        match (&sections[0].blocks[1], &sections[1].blocks[0]) {
+            (ImportBlock::Event(a2), ImportBlock::Event(b1)) => {
+                assert_eq!(a2.metadata(), Some(b"m".as_slice()));
+                assert_eq!(a2.payload(), b"a2");
+                assert_eq!(b1.schema_version(), 2);
+                assert_eq!(b1.payload(), b"b1");
+            }
+            _ => panic!("expected Event blocks"),
+        }
+    }
+
+    #[test]
+    fn writer_empty_section_then_stream() {
+        // A section with zero blocks, then a real one — the writer-path typestate
+        // must stay sound across an empty section (heading with no following
+        // blocks) and a subsequent section.
+        let mut w = ChunkWriter::new(Vec::new(), None).expect("new");
+        {
+            let _s = w.section(b"empty").expect("section");
+        }
+        {
+            let mut s = w.section(b"real").expect("section");
+            s.block(&persisted(1, 1, "E", None, b"x")).expect("block");
+        }
+        let sections = decode_chunk(&Bytes::from(w.into_sink())).expect("decode");
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].origin.as_ref(), b"empty");
+        assert!(sections[0].blocks.is_empty());
+        assert_eq!(sections[1].blocks.len(), 1);
+    }
 
     #[test]
     fn writer_header_decodes() {
