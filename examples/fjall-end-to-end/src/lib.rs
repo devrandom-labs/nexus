@@ -69,7 +69,7 @@ use nexus_store::cbor::{decode_chunk, encode_block, encode_header, encode_sectio
 use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{Atomicity, EventImporter, StreamOutcome};
 use nexus_store::repository::Repository;
-use nexus_store::store::Store;
+use nexus_store::store::RawEventStore;
 use nexus_store::{PersistedEnvelope, Subscription};
 
 use domain::{AccountEvent, AccountId, AccountState, BankAccount, Deposit, OpenAccount, Withdraw};
@@ -79,19 +79,10 @@ use domain::{AccountEvent, AccountId, AccountState, BankAccount, Deposit, OpenAc
 /// — is `Error + Send + Sync`, so `?` folds them all into this).
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
-/// Open a `FjallStore` at `path` and wrap it in a `Store` handle (the shared,
-/// `Arc`-backed entry point that both the repository builder and the
-/// subscription consume).
-fn open(path: &Path) -> Result<Store<FjallStore>, BoxErr> {
-    Ok(Store::new(FjallStore::builder(path).open()?))
-}
-
 /// Open an account and apply a series of deposits via the typed repository,
 /// returning the resulting in-memory state. Generic over any `Repository` for
-/// the account aggregate — and *because* of that `Repository<BankAccount>`
-/// bound, `repo.load(id)` resolves cleanly here with no annotation. (The
-/// friction surfaces only at the bare `EventStore` call sites below, where the
-/// aggregate isn't pinned — see the module-level note.)
+/// the account aggregate, so the bare `EventStore` facade and the snapshotting
+/// decorator both satisfy the bound.
 async fn seed_account<R: Repository<BankAccount>>(
     repo: &R,
     id: &AccountId,
@@ -134,7 +125,7 @@ pub async fn run_persistence(path: &Path) -> Result<(AccountState, AccountState)
     // Scope the first store so it (and its Arc) drops at block end, closing and
     // flushing the keyspace before we reopen the same path.
     let before = {
-        let store = open(path)?;
+        let store = FjallStore::builder(path).open()?.into_store();
         let repo = store.repository::<BankAccount>().build();
         seed_account(&repo, &id, "Alice", &[1_000, 500]).await?;
         // One more command so the persisted stream isn't trivial. `repo` is bound
@@ -147,7 +138,7 @@ pub async fn run_persistence(path: &Path) -> Result<(AccountState, AccountState)
     };
 
     // Reopen from scratch and rehydrate purely from the on-disk event log.
-    let store = open(path)?;
+    let store = FjallStore::builder(path).open()?.into_store();
     let repo = store.repository::<BankAccount>().build();
     let reopened = repo.load(id).await?;
     let after = reopened.state().clone();
@@ -179,7 +170,7 @@ pub struct SubscriptionOutcome {
 /// Open a subscription, drain catch-up history, observe a live append, and
 /// demonstrate strict-after resume.
 pub async fn run_subscription(path: &Path) -> Result<SubscriptionOutcome, BoxErr> {
-    let store = open(path)?;
+    let store = FjallStore::builder(path).open()?.into_store();
     let repo = store.repository::<BankAccount>().build();
     let id = AccountId("alice".to_owned());
 
@@ -327,7 +318,9 @@ async fn build_chunk(store: &FjallStore) -> Result<Vec<u8>, BoxErr> {
 /// file (`backup.nxch`).
 pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxErr> {
     // 1. Populate several streams in the source store.
-    let src = open(&work_dir.join("src"))?;
+    let src = FjallStore::builder(work_dir.join("src"))
+        .open()?
+        .into_store();
     let src_repo = src.repository::<BankAccount>().build();
     let specs: [(&str, &str, &[u64]); 3] = [
         ("alice", "Alice", &[1_000, 500]),
@@ -351,7 +344,9 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
 
     // 3. Reopen the file, decode it, and import into a FRESH store.
     let sections = decode_chunk(&std::fs::read(&chunk_path)?)?;
-    let dst = open(&work_dir.join("dst"))?;
+    let dst = FjallStore::builder(work_dir.join("dst"))
+        .open()?
+        .into_store();
     dst.raw()
         .import(&sections, identity_route, Atomicity::WholeChunk)
         .await?;
@@ -376,7 +371,9 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
     let last = corrupted.len() - 1;
     corrupted[last] ^= 0xFF;
     let corrupt_sections = decode_chunk(&corrupted)?;
-    let probe = open(&work_dir.join("probe"))?;
+    let probe = FjallStore::builder(work_dir.join("probe"))
+        .open()?
+        .into_store();
     let report = probe
         .raw()
         .import(&corrupt_sections, identity_route, Atomicity::PerStream)
