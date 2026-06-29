@@ -11,6 +11,7 @@ use core::ops::Range;
 
 use bytes::Bytes;
 use minicbor::Decoder;
+use minicbor::Encoder;
 use minicbor::data::Type;
 use thiserror::Error;
 
@@ -131,6 +132,40 @@ pub fn decode_header(bytes: &[u8]) -> Result<ChunkHeader, ChunkError> {
         format_version: repr.format_version,
         origin: repr.origin.map(Bytes::copy_from_slice),
     })
+}
+
+/// A chunk being written.
+///
+/// The header is already on the wire the moment this exists — you cannot hold a
+/// `ChunkWriter` without it (Arrow's schema-in-constructor discipline). There is
+/// deliberately no `finish`: a CBOR sequence (RFC 8742) has no terminator, so a
+/// chunk is complete when writing stops. Recover the buffer with
+/// [`ChunkWriter::into_sink`].
+pub struct ChunkWriter<W> {
+    enc: Encoder<W>,
+}
+
+impl<W: minicbor::encode::Write> ChunkWriter<W> {
+    /// Construct a writer over `sink` and emit the chunk header (magic + format
+    /// version + optional `origin` producer/device id).
+    ///
+    /// # Errors
+    /// Returns [`WriteError`] if writing the header to the sink fails.
+    pub fn new(sink: W, origin: Option<&[u8]>) -> Result<Self, WriteError<W::Error>> {
+        let mut enc = Encoder::new(sink);
+        enc.encode(HeaderRepr {
+            magic: MAGIC,
+            format_version: FORMAT_VERSION,
+            origin,
+        })?;
+        Ok(Self { enc })
+    }
+
+    /// Recover the sink. NOT a format "finish" (a CBOR sequence has no
+    /// terminator) — this just hands back everything written so far.
+    pub fn into_sink(self) -> W {
+        self.enc.into_writer()
+    }
 }
 
 /// Wire shape of a section heading map `{0: stream_id}`.
@@ -340,6 +375,15 @@ mod tests {
     use crate::stream_id::StreamKey;
     use crate::testing::InMemoryStore;
     use futures::StreamExt;
+
+    #[test]
+    fn writer_header_decodes() {
+        let w = ChunkWriter::new(Vec::new(), Some(b"dev-1")).expect("new");
+        let bytes = Bytes::from(w.into_sink());
+        let header = decode_header(&bytes).expect("decode header");
+        assert_eq!(header.format_version, 1);
+        assert_eq!(header.origin.as_deref(), Some(b"dev-1".as_slice()));
+    }
 
     #[test]
     fn write_error_displays_and_is_error() {
