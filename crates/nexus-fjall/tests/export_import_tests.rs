@@ -29,9 +29,7 @@ use futures::StreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_store::StreamKey;
-use nexus_store::cbor::{
-    ChunkError, decode_chunk, encode_block, encode_header, encode_section_heading,
-};
+use nexus_store::cbor::{ChunkError, ChunkWriter, decode_chunk};
 use nexus_store::envelope::{PersistedEnvelope, pending_envelope};
 use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{AbortReason, Atomicity, EventImporter, ImportError, StreamOutcome};
@@ -96,16 +94,20 @@ async fn build_chunk(store: &FjallStore) -> Vec<u8> {
         .await;
     ids.sort();
 
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&encode_header(None).expect("header"));
+    let mut w = ChunkWriter::new(Vec::new(), None).expect("writer");
     for id_bytes in ids {
-        buf.extend_from_slice(&encode_section_heading(&id_bytes).expect("heading"));
         let id = identity_route(&id_bytes);
-        for env in collect_stream(store, &id).await {
-            buf.extend_from_slice(&encode_block(&env).expect("block"));
-        }
+        let events = store
+            .read_stream(&id, Version::INITIAL)
+            .await
+            .expect("read opens");
+        w.section(&id_bytes)
+            .expect("section")
+            .try_extend(events)
+            .await
+            .expect("extend");
     }
-    buf
+    w.into_sink()
 }
 
 /// Assert two stores hold byte-identical streams **modulo `global_seq`** (export

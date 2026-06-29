@@ -63,9 +63,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use futures::StreamExt;
+use futures::TryStreamExt;
 use nexus::Version;
 use nexus_fjall::FjallStore;
-use nexus_store::cbor::{decode_chunk, encode_block, encode_header, encode_section_heading};
+use nexus_store::cbor::{ChunkWriter, decode_chunk};
 use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{Atomicity, EventImporter, StreamOutcome};
 use nexus_store::repository::Repository;
@@ -276,14 +277,9 @@ pub struct RoundTripOutcome {
     pub malformed_detected: bool,
 }
 
-/// Build a CBOR backup chunk from every stream in `store`, via the handle's own
-/// `list_streams` + `export_stream` — the production export path, directly on
-/// the `Store` handle (no `.raw()`, #247). Streams are sorted for a
-/// deterministic layout.
-///
-/// `list_streams` yields [`StreamKey`]s, which flow straight back into
-/// `export_stream` — no domain-id reconstruction, no `from_utf8` round-trip
-/// (#245).
+/// Back up every stream through the CBOR box, driving `ChunkWriter` from the
+/// export streams with `TryStreamExt::try_fold` — one functional pipeline, no
+/// manual byte concatenation, no hand-ordered framing (#246).
 async fn build_chunk(store: &Store<FjallStore>) -> Result<Vec<u8>, BoxErr> {
     let mut ids: Vec<StreamKey> = store
         .list_streams()
@@ -294,16 +290,17 @@ async fn build_chunk(store: &Store<FjallStore>) -> Result<Vec<u8>, BoxErr> {
         .collect::<Result<_, _>>()?;
     ids.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
 
-    let mut chunk = Vec::new();
-    chunk.extend_from_slice(&encode_header(None)?);
-    for id in ids {
-        chunk.extend_from_slice(&encode_section_heading(id.as_bytes())?);
-        let mut events = store.export_stream(&id, Version::INITIAL).await?;
-        while let Some(item) = events.next().await {
-            chunk.extend_from_slice(&encode_block(&item?)?);
-        }
-    }
-    Ok(chunk)
+    let writer = futures::stream::iter(ids.into_iter().map(Ok::<_, BoxErr>))
+        .try_fold(
+            ChunkWriter::new(Vec::new(), None)?,
+            |mut w, id| async move {
+                let events = store.export_stream(&id, Version::INITIAL).await?;
+                w.section(id.as_bytes())?.try_extend(events).await?;
+                Ok(w)
+            },
+        )
+        .await?;
+    Ok(writer.into_sink())
 }
 
 /// Populate several streams, back them up to a file, restore into a fresh
