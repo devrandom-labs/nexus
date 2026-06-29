@@ -387,7 +387,7 @@ pub trait SagaRepository<S: Saga>: Repository<S> {
     }
 }
 
-// Rides on every repository — bare `EventStore`/`ZeroCopyEventStore` AND the
+// Rides on every repository — bare `EventStore` AND the
 // `Snapshotting` decorator — with zero per-type code. Fully static dispatch.
 impl<S: Saga, R: Repository<S>> SagaRepository<S> for R {}
 

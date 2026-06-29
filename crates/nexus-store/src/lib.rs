@@ -42,8 +42,8 @@
 //!   the precondition zero-copy decoders (rkyv, flatbuffers, `#[repr(C)]`
 //!   POD) rely on for sound `&T` reads.
 //! - [`repository`] / [`builder`] — aggregate-facing [`Repository<A>`]
-//!   trait plus its two facade impls ([`EventStore`] owning,
-//!   [`ZeroCopyEventStore`] borrowing), constructed via the
+//!   trait plus its facade impl ([`EventStore`], one terminal for both
+//!   owning and borrowing codecs), constructed via the
 //!   [`RepositoryBuilder`] typestate.
 //! - [`state`] — [`SnapshotStore<S, P>`](crate::SnapshotStore) for atomic
 //!   state+position persistence. Powers both aggregate snapshots and
@@ -152,7 +152,7 @@ pub use import::{
 pub use nexus::Version;
 #[cfg(feature = "projection")]
 pub use projection::Projector;
-pub use repository::{EventStore, Repository, ZeroCopyEventStore};
+pub use repository::{EventStore, Repository};
 pub use saga::{
     ConflictPredicate, ProjectedIntent, ProjectedIntents, ProjectedIntentsIntoIter, Reaction,
     SagaError, SagaRepository,
