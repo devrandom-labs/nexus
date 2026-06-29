@@ -25,10 +25,12 @@ use crate::stream::EventStream;
 /// # Example
 ///
 /// ```ignore
-/// let store = Store::new(FjallStore::builder("path").open()?);
+/// // Open flows left-to-right; `.into_store()` is the de-nested `Store::new`.
+/// let store = FjallStore::builder("path").open()?.into_store();
 ///
-/// let orders = store.repository().codec(OrderCodec).upcaster(OrderUpcaster).build();
-/// let users  = store.repository().codec(UserCodec).build();
+/// // One per-aggregate facade per aggregate; the store is the shared substrate.
+/// let orders = store.repository::<Order>().codec(OrderCodec).build();
+/// let users  = store.repository::<User>().codec(UserCodec).build();
 /// ```
 #[derive(Debug)]
 pub struct Store<S> {
@@ -229,6 +231,22 @@ pub trait RawEventStore: Send + Sync {
         &self,
         from: GlobalSeq,
     ) -> impl std::future::Future<Output = Result<Self::AllStream, Self::Error>> + Send;
+
+    /// Wrap this backend in a shared [`Store`] handle.
+    ///
+    /// The de-nested alternative to [`Store::new(self)`](Store::new): opening a
+    /// store reads left-to-right —
+    /// `FjallStore::builder(path).open()?.into_store()` — instead of the
+    /// inside-out `Store::new(FjallStore::builder(path).open()?)`. Exactly
+    /// equivalent to `Store::new`; every adapter gets it for free as a provided
+    /// method, and the raw backend stays reachable via [`Store::raw`].
+    #[must_use]
+    fn into_store(self) -> Store<Self>
+    where
+        Self: Sized,
+    {
+        Store::new(self)
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

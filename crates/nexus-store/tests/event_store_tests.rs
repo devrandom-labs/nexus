@@ -177,6 +177,20 @@ async fn load_and_save_infer_aggregate_from_repository_binding() {
     assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
 }
 
+#[tokio::test]
+async fn into_store_yields_a_usable_store_handle() {
+    use nexus_store::store::RawEventStore;
+    // #244: `raw.into_store()` is the de-nested equivalent of `Store::new(raw)`
+    // — opening flows left-to-right into `.repository::<A>()` with no wrap.
+    let es = InMemoryStore::new()
+        .into_store()
+        .repository::<TodoAggregate>()
+        .codec(TestCodec)
+        .build();
+    let loaded = es.load(TodoId("t".into())).await.unwrap();
+    assert_eq!(loaded.version(), None);
+}
+
 // REMOVED `save_no_uncommitted_events_is_noop` (#207): `save` now takes
 // `&Events<E, N>`, so an empty batch is a compile error, not a runtime no-op.
 
