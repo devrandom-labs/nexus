@@ -42,6 +42,33 @@ pub enum ChunkError {
     Encode(#[from] minicbor::encode::Error<Infallible>),
 }
 
+/// A write-path failure, generic over the sink's write error `E` (`W::Error`).
+///
+/// Distinct from [`ChunkError`] (the read domain, CLAUDE rule 3). Wraps
+/// minicbor's encode error; unlike the old `Vec`-only encoders this can fire for
+/// real (a generic sink — e.g. a file — can fail mid-write).
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum WriteError<E> {
+    /// minicbor serialization or the sink failed while writing a chunk item.
+    #[error("chunk write failed: {0}")]
+    Encode(#[from] minicbor::encode::Error<E>),
+}
+
+/// A `SectionWriter::try_extend` failure: the two domains it spans, kept
+/// distinct (CLAUDE rule 3) — a read failure is never reported as a write
+/// failure.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SectionError<E, R> {
+    /// Writing a block into the chunk failed.
+    #[error(transparent)]
+    Write(#[from] WriteError<E>),
+    /// The source event stream yielded an error.
+    #[error("event stream read failed: {0}")]
+    Read(#[source] R),
+}
+
 /// The decoded chunk header — what [`decode_header`] returns.
 #[derive(Debug, Clone)]
 pub struct ChunkHeader {
@@ -313,6 +340,15 @@ mod tests {
     use crate::stream_id::StreamKey;
     use crate::testing::InMemoryStore;
     use futures::StreamExt;
+
+    #[test]
+    fn write_error_displays_and_is_error() {
+        // Infallible sink error: the WriteError type must still be constructible and
+        // implement std::error::Error so it composes in caller error chains.
+        fn assert_error<E: std::error::Error>() {}
+        assert_error::<WriteError<core::convert::Infallible>>();
+        assert_error::<SectionError<core::convert::Infallible, std::io::Error>>();
+    }
 
     /// Build a `PersistedEnvelope` directly: backing buffer = [`event_type` | metadata? | payload].
     fn persisted(
