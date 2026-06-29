@@ -12,7 +12,7 @@ use crate::state;
 /// aggregate as bounded, lifecycle-scoped streams often removes the need for
 /// snapshots entirely.
 ///
-/// Wraps an inner repository (e.g., `EventStore` or `ZeroCopyEventStore`)
+/// Wraps an inner repository (e.g., `EventStore`)
 /// and adds transparent snapshot support:
 ///
 /// - **Load:** tries the snapshot store first; on hit with matching schema

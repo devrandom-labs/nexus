@@ -58,8 +58,7 @@ pub enum StoreError<A, EncErr, DecErr> {
     /// Failure while synthesizing a fresh envelope for codec decode.
     ///
     /// Reachable only from upcaster-driven paths
-    /// ([`EventStore::load_with`](crate::EventStore::load_with),
-    /// [`ZeroCopyEventStore::load_with`](crate::ZeroCopyEventStore::load_with)):
+    /// ([`EventStore::load_with`](crate::EventStore::load_with)):
     /// after the user's upcast transforms the event, a fresh aligned
     /// envelope is built from the transformed `event_type` + payload via
     /// [`PersistedEnvelope::for_decode`](crate::PersistedEnvelope::for_decode).
@@ -106,8 +105,7 @@ impl<A, EncErr, DecErr> StoreError<A, EncErr, DecErr> {
 
 /// Errors from the with-upcaster load path.
 ///
-/// Returned by [`EventStore::load_with`](crate::EventStore::load_with) and
-/// [`ZeroCopyEventStore::load_with`](crate::ZeroCopyEventStore::load_with).
+/// Returned by [`EventStore::load_with`](crate::EventStore::load_with).
 /// Wraps the four error sources [`StoreError`] already carries plus the
 /// user-supplied upcast function's error type.
 ///

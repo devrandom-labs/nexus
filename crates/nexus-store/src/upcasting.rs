@@ -16,7 +16,6 @@ use nexus::Version;
 /// `#[nexus::transforms]` macro emits a `pub fn upcast` matching this
 /// signature; hand-rolled upcasters write the same shape. Pass the
 /// resulting function to [`EventStore::load_with`](crate::EventStore::load_with)
-/// or [`ZeroCopyEventStore::load_with`](crate::ZeroCopyEventStore::load_with)
 /// to plug it into the facade's read path.
 ///
 /// Inspired by Polars' Morsel pattern: data + metadata wrapped in a

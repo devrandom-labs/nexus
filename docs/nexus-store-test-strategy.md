@@ -5,7 +5,7 @@ This document catalogs every adversarial property test in `nasa_break_everything
 ## The Core Problem
 
 ```
-  EventStore / ZeroCopyEventStore   ← facade (your code)
+  EventStore                        ← facade (your code)
            ↓ calls
        RawEventStore                ← trait (adapter implements)
            ↓ backed by

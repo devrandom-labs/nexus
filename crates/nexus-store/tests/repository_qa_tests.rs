@@ -385,8 +385,8 @@ impl Decode<DeltaEvent> for DeltaBorrowingCodec {
     }
 }
 
-/// Owning decode for `DeltaEvent` — used by tests that exercise the owning
-/// `EventStore` facade rather than `ZeroCopyEventStore`.
+/// Owning decode for `DeltaEvent` — used by tests that exercise the
+/// `EventStore` facade with an owning (`Output = E`) codec.
 struct DeltaOwningCodec;
 
 impl Encode<DeltaEvent> for DeltaOwningCodec {
@@ -845,12 +845,12 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
     use nexus_store::pending_envelope;
 
     // DeltaDoublingTransform doubles the i32 payload on read.
-    // This exercises the ZeroCopyEventStore + upcaster path where
-    // run_upcasters returns a NEW Vec<u8> and BorrowingCodec::decode
+    // This exercises the borrowing-codec + upcaster path through `EventStore`
+    // where run_upcasters returns a NEW Vec<u8> and BorrowingCodec::decode
     // borrows from that new buffer.
     //
     // We save a "legacy" event at schema_version=1 via the raw store,
-    // then load via ZeroCopyEventStore which applies the upcaster.
+    // then load via `EventStore` which applies the upcaster.
     let raw_store = InMemoryStore::new();
 
     // Write a v1 event directly (simulating a legacy event)
@@ -868,12 +868,9 @@ async fn d4_zero_copy_event_store_with_payload_mutating_upcaster() {
         .await
         .unwrap();
 
-    // Load via ZeroCopyEventStore with upcaster — delta=5 doubled to 10
+    // Load via `EventStore` with upcaster — delta=5 doubled to 10
     let store = Store::new(raw_store);
-    let es = store
-        .repository()
-        .codec(DeltaBorrowingCodec)
-        .build_zero_copy();
+    let es = store.repository().codec(DeltaBorrowingCodec).build();
     let loaded: AggregateRoot<DeltaAggregate> = es
         .load_with(CounterId("counter-1".into()), delta_doubling_upcast)
         .await

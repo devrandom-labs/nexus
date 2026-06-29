@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::repository::{EventStore, ZeroCopyEventStore};
+use crate::repository::EventStore;
 use crate::store::{RawEventStore, Store};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -9,8 +9,8 @@ use crate::store::{RawEventStore, Store};
 
 /// Marker type indicating that a [`RepositoryBuilder`] has no codec configured yet.
 ///
-/// `NeedsCodec` is `!Send`, which prevents calling `.build()` or
-/// `.build_zero_copy()` — both require `C: Send + Sync + 'static`.
+/// `NeedsCodec` is `!Send`, which prevents calling `.build()` —
+/// it requires `C: Send + Sync + 'static`.
 /// Set a codec via [`.codec()`](RepositoryBuilder::codec) to unlock
 /// the terminal methods.
 ///
@@ -48,7 +48,7 @@ pub struct WithSnapshot<SS, T> {
 // RepositoryBuilder
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Builder for creating [`EventStore`] or [`ZeroCopyEventStore`] facades
+/// Builder for creating an [`EventStore`] facade
 /// from a [`Store`].
 ///
 /// Obtained via [`Store::repository()`]. The builder starts with either a
@@ -104,7 +104,7 @@ impl<S, C, A, Snap> RepositoryBuilder<S, C, A, Snap> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// NoSnapshot — plain EventStore / ZeroCopyEventStore
+// NoSnapshot — plain EventStore
 // ═══════════════════════════════════════════════════════════════════════════
 
 impl<S, C, A> RepositoryBuilder<S, C, A, NoSnapshot>
@@ -112,24 +112,16 @@ where
     S: RawEventStore,
     C: Send + Sync + 'static,
 {
-    /// Build an [`EventStore`] for aggregate `A` using an owning [`Codec`](crate::Codec).
+    /// Build an [`EventStore`] for aggregate `A`.
     ///
-    /// Requires that a codec has been configured (either via the default
-    /// or an explicit `.codec()` call). This method is gated on
-    /// `C: Send + Sync + 'static`, which excludes [`NeedsCodec`].
+    /// One terminal for any codec: the owning-vs-borrowing distinction is
+    /// inferred from the codec's [`Decode::Output`](crate::Decode::Output)
+    /// GAT (`E` or `&E`, unified via `Borrow<E>`), not restated at the call
+    /// site. Requires a configured codec (`C: Send + Sync + 'static`, which
+    /// excludes [`NeedsCodec`]).
     #[must_use]
     pub fn build(self) -> EventStore<S, C, A> {
         EventStore::new(self.store, self.codec)
-    }
-
-    /// Build a [`ZeroCopyEventStore`] for aggregate `A` using a [`BorrowingCodec`](crate::BorrowingCodec).
-    ///
-    /// Requires that a codec has been configured (either via the default
-    /// or an explicit `.codec()` call). This method is gated on
-    /// `C: Send + Sync + 'static`, which excludes [`NeedsCodec`].
-    #[must_use]
-    pub fn build_zero_copy(self) -> ZeroCopyEventStore<S, C, A> {
-        ZeroCopyEventStore::new(self.store, self.codec)
     }
 }
 
@@ -284,7 +276,7 @@ impl<S, C, A, SS, T> RepositoryBuilder<S, C, A, WithSnapshot<SS, T>> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WithSnapshot — Snapshotting<EventStore / ZeroCopyEventStore>
+// WithSnapshot — Snapshotting<EventStore>
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[cfg(feature = "snapshot")]
@@ -297,20 +289,6 @@ where
     #[must_use]
     pub fn build(self) -> Snapshotting<EventStore<S, C, A>, SS, T> {
         let inner = EventStore::new(self.store, self.codec);
-        let snap = self.snapshot;
-        Snapshotting::new(
-            inner,
-            snap.store,
-            snap.trigger,
-            snap.schema_version,
-            snap.snapshot_on_read,
-        )
-    }
-
-    /// Build a snapshot-aware [`ZeroCopyEventStore`] for aggregate `A` using a [`BorrowingCodec`](crate::BorrowingCodec).
-    #[must_use]
-    pub fn build_zero_copy(self) -> Snapshotting<ZeroCopyEventStore<S, C, A>, SS, T> {
-        let inner = ZeroCopyEventStore::new(self.store, self.codec);
         let snap = self.snapshot;
         Snapshotting::new(
             inner,
@@ -372,7 +350,7 @@ impl<S: RawEventStore> Store<S> {
     /// `load`/`save` infer the aggregate with no per-call annotation.
     ///
     /// No default codec is available — call [`.codec()`](RepositoryBuilder::codec)
-    /// to set one before calling `.build()` or `.build_zero_copy()`.
+    /// to set one before calling `.build()`.
     ///
     /// # Example
     ///
