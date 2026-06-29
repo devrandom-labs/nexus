@@ -206,7 +206,7 @@ impl Decode<SagaEvent> for SagaCodec {
     }
 }
 
-type Repo = nexus_store::EventStore<InMemoryStore, SagaCodec>;
+type Repo = nexus_store::EventStore<InMemoryStore, SagaCodec, OrderSaga>;
 
 fn new_repo() -> Repo {
     Store::new(InMemoryStore::new())

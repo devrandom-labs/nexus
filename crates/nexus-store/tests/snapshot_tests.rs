@@ -236,12 +236,17 @@ mod builder_tests {
     use nexus_store::state::InMemorySnapshotStore;
     use nexus_store::testing::InMemoryStore;
 
+    // A phantom aggregate to name at `repository::<A>()`. These tests only check
+    // that the builder *chain* typechecks; `.build()` does not bound `A`, so a
+    // bare marker suffices (no `Aggregate` impl needed).
+    struct Probe;
+
     /// Verify the builder API compiles: no snapshot → EventStore
     #[test]
     fn builder_without_snapshot_compiles() {
         let raw = InMemoryStore::new();
         let store = Store::new(raw);
-        let _repo = store.repository().build();
+        let _repo = store.repository::<Probe>().build();
     }
 
     /// Verify the builder API compiles: with snapshot → Snapshotting<EventStore>
@@ -250,7 +255,7 @@ mod builder_tests {
         let raw = InMemoryStore::new();
         let store = Store::new(raw);
         let snap = InMemorySnapshotStore::<Vec<u8>, Version>::new();
-        let _repo = store.repository().snapshot_store(snap).build();
+        let _repo = store.repository::<Probe>().snapshot_store(snap).build();
     }
 
     /// Verify the builder API compiles: with custom trigger
@@ -260,7 +265,7 @@ mod builder_tests {
         let store = Store::new(raw);
         let snap = InMemorySnapshotStore::<Vec<u8>, Version>::new();
         let _repo = store
-            .repository()
+            .repository::<Probe>()
             .snapshot_store(snap)
             .snapshot_trigger(AfterEventTypes::new(&["Done"]))
             .snapshot_schema_version(NonZeroU32::new(2).unwrap())

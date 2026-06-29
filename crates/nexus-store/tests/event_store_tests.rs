@@ -147,6 +147,36 @@ async fn load_empty_stream_returns_fresh_aggregate() {
     assert_eq!(loaded.state(), &TodoState::default());
 }
 
+#[tokio::test]
+async fn load_and_save_infer_aggregate_from_repository_binding() {
+    // #243: the aggregate is named ONCE, at `repository::<TodoAggregate>()`.
+    // `load`/`save` then infer it with NO per-call annotation — note there is
+    // no `AggregateRoot<TodoAggregate>` annotation on `fresh` or `loaded` below.
+    // That is the whole guarantee: if a blanket `impl<A> Repository<A> for
+    // EventStore` ever returns, the `repository::<_>()` binding disappears and
+    // this test stops compiling.
+    let store = Store::new(InMemoryStore::new());
+    let es = store.repository::<TodoAggregate>().codec(TestCodec).build();
+
+    // `fresh` is inferred as AggregateRoot<TodoAggregate> purely from `es`.
+    let fresh = es.load(TodoId("t".into())).await.unwrap();
+    assert_eq!(fresh.version(), None);
+
+    let mut agg = AggregateRoot::<TodoAggregate>::new(TodoId("t".into()));
+    es.save(
+        &mut agg,
+        &save_events(&[TodoEvent::Created("Buy milk".into()), TodoEvent::Done]),
+    )
+    .await
+    .unwrap();
+
+    // Still no annotation — `loaded`'s type comes from `es`'s bound aggregate.
+    let loaded = es.load(TodoId("t".into())).await.unwrap();
+    assert_eq!(loaded.state().title, "Buy milk");
+    assert!(loaded.state().done);
+    assert_eq!(loaded.version(), Some(Version::new(2).unwrap()));
+}
+
 // REMOVED `save_no_uncommitted_events_is_noop` (#207): `save` now takes
 // `&Events<E, N>`, so an empty batch is a compile error, not a runtime no-op.
 
@@ -250,7 +280,7 @@ async fn load_with_transform_transforms_events() {
 async fn event_store_with_no_transforms_is_zero_sized_chain() {
     assert_eq!(std::mem::size_of::<()>(), 0);
     let store = Store::new(InMemoryStore::new());
-    let _es = store.repository().codec(TestCodec).build();
+    let _es = store.repository::<TodoAggregate>().codec(TestCodec).build();
 }
 
 // ─── #207 test helper ──────────────────────────────────────────────────────
