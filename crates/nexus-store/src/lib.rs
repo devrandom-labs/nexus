@@ -129,8 +129,8 @@ pub use builder::{NeedsCodec, NoSnapshot, RepositoryBuilder};
 pub use bytes;
 #[cfg(feature = "cbor")]
 pub use cbor::{
-    ChunkError, ChunkHeader, decode_chunk, decode_header, encode_block, encode_header,
-    encode_section_heading,
+    ChunkError, ChunkHeader, ChunkWriter, SectionError, SectionWriter, WriteError, decode_chunk,
+    decode_header,
 };
 #[cfg(feature = "json")]
 pub use codec::serde::json::{Json, JsonCodec};

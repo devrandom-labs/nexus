@@ -26,10 +26,10 @@ use nexus::Version;
 const MAGIC: &[u8] = b"nxch";
 const FORMAT_VERSION: u32 = 1;
 
-/// A box-layer encode/decode failure.
+/// A box-layer decode failure.
 ///
 /// Not [`ImportError`](crate::import::ImportError) — the box has no store error
-/// or id type. Two failure domains, two variants (CLAUDE rule 3).
+/// or id type. Decode-only: write-path failures are [`WriteError`].
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ChunkError {
@@ -38,11 +38,6 @@ pub enum ChunkError {
     /// [`ImportBlock::Corrupt`](crate::import::ImportBlock::Corrupt).
     #[error("malformed chunk: {0}")]
     Malformed(&'static str),
-    /// Encode: minicbor serialization failed. Never fires in practice (the
-    /// `Vec` writer is `Infallible`, a `PersistedEnvelope` guarantees every
-    /// field cap) but minicbor's API is fallible, so the type is honest.
-    #[error("chunk encode failed: {0}")]
-    Encode(#[from] minicbor::encode::Error<Infallible>),
 }
 
 /// A write-path failure, generic over the sink's write error `E` (`W::Error`).
@@ -113,21 +108,6 @@ fn validate_header(magic: &[u8], format_version: u32) -> Result<(), ChunkError> 
         return Err(ChunkError::Malformed("unknown format version"));
     }
     Ok(())
-}
-
-/// Encode the chunk header. Call once, at the start of a chunk. `origin` is an
-/// optional chunk-level producer/device id (omitted from the map when `None`).
-///
-/// # Errors
-/// Returns [`ChunkError::Encode`] if minicbor serialization fails (never in
-/// practice — the `Vec` writer is infallible).
-pub fn encode_header(origin: Option<&[u8]>) -> Result<Bytes, ChunkError> {
-    let repr = HeaderRepr {
-        magic: MAGIC,
-        format_version: FORMAT_VERSION,
-        origin,
-    };
-    Ok(Bytes::from(minicbor::to_vec(&repr)?))
 }
 
 /// Decode just the header — a cheap peek that validates magic + format version
@@ -264,17 +244,6 @@ struct HeadingRepr<'a> {
     stream_id: &'a [u8],
 }
 
-/// Encode a per-stream section heading, recording the origin stream id once.
-/// Emit one before the blocks of each stream.
-///
-/// # Errors
-/// Returns [`ChunkError::Encode`] if minicbor serialization fails (never in
-/// practice).
-pub fn encode_section_heading(stream_id: &[u8]) -> Result<Bytes, ChunkError> {
-    let repr = HeadingRepr { stream_id };
-    Ok(Bytes::from(minicbor::to_vec(&repr)?))
-}
-
 /// Wire shape of a block body map. `global_seq` is deliberately absent —
 /// store-local, restamped on import.
 #[derive(minicbor::Encode, minicbor::Decode)]
@@ -304,28 +273,6 @@ struct BlockRepr<'a> {
     #[n(1)]
     #[cbor(with = "minicbor::bytes")]
     body: &'a [u8],
-}
-
-/// Encode one event as a block `[crc32c(body), body]`. The crc covers exactly
-/// the body bstr bytes.
-///
-/// # Errors
-/// Returns [`ChunkError::Encode`] if minicbor serialization fails (never in
-/// practice).
-pub fn encode_block(event: &PersistedEnvelope) -> Result<Bytes, ChunkError> {
-    let body = BodyRepr {
-        version: event.version().as_u64(),
-        schema_version: event.schema_version(),
-        event_type: event.event_type(),
-        metadata: event.metadata(),
-        payload: event.payload(),
-    };
-    let body_bytes = minicbor::to_vec(&body)?;
-    let block = BlockRepr {
-        crc: crc32c::crc32c(&body_bytes),
-        body: &body_bytes,
-    };
-    Ok(Bytes::from(minicbor::to_vec(&block)?))
 }
 
 /// Decode one block from the decoder's current position.
