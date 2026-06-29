@@ -1120,7 +1120,7 @@ mod tests {
     // CBOR encodes a byte/text-string length with a different prefix per size
     // band: inline (<24), 1-byte (24..=255), 2-byte (256..=65535), 4-byte
     // (65536..). A bug mishandling one band is invisible until a value lands in
-    // it; exercise each band explicitly through encode_block → decode.
+    // it; exercise each band explicitly through `block_bytes` → decode.
 
     #[test]
     fn box_round_trips_every_payload_length_band() {
