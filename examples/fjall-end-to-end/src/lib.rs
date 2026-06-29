@@ -19,17 +19,14 @@
 //! production crate — it is a consumer of the frozen public API, which doubles
 //! as a last-chance ergonomics review of those surfaces.
 //!
-//! ## Ergonomics finding (pre-freeze)
+//! ## Aggregate binding (#243)
 //!
-//! `EventStore<S, C>` implements `Repository<A>` for **every** aggregate `A`,
-//! so `repo.load(id)` cannot infer `A` from `id` alone (`A::Id == AccountId`
-//! does not pin `A`). At a bare `EventStore` call site you must name the
-//! aggregate — `let acct: AggregateRoot<BankAccount> = repo.load(id).await?`.
-//! Inside an `A`-bounded function (`seed_account`) the bound supplies it and
-//! the call is clean. A per-aggregate builder (e.g. `store.repository::<A>()`)
-//! that returns a repository bound to one `A` would remove the annotation
-//! entirely. Tracked in #243 (aggregate-bound repository); when it lands, the
-//! `AggregateRoot<BankAccount>` annotations at the inline call sites come out.
+//! The aggregate is named **once**, at `store.repository::<BankAccount>()`.
+//! The resulting facade implements `Repository<BankAccount>` for exactly that
+//! aggregate, so `repo.load(id)` / `repo.save(..)` infer it with no per-call
+//! annotation. (This example was the canary for #243; with that landed, the
+//! former `let acct: AggregateRoot<BankAccount> = repo.load(id)…` annotations
+//! are gone.)
 
 // Example code relaxes a handful of strict lints locally (production crates do
 // NOT) — same posture as `examples/closing-the-books` and `examples/inmemory`.
@@ -66,7 +63,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use futures::StreamExt;
-use nexus::{AggregateRoot, Version};
+use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_store::cbor::{decode_chunk, encode_block, encode_header, encode_section_heading};
 use nexus_store::export::{EventExporter, StreamLister};
@@ -138,12 +135,12 @@ pub async fn run_persistence(path: &Path) -> Result<(AccountState, AccountState)
     // flushing the keyspace before we reopen the same path.
     let before = {
         let store = open(path)?;
-        let repo = store.repository().build();
+        let repo = store.repository::<BankAccount>().build();
         seed_account(&repo, &id, "Alice", &[1_000, 500]).await?;
-        // One more command so the persisted stream isn't trivial. The annotation
-        // pins the aggregate: `EventStore` is `Repository<A>` for *every* `A`, so
-        // `repo.load(id)` is ambiguous until the bound is named (see module note).
-        let mut account: AggregateRoot<BankAccount> = repo.load(id.clone()).await?;
+        // One more command so the persisted stream isn't trivial. `repo` is bound
+        // to `BankAccount` (named at `repository::<BankAccount>()`), so `load`
+        // infers the aggregate — no annotation (#243).
+        let mut account = repo.load(id.clone()).await?;
         let decided = account.handle(Withdraw { amount: 300 })?;
         repo.save(&mut account, &decided).await?;
         account.state().clone()
@@ -151,8 +148,8 @@ pub async fn run_persistence(path: &Path) -> Result<(AccountState, AccountState)
 
     // Reopen from scratch and rehydrate purely from the on-disk event log.
     let store = open(path)?;
-    let repo = store.repository().build();
-    let reopened: AggregateRoot<BankAccount> = repo.load(id).await?;
+    let repo = store.repository::<BankAccount>().build();
+    let reopened = repo.load(id).await?;
     let after = reopened.state().clone();
 
     Ok((before, after))
@@ -183,7 +180,7 @@ pub struct SubscriptionOutcome {
 /// demonstrate strict-after resume.
 pub async fn run_subscription(path: &Path) -> Result<SubscriptionOutcome, BoxErr> {
     let store = open(path)?;
-    let repo = store.repository().build();
+    let repo = store.repository::<BankAccount>().build();
     let id = AccountId("alice".to_owned());
 
     // Seed exactly three events (open + 2 deposits → v1, v2, v3).
@@ -214,10 +211,9 @@ pub async fn run_subscription(path: &Path) -> Result<SubscriptionOutcome, BoxErr
     let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
     let writer_barrier = std::sync::Arc::clone(&barrier);
     let writer = tokio::spawn(async move {
-        let repo = writer_store.repository().build();
+        let repo = writer_store.repository::<BankAccount>().build();
         writer_barrier.wait().await;
-        let mut account: AggregateRoot<BankAccount> =
-            repo.load(writer_id).await.expect("load for live append");
+        let mut account = repo.load(writer_id).await.expect("load for live append");
         let decided = account
             .handle(Deposit { amount: 250 })
             .expect("live deposit decides");
@@ -332,7 +328,7 @@ async fn build_chunk(store: &FjallStore) -> Result<Vec<u8>, BoxErr> {
 pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxErr> {
     // 1. Populate several streams in the source store.
     let src = open(&work_dir.join("src"))?;
-    let src_repo = src.repository().build();
+    let src_repo = src.repository::<BankAccount>().build();
     let specs: [(&str, &str, &[u64]); 3] = [
         ("alice", "Alice", &[1_000, 500]),
         ("bob", "Bob", &[200]),
@@ -361,11 +357,10 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
         .await?;
 
     // 4. Rehydrate each aggregate from the destination and compare to source.
-    let dst_repo = dst.repository().build();
+    let dst_repo = dst.repository::<BankAccount>().build();
     let mut restored = Vec::new();
     for summary in &originals {
-        let restored_root: AggregateRoot<BankAccount> =
-            dst_repo.load(AccountId(summary.id.clone())).await?;
+        let restored_root = dst_repo.load(AccountId(summary.id.clone())).await?;
         let state = restored_root.state().clone();
         restored.push(AccountSummary {
             id: summary.id.clone(),

@@ -8,6 +8,7 @@
 )]
 
 use std::future::Future;
+use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -168,12 +169,27 @@ pub(crate) const fn first_persisted_version(current: Option<Version>) -> Option<
 ///
 /// # Construction
 ///
-/// Created via [`Store::repository()`](crate::store::Store::repository):
+/// Created via [`Store::repository::<A>()`](crate::store::Store::repository),
+/// which names the aggregate `A` once:
 ///
 /// ```ignore
 /// let store = Store::new(backend);
-/// let orders = store.repository().codec(OrderCodec).build();
+/// let orders = store.repository::<Order>().codec(OrderCodec).build();
+/// let order = orders.load(id).await?;        // AggregateRoot<Order> — inferred
+/// orders.save(&mut order, &events).await?;   // inferred
 /// ```
+///
+/// # Aggregate binding
+///
+/// The aggregate `A` is a phantom type parameter (carried as
+/// `PhantomData<fn() -> A>`, so the facade is `Send + Sync + 'static`
+/// regardless of `A` and stays covariant in it). It exists solely so the
+/// facade implements [`Repository<A>`] for **exactly one** `A`: with `A`
+/// fixed on the type, `load(id)` / `save(..)` infer the aggregate from the
+/// receiver, with no per-call annotation (the blanket-over-`A` impl that
+/// previously defeated inference is gone). `A` is named once, at
+/// `repository::<A>()`. The substrate [`Store<S>`] remains multi-aggregate;
+/// mint one cheap per-aggregate facade per aggregate type.
 ///
 /// # Schema evolution
 ///
@@ -203,22 +219,24 @@ pub(crate) const fn first_persisted_version(current: Option<Version>) -> Option<
 /// `'static`. Owning the component via `Arc` and cloning per call
 /// sidesteps the borrow entirely. Cost: one heap allocation at facade
 /// construction, one pointer bump per `load`.
-pub struct EventStore<S, C> {
+pub struct EventStore<S, C, A> {
     store: Store<S>,
     codec: Arc<C>,
+    _aggregate: PhantomData<fn() -> A>,
 }
 
-impl<S, C> EventStore<S, C> {
-    /// Create an event store bound to a shared store and codec.
+impl<S, C, A> EventStore<S, C, A> {
+    /// Create an event store bound to a shared store and codec for aggregate `A`.
     pub(crate) fn new(store: Store<S>, codec: C) -> Self {
         Self {
             store,
             codec: Arc::new(codec),
+            _aggregate: PhantomData,
         }
     }
 }
 
-impl<A, S, C> ReplayFrom<A> for EventStore<S, C>
+impl<S, C, A> ReplayFrom<A> for EventStore<S, C, A>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
@@ -263,7 +281,7 @@ where
     }
 }
 
-impl<A, S, C> Repository<A> for EventStore<S, C>
+impl<S, C, A> Repository<A> for EventStore<S, C, A>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
@@ -291,7 +309,7 @@ where
     }
 }
 
-impl<S, C> EventStore<S, C> {
+impl<S, C, A> EventStore<S, C, A> {
     /// Load an aggregate, running `upcast` over each persisted event
     /// before decoding it.
     ///
@@ -308,7 +326,7 @@ impl<S, C> EventStore<S, C> {
     /// Returns [`LoadWithError::Store`] for any non-upcast error
     /// (adapter, codec, kernel) and [`LoadWithError::Upcast`] for any
     /// error returned by the `upcast` function.
-    pub async fn load_with<A, F, E>(
+    pub async fn load_with<F, E>(
         &self,
         id: A::Id,
         upcast: F,
@@ -386,7 +404,7 @@ impl<S, C> EventStore<S, C> {
     ///
     /// The same set of errors [`save`](Repository::save) can produce —
     /// the schema-version lookup itself is infallible.
-    pub async fn save_with<A, F, const N: usize>(
+    pub async fn save_with<F, const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
         events: &Events<EventOf<A>, N>,
@@ -493,32 +511,37 @@ where
 ///
 /// # Construction
 ///
-/// Created via [`Store::repository()`](crate::store::Store::repository):
+/// Created via [`Store::repository::<A>()`](crate::store::Store::repository),
+/// which names the aggregate `A` once:
 ///
 /// ```ignore
 /// let store = Store::new(backend);
-/// let orders = store.repository().codec(OrderCodec).build_zero_copy();
+/// let orders = store.repository::<Order>().codec(OrderCodec).build_zero_copy();
 /// ```
 ///
-/// See [`EventStore`]'s doc comment for the upcasting story (use
-/// [`load_with`](Self::load_with) / [`save_with`](Self::save_with)) and
-/// the rationale behind `Arc`-owning the codec.
-pub struct ZeroCopyEventStore<S, C> {
+/// See [`EventStore`]'s doc comment for the aggregate-binding rationale (`A`
+/// is a phantom type parameter so `load`/`save` infer the aggregate), the
+/// upcasting story (use [`load_with`](Self::load_with) /
+/// [`save_with`](Self::save_with)), and the rationale behind `Arc`-owning
+/// the codec.
+pub struct ZeroCopyEventStore<S, C, A> {
     store: Store<S>,
     codec: Arc<C>,
+    _aggregate: PhantomData<fn() -> A>,
 }
 
-impl<S, C> ZeroCopyEventStore<S, C> {
-    /// Create a zero-copy event store bound to a shared store and codec.
+impl<S, C, A> ZeroCopyEventStore<S, C, A> {
+    /// Create a zero-copy event store bound to a shared store and codec for aggregate `A`.
     pub(crate) fn new(store: Store<S>, codec: C) -> Self {
         Self {
             store,
             codec: Arc::new(codec),
+            _aggregate: PhantomData,
         }
     }
 }
 
-impl<A, S, C> ReplayFrom<A> for ZeroCopyEventStore<S, C>
+impl<S, C, A> ReplayFrom<A> for ZeroCopyEventStore<S, C, A>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
@@ -559,7 +582,7 @@ where
     }
 }
 
-impl<A, S, C> Repository<A> for ZeroCopyEventStore<S, C>
+impl<S, C, A> Repository<A> for ZeroCopyEventStore<S, C, A>
 where
     A: Aggregate,
     S: RawEventStore + 'static,
@@ -584,7 +607,7 @@ where
     }
 }
 
-impl<S, C> ZeroCopyEventStore<S, C> {
+impl<S, C, A> ZeroCopyEventStore<S, C, A> {
     /// Load an aggregate via the zero-copy decode path, running `upcast`
     /// over each persisted event before decoding.
     ///
@@ -596,7 +619,7 @@ impl<S, C> ZeroCopyEventStore<S, C> {
     /// Same shape as [`EventStore::load_with`] — `LoadWithError::Store`
     /// for non-upcast errors, `LoadWithError::Upcast` for the user's
     /// upcast function's failure.
-    pub async fn load_with<A, F, E>(
+    pub async fn load_with<F, E>(
         &self,
         id: A::Id,
         upcast: F,
@@ -665,7 +688,7 @@ impl<S, C> ZeroCopyEventStore<S, C> {
     /// Same shape as [`Repository::save`] — adapter, encode, conflict,
     /// kernel, and version-overflow errors propagate through
     /// [`StoreError`]. The `current_version` lookup itself is infallible.
-    pub async fn save_with<A, F, const N: usize>(
+    pub async fn save_with<F, const N: usize>(
         &self,
         aggregate: &mut AggregateRoot<A>,
         events: &Events<EventOf<A>, N>,

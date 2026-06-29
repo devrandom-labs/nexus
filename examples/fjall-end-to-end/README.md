@@ -29,9 +29,10 @@ cargo test -p nexus-example-fjall-end-to-end    # the gate-checked proofs
 The real assertions live in `#[tokio::test]`s (run by the gate's nextest);
 `main.rs` drives the same three functions for a human.
 
-## Ergonomics note (pre-freeze)
+## Aggregate binding (#243)
 
-`EventStore<S, C>` implements `Repository<A>` for *every* aggregate `A`, so
-`repo.load(id)` can't infer `A` — the inline call sites name it
-(`let acct: AggregateRoot<BankAccount> = repo.load(id).await?`). Tracked in
-#243 (aggregate-bound repository); when that lands, those annotations come out.
+The aggregate is named once, at `store.repository::<BankAccount>()`; the facade
+then implements `Repository<BankAccount>` for exactly that aggregate, so
+`repo.load(id)` / `repo.save(..)` infer it with no per-call annotation. This
+example was the canary for #243 — with that landed, the former
+`let acct: AggregateRoot<BankAccount> = repo.load(id)…` annotations are gone.
