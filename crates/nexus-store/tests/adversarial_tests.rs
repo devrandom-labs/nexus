@@ -28,14 +28,8 @@
 use nexus::Version;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::pending_envelope;
-use nexus_store::store::GlobalSeq;
 
-fn build_persisted(
-    version: Version,
-    global_seq: GlobalSeq,
-    event_type: &str,
-    payload: &[u8],
-) -> PersistedEnvelope {
+fn build_persisted(version: Version, event_type: &str, payload: &[u8]) -> PersistedEnvelope {
     let mut buf = Vec::with_capacity(event_type.len() + payload.len());
     buf.extend_from_slice(event_type.as_bytes());
     buf.extend_from_slice(payload);
@@ -44,7 +38,6 @@ fn build_persisted(
     let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
     PersistedEnvelope::try_new(
         version,
-        global_seq,
         value,
         nexus_store::value::SchemaVersion::INITIAL,
         0..et_end,
@@ -69,12 +62,7 @@ fn max_version_envelope() {
     assert_eq!(envelope.version().as_u64(), u64::MAX);
 
     // Also verify via PersistedEnvelope
-    let persisted = build_persisted(
-        Version::new(u64::MAX).unwrap(),
-        GlobalSeq::INITIAL,
-        "Event",
-        &[],
-    );
+    let persisted = build_persisted(Version::new(u64::MAX).unwrap(), "Event", &[]);
     assert_eq!(persisted.version().as_u64(), u64::MAX);
 }
 
@@ -124,12 +112,7 @@ fn persisted_envelope_binary_payload() {
     let payload: Vec<u8> = (0..=255).collect();
     assert_eq!(payload.len(), 256);
 
-    let persisted = build_persisted(
-        Version::INITIAL,
-        GlobalSeq::INITIAL,
-        "BinaryEvent",
-        &payload,
-    );
+    let persisted = build_persisted(Version::INITIAL, "BinaryEvent", &payload);
 
     assert_eq!(persisted.payload().len(), 256);
     for (i, &byte) in persisted.payload().iter().enumerate() {

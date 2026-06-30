@@ -1,10 +1,8 @@
-use core::fmt;
-use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use nexus::Version;
 
-use crate::envelope::PendingEnvelope;
+use crate::envelope::{PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
 use crate::stream::EventStream;
 use crate::stream_id::StreamKey;
@@ -132,11 +130,21 @@ pub trait RawEventStore: Send + Sync {
     /// [`Subscription::subscribe`]: crate::subscription::Subscription::subscribe
     type Stream: EventStream<Error = Self::Error> + 'static;
 
+    /// The adapter-defined `$all` resume position. See [`AllPosition`].
+    ///
+    /// A scalar for an embedded store (fjall's `GlobalSeq`), a commit-ordered
+    /// composite for a concurrent SQL store (postgres's `(txid, seq)`). It rides
+    /// *alongside* `$all` events on [`AllStream`](Self::AllStream); the
+    /// (position-free) [`PersistedEnvelope`] never carries it.
+    type AllPosition: AllPosition;
+
     /// The stream type for an all-streams (`$all`) read.
     ///
     /// Owned, non-GAT, `'static` — a `futures::Stream` of
-    /// `Result<PersistedEnvelope, Self::Error>` ordered by [`GlobalSeq`],
-    /// not by `(stream, version)`. Distinct from [`Stream`](Self::Stream)
+    /// `Result<(Self::AllPosition, PersistedEnvelope), Self::Error>`:
+    /// **position-tagged**, ascending by [`AllPosition`], not by
+    /// `(stream, version)`. The position rides on the item so resume needs no
+    /// global field on the envelope. Distinct from [`Stream`](Self::Stream)
     /// because the global order is a different physical index.
     ///
     /// Note: the subscription path ([`Subscription::subscribe`]) requires the
@@ -144,7 +152,9 @@ pub trait RawEventStore: Send + Sync {
     /// (`ScanCursor`, `InMemoryStream`) satisfy it.
     ///
     /// [`Subscription::subscribe`]: crate::subscription::Subscription::subscribe
-    type AllStream: EventStream<Error = Self::Error> + 'static;
+    type AllStream: futures::Stream<Item = Result<(Self::AllPosition, PersistedEnvelope), Self::Error>>
+        + Send
+        + 'static;
 
     /// Append events to a stream with optimistic concurrency.
     ///
@@ -166,14 +176,16 @@ pub trait RawEventStore: Send + Sync {
     /// where versions are out of order, have gaps, or contain duplicates.
     /// Accepting malformed batches corrupts the event stream.
     ///
-    /// # Global sequence
+    /// # `$all` position
     ///
-    /// Each appended event is assigned a [`GlobalSeq`] — a store-local
-    /// counter that increases across *all* streams in append order. The
-    /// sequence **must** be monotonic but is **not** required to be
-    /// gapless: an adapter may skip values (e.g. after an aborted append),
-    /// and readers must tolerate gaps. The assigned value is surfaced on
-    /// the read path via `PersistedEnvelope::global_seq`.
+    /// Each appended event is assigned an adapter-defined
+    /// [`AllPosition`](Self::AllPosition) — the order an `$all` subscription
+    /// resumes from. It is **not** carried on the [`PersistedEnvelope`]; it is
+    /// surfaced only on the `$all` read path, tagged onto each
+    /// [`AllStream`](Self::AllStream) item. The position **must** be
+    /// monotonically increasing across *all* streams in commit order but is
+    /// **not** required to be gapless — an adapter may skip values (e.g. after
+    /// an aborted append), and readers must tolerate gaps.
     fn append(
         &self,
         id: &StreamKey,
@@ -209,13 +221,22 @@ pub trait RawEventStore: Send + Sync {
         from: Version,
     ) -> impl std::future::Future<Output = Result<Self::Stream, Self::Error>> + Send;
 
-    /// Open a one-shot read over **all** streams, ordered by [`GlobalSeq`].
+    /// Open a one-shot read over **all** streams, ordered by
+    /// [`AllPosition`](Self::AllPosition).
     ///
-    /// `from` is **inclusive**: the stream yields every event with
-    /// `global_seq >= from`, in ascending `GlobalSeq` order, then terminates
-    /// with `None`. The sequence is monotonic but **not** gapless — burned
-    /// values are simply absent, and this read tolerates them by scanning a
-    /// range rather than stepping `from + 1`.
+    /// `from` is **exclusive**: the stream yields every event *strictly after*
+    /// `from` (`None` = from the very beginning), in ascending
+    /// [`AllPosition`](Self::AllPosition) order, each item **tagged** with its
+    /// position, then terminates with `None`. Resume is `Ord`-based with no
+    /// successor function — the live loop reopens with the last-delivered
+    /// position and the adapter reads "strictly greater". The position sequence
+    /// is monotonic but **not** gapless; this read tolerates gaps by scanning a
+    /// range rather than stepping a successor.
+    ///
+    /// The exclusive `from` here is an **intentional** asymmetry with
+    /// [`read_stream`](Self::read_stream)'s **inclusive** `Version` `from`
+    /// (CLAUDE rule 4): a single stream has a gapless successor sequence, but a
+    /// concurrent adapter's composite `$all` position has none.
     ///
     /// This is the building block under an all-streams subscription; the
     /// never-ending wait-when-caught-up behaviour is layered on top.
@@ -223,14 +244,14 @@ pub trait RawEventStore: Send + Sync {
     /// # Batching
     ///
     /// Like [`read_stream`](Self::read_stream), an adapter **may** chunk or
-    /// paginate internally (e.g. keyset-resume on `GlobalSeq`) but is **not**
-    /// required to. The externally-observable contract is unchanged: events
-    /// are yielded in ascending `GlobalSeq` order from `from` (inclusive),
-    /// the stream terminates with `None` when caught up, and resident memory
-    /// is bounded by the adapter's implementation.
+    /// paginate internally (keyset-resume on the position) but is **not**
+    /// required to. The externally-observable contract is unchanged: events are
+    /// yielded in ascending position order strictly after `from`, the stream
+    /// terminates with `None` when caught up, and resident memory is bounded by
+    /// the adapter's implementation.
     fn read_all(
         &self,
-        from: GlobalSeq,
+        from: Option<Self::AllPosition>,
     ) -> impl std::future::Future<Output = Result<Self::AllStream, Self::Error>> + Send;
 
     /// Wrap this backend in a shared [`Store`] handle.
@@ -274,6 +295,7 @@ pub trait RawEventStore: Send + Sync {
 impl<S: RawEventStore> RawEventStore for Store<S> {
     type Error = S::Error;
     type Stream = S::Stream;
+    type AllPosition = S::AllPosition;
     type AllStream = S::AllStream;
 
     async fn append(
@@ -293,93 +315,47 @@ impl<S: RawEventStore> RawEventStore for Store<S> {
         self.raw().read_stream(id, from).await
     }
 
-    async fn read_all(&self, from: GlobalSeq) -> Result<Self::AllStream, Self::Error> {
+    async fn read_all(
+        &self,
+        from: Option<Self::AllPosition>,
+    ) -> Result<Self::AllStream, Self::Error> {
         self.raw().read_all(from).await
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GlobalSeq — store-local global sequence number
+// AllPosition — adapter-defined `$all` resume position
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// A store-local global sequence number.
+/// Where an `$all` subscription resumes — **adapter-defined**.
 ///
-/// Every event a producer appends — across *all* of its streams — receives
-/// the next `GlobalSeq` at append time. It is the position an all-streams
-/// subscription resumes from, the same way [`Version`] is the position
-/// within a single stream.
+/// A scalar for an embedded store (fjall's `GlobalSeq`), a commit-ordered
+/// composite for a concurrent SQL store (postgres's `(txid, seq)`), an LSN for
+/// a WAL tail. `nexus-store` owns only this trait — the *abstraction*; the
+/// concrete position lives in the adapter (dependency direction: the store
+/// cannot reference its adapters), and it is **never** carried on the
+/// position-free [`PersistedEnvelope`].
 ///
-/// The sequence is **monotonic but not gapless**: an aborted append may
-/// burn values, so consumers must tolerate gaps and never assume
-/// `next == prev + 1`.
+/// # Carried alongside events, not derived from them
 ///
-/// `GlobalSeq` is a store artifact, not a domain fact. It is local to one
-/// producer's store and is not portable across producers — two stores each
-/// assign their own independent sequence.
+/// The position rides on each [`AllStream`](RawEventStore::AllStream) item as a
+/// tag `(AllPosition, PersistedEnvelope)`. A consumer checkpoints the position
+/// it last saw and hands it back to [`read_all`](RawEventStore::read_all) /
+/// `subscribe_all` to resume — so the consumer's checkpoint type is
+/// adapter-defined and must be serializable (fjall: a `u64`; postgres: a pair).
+///
+/// # `Ord`, no successor
+///
+/// The live loop resumes **strictly after** the last delivered position using
+/// [`Ord`] alone. There is deliberately no `next`/successor: a composite
+/// position such as `(txid, seq)` has no natural `+1` in `txid` space, and the
+/// `$all` read is **exclusive** (`WHERE pos > from`), so `Ord` is all the loop
+/// needs.
 ///
 /// # Not a distributed clock
 ///
-/// `GlobalSeq` orders one store's appends; it is **not** a cross-producer or
-/// causal timestamp. A distributed adapter does not widen or reinterpret it:
+/// An `AllPosition` orders one store's appends; it is **not** a cross-producer
+/// or causal timestamp. A distributed adapter does not widen or reinterpret it:
 /// causal/HLC metadata rides in the event's `metadata` bytes, the store never
-/// orders by it, and merging across producers is the consumer's job. So the
-/// width below is fixed by *one store's* append count, not by any global clock.
-///
-/// # Width (frozen at 1.0)
-///
-/// The width is **`u64`** and is part of the frozen wire frame (the header's
-/// 8-byte `global_seq` field). The full `1..=u64::MAX` range is valid on the
-/// wire.
-///
-/// SQL-backed adapters are the exception worth naming: `PostgreSQL` sequences
-/// (`BIGSERIAL`) are **signed `i64`**, so such an adapter represents at most
-/// `GlobalSeq` values up to `i64::MAX` (≈ 9.2 × 10¹⁸) — roughly half the `u64`
-/// range. This is a per-adapter limit, not a narrowing of the frozen type: the
-/// wire format reserves the full `u64`, and an embedded adapter such as fjall
-/// uses it. A type-safe SQL adapter enforces its own range at the boundary
-/// where the types meet — a `u64 → i64` conversion (e.g. `i64::try_from`)
-/// returns an error for any value above `i64::MAX` rather than truncating, so
-/// the ceiling surfaces as an ordinary boundary error (CLAUDE.md rule 4), never
-/// silent corruption. The limit is in any case practically unreachable: ~9.2
-/// quintillion appends in a single store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GlobalSeq(NonZeroU64);
-
-impl GlobalSeq {
-    /// The first sequence number (1).
-    pub const INITIAL: Self = Self(NonZeroU64::MIN);
-
-    /// The next sequence number.
-    ///
-    /// Returns `None` if the sequence is `u64::MAX` (overflow).
-    #[must_use]
-    pub const fn next(self) -> Option<Self> {
-        match self.0.checked_add(1) {
-            Some(n) => Some(Self(n)),
-            None => None,
-        }
-    }
-
-    /// The underlying integer value. Always >= 1.
-    #[must_use]
-    pub const fn as_u64(self) -> u64 {
-        self.0.get()
-    }
-
-    /// Construct a `GlobalSeq` from a `u64`.
-    ///
-    /// Returns `None` if `v` is 0. Mirrors [`NonZeroU64::new`].
-    #[must_use]
-    pub const fn new(v: u64) -> Option<Self> {
-        match NonZeroU64::new(v) {
-            Some(nz) => Some(Self(nz)),
-            None => None,
-        }
-    }
-}
-
-impl fmt::Display for GlobalSeq {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
+/// orders by it, and merging across producers is the consumer's job.
+pub trait AllPosition: Copy + Ord + Send + Sync + core::fmt::Debug + 'static {}

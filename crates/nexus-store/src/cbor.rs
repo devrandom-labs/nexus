@@ -19,7 +19,6 @@ use thiserror::Error;
 
 use crate::envelope::PersistedEnvelope;
 use crate::import::{ImportBlock, StreamSection};
-use crate::store::GlobalSeq;
 use crate::value::SchemaVersion;
 use nexus::Version;
 
@@ -337,7 +336,6 @@ fn reconstruct(body: &BodyRepr<'_>) -> Option<PersistedEnvelope> {
     let pl_end = u32::try_from(buf.len()).ok()?;
     PersistedEnvelope::try_new(
         version,
-        GlobalSeq::INITIAL,
         Bytes::from(buf),
         schema,
         et_range,
@@ -499,7 +497,6 @@ mod tests {
         let pl_end = u32::try_from(buf.len()).expect("fits");
         PersistedEnvelope::try_new(
             Version::new(version).expect("nonzero"),
-            GlobalSeq::new(version).expect("nonzero"),
             Bytes::from(buf),
             SchemaVersion::from_u32(schema).expect("nonzero"),
             0..et_end,

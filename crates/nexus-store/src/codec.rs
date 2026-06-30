@@ -386,17 +386,9 @@ pub mod bytemuck {
             let pl = crate::value::Payload::from_bytes(bytes::Bytes::copy_from_slice(payload))
                 .expect("valid payload");
             let sv = crate::value::SchemaVersion::INITIAL;
-            let frame = wire::encode_frame(
-                crate::store::GlobalSeq::INITIAL.as_u64(),
-                sv,
-                &et,
-                &pl,
-                None,
-            )
-            .expect("wire encode_frame ok");
+            let frame = wire::encode_frame(sv, &et, &pl, None).expect("wire encode_frame ok");
             PersistedEnvelope::try_new(
                 nexus::Version::INITIAL,
-                crate::store::GlobalSeq::INITIAL,
                 frame.value,
                 sv,
                 frame.offsets.event_type,
@@ -548,17 +540,9 @@ pub mod rkyv {
             let pl = crate::value::Payload::from_bytes(bytes::Bytes::copy_from_slice(payload))
                 .expect("valid payload");
             let sv = crate::value::SchemaVersion::INITIAL;
-            let frame = wire::encode_frame(
-                crate::store::GlobalSeq::INITIAL.as_u64(),
-                sv,
-                &et,
-                &pl,
-                None,
-            )
-            .expect("wire encode_frame ok");
+            let frame = wire::encode_frame(sv, &et, &pl, None).expect("wire encode_frame ok");
             PersistedEnvelope::try_new(
                 nexus::Version::INITIAL,
-                crate::store::GlobalSeq::INITIAL,
                 frame.value,
                 sv,
                 frame.offsets.event_type,

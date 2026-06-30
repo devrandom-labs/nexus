@@ -69,9 +69,12 @@
 use std::future::Future;
 
 use futures::StreamExt;
+use futures::pin_mut;
 use nexus::Version;
 use nexus_store::EventStream;
-use nexus_store::envelope::PersistedEnvelope;
+use nexus_store::StreamKey;
+use nexus_store::envelope::{PersistedEnvelope, pending_envelope};
+use nexus_store::store::RawEventStore;
 
 /// One row of test data fed into an adapter for the conformance suite to
 /// observe back out.
@@ -427,4 +430,324 @@ where
     check_insertion_order_preserved(&make).await;
     check_large_sequence_completes(&make).await;
     check_envelope_accessors_consistent(&make).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// `$all` read-path conformance (issue #266)
+//
+// The `$all` resume contract is adapter-defined but identical in shape across
+// every adapter, so — like the per-stream `EventStream` suite above — it is
+// pinned ONCE here and instantiated per adapter, so `InMemoryStore` and
+// `FjallStore` can never silently diverge. The position type is opaque
+// (`S::AllPosition`), but the trait bounds it `Copy + Ord`, which is all the
+// suite needs: it checkpoints a real tag and feeds it back, letting `Ord` drive
+// "strictly after" without knowing the concrete representation.
+//
+// Covered:
+//  - read_all(None) yields every event across streams in position order,
+//    positions strictly increasing (no dup).
+//  - read_all(Some(p)) is EXCLUSIVE (strictly after p).
+//  - multi-resume-cycle: consume a prefix, checkpoint the tag, resume — the
+//    reconstructed stream equals the single-shot read (no gap/dup/skip across
+//    the seams).
+//  - read_all(None) then read_all(Some(last)): strictly-after holds at the
+//    boundary (empty), and a later append surfaces only the new event.
+//  - read_stream (INCLUSIVE Version) and read_all (EXCLUSIVE position) coexist
+//    on one store — the intentional asymmetry (CLAUDE rule 4).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Append one single-event batch to `id` at `version`, with the matching
+/// optimistic `expected_version` (`None` for `version == 1`). Panics on any
+/// store error — the suite drives a clean, conflict-free append sequence.
+async fn all_append<S: RawEventStore>(store: &S, id: &str, version: u64, payload: &[u8]) {
+    let expected = Version::new(version - 1);
+    let env = pending_envelope(Version::new(version).expect("version must be > 0"))
+        .event_type("E")
+        .payload(payload.to_vec())
+        .expect("valid payload")
+        .build();
+    store
+        .append(&StreamKey::from_slice(id.as_bytes()), expected, &[env])
+        .await
+        .unwrap_or_else(|e| panic!("append {id}@{version} failed: {e:?}"));
+}
+
+/// Drain a full `read_all(from)` into `(position, payload)` pairs.
+async fn drain_all<S: RawEventStore>(
+    store: &S,
+    from: Option<S::AllPosition>,
+) -> Vec<(S::AllPosition, Vec<u8>)> {
+    let stream = store.read_all(from).await.expect("open read_all");
+    pin_mut!(stream);
+    let mut out = Vec::new();
+    while let Some(item) = stream.next().await {
+        let (pos, env) = item.unwrap_or_else(|e| panic!("read_all item errored: {e:?}"));
+        out.push((pos, env.payload().to_vec()));
+    }
+    out
+}
+
+/// Assert positions are strictly increasing (monotonic, no duplicate).
+fn assert_strictly_increasing<P: Copy + Ord + core::fmt::Debug>(positions: &[(P, Vec<u8>)]) {
+    for w in positions.windows(2) {
+        assert!(
+            w[1].0 > w[0].0,
+            "$all positions must be strictly increasing: {:?} then {:?}",
+            w[0].0,
+            w[1].0,
+        );
+    }
+}
+
+async fn check_all_empty_store_yields_none<S, F, Fut>(make: &F)
+where
+    S: RawEventStore + Send + Sync,
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = S> + Send,
+{
+    let store = make().await;
+    let got = drain_all(&store, None).await;
+    assert!(
+        got.is_empty(),
+        "empty store: read_all(None) must yield nothing, got {} items",
+        got.len(),
+    );
+}
+
+async fn check_all_global_order_across_streams<S, F, Fut>(make: &F)
+where
+    S: RawEventStore + Send + Sync,
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = S> + Send,
+{
+    let store = make().await;
+    // Interleave appends across two streams so $all order differs from any one
+    // stream's version order: a@1, a@2, b@1, a@3, a@4.
+    all_append(&store, "a", 1, b"a1").await;
+    all_append(&store, "a", 2, b"a2").await;
+    all_append(&store, "b", 1, b"b1").await;
+    all_append(&store, "a", 3, b"a3").await;
+    all_append(&store, "a", 4, b"a4").await;
+
+    let got = drain_all(&store, None).await;
+    let payloads: Vec<Vec<u8>> = got.iter().map(|(_, p)| p.clone()).collect();
+    assert_eq!(
+        payloads,
+        vec![
+            b"a1".to_vec(),
+            b"a2".to_vec(),
+            b"b1".to_vec(),
+            b"a3".to_vec(),
+            b"a4".to_vec(),
+        ],
+        "read_all(None) must yield every event across streams in append (position) order",
+    );
+    assert_strictly_increasing(&got);
+}
+
+async fn check_all_from_is_exclusive<S, F, Fut>(make: &F)
+where
+    S: RawEventStore + Send + Sync,
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = S> + Send,
+{
+    let store = make().await;
+    all_append(&store, "a", 1, b"a1").await;
+    all_append(&store, "a", 2, b"a2").await;
+    all_append(&store, "a", 3, b"a3").await;
+
+    let full = drain_all(&store, None).await;
+    assert_eq!(full.len(), 3, "expected 3 events from a clean store");
+    let checkpoint = full[0].0; // position of a@1
+
+    let rest = drain_all(&store, Some(checkpoint)).await;
+    let payloads: Vec<Vec<u8>> = rest.iter().map(|(_, p)| p.clone()).collect();
+    assert_eq!(
+        payloads,
+        vec![b"a2".to_vec(), b"a3".to_vec()],
+        "read_all(Some(p)) is EXCLUSIVE: p and everything at-or-below it are excluded",
+    );
+    assert!(
+        rest[0].0 > checkpoint,
+        "first resumed position {:?} must be strictly after the checkpoint {:?}",
+        rest[0].0,
+        checkpoint,
+    );
+}
+
+async fn check_all_multi_resume_cycles<S, F, Fut>(make: &F)
+where
+    S: RawEventStore + Send + Sync,
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = S> + Send,
+{
+    let store = make().await;
+    // 10 events interleaved across two streams.
+    let mut va = 0u64;
+    let mut vb = 0u64;
+    let mut expected: Vec<Vec<u8>> = Vec::new();
+    for i in 0..10u64 {
+        if i % 2 == 0 {
+            va += 1;
+            let p = format!("a{va}").into_bytes();
+            all_append(&store, "a", va, &p).await;
+            expected.push(p);
+        } else {
+            vb += 1;
+            let p = format!("b{vb}").into_bytes();
+            all_append(&store, "b", vb, &p).await;
+            expected.push(p);
+        }
+    }
+
+    // Single-shot reference read.
+    let full = drain_all(&store, None).await;
+    let full_payloads: Vec<Vec<u8>> = full.iter().map(|(_, p)| p.clone()).collect();
+    assert_eq!(
+        full_payloads, expected,
+        "single-shot read_all(None) must match append order",
+    );
+
+    // Multi-resume cycles: consume at most 3 per cycle, checkpoint the last
+    // delivered tag, reopen strictly-after, repeat until drained.
+    let mut acc: Vec<(S::AllPosition, Vec<u8>)> = Vec::new();
+    let mut checkpoint: Option<S::AllPosition> = None;
+    loop {
+        let stream = store
+            .read_all(checkpoint)
+            .await
+            .expect("open read_all cycle");
+        pin_mut!(stream);
+        let mut taken = 0;
+        let mut advanced = false;
+        while let Some(item) = stream.next().await {
+            let (pos, env) = item.unwrap_or_else(|e| panic!("cycle item errored: {e:?}"));
+            acc.push((pos, env.payload().to_vec()));
+            checkpoint = Some(pos);
+            advanced = true;
+            taken += 1;
+            if taken == 3 {
+                break;
+            }
+        }
+        if !advanced {
+            break;
+        }
+    }
+
+    let acc_payloads: Vec<Vec<u8>> = acc.iter().map(|(_, p)| p.clone()).collect();
+    assert_eq!(
+        acc_payloads, full_payloads,
+        "multi-resume cycles must reconstruct the full stream exactly — no gap, dup, or skip across the seams",
+    );
+    assert_strictly_increasing(&acc);
+}
+
+async fn check_all_chained_none_then_after_last<S, F, Fut>(make: &F)
+where
+    S: RawEventStore + Send + Sync,
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = S> + Send,
+{
+    let store = make().await;
+    all_append(&store, "a", 1, b"a1").await;
+    all_append(&store, "b", 1, b"b1").await;
+
+    let full = drain_all(&store, None).await;
+    assert_eq!(full.len(), 2);
+    let last = full.last().expect("non-empty").0;
+
+    // Strictly-after the last delivered position → empty at the boundary.
+    let empty = drain_all(&store, Some(last)).await;
+    assert!(
+        empty.is_empty(),
+        "read_all(Some(last)) must be empty — nothing is strictly after the last position",
+    );
+
+    // A later append makes the SAME checkpoint surface exactly the new event.
+    all_append(&store, "a", 2, b"a2").await;
+    let after = drain_all(&store, Some(last)).await;
+    let payloads: Vec<Vec<u8>> = after.iter().map(|(_, p)| p.clone()).collect();
+    assert_eq!(
+        payloads,
+        vec![b"a2".to_vec()],
+        "resuming after the old last must yield exactly the newly appended event",
+    );
+    assert!(
+        after[0].0 > last,
+        "the new event's position {:?} must be strictly after the prior last {:?}",
+        after[0].0,
+        last,
+    );
+}
+
+async fn check_read_stream_inclusive_read_all_exclusive_coexist<S, F, Fut>(make: &F)
+where
+    S: RawEventStore + Send + Sync,
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = S> + Send,
+{
+    let store = make().await;
+    all_append(&store, "a", 1, b"a1").await;
+    all_append(&store, "a", 2, b"a2").await;
+    all_append(&store, "a", 3, b"a3").await;
+
+    // read_stream(from) is INCLUSIVE on Version: from=2 yields versions [2, 3].
+    let rs = store
+        .read_stream(&StreamKey::from_slice(b"a"), Version::new(2).expect("v2"))
+        .await
+        .expect("open read_stream");
+    pin_mut!(rs);
+    let mut versions = Vec::new();
+    while let Some(item) = rs.next().await {
+        let env = item.unwrap_or_else(|e| panic!("read_stream item errored: {e:?}"));
+        versions.push(env.version().as_u64());
+    }
+    assert_eq!(
+        versions,
+        vec![2, 3],
+        "read_stream(from) is INCLUSIVE: from=2 yields versions 2 and 3",
+    );
+
+    // read_all(from) is EXCLUSIVE: from = position of a@2 yields only a3.
+    let full = drain_all(&store, None).await;
+    assert_eq!(full.len(), 3);
+    let pos_of_a2 = full[1].0;
+    let after = drain_all(&store, Some(pos_of_a2)).await;
+    let payloads: Vec<Vec<u8>> = after.iter().map(|(_, p)| p.clone()).collect();
+    assert_eq!(
+        payloads,
+        vec![b"a3".to_vec()],
+        "read_all(from) is EXCLUSIVE: from=pos(a2) yields only a3 — the asymmetry with read_stream holds on one store",
+    );
+}
+
+/// Run every `$all` read-path contract check against fresh stores from `make`.
+///
+/// Each check calls `make` to get a clean store, so adapters that need per-call
+/// state (a temp dir, a fresh keyspace) must produce a fresh store each call.
+///
+/// Checks performed (each isolated, panics on failure):
+///
+/// 1. Empty store: `read_all(None)` yields nothing.
+/// 2. `read_all(None)` yields every event across streams in position order,
+///    strictly increasing.
+/// 3. `read_all(Some(p))` is exclusive (strictly after `p`).
+/// 4. Multi-resume cycles reconstruct the full stream with no gap/dup/skip.
+/// 5. `read_all(None)` then `read_all(Some(last))`: empty at the boundary, then
+///    surfaces only a later append.
+/// 6. `read_stream` (inclusive `Version`) and `read_all` (exclusive position)
+///    coexist on one store.
+pub async fn assert_all_stream_conformance<S, F, Fut>(make: F)
+where
+    S: RawEventStore + Send + Sync,
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = S> + Send,
+{
+    check_all_empty_store_yields_none(&make).await;
+    check_all_global_order_across_streams(&make).await;
+    check_all_from_is_exclusive(&make).await;
+    check_all_multi_resume_cycles(&make).await;
+    check_all_chained_none_then_after_last(&make).await;
+    check_read_stream_inclusive_read_all_exclusive_coexist(&make).await;
 }

@@ -25,7 +25,7 @@ use crate::codec::{Decode, Encode};
 ///
 /// Generic over the position type `P` so one trait serves a single
 /// stream (`P = Version`) and a multi-stream, single-producer projection
-/// (`P = GlobalSeq`).
+/// (`P =` the adapter's [`AllPosition`](crate::AllPosition)).
 pub trait SnapshotStore<S, P>: Send + Sync {
     /// Adapter-specific error type.
     type Error: core::error::Error + Send + Sync + 'static;

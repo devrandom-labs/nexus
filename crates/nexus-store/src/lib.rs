@@ -23,8 +23,9 @@
 //!   refcount + range copies) and has no lifetime parameter, so it flows
 //!   through `futures::Stream` items without bridging code.
 //! - [`store`] — adapter-facing [`RawEventStore`] trait,
-//!   [`Store<S>`](crate::store::Store) shared handle, and [`GlobalSeq`]
-//!   (store-wide monotonic-but-gappy stamp).
+//!   [`Store<S>`](crate::store::Store) shared handle, and [`AllPosition`]
+//!   (the adapter-defined `$all` resume position — the concrete type lives in
+//!   each adapter, only the trait here).
 //! - [`subscription`] — user-facing [`Subscription<S>`] struct (built
 //!   via `Subscription::new(&store)`). Its `subscribe` / `subscribe_all`
 //!   methods assemble the generic catch-up-then-live-tail loop from
@@ -48,7 +49,8 @@
 //! - [`state`] — [`SnapshotStore<S, P>`](crate::SnapshotStore) for atomic
 //!   state+position persistence. Powers both aggregate snapshots and
 //!   projection state — same trait, different position type
-//!   ([`Version`] vs [`GlobalSeq`]).
+//!   ([`Version`] for a single stream vs an adapter's [`AllPosition`] for a
+//!   multi-stream projection).
 //! - [`upcasting`] — schema evolution via the [`Upcaster`] trait and
 //!   [`EventMorsel`] zero-copy-when-possible data unit.
 //! - [`snapshot`] (feature-gated) — decorator that wraps a repository to
@@ -165,7 +167,7 @@ pub use state::{
     AfterEventTypes, CodecSnapshotStore, CodecSnapshotStoreError, EveryNEvents, PersistTrigger,
     SnapshotStore,
 };
-pub use store::{GlobalSeq, RawEventStore, Store};
+pub use store::{AllPosition, RawEventStore, Store};
 pub use stream::EventStream;
 pub use stream_id::StreamKey;
 // Re-export the `Stream` trait from `futures-core` (the small, near-frozen

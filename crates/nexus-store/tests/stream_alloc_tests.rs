@@ -55,7 +55,6 @@ use futures::TryStreamExt;
 use nexus::Version;
 use nexus_store::codec::{Decode, Encode};
 use nexus_store::envelope::PersistedEnvelope;
-use nexus_store::store::GlobalSeq;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -181,7 +180,6 @@ impl futures::Stream for VecStream {
         self.pos += 1;
         let env = PersistedEnvelope::try_new(
             Version::new(row.version).expect("non-zero"),
-            GlobalSeq::INITIAL,
             row.value,
             nexus_store::value::SchemaVersion::INITIAL,
             row.event_type_range,

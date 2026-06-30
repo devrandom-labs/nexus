@@ -1,5 +1,6 @@
 use crate::builder::FjallStoreBuilder;
 use crate::error::{FjallError, reason_label};
+use crate::global_seq::GlobalSeq;
 use crate::scan::{GlobalScan, ScanCursor, StreamScan};
 use crate::subscription_id::OwnedStreamId;
 use crate::wire_key::{
@@ -11,7 +12,7 @@ use nexus_store::PendingEnvelope;
 use nexus_store::StreamKey;
 use nexus_store::error::AppendError;
 use nexus_store::notify::{NotifyError, StreamNotifiers, WakeReg};
-use nexus_store::store::{GlobalSeq, RawEventStore};
+use nexus_store::store::RawEventStore;
 use nexus_store::wake::WakeSource;
 use nexus_store::wire;
 use std::path::Path;
@@ -158,6 +159,7 @@ impl FjallStore {
 impl RawEventStore for FjallStore {
     type Error = FjallError;
     type Stream = ScanCursor<StreamScan>;
+    type AllPosition = GlobalSeq;
     type AllStream = ScanCursor<GlobalScan>;
 
     #[allow(
@@ -234,7 +236,6 @@ impl RawEventStore for FjallStore {
                 })
             })?;
             let frame = wire::encode_frame(
-                global_seq,
                 env.schema_version_value(),
                 &env.event_type_value(),
                 &env.payload_value(),
@@ -296,8 +297,18 @@ impl RawEventStore for FjallStore {
         )
     }
 
-    async fn read_all(&self, from: GlobalSeq) -> Result<Self::AllStream, Self::Error> {
-        ScanCursor::open(&self.events_global, GlobalScan, from)
+    async fn read_all(&self, from: Option<GlobalSeq>) -> Result<Self::AllStream, Self::Error> {
+        // `$all` resume is **exclusive**: open strictly after `from`. The
+        // `ScanCursor` keyset bound is inclusive, so resume at `from.next()`
+        // (None = from the first position). At the `GlobalSeq::MAX` ceiling
+        // there is no successor — nothing is strictly after it — so the resume
+        // anchor collapses to `None` and the cursor is empty, never a re-read of
+        // the ceiling event. Mirrors `StreamCatchup::read_after` in nexus-store.
+        from.map_or(Some(GlobalSeq::INITIAL), GlobalSeq::next)
+            .map_or_else(
+                || Ok(ScanCursor::open_empty(&self.events_global, GlobalScan)),
+                |after| ScanCursor::open(&self.events_global, GlobalScan, after),
+            )
     }
 }
 
@@ -479,7 +490,6 @@ mod atomic_append_impl {
                     let key = encode_event_key(id_bytes, version)
                         .map_err(|e| invalid_input(&w.target, version, &e))?;
                     let frame = wire::encode_frame(
-                        global_seq,
                         env.schema_version_value(),
                         &env.event_type_value(),
                         &env.payload_value(),
@@ -692,6 +702,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
         (store, dir)
+    }
+
+    /// Build a valid V2 wire-frame value (`schema_version` 1, no metadata) for
+    /// white-box insertion into the `events_global` partition — used by the
+    /// corruption / burned-position tests that need to plant rows directly.
+    fn frame_value(event_type: &str, payload: &[u8]) -> Slice {
+        let sv = nexus_store::value::SchemaVersion::from_u32(1).unwrap();
+        let et = nexus_store::value::EventType::from_bytes(bytes::Bytes::copy_from_slice(
+            event_type.as_bytes(),
+        ))
+        .unwrap();
+        let pl = nexus_store::value::Payload::from_bytes(bytes::Bytes::copy_from_slice(payload))
+            .unwrap();
+        Slice::from(wire::encode_frame(sv, &et, &pl, None).unwrap().value)
     }
 
     // ---- append tests ----
@@ -970,11 +994,11 @@ mod tests {
             .await
             .unwrap();
 
-        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
+        let mut all = store.read_all(None).await.unwrap();
         let mut seen = Vec::new();
         while let Some(item) = all.next().await {
-            let env = item.unwrap();
-            seen.push((env.global_seq().as_u64(), env.payload().to_vec()));
+            let (pos, env) = item.unwrap();
+            seen.push((pos.as_u64(), env.payload().to_vec()));
         }
         assert_eq!(
             seen,
@@ -987,7 +1011,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_all_from_is_inclusive() {
+    async fn read_all_from_is_exclusive() {
         let dir = tempfile::tempdir().unwrap();
         let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
         let a = sk("a");
@@ -1013,33 +1037,195 @@ mod tests {
             .await
             .unwrap();
 
-        let mut all = store.read_all(GlobalSeq::new(2).unwrap()).await.unwrap();
+        // Exclusive: strictly after position 1 → [2, 3].
+        let mut all = store
+            .read_all(Some(GlobalSeq::new(1).unwrap()))
+            .await
+            .unwrap();
         let mut seqs = Vec::new();
-        while let Some(env) = all.next().await {
-            seqs.push(env.unwrap().global_seq().as_u64());
+        while let Some(item) = all.next().await {
+            seqs.push(item.unwrap().0.as_u64());
         }
         assert_eq!(seqs, vec![2, 3]);
     }
 
     #[tokio::test]
     async fn read_all_survives_reopen() {
+        // Lifecycle: append V2 frames across two interleaved streams, close,
+        // reopen, recover EVERY event with the SAME $all positions — the
+        // key-derived positions persist across reopen, not just the payloads.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db");
         let a = sk("a");
+        let b = sk("b");
         {
             let store = FjallStore::builder(&path).open().unwrap();
-            let env = pending_envelope(Version::new(1).unwrap())
-                .event_type("E")
-                .payload(b"x".to_vec())
-                .unwrap()
-                .build();
-            store.append(&a, None, &[env]).await.unwrap();
+            // a@1, a@2, b@1, a@3 → positions 1,2,3,4 interleaving the streams.
+            store
+                .append(
+                    &a,
+                    None,
+                    &[make_envelope(1, "A1", b"a1"), make_envelope(2, "A2", b"a2")],
+                )
+                .await
+                .unwrap();
+            store
+                .append(&b, None, &[make_envelope(1, "B1", b"b1")])
+                .await
+                .unwrap();
+            store
+                .append(&a, Version::new(2), &[make_envelope(3, "A3", b"a3")])
+                .await
+                .unwrap();
         }
         let store = FjallStore::builder(&path).open().unwrap();
-        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
-        let env = all.next().await.unwrap().unwrap();
-        assert_eq!(env.global_seq().as_u64(), 1);
-        assert_eq!(env.payload(), b"x");
+        let mut all = store.read_all(None).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = all.next().await {
+            let (pos, env) = item.unwrap();
+            seen.push((
+                pos.as_u64(),
+                env.event_type().to_owned(),
+                env.payload().to_vec(),
+            ));
+        }
+        assert_eq!(
+            seen,
+            vec![
+                (1, "A1".to_owned(), b"a1".to_vec()),
+                (2, "A2".to_owned(), b"a2".to_vec()),
+                (3, "B1".to_owned(), b"b1".to_vec()),
+                (4, "A3".to_owned(), b"a3".to_vec()),
+            ],
+            "read_all after reopen must recover every event with identical positions",
+        );
+
+        // The persisted global counter is intact: a post-reopen append
+        // continues the $all sequence at position 5, strictly after 4.
+        store
+            .append(&a, Version::new(3), &[make_envelope(4, "A4", b"a4")])
+            .await
+            .unwrap();
+        let mut after = store
+            .read_all(Some(GlobalSeq::new(4).unwrap()))
+            .await
+            .unwrap();
+        let mut rest = Vec::new();
+        while let Some(item) = after.next().await {
+            rest.push(item.unwrap().0.as_u64());
+        }
+        assert_eq!(
+            rest,
+            vec![5],
+            "post-reopen append continues the $all sequence at 5",
+        );
+    }
+
+    #[tokio::test]
+    async fn read_all_poisons_on_corrupt_events_global_row() {
+        // Lifecycle: write → corrupt a persisted events_global row value →
+        // reopen → read_all surfaces a typed FjallError (poison), never a
+        // panic, never a silent skip.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db");
+        {
+            let store = FjallStore::builder(&path).open().unwrap();
+            store
+                .append(&sk("a"), None, &[make_envelope(1, "E", b"ok")])
+                .await
+                .unwrap();
+            // Overwrite the events_global row value (global_seq 1, version 1)
+            // with too few bytes to be a valid frame, committed durably.
+            let mut tx = store.db.write_tx();
+            tx.insert(
+                &store.events_global,
+                encode_global_key(1, 1),
+                Slice::from(&[0u8, 1, 2][..]),
+            );
+            tx.commit().unwrap();
+        }
+        let store = FjallStore::builder(&path).open().unwrap();
+        let mut all = store.read_all(None).await.unwrap();
+        match all.next().await {
+            Some(Err(FjallError::CorruptValue { version, .. })) => {
+                assert_eq!(version, Some(1), "corruption surfaces the row's version");
+            }
+            other => panic!("expected CorruptValue, got {other:?}"),
+        }
+        assert!(
+            all.next().await.is_none(),
+            "poisoned cursor must terminate, not silently skip the corrupt row",
+        );
+    }
+
+    #[tokio::test]
+    async fn read_all_from_max_yields_empty() {
+        // Defensive boundary: nothing is strictly after GlobalSeq::MAX, so the
+        // exclusive resume opens an empty cursor (ScanCursor::open_empty) — no
+        // panic, no re-read of the ceiling event.
+        let (store, _dir) = temp_store();
+        store
+            .append(&sk("a"), None, &[make_envelope(1, "E", b"x")])
+            .await
+            .unwrap();
+        let mut all = store
+            .read_all(Some(GlobalSeq::new(u64::MAX).unwrap()))
+            .await
+            .unwrap();
+        assert!(
+            all.next().await.is_none(),
+            "read_all(Some(MAX)) must yield nothing",
+        );
+    }
+
+    #[tokio::test]
+    async fn read_all_tolerates_burned_position_gap() {
+        // Monotonic-but-NOT-gapless: simulate an aborted append that burned
+        // position 2 by planting events_global rows at 1 and 3 (skipping 2).
+        // The $all read is a range scan, so it tolerates the gap and never
+        // assumes next == prev + 1.
+        let (store, _dir) = temp_store();
+        {
+            let mut tx = store.db.write_tx();
+            tx.insert(
+                &store.events_global,
+                encode_global_key(1, 1),
+                frame_value("E", b"p1"),
+            );
+            tx.insert(
+                &store.events_global,
+                encode_global_key(3, 1),
+                frame_value("E", b"p3"),
+            );
+            tx.commit().unwrap();
+        }
+
+        let mut all = store.read_all(None).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = all.next().await {
+            let (pos, env) = item.unwrap();
+            seen.push((pos.as_u64(), env.payload().to_vec()));
+        }
+        assert_eq!(
+            seen,
+            vec![(1, b"p1".to_vec()), (3, b"p3".to_vec())],
+            "read_all must yield across a burned position, never assuming contiguity",
+        );
+
+        // Exclusive resume strictly after 1 skips the burned 2 and yields 3.
+        let mut after = store
+            .read_all(Some(GlobalSeq::new(1).unwrap()))
+            .await
+            .unwrap();
+        let mut rest = Vec::new();
+        while let Some(item) = after.next().await {
+            rest.push(item.unwrap().0.as_u64());
+        }
+        assert_eq!(
+            rest,
+            vec![3],
+            "resume after 1 tolerates the burned 2, yields 3",
+        );
     }
 
     // ---- linearizability / concurrency tests ----
@@ -1225,10 +1411,10 @@ mod atomic_append_tests {
         assert_eq!(read_versions(&store, &sk("a")).await, vec![1, 2, 3]);
         // global_seq is contiguous across the two paths: 1,2 (atomic) then 3.
         assert_eq!(global_counter(&store), Some(3));
-        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
+        let mut all = store.read_all(None).await.unwrap();
         let mut seqs = Vec::new();
-        while let Some(env) = all.next().await {
-            seqs.push(env.unwrap().global_seq().as_u64());
+        while let Some(item) = all.next().await {
+            seqs.push(item.unwrap().0.as_u64());
         }
         assert_eq!(seqs, vec![1, 2, 3]);
     }
@@ -1428,6 +1614,51 @@ mod atomic_append_tests {
         handle.await.unwrap();
         assert_eq!(read_versions(&store, &sk("a")).await, vec![1]);
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_read_all_never_sees_a_torn_atomic_batch() {
+        // A one-shot $all reader racing a multi-stream atomic_append_many must
+        // only ever observe a position-ordered view that is EITHER empty (batch
+        // not yet committed) OR the WHOLE committed batch — never a torn subset,
+        // never another stream's un-committed events. The batch's 4 events
+        // ([a:1,2,3] + [b:1]) all land in ONE write_tx, so a snapshot-pinned
+        // read_all cannot straddle the commit.
+        let (raw, _dir) = temp_store();
+        let store = StdArc::new(raw);
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let writer = StdArc::clone(&store);
+        let wbarrier = StdArc::clone(&barrier);
+        let handle = tokio::spawn(async move {
+            wbarrier.wait().await;
+            writer
+                .atomic_append_many(&[planned("a", None, &[1, 2, 3]), planned("b", None, &[1])])
+                .await
+                .unwrap();
+        });
+
+        barrier.wait().await;
+        for _ in 0..64u32 {
+            let mut all = store.read_all(None).await.unwrap();
+            let mut positions = Vec::new();
+            while let Some(item) = all.next().await {
+                positions.push(item.unwrap().0.as_u64());
+            }
+            assert!(
+                positions.is_empty() || positions == vec![1, 2, 3, 4],
+                "read_all saw a torn view of an atomic batch: {positions:?}",
+            );
+        }
+        handle.await.unwrap();
+
+        // After the batch commits, read_all yields exactly the 4 events in order.
+        let mut all = store.read_all(None).await.unwrap();
+        let mut positions = Vec::new();
+        while let Some(item) = all.next().await {
+            positions.push(item.unwrap().0.as_u64());
+        }
+        assert_eq!(positions, vec![1, 2, 3, 4]);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1498,7 +1729,12 @@ mod stream_lister_tests {
         }
         let store = FjallStore::builder(&path).open().unwrap();
         let ids = list_ids(&store).await;
-        assert_eq!(ids, [b"a".to_vec(), b"b".to_vec()].into_iter().collect());
+        assert_eq!(
+            ids,
+            [b"a".to_vec(), b"b".to_vec()]
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+        );
     }
 
     #[tokio::test]

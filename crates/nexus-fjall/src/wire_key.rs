@@ -192,7 +192,6 @@ pub fn decode_stream_version(value: &[u8]) -> Result<u64, DecodeError> {
 /// surfaced as `DecodeError::Wire(wire::DecodeError::CorruptSchemaVersion)`.
 #[derive(Debug)]
 pub struct DecodedEvent {
-    pub global_seq: u64,
     pub schema_version: nexus_store::value::SchemaVersion,
     pub event_type_range: std::ops::Range<u32>,
     pub payload_range: std::ops::Range<u32>,
@@ -216,7 +215,6 @@ pub fn decode_event_value(value: &bytes::Bytes) -> Result<DecodedEvent, DecodeEr
     let decoded = wire::decode_frame(value.as_ref()).map_err(DecodeError::Wire)?;
 
     Ok(DecodedEvent {
-        global_seq: decoded.global_seq,
         schema_version: decoded.schema_version,
         event_type_range: decoded.offsets.event_type,
         payload_range: decoded.offsets.payload,
@@ -256,7 +254,6 @@ mod tests {
     /// Forwards [`wire::WireError`] / [`nexus_store::value::ValueError`] mapped
     /// to [`EncodeError`] (e.g. `schema_version == 0`, oversize `event_type`).
     fn test_row(
-        global_seq: u64,
         schema_version: u32,
         event_type: &str,
         metadata: Option<&[u8]>,
@@ -270,13 +267,14 @@ mod tests {
         let md = metadata
             .map(|m| nexus_store::value::Metadata::from_bytes(Bytes::copy_from_slice(m)))
             .transpose()?;
-        let frame = wire::encode_frame(global_seq, sv, &et, &pl, md.as_ref())?;
+        let frame = wire::encode_frame(sv, &et, &pl, md.as_ref())?;
         Ok(frame.value.to_vec())
     }
 
     /// Decode an event value from a `Vec<u8>` buffer and extract all fields as
-    /// concrete values: `(global_seq, schema_version, event_type, payload)`.
-    fn decode_ev_slices(buf: &[u8]) -> (u64, u32, String, Vec<u8>) {
+    /// concrete values: `(schema_version, event_type, payload)`. The `$all`
+    /// position is not in the value (V2) — it is the `events_global` key.
+    fn decode_ev_slices(buf: &[u8]) -> (u32, String, Vec<u8>) {
         let b = Bytes::copy_from_slice(buf);
         let d = decode_event_value(&b).unwrap();
         let et = std::str::from_utf8(
@@ -285,7 +283,7 @@ mod tests {
         .unwrap()
         .to_owned();
         let pl = b[d.payload_range.start as usize..d.payload_range.end as usize].to_vec();
-        (d.global_seq, d.schema_version.get(), et, pl)
+        (d.schema_version.get(), et, pl)
     }
 
     // --- Event key tests ---
@@ -363,16 +361,14 @@ mod tests {
 
     #[test]
     fn event_value_round_trips() {
-        let global_seq: u64 = 42;
         let schema_version: u32 = 3;
         let event_type = "UserCreated";
         let payload = b"some-json-bytes";
 
-        let buf = test_row(global_seq, schema_version, event_type, None, payload).unwrap();
+        let buf = test_row(schema_version, event_type, None, payload).unwrap();
         let bytes_buf = bytes::Bytes::copy_from_slice(&buf);
         let decoded = decode_event_value(&bytes_buf).unwrap();
 
-        assert_eq!(decoded.global_seq, global_seq);
         assert_eq!(decoded.schema_version.get(), schema_version);
         assert!(decoded.metadata_range.is_none());
         let et = &bytes_buf
@@ -385,10 +381,9 @@ mod tests {
 
     #[test]
     fn event_value_empty_payload() {
-        let buf = test_row(7, 1, "Empty", None, b"").unwrap();
+        let buf = test_row(1, "Empty", None, b"").unwrap();
         let bytes_buf = bytes::Bytes::copy_from_slice(&buf);
         let decoded = decode_event_value(&bytes_buf).unwrap();
-        assert_eq!(decoded.global_seq, 7);
         assert_eq!(decoded.schema_version.get(), 1);
         let et = &bytes_buf
             [decoded.event_type_range.start as usize..decoded.event_type_range.end as usize];
@@ -405,25 +400,16 @@ mod tests {
 
     #[test]
     fn event_value_round_trips_with_metadata() {
-        let global_seq: u64 = 42;
         let schema_version: u32 = 3;
         let event_type = "UserCreated";
         let metadata = b"correlation-abc-123".as_slice();
         let payload = b"some-json-bytes";
 
-        let buf = test_row(
-            global_seq,
-            schema_version,
-            event_type,
-            Some(metadata),
-            payload,
-        )
-        .unwrap();
+        let buf = test_row(schema_version, event_type, Some(metadata), payload).unwrap();
 
         let bytes_buf = bytes::Bytes::copy_from_slice(&buf);
         let decoded = decode_event_value(&bytes_buf).unwrap();
 
-        assert_eq!(decoded.global_seq, global_seq);
         assert_eq!(decoded.schema_version.get(), schema_version);
         assert_eq!(
             &bytes_buf
@@ -443,12 +429,11 @@ mod tests {
 
     #[test]
     fn event_value_round_trips_without_metadata() {
-        let buf = test_row(7, 1, "Empty", None, b"").unwrap();
+        let buf = test_row(1, "Empty", None, b"").unwrap();
 
         let bytes_buf = bytes::Bytes::copy_from_slice(&buf);
         let decoded = decode_event_value(&bytes_buf).unwrap();
 
-        assert_eq!(decoded.global_seq, 7);
         assert_eq!(decoded.schema_version.get(), 1);
         assert!(decoded.metadata_range.is_none());
         assert_eq!(decoded.payload_range.end, decoded.payload_range.start);
@@ -489,12 +474,11 @@ mod tests {
 
     #[test]
     fn decoder_rejects_meta_len_exceeding_buffer() {
-        // Manually build a value that *claims* meta_len = 100 but only 10 bytes
-        // of metadata/payload follow. The decoder must reject rather than read
-        // past the buffer end.
+        // Manually build a V2 value that *claims* meta_len = 100 but only 10
+        // bytes of metadata/payload follow. The decoder must reject rather than
+        // read past the buffer end.
         let mut buf = Vec::new();
-        buf.push(1u8); // frame_format_version = 1
-        buf.extend_from_slice(&1u64.to_le_bytes()); // global_seq
+        buf.push(2u8); // frame_format_version = 2 (V2)
         buf.extend_from_slice(&1u32.to_le_bytes()); // schema_version
         buf.extend_from_slice(&1u16.to_le_bytes()); // event_type_len = 1
         buf.extend_from_slice(&100u32.to_le_bytes()); // meta_len = 100 (LIE)
@@ -544,14 +528,12 @@ mod tests {
         /// test_row -> decode_event_value is identity.
         #[test]
         fn attack_encoding_event_value_round_trip_any_data(
-            global_seq in any::<u64>(),
             schema_ver in 1..=u32::MAX,
             event_type in "[a-zA-Z_][a-zA-Z0-9_]{0,200}",
             payload in prop::collection::vec(any::<u8>(), 0..1024),
         ) {
-            let buf = test_row(global_seq, schema_ver, &event_type, None, &payload).unwrap();
-            let (dec_gs, dec_sv, dec_et, dec_payload) = decode_ev_slices(&buf);
-            prop_assert_eq!(dec_gs, global_seq, "global_seq round-trip failed");
+            let buf = test_row(schema_ver, &event_type, None, &payload).unwrap();
+            let (dec_sv, dec_et, dec_payload) = decode_ev_slices(&buf);
             prop_assert_eq!(dec_sv, schema_ver, "schema_version round-trip failed");
             prop_assert_eq!(dec_et, event_type, "event_type round-trip failed");
             prop_assert_eq!(dec_payload, payload.as_slice(), "payload round-trip failed");
@@ -602,10 +584,9 @@ mod tests {
         ];
 
         for (evil_type, description) in &evil_types {
-            match test_row(1, 1, evil_type, None, b"test") {
+            match test_row(1, evil_type, None, b"test") {
                 Ok(buf) => {
-                    let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-                    assert_eq!(gs, 1, "global_seq corrupted for: {description}");
+                    let (sv, decoded_type, payload) = decode_ev_slices(&buf);
                     assert_eq!(sv, 1, "schema_version corrupted for: {description}");
                     assert_eq!(
                         decoded_type, *evil_type,
@@ -622,14 +603,14 @@ mod tests {
 
         // Very long string near u16::MAX bytes
         let long_type = "a".repeat(usize::from(u16::MAX));
-        let buf = test_row(1, 1, &long_type, None, b"x")
+        let buf = test_row(1, &long_type, None, b"x")
             .expect("event_type at exactly u16::MAX bytes must be accepted");
-        let (_, _, decoded, _) = decode_ev_slices(&buf);
+        let (_, decoded, _) = decode_ev_slices(&buf);
         assert_eq!(decoded.len(), usize::from(u16::MAX));
 
         // One byte over u16::MAX must be rejected
         let too_long_type = "a".repeat(usize::from(u16::MAX) + 1);
-        let result = test_row(1, 1, &too_long_type, None, b"x");
+        let result = test_row(1, &too_long_type, None, b"x");
         assert!(
             result.is_err(),
             "event_type exceeding u16::MAX bytes must be rejected"
@@ -642,11 +623,10 @@ mod tests {
     #[test]
     fn attack_encoding_event_type_exactly_u16_max_bytes() {
         let event_type = "a".repeat(usize::from(u16::MAX));
-        let buf = test_row(7, 1, &event_type, None, b"payload")
+        let buf = test_row(1, &event_type, None, b"payload")
             .expect("event type at exactly u16::MAX bytes should succeed");
 
-        let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-        assert_eq!(gs, 7);
+        let (sv, decoded_type, payload) = decode_ev_slices(&buf);
         assert_eq!(sv, 1);
         assert_eq!(decoded_type.len(), usize::from(u16::MAX));
         assert_eq!(payload, b"payload");
@@ -655,7 +635,7 @@ mod tests {
     #[test]
     fn attack_encoding_event_type_one_over_u16_max() {
         let event_type = "a".repeat(usize::from(u16::MAX) + 1);
-        let result = test_row(1, 1, &event_type, None, b"payload");
+        let result = test_row(1, &event_type, None, b"payload");
         assert!(
             result.is_err(),
             "event type over u16::MAX must fail with EncodeError"
@@ -664,10 +644,9 @@ mod tests {
 
     #[test]
     fn attack_encoding_empty_event_type() {
-        let buf = test_row(3, 1, "", None, b"payload").expect("empty event type should encode");
+        let buf = test_row(1, "", None, b"payload").expect("empty event type should encode");
 
-        let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-        assert_eq!(gs, 3);
+        let (sv, decoded_type, payload) = decode_ev_slices(&buf);
         assert_eq!(sv, 1);
         assert_eq!(decoded_type, "");
         assert_eq!(payload, b"payload");
@@ -675,10 +654,9 @@ mod tests {
 
     #[test]
     fn attack_encoding_empty_payload() {
-        let buf = test_row(5, 1, "Test", None, b"").expect("empty payload should encode");
+        let buf = test_row(1, "Test", None, b"").expect("empty payload should encode");
 
-        let (gs, sv, decoded_type, payload) = decode_ev_slices(&buf);
-        assert_eq!(gs, 5);
+        let (sv, decoded_type, payload) = decode_ev_slices(&buf);
         assert_eq!(sv, 1);
         assert_eq!(decoded_type, "Test");
         assert!(payload.is_empty());
@@ -687,8 +665,8 @@ mod tests {
     #[test]
     fn attack_encoding_null_bytes_in_payload() {
         let evil_payload = b"\x00\x00\x00\x00\x00";
-        let buf = test_row(1, 1, "Test", None, evil_payload).unwrap();
-        let (_, _, _, payload) = decode_ev_slices(&buf);
+        let buf = test_row(1, "Test", None, evil_payload).unwrap();
+        let (_, _, payload) = decode_ev_slices(&buf);
         assert_eq!(payload, evil_payload, "null bytes in payload must survive");
     }
 
@@ -697,20 +675,20 @@ mod tests {
         // schema_version = 0 must be rejected at the encoding layer — the
         // wire builder ([`wire::encode_frame`]) and `PersistedEnvelope::try_new`
         // both reject 0, restoring write/read symmetry (CLAUDE.md §3, §4).
-        let result = test_row(1, 0, "Test", None, b"data");
+        let result = test_row(0, "Test", None, b"data");
         match result {
             Err(EncodeError::Value(nexus_store::value::ValueError::SchemaVersionZero)) => {}
             other => panic!("expected Value(SchemaVersionZero) at encoding layer, got {other:?}"),
         }
 
         // schema_version = 1 is the minimum valid value and must round-trip.
-        let buf = test_row(1, 1, "Test", None, b"data").unwrap();
-        let (_, sv, _, _) = decode_ev_slices(&buf);
+        let buf = test_row(1, "Test", None, b"data").unwrap();
+        let (sv, _, _) = decode_ev_slices(&buf);
         assert_eq!(sv, 1, "schema_version=1 must round-trip");
 
         // schema_version = u32::MAX is the upper boundary and must round-trip.
-        let buf = test_row(1, u32::MAX, "Test", None, b"data").unwrap();
-        let (_, sv, _, _) = decode_ev_slices(&buf);
+        let buf = test_row(u32::MAX, "Test", None, b"data").unwrap();
+        let (sv, _, _) = decode_ev_slices(&buf);
         assert_eq!(
             sv,
             u32::MAX,
@@ -722,8 +700,8 @@ mod tests {
     fn attack_encoding_large_payload() {
         // 1MB payload
         let large = vec![0xABu8; 1_048_576];
-        let buf = test_row(1, 1, "Big", None, &large).unwrap();
-        let (_, _, _, payload) = decode_ev_slices(&buf);
+        let buf = test_row(1, "Big", None, &large).unwrap();
+        let (_, _, payload) = decode_ev_slices(&buf);
         assert_eq!(
             payload.len(),
             1_048_576,
@@ -824,7 +802,7 @@ mod tests {
 
     #[test]
     fn event_value_typical() {
-        let buf = test_row(1, 1, "UserCreated", None, b"payload").unwrap();
+        let buf = test_row(1, "UserCreated", None, b"payload").unwrap();
         insta::assert_snapshot!("event_value_typical", hex_dump(&buf));
     }
 
@@ -832,7 +810,7 @@ mod tests {
     fn event_value_schema_zero_rejected() {
         // schema_version=0 is now rejected at the encoding layer to stay
         // symmetric with `PersistedEnvelope::try_new` (CLAUDE.md §3, §4).
-        let result = test_row(1, 0, "Empty", None, b"");
+        let result = test_row(0, "Empty", None, b"");
         assert!(
             matches!(
                 result,
@@ -848,31 +826,31 @@ mod tests {
     fn event_value_schema_min_empty_payload() {
         // The pair we want to cover is "minimum valid schema_version + empty
         // payload" — schema_version=1 is the minimum now that 0 is rejected.
-        let buf = test_row(1, 1, "Empty", None, b"").unwrap();
+        let buf = test_row(1, "Empty", None, b"").unwrap();
         insta::assert_snapshot!("event_value_schema_min_empty_payload", hex_dump(&buf));
     }
 
     #[test]
     fn event_value_max_schema_binary_payload() {
-        let buf = test_row(u64::MAX, u32::MAX, "X", None, b"\x00\xff").unwrap();
+        let buf = test_row(u32::MAX, "X", None, b"\x00\xff").unwrap();
         insta::assert_snapshot!("event_value_max_schema_binary_payload", hex_dump(&buf));
     }
 
     #[test]
     fn event_value_empty_event_type() {
-        let buf = test_row(1, 1, "", None, b"data").unwrap();
+        let buf = test_row(1, "", None, b"data").unwrap();
         insta::assert_snapshot!("event_value_empty_event_type", hex_dump(&buf));
     }
 
     #[test]
     fn event_value_single_char_type_empty_payload() {
-        let buf = test_row(1, 1, "A", None, b"").unwrap();
+        let buf = test_row(1, "A", None, b"").unwrap();
         insta::assert_snapshot!("event_value_single_char_type_empty_payload", hex_dump(&buf));
     }
 
     #[test]
     fn event_value_larger_payload() {
-        let buf = test_row(42, 42, "OrderPlaced", None, &[0u8; 1024]).unwrap();
+        let buf = test_row(42, "OrderPlaced", None, &[0u8; 1024]).unwrap();
         insta::assert_snapshot!("event_value_larger_payload", hex_dump(&buf));
     }
 }

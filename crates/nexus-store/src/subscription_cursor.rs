@@ -20,8 +20,10 @@ pub const CATCHUP_CHUNK: usize = 1024;
 /// Live-loop state threaded through [`futures::stream::unfold`].
 struct LiveState<C: Catchup> {
     c: C,
-    /// Next INCLUSIVE read position; `None` means the resume position overflowed
-    /// (last delivered was the max) so no further event can ever exist.
+    /// Resume anchor: the last-delivered position, or `None` to (re)open from the
+    /// beginning. Passed straight to [`Catchup::read_after`], which opens the
+    /// scan **strictly after** it — so the ceiling/overflow case is the
+    /// adapter's empty scan, not a sentinel here.
     read_from: Option<C::Position>,
     /// The currently-open scan, or `None` when one must be opened.
     scan: Option<C::Scan>,
@@ -36,7 +38,7 @@ struct LiveState<C: Catchup> {
 ///
 /// # On error
 ///
-/// Adapter errors — both a failure to open a scan ([`Catchup::read_from`]) and
+/// Adapter errors — both a failure to open a scan ([`Catchup::read_after`]) and
 /// a failing scan item — are surfaced as `Err` stream items. The cursor does
 /// **not** terminate on an error and does **not** back off: the next poll
 /// reopens a scan from the last *successfully delivered* position. A delivered
@@ -51,7 +53,7 @@ struct LiveState<C: Catchup> {
 pub fn live<C: Catchup + 'static>(
     c: C,
     from: Option<C::Position>,
-) -> impl futures::Stream<Item = Result<PersistedEnvelope, C::Error>> + Send
+) -> impl futures::Stream<Item = Result<(C::Position, PersistedEnvelope), C::Error>> + Send
 where
     // `StreamExt::next` requires `Unpin`, and the scan is held by-value across
     // awaits in the `unfold` state — so the scan must be `Unpin`. Placed
@@ -60,22 +62,19 @@ where
     C::Scan: Unpin,
 {
     let state = LiveState {
-        read_from: C::next_pos(from),
+        // `from` is the resume anchor verbatim: `read_after` opens strictly
+        // after it (None = from the beginning). No successor step here.
+        read_from: from,
         c,
         scan: None,
         drained_in_chunk: 0,
     };
     futures::stream::unfold(state, |mut s| async move {
         loop {
-            // (1) Ensure an open scan.
+            // (1) Ensure an open scan — strictly after the last-delivered
+            // position (or from the beginning when `read_from` is `None`).
             if s.scan.is_none() {
-                let Some(rf) = s.read_from else {
-                    // Resume position overflowed: no further event can exist.
-                    // Park (responds to shutdown when all wake senders drop).
-                    s.c.arm().await;
-                    continue;
-                };
-                match s.c.read_from(rf).await {
+                match s.c.read_after(s.read_from).await {
                     Ok(scan) => {
                         s.scan = Some(scan);
                         s.drained_in_chunk = 0;
@@ -91,13 +90,13 @@ where
                 continue;
             };
             match scan.next().await {
-                Some(Ok(env)) => {
-                    s.read_from = C::next_pos(Some(C::position_of(&env)));
+                Some(Ok((pos, env))) => {
+                    s.read_from = Some(pos);
                     s.drained_in_chunk += 1;
                     if s.drained_in_chunk >= CATCHUP_CHUNK {
                         s.scan = None; // reopen next iteration from the advanced read_from
                     }
-                    return Some((Ok(env), s));
+                    return Some((Ok((pos, env)), s));
                 }
                 Some(Err(e)) => {
                     s.scan = None;
@@ -108,17 +107,13 @@ where
                     // discipline), then park only if the re-scan is genuinely empty.
                     s.scan = None;
                     let wait = s.c.arm();
-                    let Some(rf) = s.read_from else {
-                        wait.await;
-                        continue;
-                    };
-                    match s.c.read_from(rf).await {
+                    match s.c.read_after(s.read_from).await {
                         Ok(mut probe) => match probe.next().await {
-                            Some(Ok(env)) => {
-                                s.read_from = C::next_pos(Some(C::position_of(&env)));
+                            Some(Ok((pos, env))) => {
+                                s.read_from = Some(pos);
                                 s.scan = Some(probe);
                                 s.drained_in_chunk = 1;
-                                return Some((Ok(env), s));
+                                return Some((Ok((pos, env)), s));
                             }
                             Some(Err(e)) => return Some((Err(e), s)),
                             None => {
@@ -153,7 +148,7 @@ mod tests {
     use super::*;
     use crate::catchup::{AllCatchup, Catchup, StreamCatchup};
     use crate::envelope::pending_envelope;
-    use crate::store::{GlobalSeq, RawEventStore};
+    use crate::store::RawEventStore;
     use crate::stream_id::StreamKey;
     use crate::testing::InMemoryStore;
 
@@ -181,7 +176,7 @@ mod tests {
         let catchup = StreamCatchup::new(Arc::clone(&store), b"s").unwrap();
         let versions: Vec<u64> = live(catchup, None)
             .take(5)
-            .map(|r| r.unwrap().version().as_u64())
+            .map(|r| r.unwrap().1.version().as_u64())
             .collect()
             .await;
 
@@ -210,7 +205,7 @@ mod tests {
             .expect("catch-up event must arrive")
             .expect("stream never ends")
             .unwrap();
-        assert_eq!(first.version().as_u64(), 1, "catch-up event is version 1");
+        assert_eq!(first.1.version().as_u64(), 1, "catch-up event is version 1");
 
         // Append version 2 after the cursor is parked.
         let writer = Arc::clone(&store);
@@ -224,7 +219,7 @@ mod tests {
             .expect("stream never ends")
             .unwrap();
         assert_eq!(
-            second.version().as_u64(),
+            second.1.version().as_u64(),
             2,
             "live tail must deliver the post-subscribe append"
         );
@@ -244,7 +239,7 @@ mod tests {
         let take_n = CATCHUP_CHUNK + 3;
         let versions: Vec<u64> = live(catchup, None)
             .take(take_n)
-            .map(|r| r.unwrap().version().as_u64())
+            .map(|r| r.unwrap().1.version().as_u64())
             .collect()
             .await;
 
@@ -279,20 +274,20 @@ mod tests {
         let cursor = live(catchup, None);
         tokio::pin!(cursor);
 
-        // Catch-up: ascending global_seq across both streams.
+        // Catch-up: ascending `$all` position across both streams (from the tag).
         let mut seqs = Vec::new();
         for _ in 0..3 {
-            let env = timeout(MUST_DELIVER, cursor.next())
+            let (pos, _env) = timeout(MUST_DELIVER, cursor.next())
                 .await
                 .expect("catch-up event must arrive")
                 .expect("stream never ends")
                 .unwrap();
-            seqs.push(env.global_seq().as_u64());
+            seqs.push(pos.as_u64());
         }
         assert_eq!(
             seqs,
             vec![1, 2, 3],
-            "$all catch-up must deliver every stream's events in GlobalSeq order"
+            "$all catch-up must deliver every stream's events in position order"
         );
 
         // Live: append to stream `b` after the cursor parked — must wake it.
@@ -309,15 +304,15 @@ mod tests {
                 .unwrap();
         });
 
-        let live_env = timeout(MUST_DELIVER, cursor.next())
+        let (live_pos, _live_env) = timeout(MUST_DELIVER, cursor.next())
             .await
             .expect("live append must wake the parked $all cursor")
             .expect("stream never ends")
             .unwrap();
         assert_eq!(
-            live_env.global_seq().as_u64(),
+            live_pos.as_u64(),
             4,
-            "$all live tail must deliver the post-subscribe append at global_seq 4"
+            "$all live tail must deliver the post-subscribe append at position 4"
         );
         appender.await.unwrap();
     }
@@ -349,29 +344,27 @@ mod tests {
     }
 
     impl Catchup for FailingCatchup {
-        type Position = GlobalSeq;
-        type Scan = futures::stream::Iter<std::vec::IntoIter<Result<PersistedEnvelope, BoomError>>>;
+        type Position = Version;
+        type Scan = futures::stream::Iter<
+            std::vec::IntoIter<Result<(Version, PersistedEnvelope), BoomError>>,
+        >;
         type Error = BoomError;
 
-        fn read_from(
+        fn read_after(
             &self,
-            _from: GlobalSeq,
+            _from: Option<Version>,
         ) -> impl core::future::Future<Output = Result<Self::Scan, Self::Error>> + Send {
-            // One Ok then one Err — the loop must surface both, in order.
-            let scan = futures::stream::iter(vec![Ok(self.ok_env.clone()), Err(BoomError)]);
+            // One Ok then one Err — the loop must surface both, in order. The
+            // tag value is irrelevant to this test; INITIAL is a stand-in.
+            let scan = futures::stream::iter(vec![
+                Ok((Version::INITIAL, self.ok_env.clone())),
+                Err(BoomError),
+            ]);
             core::future::ready(Ok(scan))
         }
 
         fn arm(&self) -> impl core::future::Future<Output = ()> + Send + 'static {
             core::future::ready(())
-        }
-
-        fn position_of(env: &PersistedEnvelope) -> GlobalSeq {
-            env.global_seq()
-        }
-
-        fn next_pos(resume: Option<GlobalSeq>) -> Option<GlobalSeq> {
-            resume.map_or(Some(GlobalSeq::INITIAL), GlobalSeq::next)
         }
     }
 
@@ -383,8 +376,8 @@ mod tests {
         // Read back a real PersistedEnvelope to feed the mock's Ok item.
         let store = Arc::new(InMemoryStore::new());
         seed_range(&store, &StreamKey::from_slice(b"s"), 1, 1).await;
-        let ok_env = store
-            .read_all(GlobalSeq::INITIAL)
+        let (_pos, ok_env) = store
+            .read_all(None)
             .await
             .unwrap()
             .next()

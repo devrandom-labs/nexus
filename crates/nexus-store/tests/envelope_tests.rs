@@ -5,7 +5,6 @@ use bytes::Bytes;
 use nexus::Version;
 use nexus_store::envelope::{EnvelopeError, PersistedEnvelope};
 use nexus_store::pending_envelope;
-use nexus_store::store::GlobalSeq;
 use nexus_store::value::SchemaVersion;
 
 fn make_persisted(
@@ -21,16 +20,8 @@ fn make_persisted(
     let et_end = u32::try_from(event_type.len()).expect("fits");
     let pl_end = u32::try_from(event_type.len() + payload.len()).expect("fits");
     let sv = SchemaVersion::from_u32(schema_version).expect("nonzero test fixture");
-    PersistedEnvelope::try_new(
-        version,
-        GlobalSeq::INITIAL,
-        value,
-        sv,
-        0..et_end,
-        et_end..pl_end,
-        None,
-    )
-    .expect("valid test fixture")
+    PersistedEnvelope::try_new(version, value, sv, 0..et_end, et_end..pl_end, None)
+        .expect("valid test fixture")
 }
 
 #[test]
@@ -66,7 +57,6 @@ fn persisted_envelope_accessors() {
     let envelope = make_persisted(Version::new(3).unwrap(), "UserActivated", 1, &payload);
 
     assert_eq!(envelope.version(), Version::new(3).unwrap());
-    assert_eq!(envelope.global_seq(), GlobalSeq::INITIAL);
     assert_eq!(envelope.event_type(), "UserActivated");
     assert_eq!(envelope.payload(), &[10, 20, 30]);
     assert!(envelope.metadata().is_none());
@@ -88,7 +78,6 @@ fn persisted_envelope_metadata_bytes() {
     let meta_end = 2u32 + u32::try_from(meta.len()).unwrap();
     let envelope = PersistedEnvelope::try_new(
         Version::new(1).unwrap(),
-        GlobalSeq::INITIAL,
         value,
         SchemaVersion::INITIAL,
         0..et_end,
@@ -171,7 +160,6 @@ fn try_new_rejects_out_of_bounds_range() {
     // event_type range goes past value length
     let result = PersistedEnvelope::try_new(
         Version::new(1).unwrap(),
-        GlobalSeq::INITIAL,
         Bytes::from_static(b"E"),
         SchemaVersion::INITIAL,
         0..100, // ATTACK: range beyond buffer
@@ -191,7 +179,6 @@ fn try_new_rejects_invalid_utf8_event_type() {
     let value = Bytes::from(vec![0xFF, 0xFE, b'x']);
     let result = PersistedEnvelope::try_new(
         Version::new(1).unwrap(),
-        GlobalSeq::INITIAL,
         value,
         SchemaVersion::INITIAL,
         0..2, // invalid UTF-8 bytes as event_type

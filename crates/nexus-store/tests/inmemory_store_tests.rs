@@ -7,8 +7,8 @@ use nexus::Version;
 use nexus_store::AppendError;
 use nexus_store::StreamKey;
 use nexus_store::pending_envelope;
-use nexus_store::store::{GlobalSeq, RawEventStore};
-use nexus_store::testing::InMemoryStore;
+use nexus_store::store::RawEventStore;
+use nexus_store::testing::{InMemoryAllPos, InMemoryStore};
 
 #[tokio::test]
 async fn append_conflict_truncates_overlong_stream_id_with_ellipsis() {
@@ -107,11 +107,12 @@ async fn read_from_version_filters_correctly() {
     assert!(stream.next().await.is_none());
 }
 
-/// `InMemoryStore::append` assigns a store-global sequence to every event,
-/// monotonically increasing across events in a single batch AND across
-/// separate appends to different streams.
+/// `InMemoryStore::append` assigns a store-global `$all` position to every
+/// event, monotonically increasing across events in a single batch AND across
+/// separate appends to different streams. The position rides on the `$all`
+/// read tag (a per-stream event carries none).
 #[tokio::test]
-async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
+async fn append_assigns_monotonic_all_position_across_batches_and_streams() {
     let store = InMemoryStore::new();
 
     // First append: a two-event batch on stream "a". Events get seq 1, 2.
@@ -146,27 +147,18 @@ async fn append_assigns_monotonic_global_seq_across_batches_and_streams() {
         .await
         .unwrap();
 
-    // Read stream "a" back: seq 1 then seq 2.
-    let mut stream_a = store
-        .read_stream(&StreamKey::from_slice(b"a"), Version::INITIAL)
-        .await
-        .unwrap();
-    let a1 = stream_a.next().await.unwrap().unwrap();
+    // Read `$all` back: positions 1,2 (stream "a"), then 3 (stream "b") —
+    // proving the counter is store-global and does not reset per stream. The
+    // position rides on the tag, not the (position-free) envelope.
+    let mut all = store.read_all(None).await.unwrap();
+    let (p1, a1) = all.next().await.unwrap().unwrap();
     assert_eq!(a1.event_type(), "A1");
-    assert_eq!(a1.global_seq(), GlobalSeq::new(1).unwrap());
-    let a2 = stream_a.next().await.unwrap().unwrap();
+    assert_eq!(p1, InMemoryAllPos::new(1).unwrap());
+    let (p2, a2) = all.next().await.unwrap().unwrap();
     assert_eq!(a2.event_type(), "A2");
-    assert_eq!(a2.global_seq(), GlobalSeq::new(2).unwrap());
-    assert!(stream_a.next().await.is_none());
-
-    // Read stream "b" back: seq 3, proving the counter is store-global and
-    // does not reset per stream.
-    let mut stream_b = store
-        .read_stream(&StreamKey::from_slice(b"b"), Version::INITIAL)
-        .await
-        .unwrap();
-    let b1 = stream_b.next().await.unwrap().unwrap();
+    assert_eq!(p2, InMemoryAllPos::new(2).unwrap());
+    let (p3, b1) = all.next().await.unwrap().unwrap();
     assert_eq!(b1.event_type(), "B1");
-    assert_eq!(b1.global_seq(), GlobalSeq::new(3).unwrap());
-    assert!(stream_b.next().await.is_none());
+    assert_eq!(p3, InMemoryAllPos::new(3).unwrap());
+    assert!(all.next().await.is_none());
 }

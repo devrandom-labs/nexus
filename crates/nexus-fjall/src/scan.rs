@@ -7,9 +7,10 @@
 use bytes::Bytes;
 use fjall::Slice;
 use nexus::{ErrorId, Version};
-use nexus_store::{GlobalSeq, PersistedEnvelope};
+use nexus_store::PersistedEnvelope;
 
 use crate::error::{FjallError, reason_label};
+use crate::global_seq::GlobalSeq;
 use crate::subscription_id::OwnedStreamId;
 use crate::wire_key::{
     DecodedEvent, decode_event_key, decode_event_value, decode_global_key, encode_event_key,
@@ -21,12 +22,18 @@ use crate::wire_key::{
 pub trait ScanStrategy: Send {
     /// The position the scan opens from ([`Version`] for a stream, [`GlobalSeq`] for `$all`).
     type Position: Copy + Send;
+    /// What one decoded row yields. Per-stream: a bare [`PersistedEnvelope`];
+    /// `$all`: a `(GlobalSeq, PersistedEnvelope)` tagged with the key-derived
+    /// position (the envelope no longer carries it), matching the
+    /// position-tagged `$all` stream contract.
+    type Item: Send;
     /// Keyset lower bound (inclusive) for opening at `from`.
     fn lower_key(&self, from: Self::Position) -> Result<Vec<u8>, FjallError>;
     /// Keyset upper bound (inclusive) — the end of this strategy's key range.
     fn upper_key(&self) -> Result<Vec<u8>, FjallError>;
-    /// Decode one stored row into an envelope, mapping malformed shapes to `FjallError`.
-    fn decode(&self, key: &Slice, value: Slice) -> Result<PersistedEnvelope, FjallError>;
+    /// Decode one stored row into this strategy's item, mapping malformed
+    /// shapes to `FjallError`.
+    fn decode(&self, key: &Slice, value: Slice) -> Result<Self::Item, FjallError>;
 }
 
 /// Per-stream scan: keyed by `[id_len][id_bytes][version]`, opens from a [`Version`].
@@ -38,8 +45,10 @@ pub struct StreamScan {
 /// `$all` scan: keyed by `[global_seq][version]`, opens from a [`GlobalSeq`].
 pub struct GlobalScan;
 
-/// Shared decode tail: validate the raw `(version, global_seq)` and build the
-/// envelope, mapping the two terminal failures identically for both strategies.
+/// Shared decode tail: validate the raw `version` and build the envelope,
+/// mapping the two terminal failures identically for both strategies. The
+/// `$all` position is **not** built here — it is the key-derived `GlobalSeq`
+/// the [`GlobalScan`] pairs on top (the envelope no longer carries it).
 ///
 /// `stream_id` is the diagnostic label stamped into every error: the per-stream
 /// label for [`StreamScan`], an empty [`ErrorId`] for [`GlobalScan`] (a
@@ -55,14 +64,9 @@ fn build_envelope(
         stream_id,
         version: Some(raw_version),
     })?;
-    let global_seq = GlobalSeq::new(decoded.global_seq).ok_or(FjallError::CorruptValue {
-        stream_id,
-        version: Some(raw_version),
-    })?;
 
     PersistedEnvelope::try_new(
         version,
-        global_seq,
         bytes_value,
         decoded.schema_version,
         decoded.event_type_range,
@@ -78,6 +82,7 @@ fn build_envelope(
 
 impl ScanStrategy for StreamScan {
     type Position = Version;
+    type Item = PersistedEnvelope;
 
     fn lower_key(&self, from: Self::Position) -> Result<Vec<u8>, FjallError> {
         encode_event_key(self.id.as_ref(), from.as_u64()).map_err(|e| FjallError::InvalidInput {
@@ -95,7 +100,7 @@ impl ScanStrategy for StreamScan {
         })
     }
 
-    fn decode(&self, key: &Slice, value: Slice) -> Result<PersistedEnvelope, FjallError> {
+    fn decode(&self, key: &Slice, value: Slice) -> Result<Self::Item, FjallError> {
         let (_id_bytes, version) = decode_event_key(key).map_err(|_| FjallError::CorruptValue {
             stream_id: self.label,
             version: None,
@@ -113,6 +118,7 @@ impl ScanStrategy for StreamScan {
 
 impl ScanStrategy for GlobalScan {
     type Position = GlobalSeq;
+    type Item = (GlobalSeq, PersistedEnvelope);
 
     fn lower_key(&self, from: Self::Position) -> Result<Vec<u8>, FjallError> {
         Ok(encode_global_key(from.as_u64(), 0).to_vec())
@@ -122,12 +128,18 @@ impl ScanStrategy for GlobalScan {
         Ok(encode_global_key(u64::MAX, u64::MAX).to_vec())
     }
 
-    fn decode(&self, key: &Slice, value: Slice) -> Result<PersistedEnvelope, FjallError> {
+    fn decode(&self, key: &Slice, value: Slice) -> Result<Self::Item, FjallError> {
         let (key_global_seq, version_raw) =
             decode_global_key(key).map_err(|_| FjallError::CorruptValue {
                 stream_id: ErrorId::default(),
                 version: None,
             })?;
+        // The key is the authoritative `$all` position; an event is always
+        // stamped with global_seq >= 1, so a 0 here is corruption.
+        let position = GlobalSeq::new(key_global_seq).ok_or_else(|| FjallError::CorruptValue {
+            stream_id: ErrorId::default(),
+            version: Some(version_raw),
+        })?;
 
         let bytes_value: Bytes = value.into();
         let decoded = decode_event_value(&bytes_value).map_err(|_| FjallError::CorruptValue {
@@ -135,16 +147,11 @@ impl ScanStrategy for GlobalScan {
             version: Some(version_raw),
         })?;
 
-        // The global_seq in the key and in the frame value must match
-        // (CLAUDE.md rule 4 — redundant data must be validated).
-        if decoded.global_seq != key_global_seq {
-            return Err(FjallError::CorruptValue {
-                stream_id: ErrorId::default(),
-                version: Some(version_raw),
-            });
-        }
-
-        build_envelope(bytes_value, decoded, version_raw, ErrorId::default())
+        // Tag the envelope with the key-derived position — the `$all` stream
+        // contract. The frame no longer stores global_seq, so there is no
+        // redundant key/frame cross-check to perform.
+        let env = build_envelope(bytes_value, decoded, version_raw, ErrorId::default())?;
+        Ok((position, env))
     }
 }
 
@@ -187,7 +194,20 @@ impl<S: ScanStrategy> ScanCursor<S> {
         })
     }
 
-    fn poll_one(&mut self) -> Option<Result<PersistedEnvelope, FjallError>> {
+    /// Open an intentionally **empty** cursor — the `$all` ceiling case, where
+    /// nothing is strictly after the maximum position so the exclusive resume
+    /// has no successor. A reversed keyset bound (`[1] ..= [0]`) yields no rows.
+    /// Infallible (the bound is constant), unlike [`open`](Self::open).
+    pub fn open_empty(keyspace: &fjall::SingleWriterTxKeyspace, strategy: S) -> Self {
+        let iter = keyspace.inner().range(vec![1u8]..=vec![0u8]);
+        Self {
+            iter,
+            strategy,
+            poisoned: false,
+        }
+    }
+
+    fn poll_one(&mut self) -> Option<Result<S::Item, FjallError>> {
         if self.poisoned {
             return None;
         }
@@ -199,13 +219,12 @@ impl<S: ScanStrategy> ScanCursor<S> {
                 return Some(Err(FjallError::Io(e)));
             }
         };
-        match self.strategy.decode(&key, value) {
-            Ok(env) => Some(Ok(env)),
-            Err(e) => {
-                self.poisoned = true;
-                Some(Err(e))
-            }
-        }
+        // Poison on a decode error, then surface the result as-is.
+        Some(
+            self.strategy
+                .decode(&key, value)
+                .inspect_err(|_| self.poisoned = true),
+        )
     }
 }
 
@@ -213,7 +232,7 @@ impl<S: ScanStrategy> ScanCursor<S> {
 // `Unpin`, so `S` is the only field that isn't `Unpin` by default — hence the
 // `S: Unpin` bound (also relied on by the generic live loop in `nexus-store`).
 impl<S: ScanStrategy + Unpin> futures::Stream for ScanCursor<S> {
-    type Item = Result<PersistedEnvelope, FjallError>;
+    type Item = Result<S::Item, FjallError>;
 
     fn poll_next(
         self: core::pin::Pin<&mut Self>,
@@ -240,12 +259,13 @@ mod tests {
     /// Build a wire-frame event-value row via the real production encoder
     /// (`wire::encode_frame` + the `nexus_store::value` newtypes), for the
     /// row-decode tests below. `schema_version` is always 1 and there is no
-    /// metadata — the cases this test mod exercises.
-    fn test_row_value(global_seq: u64, event_type: &str, payload: &[u8]) -> Vec<u8> {
+    /// metadata — the cases this test mod exercises. The `$all` position is not
+    /// in the value (V2); the `events_global` key carries it.
+    fn test_row_value(event_type: &str, payload: &[u8]) -> Vec<u8> {
         let sv = SchemaVersion::from_u32(1).unwrap();
         let et = EventType::from_bytes(Bytes::copy_from_slice(event_type.as_bytes())).unwrap();
         let pl = Payload::from_bytes(Bytes::copy_from_slice(payload)).unwrap();
-        wire::encode_frame(global_seq, sv, &et, &pl, None)
+        wire::encode_frame(sv, &et, &pl, None)
             .unwrap()
             .value
             .to_vec()
@@ -328,10 +348,8 @@ mod tests {
         let cursor =
             ScanCursor::open(&store.events_global, GlobalScan, GlobalSeq::INITIAL).unwrap();
 
-        let seqs: Vec<u64> = cursor
-            .map(|item| item.unwrap().global_seq().as_u64())
-            .collect()
-            .await;
+        // The `$all` scan is position-tagged; the tag is the key-derived position.
+        let seqs: Vec<u64> = cursor.map(|item| item.unwrap().0.as_u64()).collect().await;
         assert_eq!(seqs, vec![1, 2, 3, 4]);
     }
 
@@ -348,25 +366,25 @@ mod tests {
         StreamKey::from_slice(bytes)
     }
 
-    fn row(id: &[u8], version: u64, global_seq: u64, et: &str, payload: &[u8]) -> (Slice, Slice) {
+    fn row(id: &[u8], version: u64, et: &str, payload: &[u8]) -> (Slice, Slice) {
         let key = encode_event_key(id, version).unwrap();
-        let val = test_row_value(global_seq, et, payload);
+        let val = test_row_value(et, payload);
         (Slice::from(key), Slice::from(val))
     }
 
     fn global_row(global_seq: u64, version: u64, et: &str, payload: &[u8]) -> (Slice, Slice) {
+        // `global_seq` is the `$all` index KEY; the value (frame) no longer holds it.
         let key = encode_global_key(global_seq, version);
-        let val = test_row_value(global_seq, et, payload);
+        let val = test_row_value(et, payload);
         (Slice::from(&key[..]), Slice::from(val))
     }
 
     #[test]
     fn stream_decode_yields_envelope() {
-        let (k, v) = row(b"user-1", 7, 42, "Created", b"data");
+        let (k, v) = row(b"user-1", 7, "Created", b"data");
         let scan = stream_scan(b"user-1", "user-1");
         let env = scan.decode(&k, v).unwrap();
         assert_eq!(env.version(), Version::new(7).unwrap());
-        assert_eq!(env.global_seq(), GlobalSeq::new(42).unwrap());
         assert_eq!(env.event_type(), "Created");
         assert_eq!(env.payload(), b"data");
     }
@@ -391,7 +409,7 @@ mod tests {
         // read path's `PersistedEnvelope::try_new` does, surfacing it as
         // `FjallError::EnvelopeCorrupt`. Build a valid frame, then overwrite
         // the `event_type` bytes in place (same length) with invalid UTF-8.
-        let (k, v) = row(b"user-1", 7, 42, "ABC", b"data");
+        let (k, v) = row(b"user-1", 7, "ABC", b"data");
         let mut raw = v.to_vec();
         // Derive the event_type start offset from a publicly-decoded
         // `FrameOffsets` rather than a private wire header-size constant —
@@ -418,23 +436,13 @@ mod tests {
     }
 
     #[test]
-    fn global_decode_yields_envelope() {
+    fn global_decode_yields_position_tagged_envelope() {
         let (k, v) = global_row(42, 7, "Created", b"data");
-        let env = GlobalScan.decode(&k, v).unwrap();
-        assert_eq!(env.global_seq(), GlobalSeq::new(42).unwrap());
+        // `$all` decode pairs the key-derived position with the envelope.
+        let (pos, env) = GlobalScan.decode(&k, v).unwrap();
+        assert_eq!(pos, GlobalSeq::new(42).unwrap());
         assert_eq!(env.version(), Version::new(7).unwrap());
         assert_eq!(env.event_type(), "Created");
         assert_eq!(env.payload(), b"data");
-    }
-
-    #[test]
-    fn global_decode_rejects_global_seq_mismatch() {
-        // Key says global_seq 99, value frame says 42 → corruption.
-        let key = encode_global_key(99, 7);
-        let val = test_row_value(42, "E", b"x");
-        let err = GlobalScan
-            .decode(&Slice::from(&key[..]), Slice::from(val))
-            .unwrap_err();
-        assert!(matches!(err, FjallError::CorruptValue { .. }));
     }
 }

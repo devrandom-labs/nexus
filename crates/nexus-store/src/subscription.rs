@@ -25,11 +25,12 @@
 
 use std::sync::Arc;
 
+use futures::StreamExt;
 use nexus::{Id, Version};
 
 use crate::PersistedEnvelope;
 use crate::catchup::{AllCatchup, StreamCatchup};
-use crate::store::{GlobalSeq, RawEventStore, Store};
+use crate::store::{RawEventStore, Store};
 use crate::subscription_cursor::live;
 use crate::wake::WakeSource;
 
@@ -75,9 +76,11 @@ impl<S: RawEventStore + WakeSource> Subscription<S> {
     /// Open a per-stream catch-up + live-tail cursor.
     ///
     /// `from: None` starts from version 1; `from: Some(v)` starts from the
-    /// event *strictly after* version `v`. The returned stream **never returns
-    /// `None`** — it waits for new events when caught up — and is `!Unpin`, so
-    /// `pin!` it before polling.
+    /// event *strictly after* version `v`. Items are bare
+    /// [`PersistedEnvelope`]s (a per-stream event carries no global position);
+    /// checkpoint by [`version()`](PersistedEnvelope::version). The returned
+    /// stream **never returns `None`** — it waits for new events when caught up
+    /// — and is `!Unpin`, so `pin!` it before polling.
     ///
     /// # Errors
     ///
@@ -97,14 +100,20 @@ impl<S: RawEventStore + WakeSource> Subscription<S> {
         <S as RawEventStore>::Stream: Unpin,
     {
         let catchup = StreamCatchup::new(Arc::clone(&self.store), id.as_ref())?;
-        Ok(live(catchup, from))
+        // The generic loop yields `(Version, env)`; the per-stream consumer API
+        // is unchanged (bare envelopes), so drop the tag here.
+        Ok(live(catchup, from).map(|item| item.map(|(_, env)| env)))
     }
 
     /// Open an all-streams (`$all`) catch-up + live-tail cursor in
-    /// [`GlobalSeq`] order.
+    /// [`AllPosition`](crate::AllPosition) order.
     ///
-    /// `from: None` starts from the first event ever appended; `from: Some(g)`
-    /// starts from the event *strictly after* `GlobalSeq` `g`. The returned
+    /// `from: None` starts from the first event ever appended; `from: Some(p)`
+    /// starts from the event *strictly after* position `p`. Items are
+    /// **position-tagged** `(AllPosition, PersistedEnvelope)`: the position is
+    /// no longer on the envelope, so the consumer checkpoints the tag and hands
+    /// it back here (or to [`read_all`](RawEventStore::read_all)) to resume. The
+    /// checkpoint type is adapter-defined and must be serializable. The returned
     /// stream **never returns `None`** and is `!Unpin`, so `pin!` it before
     /// polling.
     ///
@@ -112,12 +121,21 @@ impl<S: RawEventStore + WakeSource> Subscription<S> {
     ///
     /// `<S as WakeSource>::Error` if wake-registration fails. Read errors are
     /// surfaced as `Err` items in the stream (see [`live`]).
+    #[allow(
+        clippy::type_complexity,
+        reason = "the position-tagged `$all` item is intrinsic to the contract; an \
+                  alias would hide the `impl Stream`/`use<>` capture the API depends on"
+    )]
     pub fn subscribe_all(
         &self,
-        from: Option<GlobalSeq>,
+        from: Option<<S as RawEventStore>::AllPosition>,
     ) -> Result<
-        impl futures_core::Stream<Item = Result<PersistedEnvelope, <S as RawEventStore>::Error>>
-        + Send
+        impl futures_core::Stream<
+            Item = Result<
+                (<S as RawEventStore>::AllPosition, PersistedEnvelope),
+                <S as RawEventStore>::Error,
+            >,
+        > + Send
         + use<S>,
         <S as WakeSource>::Error,
     >
