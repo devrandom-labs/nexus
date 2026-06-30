@@ -96,8 +96,9 @@ git checkout -b feat/postgres-adapter
 
 ```bash
 cargo add --workspace --dry-run sqlx --no-default-features \
-  --features "runtime-tokio-rustls,postgres,macros"
+  --features "runtime-tokio,postgres,macros"
 ```
+> **No TLS backend** (decided 2026-07-01): `runtime-tokio` (not `-rustls`/`-native-tls`). The validation skeleton connects over local / unix-socket Postgres, so no TLS is exercised; `runtime-tokio-rustls` pulls `webpki-roots` (`CDLA-Permissive-2.0`, not in `deny.toml` → gate fail) and `native-tls` pulls `openssl-sys` (fights Nix reproducibility + IoT cross-compile). TLS-to-managed-Postgres is the deferred follow-up **#268**. (DONE in scaffolding commit `56e06a3`.)
 Review, then run without `--dry-run`. (We will use the **runtime `query` API**, not the compile-time-checked `query!` macros, so the build needs no live DB — see the design note's nix-reproducibility point. `macros` is harmless to enable but we won't use the checked macros.)
 
 - [ ] **Step 3: Create `crates/nexus-postgres/Cargo.toml`** (mirror `nexus-fjall`)
