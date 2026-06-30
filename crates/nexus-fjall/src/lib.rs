@@ -53,7 +53,7 @@
 //! lives in the crate-private `wire_key` module; the *value* layout is owned
 //! entirely by [`nexus_store::wire`].
 //!
-//! [`GlobalSeq`]: nexus_store::store::GlobalSeq
+//! [`GlobalSeq`]: crate::GlobalSeq
 
 #![allow(
     clippy::result_large_err,
@@ -62,6 +62,7 @@
 
 pub mod builder;
 pub mod error;
+mod global_seq;
 mod partition;
 mod scan;
 #[cfg(feature = "snapshot")]
@@ -72,5 +73,6 @@ mod wire_key;
 
 pub use builder::FjallStoreBuilder;
 pub use error::FjallError;
+pub use global_seq::GlobalSeq;
 pub use partition::KeyspaceConfig;
 pub use store::FjallStore;

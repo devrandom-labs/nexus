@@ -33,16 +33,11 @@ use nexus_store::InMemoryStoreError;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
-use nexus_store::store::{GlobalSeq, RawEventStore};
+use nexus_store::store::RawEventStore;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
-fn build_persisted(
-    version: Version,
-    global_seq: GlobalSeq,
-    event_type: &str,
-    payload: &[u8],
-) -> PersistedEnvelope {
+fn build_persisted(version: Version, event_type: &str, payload: &[u8]) -> PersistedEnvelope {
     let mut buf = Vec::with_capacity(event_type.len() + payload.len());
     buf.extend_from_slice(event_type.as_bytes());
     buf.extend_from_slice(payload);
@@ -51,7 +46,6 @@ fn build_persisted(
     let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
     PersistedEnvelope::try_new(
         version,
-        global_seq,
         value,
         nexus_store::value::SchemaVersion::INITIAL,
         0..et_end,
@@ -108,12 +102,7 @@ impl futures::Stream for ProbeStream {
         }
         let row = self.events[self.pos].clone();
         self.pos += 1;
-        let env = build_persisted(
-            Version::new(row.0).unwrap(),
-            GlobalSeq::INITIAL,
-            &row.1,
-            &row.2,
-        );
+        let env = build_persisted(Version::new(row.0).unwrap(), &row.1, &row.2);
         core::task::Poll::Ready(Some(Ok(env)))
     }
 }
@@ -121,7 +110,9 @@ impl futures::Stream for ProbeStream {
 impl RawEventStore for ProbeStore {
     type Error = ProbeError;
     type Stream = ProbeStream;
-    type AllStream = ProbeStream;
+    type AllPosition = nexus_store::testing::InMemoryAllPos;
+    type AllStream =
+        futures::stream::Empty<Result<(Self::AllPosition, PersistedEnvelope), ProbeError>>;
 
     async fn append(
         &self,
@@ -175,13 +166,10 @@ impl RawEventStore for ProbeStore {
 
     async fn read_all(
         &self,
-        _from: nexus_store::store::GlobalSeq,
+        _from: Option<Self::AllPosition>,
     ) -> Result<Self::AllStream, Self::Error> {
-        // ProbeStore is a test-only adapter that does not implement the global index.
-        Ok(ProbeStream {
-            events: Vec::new(),
-            pos: 0,
-        })
+        // ProbeStore is a test-only adapter that does not implement the $all index.
+        Ok(futures::stream::empty())
     }
 }
 
@@ -384,7 +372,6 @@ fn bug_probe_persisted_envelope_public_constructor() {
     // This compiles — PersistedEnvelope::try_new is fully public
     let forged = build_persisted(
         Version::new(999).unwrap(),
-        GlobalSeq::INITIAL,
         "ForgedEvent",
         b"malicious payload",
     );
@@ -502,7 +489,7 @@ fn bug_probe_envelope_memory_layout() {
         "PendingEnvelope is {pending_size} bytes — check for padding bloat"
     );
 
-    // PersistedEnvelope: Version(8) + GlobalSeq(8) + u32(4) + Bytes(24) + 3x Range<u32>(12+8+8) + padding
+    // PersistedEnvelope: Version(8) + u32(4) + Bytes(24) + 3x Range<u32>(12+8+8) + padding
     // Expected: ~80 bytes
     assert!(
         persisted_size <= 128,

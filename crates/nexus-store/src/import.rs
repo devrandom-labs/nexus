@@ -602,6 +602,8 @@ where
 mod tests {
     use super::*;
     use crate::envelope::{PendingEnvelope, pending_envelope};
+    use crate::export::EventExporter;
+    use crate::value::SchemaVersion;
     use bytes::Bytes;
     use futures::StreamExt;
     use proptest::prelude::*;
@@ -885,7 +887,6 @@ mod tests {
 
     #[tokio::test]
     async fn atomic_append_many_commits_all_writes() {
-        use crate::import::AtomicAppend;
         let store = crate::testing::InMemoryStore::new();
         let writes = vec![planned("a", None, &[1, 2]), planned("b", None, &[1])];
         store.atomic_append_many(&writes).await.expect("commits");
@@ -895,7 +896,6 @@ mod tests {
 
     #[tokio::test]
     async fn atomic_append_many_rolls_back_all_on_one_conflict() {
-        use crate::import::AtomicAppend;
         let store = crate::testing::InMemoryStore::new();
         // Pre-seed "b" to v1 so the second write (expecting fresh) conflicts.
         store
@@ -926,8 +926,6 @@ mod tests {
     // ── per-section planner ──────────────────────────────────────────────────
 
     fn persisted(version: u64, payload: &[u8]) -> PersistedEnvelope {
-        use crate::store::GlobalSeq;
-        use crate::value::SchemaVersion;
         let mut buf = Vec::new();
         buf.extend_from_slice(b"E");
         buf.extend_from_slice(payload);
@@ -935,7 +933,6 @@ mod tests {
         let pl_end = et_end + u32::try_from(payload.len()).expect("payload fits u32");
         PersistedEnvelope::try_new(
             v(version),
-            GlobalSeq::new(version).expect("nonzero"), // arbitrary; import ignores global_seq
             Bytes::from(buf),
             SchemaVersion::INITIAL,
             0..et_end,
@@ -1093,7 +1090,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_clean_multi_stream_all_complete() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![
             section("a", vec![evt(1), evt(2), evt(3)]),
@@ -1116,7 +1112,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_partial_overlap_is_picky_rejected() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         for n in 1..=3 {
             store
@@ -1142,7 +1137,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_internal_gap_applies_prefix_then_halts() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("a", vec![evt(1), evt(2), evt(4)])];
         let report = store
@@ -1162,7 +1156,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_mid_section_corrupt_applies_prefix_then_corrupt() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section(
             "a",
@@ -1184,7 +1177,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_first_block_corrupt_reaches_none() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("a", vec![ImportBlock::Corrupt, evt(1)])];
         let report = store
@@ -1200,7 +1192,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_empty_chunk_is_empty_report() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let report = store
             .import(&[], identity_route, Atomicity::PerStream)
@@ -1212,7 +1203,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_version_overflow_surfaces_error() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("a", vec![evt(u64::MAX), evt(1)])];
         let err = store
@@ -1236,7 +1226,8 @@ mod tests {
     impl crate::store::RawEventStore for FailingAppendStore {
         type Error = crate::testing::InMemoryStoreError;
         type Stream = crate::testing::InMemoryStream;
-        type AllStream = crate::testing::InMemoryStream;
+        type AllPosition = crate::testing::InMemoryAllPos;
+        type AllStream = crate::testing::InMemoryAllStream;
 
         async fn append(
             &self,
@@ -1262,7 +1253,7 @@ mod tests {
 
         async fn read_all(
             &self,
-            from: crate::store::GlobalSeq,
+            from: Option<Self::AllPosition>,
         ) -> Result<Self::AllStream, Self::Error> {
             self.inner.read_all(from).await
         }
@@ -1279,7 +1270,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_store_error_propagates_and_keeps_prior_commits() {
-        use crate::import::EventImporter;
         let store = FailingAppendStore {
             inner: crate::testing::InMemoryStore::new(),
             fail_on: "b".to_owned(),
@@ -1301,7 +1291,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_clean_commits_all_complete() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![
             section("a", vec![evt(1), evt(2)]),
@@ -1318,7 +1307,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_corrupt_block_aborts_nothing_lands() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![
             section("a", vec![evt(1), evt(2)]),               // would be fine
@@ -1342,7 +1330,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_internal_gap_aborts_mismatch() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("a", vec![evt(1), evt(2), evt(4)])];
         let err = store
@@ -1367,7 +1354,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_head_conflict_aborts_mismatch() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         for n in 1..=2 {
             store
@@ -1399,7 +1385,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_first_block_corrupt_aborts() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("a", vec![ImportBlock::Corrupt])];
         let err = store
@@ -1414,7 +1399,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_conflict_on_later_section_reports_that_section() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         // Pre-seed "b" to v1 so the SECOND write conflicts (index 1), while "a"
         // (index 0) would be fine — exercises index > 0 in the Conflict arm.
@@ -1455,7 +1439,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_empty_section_skipped_others_commit() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("empty", vec![]), section("b", vec![evt(1), evt(2)])];
         let report = store
@@ -1473,7 +1456,6 @@ mod tests {
 
     #[tokio::test]
     async fn whole_chunk_non_injective_route_aborts_no_corruption() {
-        use crate::import::EventImporter;
         // A non-injective route maps BOTH origin sections to the same target.
         // WholeChunk must abort with nothing landed — never a [1,2,1,2] stream.
         let store = crate::testing::InMemoryStore::new();
@@ -1493,7 +1475,6 @@ mod tests {
 
     #[tokio::test]
     async fn per_stream_non_injective_route_second_rejected_no_corruption() {
-        use crate::import::EventImporter;
         // PerStream: the first section commits the target; the second (same
         // target) is picky-rejected — the stream is [1,2], never [1,2,1,2].
         let store = crate::testing::InMemoryStore::new();
@@ -1528,8 +1509,6 @@ mod tests {
 
     #[tokio::test]
     async fn store_handle_imports_without_raw() {
-        use crate::import::{AtomicAppend, EventImporter};
-        use crate::store::Store;
         // The handle itself imports and atomic-appends — never `.raw()`.
         let store = Store::new(crate::testing::InMemoryStore::new());
         let sections = vec![section("a", vec![evt(1), evt(2)])];
@@ -1558,7 +1537,6 @@ mod tests {
     // ── Round-trip + idempotency (Card-1 export ↔ Card-2 import) ────────────
 
     async fn export_section(store: &crate::testing::InMemoryStore, origin: &str) -> StreamSection {
-        use crate::export::EventExporter;
         let blocks = store
             .export_stream(&sk(origin), Version::INITIAL)
             .await
@@ -1570,8 +1548,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_then_import_round_trips_byte_equal_modulo_global_seq() {
-        use crate::import::EventImporter;
+    async fn export_then_import_round_trips_byte_equal_modulo_all_position() {
         // Source store with two streams.
         let source = crate::testing::InMemoryStore::new();
         for n in 1..=3 {
@@ -1592,9 +1569,10 @@ mod tests {
 
         // Import into a FRESH store, identity routing.
         let target = crate::testing::InMemoryStore::new();
-        // Advance the target's global_seq counter so imported events get DIFFERENT
-        // global_seqs than the source — makes the restamp observable (a bug that
-        // copied the source global_seq verbatim would now be caught).
+        // Pre-seed a warmup event so the target's `$all` counter is already
+        // advanced — imported events must get FRESH positions (2..) rather than
+        // copying the source's (which started at 1), making the restamp
+        // observable on the `$all` read.
         target
             .append(&sk("warmup"), None, &[pending(1, b"warmup")])
             .await
@@ -1605,8 +1583,8 @@ mod tests {
             .expect("import ok");
         assert!(report.all_complete());
 
-        // Byte-equal modulo restamped global_seq: compare version/type/payload/
-        // metadata/schema for every event of every stream.
+        // Per-stream events are byte-equal (a per-stream event carries no global
+        // position): compare version/type/payload/metadata/schema verbatim.
         for origin in ["acct-1", "acct-2"] {
             let src: Vec<PersistedEnvelope> = source
                 .read_stream(&sk(origin), Version::INITIAL)
@@ -1624,11 +1602,6 @@ mod tests {
                 .await;
             assert_eq!(src.len(), dst.len(), "{origin} length");
             for (s, d) in src.iter().zip(dst.iter()) {
-                assert_ne!(
-                    s.global_seq(),
-                    d.global_seq(),
-                    "{origin} global_seq must be restamped, not copied from source"
-                );
                 assert_eq!(s.version(), d.version(), "{origin} version");
                 assert_eq!(s.event_type(), d.event_type(), "{origin} type");
                 assert_eq!(s.payload(), d.payload(), "{origin} payload");
@@ -1636,11 +1609,26 @@ mod tests {
                 assert_eq!(s.schema_version(), d.schema_version(), "{origin} schema");
             }
         }
+
+        // Restamp observable on `$all`: the target re-stamped fresh positions, so
+        // its `$all` order is the warmup (1) then the imported events (2..=5),
+        // strictly increasing — NOT the source's positions copied verbatim.
+        let target_positions: Vec<u64> = target
+            .read_all(None)
+            .await
+            .expect("read_all")
+            .map(|r| r.expect("ok").0.as_u64())
+            .collect()
+            .await;
+        assert_eq!(
+            target_positions,
+            vec![1, 2, 3, 4, 5],
+            "import must re-stamp fresh $all positions, not copy the source's",
+        );
     }
 
     #[tokio::test]
     async fn reimport_same_chunk_is_idempotent_per_stream() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("a", vec![evt(1), evt(2), evt(3)])];
 
@@ -1666,7 +1654,6 @@ mod tests {
 
     #[tokio::test]
     async fn reimport_same_chunk_whole_chunk_aborts() {
-        use crate::import::EventImporter;
         let store = crate::testing::InMemoryStore::new();
         let sections = vec![section("a", vec![evt(1), evt(2)])];
         store
@@ -1697,7 +1684,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn per_stream_import_concurrent_with_writer_surfaces_conflict_no_torn_stream() {
-        use crate::import::EventImporter;
         // Two actors race to populate the SAME fresh target stream from v1:
         // a direct writer (append v1..=N) and an importer (a v1..=N section).
         // Exactly one wins the v1 slot; the other must surface a Mismatch (a
@@ -1792,7 +1778,6 @@ mod tests {
                         (first..first + count).map(evt).collect();
                     let sections = vec![section("m", blocks)];
                     let report = {
-                        use crate::import::EventImporter;
                         store
                             .import(&sections, identity_route, Atomicity::PerStream)
                             .await

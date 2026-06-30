@@ -33,7 +33,7 @@ use nexus_store::cbor::{ChunkError, ChunkWriter, decode_chunk};
 use nexus_store::envelope::{PersistedEnvelope, pending_envelope};
 use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{AbortReason, Atomicity, EventImporter, ImportError, StreamOutcome};
-use nexus_store::store::{GlobalSeq, RawEventStore};
+use nexus_store::store::RawEventStore;
 
 fn sk(s: &str) -> StreamKey {
     StreamKey::from_slice(s.as_bytes())
@@ -168,20 +168,21 @@ async fn persistent_round_trip_through_a_file_preserves_streams() {
     assert_streams_equal_modulo_global_seq(&src, &dst, &sk("task-1")).await;
     assert_streams_equal_modulo_global_seq(&src, &dst, &sk("task-2")).await;
 
-    // And global_seq is genuinely RE-STAMPED: the destination's $all sequence
-    // is a fresh contiguous 1..=4, independent of the source's values.
+    // And the `$all` position is genuinely RE-STAMPED: the destination's `$all`
+    // sequence is a fresh contiguous 1..=4, independent of the source's values.
+    // The position rides on the read tag (a per-stream event carries none).
     let mut dst_seqs: Vec<u64> = dst
-        .read_all(GlobalSeq::INITIAL)
+        .read_all(None)
         .await
         .expect("read_all")
-        .map(|r| r.expect("no error").global_seq().as_u64())
+        .map(|r| r.expect("no error").0.as_u64())
         .collect::<Vec<_>>()
         .await;
     dst_seqs.sort_unstable();
     assert_eq!(
         dst_seqs,
         vec![1, 2, 3, 4],
-        "global_seq re-stamped on import"
+        "$all position re-stamped on import"
     );
 }
 

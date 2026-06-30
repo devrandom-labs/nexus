@@ -27,7 +27,9 @@ use nexus_store::StreamKey;
 use nexus_store::envelope::{PersistedEnvelope, pending_envelope};
 use nexus_store::store::RawEventStore;
 use nexus_store::value::SchemaVersion;
-use nexus_store_testing::{ConformanceRow, assert_event_stream_conformance};
+use nexus_store_testing::{
+    ConformanceRow, assert_all_stream_conformance, assert_event_stream_conformance,
+};
 
 /// The `read_stream` cursor plus the `FjallStore` and `TempDir` it depends on.
 /// The cursor holds a live `fjall::Iter` referencing data that becomes invalid
@@ -102,6 +104,30 @@ async fn fjall_event_stream_conforms() {
             _store: store,
             _tempdir: tempdir,
         }
+    })
+    .await;
+}
+
+/// `FjallStore` conformance against the canonical `$all` read-path contract
+/// (issue #266) — the same suite `InMemoryStore` runs, so the persistent
+/// adapter cannot silently diverge from the in-memory one on `read_all`
+/// ordering, exclusivity, or resume.
+///
+/// The suite calls the factory once per check and uses the store for the whole
+/// check, so each `FjallStore` must keep its on-disk dir alive for its lifetime.
+/// We leak the `TempDir` (`Box::leak`) — the test process exits shortly after,
+/// so the handful of leaked dirs are bounded, matching the harness's existing
+/// leak-for-`'static` philosophy.
+#[tokio::test]
+async fn fjall_all_stream_conforms() {
+    assert_all_stream_conformance(|| async {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let store = FjallStore::builder(tempdir.path().join("db"))
+            .open()
+            .expect("open fjall store");
+        // Keep the on-disk dir alive for the store's whole lifetime.
+        Box::leak(Box::new(tempdir));
+        store
     })
     .await;
 }

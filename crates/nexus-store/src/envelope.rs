@@ -4,7 +4,6 @@ use bytes::Bytes;
 use nexus::Version;
 use thiserror::Error;
 
-use crate::store::GlobalSeq;
 use crate::value::{
     EventType, MAX_EVENT_TYPE_LEN, MAX_METADATA_LEN, Metadata, Payload, SchemaVersion, ValueError,
 };
@@ -169,10 +168,11 @@ impl PendingEnvelope {
     /// Rebuild a write-path envelope from a read-path one.
     ///
     /// Reuses the [`PersistedEnvelope`]'s already-validated value newtypes
-    /// (one Arc share each — zero copy, no re-validation) and **drops
-    /// `global_seq`**: the store stamps a fresh one on append. Infallible,
-    /// because every field of a `PersistedEnvelope` was validated at its own
-    /// construction. Used by the importer to re-append exported events.
+    /// (one Arc share each — zero copy, no re-validation). Infallible, because
+    /// every field of a `PersistedEnvelope` was validated at its own
+    /// construction. Used by the importer to re-append exported events; the
+    /// target store assigns the `$all` position fresh on append (it is not an
+    /// envelope field).
     #[cfg(feature = "import")]
     #[must_use]
     pub(crate) fn from_persisted(persisted: &PersistedEnvelope) -> Self {
@@ -329,7 +329,6 @@ pub const fn pending_envelope(version: Version) -> WithVersion {
 #[derive(Debug, Clone)]
 pub struct PersistedEnvelope {
     version: Version,
-    global_seq: GlobalSeq,
     schema_version: SchemaVersion,
     value: Bytes,
     event_type_range: Range<u32>,
@@ -352,12 +351,11 @@ impl PersistedEnvelope {
     ///   with an empty range.
     #[allow(
         clippy::too_many_arguments,
-        reason = "all 7 fields are required to construct a validated PersistedEnvelope; \
+        reason = "all 6 fields are required to construct a validated PersistedEnvelope; \
                   a builder would add indirection with no type-safety benefit here"
     )]
     pub fn try_new(
         version: Version,
-        global_seq: GlobalSeq,
         value: Bytes,
         schema_version: SchemaVersion,
         event_type_range: Range<u32>,
@@ -404,7 +402,6 @@ impl PersistedEnvelope {
         })?;
         Ok(Self {
             version,
-            global_seq,
             schema_version,
             value,
             event_type_range,
@@ -416,11 +413,6 @@ impl PersistedEnvelope {
     #[must_use]
     pub const fn version(&self) -> Version {
         self.version
-    }
-
-    #[must_use]
-    pub const fn global_seq(&self) -> GlobalSeq {
-        self.global_seq
     }
 
     /// The raw `u32` view of `schema_version` (always > 0 by the
@@ -562,11 +554,10 @@ impl PersistedEnvelope {
     /// buffer — snapshot decoding, upcaster post-transform decoding, codec
     /// round-trip tests.
     ///
-    /// Reports `Version::INITIAL`, `GlobalSeq::INITIAL`, and
-    /// `schema_version = SchemaVersion::INITIAL`. Most codecs ignore those
-    /// fields; when they don't (or you're bridging an upcast back to a
-    /// decode and need to preserve the original envelope's version
-    /// triple), construct the envelope manually via [`try_new`](Self::try_new).
+    /// Reports `Version::INITIAL` and `schema_version = SchemaVersion::INITIAL`.
+    /// Most codecs ignore those fields; when they don't (or you're bridging an
+    /// upcast back to a decode and need to preserve the original envelope's
+    /// version), construct the envelope manually via [`try_new`](Self::try_new).
     ///
     /// # Errors
     ///
@@ -578,10 +569,9 @@ impl PersistedEnvelope {
         let et = EventType::from_bytes(Bytes::copy_from_slice(event_type.as_bytes()))?;
         let pl = Payload::from_bytes(Bytes::copy_from_slice(payload))?;
         let sv = SchemaVersion::INITIAL;
-        let frame = crate::wire::encode_frame(GlobalSeq::INITIAL.as_u64(), sv, &et, &pl, None)?;
+        let frame = crate::wire::encode_frame(sv, &et, &pl, None)?;
         Ok(Self::try_new(
             Version::INITIAL,
-            GlobalSeq::INITIAL,
             frame.value,
             sv,
             frame.offsets.event_type,
@@ -678,7 +668,6 @@ mod tests {
         // ranges: event_type 0..4 ("TYPE"), payload 4..11 ("payload"), metadata 11..15 ("meta")
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             value,
             SchemaVersion::INITIAL,
             0..4,
@@ -696,7 +685,6 @@ mod tests {
     fn persisted_envelope_payload_bytes_shares_arc() {
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
             SchemaVersion::INITIAL,
             0..4,
@@ -714,7 +702,6 @@ mod tests {
         let value = Bytes::from_static(b"short");
         let err = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             value,
             SchemaVersion::INITIAL,
             0..4,
@@ -736,7 +723,6 @@ mod tests {
 
         let err = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             value,
             SchemaVersion::INITIAL,
             0..too_long_end,
@@ -757,7 +743,6 @@ mod tests {
     fn persisted_envelope_rejects_empty_metadata_range() {
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
             SchemaVersion::INITIAL,
             0..4,
@@ -772,7 +757,6 @@ mod tests {
         let value = Bytes::from_static(&[0xFFu8, 0xFF, b'p', b'a', b'y']);
         let err = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             value,
             SchemaVersion::INITIAL,
             0..2,
@@ -787,7 +771,6 @@ mod tests {
     fn persisted_envelope_event_type_value_returns_validated_value_newtype() {
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
             SchemaVersion::INITIAL,
             0..4,
@@ -804,7 +787,6 @@ mod tests {
     fn persisted_envelope_payload_value_returns_validated_value_newtype() {
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
             SchemaVersion::INITIAL,
             0..4,
@@ -821,7 +803,6 @@ mod tests {
     fn persisted_envelope_metadata_value_returns_some_when_present() {
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayloadMETA"),
             SchemaVersion::INITIAL,
             0..4,
@@ -838,7 +819,6 @@ mod tests {
     fn persisted_envelope_metadata_value_returns_none_when_absent() {
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            crate::store::GlobalSeq::new(1).expect("nonzero"),
             Bytes::from_static(b"TYPEpayload"),
             SchemaVersion::INITIAL,
             0..4,
@@ -857,7 +837,6 @@ mod tests {
         let value = Bytes::from_static(b"TYPEpayloadmeta");
         let persisted = PersistedEnvelope::try_new(
             Version::new(7).expect("nonzero"),
-            crate::store::GlobalSeq::new(99).expect("nonzero"),
             value,
             crate::value::SchemaVersion::from_u32(3).expect("nonzero"),
             0..4,
@@ -899,7 +878,6 @@ mod tests {
 #[allow(clippy::expect_used, reason = "test code")]
 mod persisted_exhaustive_tests {
     use super::{EnvelopeError, PersistedEnvelope};
-    use crate::store::GlobalSeq;
     use crate::value::{MAX_EVENT_TYPE_LEN, Metadata, SchemaVersion};
     use bytes::Bytes;
     use nexus::Version;
@@ -915,10 +893,6 @@ mod persisted_exhaustive_tests {
 
     fn sv(n: u32) -> SchemaVersion {
         SchemaVersion::from_u32(n).expect("test schema_version must be nonzero")
-    }
-
-    fn gs(n: u64) -> GlobalSeq {
-        GlobalSeq::new(n).expect("test global_seq must be nonzero")
     }
 
     /// Assemble a contiguous `[event_type][payload][metadata?]` buffer and the
@@ -944,20 +918,15 @@ mod persisted_exhaustive_tests {
     }
 
     /// Build a valid `PersistedEnvelope` from byte components.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "test helper mirrors the 7-field PersistedEnvelope::try_new shape"
-    )]
     fn build(
         version: Version,
-        global_seq: GlobalSeq,
         schema: SchemaVersion,
         event_type: &[u8],
         payload: &[u8],
         metadata: Option<&[u8]>,
     ) -> PersistedEnvelope {
         let (value, et, pl, meta) = assemble(event_type, payload, metadata);
-        PersistedEnvelope::try_new(version, global_seq, value, schema, et, pl, meta)
+        PersistedEnvelope::try_new(version, value, schema, et, pl, meta)
             .expect("components form a valid PersistedEnvelope")
     }
 
@@ -971,7 +940,6 @@ mod persisted_exhaustive_tests {
     fn persisted_envelope_clones_across_thread_boundary() {
         let event = build(
             v(3),
-            gs(99),
             sv(2),
             b"MoneyDeposited",
             b"payload-bytes",
@@ -980,11 +948,10 @@ mod persisted_exhaustive_tests {
         let moved = event.clone();
         // `std::thread::scope` (not the banned free `std::thread::spawn`) moves
         // the clone to another thread and joins it — proving `Send` in practice.
-        let (gseq, ver, schema, etype, payload, meta) = std::thread::scope(|scope| {
+        let (ver, schema, etype, payload, meta) = std::thread::scope(|scope| {
             scope
                 .spawn(move || {
                     (
-                        moved.global_seq(),
                         moved.version(),
                         moved.schema_version(),
                         moved.event_type().to_owned(),
@@ -996,7 +963,6 @@ mod persisted_exhaustive_tests {
                 .expect("worker thread must not panic")
         });
 
-        assert_eq!(gseq, gs(99));
         assert_eq!(ver, v(3));
         assert_eq!(schema, 2);
         assert_eq!(etype, "MoneyDeposited");
@@ -1012,7 +978,7 @@ mod persisted_exhaustive_tests {
 
     #[test]
     fn repeated_accessor_calls_are_consistent() {
-        let event = build(v(9), gs(5), sv(4), b"TYPE", b"payload", Some(b"meta"));
+        let event = build(v(9), sv(4), b"TYPE", b"payload", Some(b"meta"));
 
         // Same accessor twice → identical.
         assert_eq!(event.event_type(), event.event_type());
@@ -1038,8 +1004,6 @@ mod persisted_exhaustive_tests {
         // Scalars are stable across repeated reads.
         assert_eq!(event.version(), v(9));
         assert_eq!(event.version(), event.version());
-        assert_eq!(event.global_seq(), gs(5));
-        assert_eq!(event.global_seq(), event.global_seq());
         assert_eq!(event.schema_version(), 4);
         assert_eq!(event.schema_version_value(), sv(4));
     }
@@ -1050,7 +1014,6 @@ mod persisted_exhaustive_tests {
     fn clone_is_field_for_field_equal_view() {
         let original = build(
             v(42),
-            gs(7),
             sv(7),
             b"OrderPlaced",
             b"the-payload",
@@ -1059,7 +1022,6 @@ mod persisted_exhaustive_tests {
         let cloned = original.clone();
 
         assert_eq!(cloned.version(), original.version());
-        assert_eq!(cloned.global_seq(), original.global_seq());
         assert_eq!(cloned.schema_version(), original.schema_version());
         assert_eq!(
             cloned.schema_version_value(),
@@ -1078,7 +1040,7 @@ mod persisted_exhaustive_tests {
     fn clone_shares_the_same_backing_buffer() {
         // A clone is one Arc refcount inc — owned views from both clones must
         // point at the SAME allocation (zero-copy), not a deep copy.
-        let original = build(v(1), gs(1), sv(1), b"TYPE", b"payload", None);
+        let original = build(v(1), sv(1), b"TYPE", b"payload", None);
         let cloned = original.clone();
 
         let from_original = original.payload_bytes();
@@ -1100,7 +1062,6 @@ mod persisted_exhaustive_tests {
         let (bad_start, bad_end) = (7u32, 2u32);
         let err = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             0..4,
@@ -1133,7 +1094,6 @@ mod persisted_exhaustive_tests {
         let value = Bytes::from(vec![b'A'; buf_len]);
         let event = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             start..end,
@@ -1153,7 +1113,6 @@ mod persisted_exhaustive_tests {
         let value = Bytes::from_static(b"short");
         let err = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             // event_type is the FIRST range checked; end 100 > len 5.
@@ -1177,7 +1136,6 @@ mod persisted_exhaustive_tests {
         let value = Bytes::from_static(b"TYPEpayload");
         let err = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             // event_type + payload in-bounds so the metadata check is reached.
@@ -1202,7 +1160,6 @@ mod persisted_exhaustive_tests {
         let (bad_start, bad_end) = (9u32, 5u32);
         let err = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             0..4,
@@ -1230,7 +1187,6 @@ mod persisted_exhaustive_tests {
         let value = Bytes::from_static(b"TYPE");
         let event = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             0..4,
@@ -1251,7 +1207,6 @@ mod persisted_exhaustive_tests {
         let value = Bytes::from_static(b"TYPE");
         let event = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             0..4,
@@ -1267,7 +1222,7 @@ mod persisted_exhaustive_tests {
 
     #[test]
     fn metadata_absent_is_none_everywhere() {
-        let event = build(v(1), gs(1), sv(1), b"TYPE", b"payload", None);
+        let event = build(v(1), sv(1), b"TYPE", b"payload", None);
         assert!(event.metadata().is_none());
         assert!(event.metadata_bytes().is_none());
         assert!(event.metadata_value().is_none());
@@ -1275,7 +1230,7 @@ mod persisted_exhaustive_tests {
 
     #[test]
     fn metadata_present_threads_through_every_accessor() {
-        let event = build(v(1), gs(1), sv(1), b"TYPE", b"payload", Some(b"META"));
+        let event = build(v(1), sv(1), b"TYPE", b"payload", Some(b"META"));
         assert_eq!(event.metadata(), Some(b"META".as_slice()));
         assert_eq!(event.metadata_bytes().expect("some").as_ref(), b"META");
         assert_eq!(event.metadata_value().expect("some").as_slice(), b"META");
@@ -1285,26 +1240,18 @@ mod persisted_exhaustive_tests {
 
     #[test]
     fn empty_event_type_is_accepted() {
-        let event = build(v(1), gs(1), sv(1), b"", b"payload", None);
+        let event = build(v(1), sv(1), b"", b"payload", None);
         assert_eq!(event.event_type(), "");
         assert_eq!(event.event_type_value().as_str(), "");
         assert_eq!(event.payload(), b"payload");
     }
 
-    // ── boundary scalars carried verbatim (version, global_seq, schema) ──────
+    // ── boundary scalars carried verbatim (version, schema) ─────────────────
 
     #[test]
-    fn boundary_version_global_seq_and_schema_version_carried_verbatim() {
-        let event = build(
-            v(u64::MAX),
-            gs(u64::MAX),
-            sv(u32::MAX),
-            b"TYPE",
-            b"payload",
-            None,
-        );
+    fn boundary_version_and_schema_version_carried_verbatim() {
+        let event = build(v(u64::MAX), sv(u32::MAX), b"TYPE", b"payload", None);
         assert_eq!(event.version().as_u64(), u64::MAX);
-        assert_eq!(event.global_seq().as_u64(), u64::MAX);
         assert_eq!(event.schema_version(), u32::MAX);
         assert_eq!(event.schema_version_value().get(), u32::MAX);
     }
@@ -1317,7 +1264,6 @@ mod persisted_exhaustive_tests {
         let base = value.clone(); // shares the same allocation as `value`
         let event = PersistedEnvelope::try_new(
             Version::INITIAL,
-            gs(1),
             value,
             SchemaVersion::INITIAL,
             et,
@@ -1411,15 +1357,12 @@ mod persisted_exhaustive_tests {
             payload in payload_bytes_strategy(),
             metadata in metadata_bytes_strategy(),
             version_raw in boundary_u64(),
-            global_seq_raw in boundary_u64(),
             schema_raw in boundary_u32_nonzero(),
         ) {
             let version = v(version_raw);
-            let global_seq = gs(global_seq_raw);
             let schema = sv(schema_raw);
             let event = build(
                 version,
-                global_seq,
                 schema,
                 &event_type,
                 &payload,
@@ -1429,8 +1372,6 @@ mod persisted_exhaustive_tests {
             // Scalars verbatim.
             prop_assert_eq!(event.version(), version);
             prop_assert_eq!(event.version().as_u64(), version_raw);
-            prop_assert_eq!(event.global_seq(), global_seq);
-            prop_assert_eq!(event.global_seq().as_u64(), global_seq_raw);
             prop_assert_eq!(event.schema_version(), schema_raw);
             prop_assert_eq!(event.schema_version_value(), schema);
 
@@ -1489,12 +1430,10 @@ mod persisted_exhaustive_tests {
             payload_range in arbitrary_range(),
             metadata_range in arbitrary_optional_range(),
             version_raw in boundary_u64(),
-            global_seq_raw in boundary_u64(),
             schema_raw in boundary_u32_nonzero(),
         ) {
             let result = PersistedEnvelope::try_new(
                 v(version_raw),
-                gs(global_seq_raw),
                 Bytes::from(value_bytes),
                 sv(schema_raw),
                 event_type_range,

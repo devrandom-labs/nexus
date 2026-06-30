@@ -746,25 +746,13 @@ async fn attack_empty_batch_does_not_advance_version() {
 /// `FjallStore::append` must assign each event a store-global `GlobalSeq` that
 /// increases monotonically across events within a batch, across separate
 /// appends, and across appends to *different* streams. The sequence starts at
-/// 1. Readers surface the assigned value via `PersistedEnvelope::global_seq()`.
+/// 1. The position rides on the `$all` read tag (a per-stream event carries
+/// none), so the cross-stream interleaving is observed via `read_all`.
 #[tokio::test]
-async fn append_assigns_monotonic_global_seq_across_streams() {
+async fn append_assigns_monotonic_all_position_across_streams() {
     let (store, _dir) = temp_store();
 
-    async fn read_global_seqs(store: &FjallStore, stream_id: &StreamKey) -> Vec<u64> {
-        let mut stream = store
-            .read_stream(stream_id, Version::INITIAL)
-            .await
-            .unwrap();
-        let mut seqs = Vec::new();
-        while let Some(__i) = stream.next().await {
-            let env = __i.unwrap();
-            seqs.push(env.global_seq().as_u64());
-        }
-        seqs
-    }
-
-    // Append 1: two events to stream "a" -> global_seq 1, 2.
+    // Append 1: two events to stream "a" -> positions 1, 2.
     store
         .append(
             &sk("a"),
@@ -774,13 +762,13 @@ async fn append_assigns_monotonic_global_seq_across_streams() {
         .await
         .unwrap();
 
-    // Append 2: one event to a different stream "b" -> global_seq 3.
+    // Append 2: one event to a different stream "b" -> position 3.
     store
         .append(&sk("b"), None, &[make_envelope(1, "B1", b"b1")])
         .await
         .unwrap();
 
-    // Append 3: continue stream "a" -> global_seq 4, 5.
+    // Append 3: continue stream "a" -> positions 4, 5.
     store
         .append(
             &sk("a"),
@@ -790,30 +778,26 @@ async fn append_assigns_monotonic_global_seq_across_streams() {
         .await
         .unwrap();
 
-    let seqs_a = read_global_seqs(&store, &sk("a")).await;
-    let seqs_b = read_global_seqs(&store, &sk("b")).await;
-
-    // Stream "a" got events at append positions 1,2 then 4,5.
+    // The `$all` read yields a contiguous monotonic position sequence 1..=5,
+    // interleaving the two streams in exact append order: a@1,a@2 (1,2), then
+    // b@1 (3) between a's two appends, then a@3,a@4 (4,5).
+    let mut all = store.read_all(None).await.unwrap();
+    let mut seen: Vec<(u64, String)> = Vec::new();
+    while let Some(item) = all.next().await {
+        let (pos, env) = item.unwrap();
+        seen.push((pos.as_u64(), env.event_type().to_owned()));
+    }
     assert_eq!(
-        seqs_a,
-        vec![1, 2, 4, 5],
-        "stream a global_seqs must match append order"
-    );
-    // Stream "b" got the single event between a's two appends.
-    assert_eq!(
-        seqs_b,
-        vec![3],
-        "stream b global_seq must be assigned between a's appends"
-    );
-
-    // Every assigned global_seq across the whole store is unique and strictly
-    // increasing in append order: 1,2,3,4,5.
-    let mut all: Vec<u64> = seqs_a.iter().chain(seqs_b.iter()).copied().collect();
-    all.sort_unstable();
-    assert_eq!(
-        all,
-        vec![1, 2, 3, 4, 5],
-        "global_seq must be a contiguous monotonic sequence starting at 1"
+        seen,
+        vec![
+            (1, "A1".to_owned()),
+            (2, "A2".to_owned()),
+            (3, "B1".to_owned()),
+            (4, "A3".to_owned()),
+            (5, "A4".to_owned()),
+        ],
+        "$all positions must be a contiguous monotonic sequence starting at 1, \
+         interleaving streams in append order",
     );
 }
 

@@ -3,8 +3,10 @@
 use crate::batch::BatchSize;
 use crate::envelope::{EnvelopeError, PendingEnvelope, PersistedEnvelope};
 use crate::error::AppendError;
+#[cfg(feature = "import")]
+use crate::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
 use crate::notify::{NotifyError, StreamNotifiers, WakeReg};
-use crate::store::{GlobalSeq, RawEventStore};
+use crate::store::{AllPosition, RawEventStore};
 use crate::wake::WakeSource;
 use crate::wire::{self, FrameOffsets};
 use bytes::Bytes;
@@ -15,6 +17,8 @@ use crate::stream_id::StreamKey;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::num::NonZeroU64;
+use std::ops::Bound;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -26,10 +30,6 @@ pub enum InMemoryStoreError {
     /// Stored event has version 0 — corrupt data.
     #[error("stored event has version 0 — corrupt data")]
     CorruptVersion,
-
-    /// Stored event has `global_seq` 0 — corrupt data (`GlobalSeq` is `NonZero`).
-    #[error("stored event has global_seq 0 — corrupt data at version {version}")]
-    CorruptGlobalSeq { version: u64 },
 
     /// Version overflow: cannot advance past `u64::MAX`.
     #[error("version overflow: cannot advance past u64::MAX")]
@@ -60,6 +60,46 @@ pub enum InMemoryStoreError {
     #[error("subscription wake registration failed")]
     Subscription(#[from] NotifyError),
 }
+
+/// [`InMemoryStore`]'s `$all` resume position — its
+/// [`AllPosition`](crate::AllPosition).
+///
+/// A monotonic-but-gappy `NonZeroU64`, the in-memory analogue of fjall's
+/// `GlobalSeq`. It is the key of the store's `$all` index (`global_index`), so
+/// the `$all` read tags each item with the key it was stored under rather than
+/// reading a position out of the (position-free) frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InMemoryAllPos(NonZeroU64);
+
+impl InMemoryAllPos {
+    /// The first position (1).
+    pub const INITIAL: Self = Self(NonZeroU64::MIN);
+
+    /// Construct from a `u64`; `None` if `v` is 0. Mirrors [`NonZeroU64::new`].
+    #[must_use]
+    pub const fn new(v: u64) -> Option<Self> {
+        match NonZeroU64::new(v) {
+            Some(nz) => Some(Self(nz)),
+            None => None,
+        }
+    }
+
+    /// The underlying integer (always >= 1).
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
+        self.0.get()
+    }
+
+    /// The next position, or `None` on overflow at `u64::MAX`.
+    const fn next(self) -> Option<Self> {
+        match self.0.checked_add(1) {
+            Some(n) => Some(Self(n)),
+            None => None,
+        }
+    }
+}
+
+impl AllPosition for InMemoryAllPos {}
 
 /// A frame stored in the in-memory database.
 ///
@@ -100,11 +140,13 @@ struct StoredFrame {
 pub struct InMemoryStore {
     streams: Arc<Mutex<HashMap<String, Vec<StoredFrame>>>>,
     notifiers: Arc<StreamNotifiers>,
-    next_global_seq: Mutex<GlobalSeq>,
-    /// All events keyed by `global_seq`, the `$all` read order. Holds the
-    /// same `StoredFrame`s as `streams` (Arc-shared `Bytes`, cheap clones);
-    /// written under `streams`'s lock in `append` so the two never diverge.
-    global_index: Arc<Mutex<BTreeMap<u64, StoredFrame>>>,
+    next_global_seq: Mutex<InMemoryAllPos>,
+    /// All events keyed by their `$all` position ([`InMemoryAllPos`]), the
+    /// `$all` read order. Holds the same `StoredFrame`s as `streams` (Arc-shared
+    /// `Bytes`, cheap clones); written under `streams`'s lock in `append` so the
+    /// two never diverge. The key is the authoritative position — the frame no
+    /// longer carries one.
+    global_index: Arc<Mutex<BTreeMap<InMemoryAllPos, StoredFrame>>>,
     batch_size: BatchSize,
 }
 
@@ -121,7 +163,7 @@ impl InMemoryStore {
         Self {
             streams: Arc::new(Mutex::new(HashMap::new())),
             notifiers: StreamNotifiers::new(),
-            next_global_seq: Mutex::new(GlobalSeq::INITIAL),
+            next_global_seq: Mutex::new(InMemoryAllPos::INITIAL),
             global_index: Arc::new(Mutex::new(BTreeMap::new())),
             batch_size,
         }
@@ -175,24 +217,28 @@ impl ReadState {
     }
 }
 
-/// Keyset-paginating read state for a one-shot `read_all` ([`GlobalSeq`] order).
+/// Keyset-paginating read state for a one-shot `read_all` (`$all` order).
 struct GlobalReadState {
-    global_index: Arc<Mutex<BTreeMap<u64, StoredFrame>>>,
-    /// Next `global_seq` to scan from (inclusive). Resumes at `last + 1`.
-    from: u64,
+    global_index: Arc<Mutex<BTreeMap<InMemoryAllPos, StoredFrame>>>,
+    /// Exclusive lower bound: yield positions **strictly greater** than this;
+    /// `None` = from the very beginning. Advances to the last-yielded position
+    /// (matching the exclusive `read_all` resume contract).
+    after: Option<InMemoryAllPos>,
     batch_size: usize,
-    buffer: VecDeque<StoredFrame>,
+    /// Position-tagged frames — the key is the authoritative `$all` position.
+    buffer: VecDeque<(InMemoryAllPos, StoredFrame)>,
     done: bool,
 }
 
 impl GlobalReadState {
     async fn refill(&mut self) {
-        let batch: VecDeque<StoredFrame> = {
+        let batch: VecDeque<(InMemoryAllPos, StoredFrame)> = {
             let guard = self.global_index.lock().await;
+            let lower = self.after.map_or(Bound::Unbounded, Bound::Excluded);
             guard
-                .range(self.from..)
+                .range((lower, Bound::Unbounded))
                 .take(self.batch_size)
-                .map(|(_, frame)| frame.clone())
+                .map(|(pos, frame)| (*pos, frame.clone()))
                 .collect()
         };
         self.done = batch.len() < self.batch_size;
@@ -222,16 +268,44 @@ impl futures::Stream for InMemoryStream {
     }
 }
 
-/// Encode a `PendingEnvelope` + its assigned `global_seq` into a `StoredFrame`.
+/// The boxed inner stream behind [`InMemoryAllStream`] — a position-tagged
+/// `$all` item stream. Aliased so the struct field reads cleanly.
+type BoxedAllItemStream = core::pin::Pin<
+    Box<
+        dyn futures::Stream<Item = Result<(InMemoryAllPos, PersistedEnvelope), InMemoryStoreError>>
+            + Send,
+    >,
+>;
+
+/// `futures::Stream` of **position-tagged** envelopes over the `$all` index.
+///
+/// The `$all` analogue of [`InMemoryStream`]: each `Item` carries the
+/// [`InMemoryAllPos`] the event was read at, so a subscriber can checkpoint a
+/// position the (position-free) envelope no longer holds.
+pub struct InMemoryAllStream {
+    inner: BoxedAllItemStream,
+}
+
+impl futures::Stream for InMemoryAllStream {
+    type Item = Result<(InMemoryAllPos, PersistedEnvelope), InMemoryStoreError>;
+
+    fn poll_next(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+/// Encode a `PendingEnvelope` into a `StoredFrame`.
 ///
 /// Delegates to [`wire::encode_frame`], which produces a 16-byte-aligned
-/// payload inside the resulting [`Bytes`].
+/// payload inside the resulting [`Bytes`]. The `$all` position is **not**
+/// encoded into the frame — the store keys its `global_index` by it instead.
 fn encode_pending_to_frame(
     env: &PendingEnvelope,
-    global_seq: GlobalSeq,
 ) -> Result<StoredFrame, AppendError<InMemoryStoreError>> {
     let frame = wire::encode_frame(
-        global_seq.as_u64(),
         env.schema_version_value(),
         &env.event_type_value(),
         &env.payload_value(),
@@ -248,8 +322,9 @@ fn encode_pending_to_frame(
 
 /// Construct a [`PersistedEnvelope`] from a [`StoredFrame`].
 ///
-/// Reads `global_seq` and `schema_version` from the wire-format header
-/// at the constant offsets defined by [`wire`].
+/// Reads `schema_version` from the wire-format header at the constant offset
+/// defined by [`wire`]. The `$all` position is not in the frame — callers that
+/// need it read it from the `global_index` key.
 fn frame_to_envelope(frame: &StoredFrame) -> Result<PersistedEnvelope, InMemoryStoreError> {
     let Some(version) = Version::new(frame.version) else {
         return Err(InMemoryStoreError::CorruptVersion);
@@ -258,21 +333,6 @@ fn frame_to_envelope(frame: &StoredFrame) -> Result<PersistedEnvelope, InMemoryS
     // Bytes are read individually so no fallible try_into sits in the
     // cursor hot path. The wire::encode_frame invariant guarantees these
     // offsets are present in any non-empty StoredFrame value.
-    let global_seq_raw = u64::from_le_bytes([
-        value[wire::GLOBAL_SEQ_OFFSET],
-        value[wire::GLOBAL_SEQ_OFFSET + 1],
-        value[wire::GLOBAL_SEQ_OFFSET + 2],
-        value[wire::GLOBAL_SEQ_OFFSET + 3],
-        value[wire::GLOBAL_SEQ_OFFSET + 4],
-        value[wire::GLOBAL_SEQ_OFFSET + 5],
-        value[wire::GLOBAL_SEQ_OFFSET + 6],
-        value[wire::GLOBAL_SEQ_OFFSET + 7],
-    ]);
-    let Some(global_seq) = GlobalSeq::new(global_seq_raw) else {
-        return Err(InMemoryStoreError::CorruptGlobalSeq {
-            version: frame.version,
-        });
-    };
     let schema_version_raw = u32::from_le_bytes([
         value[wire::SCHEMA_VERSION_OFFSET],
         value[wire::SCHEMA_VERSION_OFFSET + 1],
@@ -288,7 +348,6 @@ fn frame_to_envelope(frame: &StoredFrame) -> Result<PersistedEnvelope, InMemoryS
 
     PersistedEnvelope::try_new(
         version,
-        global_seq,
         frame.value.clone(),
         schema_version,
         frame.offsets.event_type.clone(),
@@ -316,7 +375,8 @@ fn scan_batch(rows: &[StoredFrame], from: u64, batch_size: usize) -> VecDeque<St
 impl RawEventStore for InMemoryStore {
     type Error = InMemoryStoreError;
     type Stream = InMemoryStream;
-    type AllStream = InMemoryStream;
+    type AllPosition = InMemoryAllPos;
+    type AllStream = InMemoryAllStream;
 
     async fn append(
         &self,
@@ -363,13 +423,13 @@ impl RawEventStore for InMemoryStore {
             }
         }
 
-        // Assign a store-global sequence to each event — monotonic across
-        // all streams; gaps are permitted by the `RawEventStore` contract.
+        // Assign an `$all` position to each event — monotonic across all
+        // streams; gaps are permitted by the `RawEventStore` contract.
         let mut counter = self.next_global_seq.lock().await;
         let mut seq = *counter;
-        let mut rows: Vec<(u64, StoredFrame)> = Vec::with_capacity(envelopes.len());
+        let mut rows: Vec<(InMemoryAllPos, StoredFrame)> = Vec::with_capacity(envelopes.len());
         for env in envelopes {
-            rows.push((seq.as_u64(), encode_pending_to_frame(env, seq)?));
+            rows.push((seq, encode_pending_to_frame(env)?));
             seq = seq
                 .next()
                 .ok_or(AppendError::Store(InMemoryStoreError::GlobalSeqOverflow))?;
@@ -377,12 +437,13 @@ impl RawEventStore for InMemoryStore {
         *counter = seq;
         drop(counter);
 
-        // Index by global_seq for $all reads, in the same critical section as
-        // the per-stream store, so a reader never sees one without the other.
+        // Index by `$all` position for `$all` reads, in the same critical
+        // section as the per-stream store, so a reader never sees one without
+        // the other.
         {
             let mut gidx = self.global_index.lock().await;
-            for (s, frame) in &rows {
-                gidx.insert(*s, frame.clone());
+            for (pos, frame) in &rows {
+                gidx.insert(*pos, frame.clone());
             }
         }
 
@@ -470,10 +531,14 @@ impl RawEventStore for InMemoryStore {
         })
     }
 
-    async fn read_all(&self, from: GlobalSeq) -> Result<Self::AllStream, Self::Error> {
+    async fn read_all(
+        &self,
+        from: Option<Self::AllPosition>,
+    ) -> Result<Self::AllStream, Self::Error> {
         let state = GlobalReadState {
             global_index: Arc::clone(&self.global_index),
-            from: from.as_u64(),
+            // `read_all` is exclusive: yield positions strictly after `from`.
+            after: from,
             batch_size: self.batch_size.get(),
             buffer: VecDeque::new(),
             done: false,
@@ -481,15 +546,12 @@ impl RawEventStore for InMemoryStore {
 
         let unfolded = futures::stream::unfold(state, |mut s| async move {
             loop {
-                if let Some(frame) = s.buffer.pop_front() {
+                if let Some((pos, frame)) = s.buffer.pop_front() {
                     return match frame_to_envelope(&frame) {
                         Ok(env) => {
-                            // Resume strictly after this global_seq.
-                            match env.global_seq().as_u64().checked_add(1) {
-                                Some(next) => s.from = next,
-                                None => s.done = true,
-                            }
-                            Some((Ok(env), s))
+                            // Advance the exclusive scan bound past this position.
+                            s.after = Some(pos);
+                            Some((Ok((pos, env)), s))
                         }
                         Err(e) => {
                             s.done = true;
@@ -507,7 +569,7 @@ impl RawEventStore for InMemoryStore {
             }
         });
 
-        Ok(InMemoryStream {
+        Ok(InMemoryAllStream {
             inner: Box::pin(futures::StreamExt::fuse(unfolded)),
         })
     }
@@ -576,13 +638,11 @@ impl crate::export::StreamLister for InMemoryStore {
 /// unrepresentable and no concurrent `append` can interleave. Mirrors
 /// `append`'s lock order (`streams` → `next_global_seq` → `global_index`).
 #[cfg(feature = "import")]
-impl crate::import::AtomicAppend for InMemoryStore {
+impl AtomicAppend for InMemoryStore {
     async fn atomic_append_many(
         &self,
-        writes: &[crate::import::PlannedAppend],
-    ) -> Result<(), crate::import::AtomicAppendError<Self::Error>> {
-        use crate::import::AtomicAppendError;
-
+        writes: &[PlannedAppend],
+    ) -> Result<(), AtomicAppendError<Self::Error>> {
         let mut guard = self.streams.lock().await;
 
         // Phase 1 — validate every head and run shape against the RUNNING
@@ -635,15 +695,15 @@ impl crate::import::AtomicAppend for InMemoryStore {
             projected.insert(key, new_head);
         }
 
-        // Phase 2 — assign global_seqs and stage frames (still no store mutation).
+        // Phase 2 — assign `$all` positions and stage frames (still no store mutation).
         let mut counter = self.next_global_seq.lock().await;
         let mut seq = *counter;
         let mut staged_streams: Vec<(String, Vec<StoredFrame>)> = Vec::with_capacity(writes.len());
-        let mut staged_global: Vec<(u64, StoredFrame)> = Vec::new();
+        let mut staged_global: Vec<(InMemoryAllPos, StoredFrame)> = Vec::new();
         for w in writes {
             let mut frames = Vec::with_capacity(w.events.len());
             for env in &w.events {
-                let frame = encode_pending_to_frame(env, seq).map_err(|e| match e {
+                let frame = encode_pending_to_frame(env).map_err(|e| match e {
                     AppendError::Store(s) => AtomicAppendError::Store(s),
                     // encode_pending_to_frame only ever returns AppendError::Store
                     // (wire-format failure); it never does a head check and so can
@@ -654,7 +714,7 @@ impl crate::import::AtomicAppend for InMemoryStore {
                         AtomicAppendError::Store(InMemoryStoreError::VersionOverflow)
                     }
                 })?;
-                staged_global.push((seq.as_u64(), frame.clone()));
+                staged_global.push((seq, frame.clone()));
                 frames.push(frame);
                 seq = seq.next().ok_or(AtomicAppendError::Store(
                     InMemoryStoreError::GlobalSeqOverflow,
@@ -669,8 +729,8 @@ impl crate::import::AtomicAppend for InMemoryStore {
         // section, streams lock still held throughout).
         {
             let mut gidx = self.global_index.lock().await;
-            for (s, frame) in &staged_global {
-                gidx.insert(*s, frame.clone());
+            for (pos, frame) in &staged_global {
+                gidx.insert(*pos, frame.clone());
             }
         }
         for (key, frames) in staged_streams {
@@ -821,6 +881,7 @@ mod bounded_read_tests {
 mod global_read_tests {
     use super::*;
     use crate::envelope::pending_envelope;
+    use crate::{Store, Subscription};
     use futures::StreamExt;
 
     fn sk(s: &str) -> StreamKey {
@@ -853,11 +914,11 @@ mod global_read_tests {
         append_one(&store, "b", 1, None, b"b1").await;
         append_one(&store, "a", 2, Some(1), b"a2").await;
 
-        let mut all = store.read_all(GlobalSeq::INITIAL).await.unwrap();
+        let mut all = store.read_all(None).await.unwrap();
         let mut seen = Vec::new();
         while let Some(item) = all.next().await {
-            let env = item.unwrap();
-            seen.push((env.global_seq().as_u64(), env.payload().to_vec()));
+            let (pos, env) = item.unwrap();
+            seen.push((pos.as_u64(), env.payload().to_vec()));
         }
         assert_eq!(
             seen,
@@ -866,55 +927,72 @@ mod global_read_tests {
                 (2, b"b1".to_vec()),
                 (3, b"a2".to_vec()),
             ],
-            "read_all must yield every event across streams in GlobalSeq order"
+            "read_all must yield every event across streams in position order"
         );
     }
 
     #[tokio::test]
-    async fn read_all_from_is_inclusive_and_resumes() {
+    async fn read_all_from_is_exclusive_and_resumes() {
         let store = InMemoryStore::new();
         append_one(&store, "a", 1, None, b"a1").await;
         append_one(&store, "a", 2, Some(1), b"a2").await;
         append_one(&store, "a", 3, Some(2), b"a3").await;
 
-        let mut all = store.read_all(GlobalSeq::new(2).unwrap()).await.unwrap();
+        // Exclusive: strictly after position 1 → [2, 3].
+        let mut all = store
+            .read_all(Some(InMemoryAllPos::new(1).unwrap()))
+            .await
+            .unwrap();
         let mut seqs = Vec::new();
-        while let Some(env) = all.next().await {
-            seqs.push(env.unwrap().global_seq().as_u64());
+        while let Some(item) = all.next().await {
+            seqs.push(item.unwrap().0.as_u64());
         }
-        assert_eq!(seqs, vec![2, 3], "from is inclusive; lower seqs excluded");
+        assert_eq!(
+            seqs,
+            vec![2, 3],
+            "from is exclusive; position 1 and below excluded"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_all_from_max_yields_empty() {
+        // Defensive boundary (parity with fjall): nothing is strictly after
+        // InMemoryAllPos::MAX, so the exclusive resume yields an empty stream —
+        // no panic, no re-read of the ceiling event.
+        let store = InMemoryStore::new();
+        append_one(&store, "a", 1, None, b"x").await;
+        let mut all = store
+            .read_all(Some(InMemoryAllPos::new(u64::MAX).unwrap()))
+            .await
+            .unwrap();
+        assert!(
+            all.next().await.is_none(),
+            "read_all(Some(MAX)) must yield nothing",
+        );
     }
 
     #[tokio::test]
     async fn subscribe_all_catches_up_then_sees_live_event() {
-        use crate::Store;
-        use crate::Subscription;
-        use futures::StreamExt;
-
         let store = Store::new(InMemoryStore::new());
         append_one(store.raw(), "a", 1, None, b"a1").await;
         append_one(store.raw(), "b", 1, None, b"b1").await;
 
         let sub = Subscription::new(&store).subscribe_all(None).unwrap();
         futures::pin_mut!(sub);
-        assert_eq!(sub.next().await.unwrap().unwrap().global_seq().as_u64(), 1);
-        assert_eq!(sub.next().await.unwrap().unwrap().global_seq().as_u64(), 2);
+        assert_eq!(sub.next().await.unwrap().unwrap().0.as_u64(), 1);
+        assert_eq!(sub.next().await.unwrap().unwrap().0.as_u64(), 2);
 
         let store2 = store.clone();
         tokio::spawn(async move {
             append_one(store2.raw(), "a", 2, Some(1), b"a2").await;
         });
-        let live = sub.next().await.unwrap().unwrap();
-        assert_eq!(live.global_seq().as_u64(), 3);
-        assert_eq!(live.payload(), b"a2");
+        let (live_pos, live_env) = sub.next().await.unwrap().unwrap();
+        assert_eq!(live_pos.as_u64(), 3);
+        assert_eq!(live_env.payload(), b"a2");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn subscribe_all_sees_concurrent_appends_across_streams() {
-        use crate::Store;
-        use crate::Subscription;
-        use futures::StreamExt;
-
         let store = Store::new(InMemoryStore::new());
         let sub = Subscription::new(&store).subscribe_all(None).unwrap();
         futures::pin_mut!(sub);
@@ -936,10 +1014,10 @@ mod global_read_tests {
 
         let mut prev = 0u64;
         for _ in 0..20 {
-            let g = sub.next().await.unwrap().unwrap().global_seq().as_u64();
+            let g = sub.next().await.unwrap().unwrap().0.as_u64();
             assert!(
                 g > prev,
-                "global_seq must be strictly increasing: {g} after {prev}"
+                "$all position must be strictly increasing: {g} after {prev}"
             );
             prev = g;
         }
@@ -1032,5 +1110,81 @@ mod wake_source_tests {
         timeout(Duration::from_secs(5), wait)
             .await
             .expect("append must wake the registration");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod all_pos_tests {
+    use super::InMemoryAllPos;
+    use proptest::prelude::*;
+
+    /// `u64` strategy anchoring the project-mandated boundaries (0, 1, MAX-1,
+    /// MAX) alongside a uniform interior. The `- 1` are const-folded, so they
+    /// do not trip `arithmetic_side_effects`.
+    fn u64_with_boundaries() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            1 => Just(0u64),
+            1 => Just(1u64),
+            1 => Just(u64::MAX - 1),
+            1 => Just(u64::MAX),
+            10 => any::<u64>(),
+        ]
+    }
+
+    #[test]
+    fn new_rejects_zero() {
+        // 0 is unrepresentable: an InMemoryAllPos is always >= 1 (NonZeroU64).
+        assert_eq!(InMemoryAllPos::new(0), None);
+    }
+
+    #[test]
+    fn initial_is_one() {
+        assert_eq!(InMemoryAllPos::INITIAL.as_u64(), 1);
+        assert_eq!(InMemoryAllPos::new(1), Some(InMemoryAllPos::INITIAL));
+    }
+
+    #[test]
+    fn next_overflows_at_max() {
+        // No successor at the ceiling — mirrors fjall's GlobalSeq so the two
+        // adapters share the exclusive-resume ceiling behaviour.
+        let max = InMemoryAllPos::new(u64::MAX).unwrap();
+        assert_eq!(max.next(), None);
+    }
+
+    #[test]
+    fn next_one_below_max_reaches_max() {
+        let near = InMemoryAllPos::new(u64::MAX - 1).unwrap();
+        assert_eq!(near.next(), InMemoryAllPos::new(u64::MAX));
+    }
+
+    proptest! {
+        #[test]
+        fn new_round_trips_nonzero(v in u64_with_boundaries()) {
+            if let Some(p) = InMemoryAllPos::new(v) {
+                prop_assert_eq!(p.as_u64(), v);
+            } else {
+                prop_assert_eq!(v, 0);
+            }
+        }
+
+        #[test]
+        fn ord_matches_underlying_u64(a in u64_with_boundaries(), b in u64_with_boundaries()) {
+            prop_assume!(a != 0 && b != 0);
+            let pa = InMemoryAllPos::new(a).unwrap();
+            let pb = InMemoryAllPos::new(b).unwrap();
+            prop_assert_eq!(pa.cmp(&pb), a.cmp(&b));
+        }
+
+        #[test]
+        fn next_is_successor_or_none_at_ceiling(v in u64_with_boundaries()) {
+            prop_assume!(v != 0);
+            let p = InMemoryAllPos::new(v).unwrap();
+            if let Some(n) = p.next() {
+                prop_assert_eq!(n.as_u64(), v.checked_add(1).unwrap());
+            } else {
+                prop_assert_eq!(v, u64::MAX);
+            }
+        }
     }
 }

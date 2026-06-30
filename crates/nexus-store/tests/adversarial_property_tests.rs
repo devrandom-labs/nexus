@@ -75,7 +75,7 @@ use nexus_store::codec::{Decode, Encode};
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::error::StoreError;
 use nexus_store::pending_envelope;
-use nexus_store::store::{GlobalSeq, RawEventStore};
+use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::upcasting::EventMorsel;
 use nexus_store::value::{EventType, Metadata, Payload, SchemaVersion};
@@ -85,7 +85,6 @@ use proptest::prelude::*;
 
 fn build_persisted(
     version: nexus::Version,
-    global_seq: GlobalSeq,
     event_type: &str,
     schema_version: u32,
     payload: &[u8],
@@ -98,16 +97,8 @@ fn build_persisted(
     let pl_end = u32::try_from(event_type.len() + payload.len()).expect("payload fits u32");
     let sv = nexus_store::value::SchemaVersion::from_u32(schema_version)
         .expect("test fixture schema_version nonzero");
-    PersistedEnvelope::try_new(
-        version,
-        global_seq,
-        value,
-        sv,
-        0..et_end,
-        et_end..pl_end,
-        None,
-    )
-    .expect("test fixture envelope")
+    PersistedEnvelope::try_new(version, value, sv, 0..et_end, et_end..pl_end, None)
+        .expect("test fixture envelope")
 }
 
 /// Concrete `StoreError` for tests using `InMemoryStore` + `JsonCodec` + no upcaster.
@@ -386,7 +377,6 @@ proptest! {
     ) {
         let env = build_persisted(
             Version::new(version).unwrap(),
-            GlobalSeq::INITIAL,
             &event_type,
             schema_version,
             &payload,
@@ -1440,7 +1430,7 @@ proptest! {
             prop_assert!(result.is_err(), "SchemaVersion::from_u32(0) must error");
         } else {
             // Must succeed
-            let env = build_persisted(Version::new(1).unwrap(), GlobalSeq::INITIAL, "E", schema_version, &[]);
+            let env = build_persisted(Version::new(1).unwrap(), "E", schema_version, &[]);
             prop_assert_eq!(env.schema_version(), schema_version);
         }
     }
@@ -2038,7 +2028,7 @@ proptest! {
             .expect("valid metadata by strategy");
         let sv = SchemaVersion::INITIAL;
 
-        let frame = wire::encode_frame(1, sv, &event_type, &payload_v, Some(&metadata_v))
+        let frame = wire::encode_frame(sv, &event_type, &payload_v, Some(&metadata_v))
             .expect("encode_frame succeeds on validated newtypes");
 
         let decoded = wire::decode_frame(&frame.value)
@@ -2046,7 +2036,6 @@ proptest! {
 
         let env = PersistedEnvelope::try_new(
             Version::INITIAL,
-            GlobalSeq::new(1).expect("nonzero"),
             frame.value,
             decoded.schema_version,
             decoded.offsets.event_type,

@@ -11,6 +11,7 @@
 #![allow(clippy::expect_used, reason = "test code")]
 #![allow(clippy::shadow_reuse, reason = "tests")]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -18,6 +19,7 @@ use nexus::Version;
 use nexus_fjall::FjallStore;
 use nexus_store::store::RawEventStore;
 use nexus_store::{PendingEnvelope, Store, StreamKey, Subscription, pending_envelope};
+use tokio::sync::Barrier;
 use tokio::time::timeout;
 
 fn sk(s: &str) -> StreamKey {
@@ -373,6 +375,70 @@ async fn append_during_catchup_no_loss() {
             .unwrap();
         assert_eq!(env.version(), Version::new(expected_v).unwrap());
     }
+}
+
+/// `$all` subscription under concurrent writers on DIFFERENT streams: every
+/// observed position is strictly increasing — never a reorder, dup, or phantom —
+/// and every appended event is eventually seen. Genuine overlap: a 3-way
+/// `Barrier` releases both writers and the draining reader together (the fjall
+/// `$all` analogue of `InMemoryStore`'s
+/// `subscribe_all_sees_concurrent_appends_across_streams`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscribe_all_sees_concurrent_appends_across_streams() {
+    let (store, _dir) = temp_store();
+    let store = Store::new(store);
+
+    let sub = Subscription::new(&store).subscribe_all(None).unwrap();
+    futures::pin_mut!(sub);
+
+    let barrier = Arc::new(Barrier::new(3));
+    let s1 = store.clone();
+    let s2 = store.clone();
+    let b1 = Arc::clone(&barrier);
+    let b2 = Arc::clone(&barrier);
+
+    let w1 = tokio::spawn(async move {
+        b1.wait().await;
+        for v in 1..=10u64 {
+            let expected = (v > 1).then(|| Version::new(v - 1).unwrap());
+            append_one(&s1, &sk("x"), v, expected, "X").await;
+        }
+    });
+    let w2 = tokio::spawn(async move {
+        b2.wait().await;
+        for v in 1..=10u64 {
+            let expected = (v > 1).then(|| Version::new(v - 1).unwrap());
+            append_one(&s2, &sk("y"), v, expected, "Y").await;
+        }
+    });
+
+    // Release both writers and drain concurrently.
+    barrier.wait().await;
+    let mut prev = 0u64;
+    let mut seen_x = 0u32;
+    let mut seen_y = 0u32;
+    for _ in 0..20 {
+        let (pos, env) = timeout(TIMEOUT, sub.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            pos.as_u64() > prev,
+            "$all position must be strictly increasing: {} after {prev}",
+            pos.as_u64()
+        );
+        prev = pos.as_u64();
+        match env.event_type() {
+            "X" => seen_x += 1,
+            "Y" => seen_y += 1,
+            other => panic!("phantom event type observed on $all: {other}"),
+        }
+    }
+    w1.await.unwrap();
+    w2.await.unwrap();
+    assert_eq!(seen_x, 10, "must observe all 10 events from stream x");
+    assert_eq!(seen_y, 10, "must observe all 10 events from stream y");
 }
 
 #[tokio::test]

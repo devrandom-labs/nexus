@@ -68,7 +68,7 @@ fn build_frame_value(event_type: &str, p: &[u8]) -> Bytes {
     let sv = SchemaVersion::from_u32(1).unwrap();
     let et = EventType::from_bytes(Bytes::copy_from_slice(event_type.as_bytes())).unwrap();
     let pl = Payload::from_bytes(Bytes::copy_from_slice(p)).unwrap();
-    wire::encode_frame(1, sv, &et, &pl, None).unwrap().value
+    wire::encode_frame(sv, &et, &pl, None).unwrap().value
 }
 
 fn encoding_benchmarks(c: &mut Criterion) {
@@ -84,7 +84,7 @@ fn encoding_benchmarks(c: &mut Criterion) {
     ] {
         let pl = Payload::from_bytes(Bytes::from(payload(size))).unwrap();
         group.bench_with_input(BenchmarkId::new("encode_frame", label), &pl, |b, pl| {
-            b.iter(|| wire::encode_frame(1, sv, &et, pl, None).unwrap());
+            b.iter(|| wire::encode_frame(sv, &et, pl, None).unwrap());
         });
     }
 
@@ -114,7 +114,7 @@ fn encoding_benchmarks(c: &mut Criterion) {
             &pl,
             |b, pl| {
                 b.iter(|| {
-                    let frame = wire::encode_frame(1, sv, &et, pl, None).unwrap();
+                    let frame = wire::encode_frame(sv, &et, pl, None).unwrap();
                     wire::decode_frame(frame.value.as_ref()).unwrap();
                 });
             },

@@ -135,7 +135,6 @@ impl<S: StreamLister> StreamLister for Store<S> {
 mod tests {
     use super::*;
     use crate::envelope::{PersistedEnvelope, pending_envelope};
-    use crate::store::GlobalSeq;
     use crate::testing::{InMemoryStore, InMemoryStoreError};
     use futures::StreamExt;
     use proptest::prelude::*;
@@ -195,7 +194,8 @@ mod tests {
     #[tokio::test]
     async fn export_stream_is_byte_for_byte_the_read_stream() {
         // The core contract: export is a verbatim pass-through of read_stream.
-        // Same versions, global_seqs, schema, event_type, payload, metadata.
+        // Same versions, schema, event_type, payload, metadata (a per-stream
+        // event carries no global position).
         let store = InMemoryStore::new();
         let id = sk("acct-1");
         seed(&store, &id, 5).await;
@@ -213,11 +213,6 @@ mod tests {
         assert_eq!(exported.len(), read.len());
         for (e, r) in exported.iter().zip(read.iter()) {
             assert_eq!(e.version(), r.version());
-            assert_eq!(
-                e.global_seq(),
-                r.global_seq(),
-                "global_seq carried verbatim"
-            );
             assert_eq!(e.schema_version(), r.schema_version());
             assert_eq!(e.event_type(), r.event_type());
             assert_eq!(e.payload(), r.payload());
@@ -253,7 +248,6 @@ mod tests {
         assert_eq!(first.len(), second.len());
         for (a, b) in first.iter().zip(second.iter()) {
             assert_eq!(a.version(), b.version());
-            assert_eq!(a.global_seq(), b.global_seq());
             assert_eq!(a.payload(), b.payload());
         }
     }
@@ -513,15 +507,12 @@ mod tests {
         fn assert_err_type<S: StreamLister<Error = InMemoryStoreError>>(_: &S) {}
         let store = InMemoryStore::new();
         assert_err_type(&store);
-        // The GlobalSeq import keeps the path exercised in tests that need it.
-        let _ = GlobalSeq::INITIAL;
     }
 
     // ── #247: the Store handle is the front door — list/export, no .raw() ────
 
     #[tokio::test]
     async fn store_handle_lists_and_exports_without_raw() {
-        use crate::store::{RawEventStore, Store};
         // The handle itself appends, lists, and exports — never `.raw()`.
         let store = Store::new(InMemoryStore::new());
         store
@@ -538,7 +529,10 @@ mod tests {
             .await
             .into_iter()
             .collect();
-        assert_eq!(ids, [b"acct-1".to_vec()].into_iter().collect());
+        assert_eq!(
+            ids,
+            [b"acct-1".to_vec()].into_iter().collect::<HashSet<_>>()
+        );
 
         let exported: Vec<PersistedEnvelope> = store
             .export_stream(&sk("acct-1"), Version::INITIAL)

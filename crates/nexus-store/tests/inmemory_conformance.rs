@@ -16,7 +16,9 @@ use nexus_store::store::RawEventStore;
 use nexus_store::testing::InMemoryStore;
 use nexus_store::value::SchemaVersion;
 use nexus_store::{PendingEnvelope, StreamKey, Version};
-use nexus_store_testing::{ConformanceRow, assert_event_stream_conformance};
+use nexus_store_testing::{
+    ConformanceRow, assert_all_stream_conformance, assert_event_stream_conformance,
+};
 
 #[tokio::test]
 async fn inmemory_event_stream_conforms() {
@@ -59,4 +61,12 @@ async fn inmemory_event_stream_conforms() {
             .expect("open read_stream")
     })
     .await;
+}
+
+/// `InMemoryStore` conformance against the canonical `$all` read-path contract
+/// (issue #266) — the same suite `FjallStore` runs, so the two adapters cannot
+/// silently diverge on `read_all` ordering, exclusivity, or resume.
+#[tokio::test]
+async fn inmemory_all_stream_conforms() {
+    assert_all_stream_conformance(|| async { InMemoryStore::new() }).await;
 }

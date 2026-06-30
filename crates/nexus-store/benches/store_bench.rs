@@ -42,15 +42,17 @@ use nexus_store::AppendError;
 use nexus_store::StreamKey;
 use nexus_store::envelope::{PendingEnvelope, PersistedEnvelope};
 use nexus_store::pending_envelope;
-use nexus_store::store::{GlobalSeq, RawEventStore};
+use nexus_store::store::RawEventStore;
 use tokio::sync::Mutex;
 
-fn build_persisted(
-    version: u64,
-    global_seq: GlobalSeq,
-    event_type: &str,
-    payload: &[u8],
-) -> PersistedEnvelope {
+/// The bench adapter's `$all` position. Its `read_all` is a no-op (empty), so
+/// this exists only to satisfy `RawEventStore::AllPosition`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct BenchAllPos(u64);
+
+impl nexus_store::AllPosition for BenchAllPos {}
+
+fn build_persisted(version: u64, event_type: &str, payload: &[u8]) -> PersistedEnvelope {
     let mut buf = Vec::with_capacity(event_type.len() + payload.len());
     buf.extend_from_slice(event_type.as_bytes());
     buf.extend_from_slice(payload);
@@ -59,7 +61,6 @@ fn build_persisted(
     let pl_end = u32::try_from(event_type.len() + payload.len()).expect("fits u32");
     PersistedEnvelope::try_new(
         nexus::Version::new(version).expect("non-zero version"),
-        global_seq,
         value,
         nexus_store::value::SchemaVersion::INITIAL,
         0..et_end,
@@ -103,12 +104,7 @@ impl futures::Stream for InMemoryStream {
         }
         let row = self.events[self.pos].clone();
         self.pos += 1;
-        core::task::Poll::Ready(Some(Ok(build_persisted(
-            row.0,
-            GlobalSeq::INITIAL,
-            &row.1,
-            &row.2,
-        ))))
+        core::task::Poll::Ready(Some(Ok(build_persisted(row.0, &row.1, &row.2))))
     }
 }
 
@@ -121,7 +117,8 @@ enum BenchError {
 impl RawEventStore for InMemoryRawStore {
     type Error = BenchError;
     type Stream = InMemoryStream;
-    type AllStream = InMemoryStream;
+    type AllPosition = BenchAllPos;
+    type AllStream = futures::stream::Empty<Result<(BenchAllPos, PersistedEnvelope), BenchError>>;
 
     async fn append(
         &self,
@@ -169,13 +166,10 @@ impl RawEventStore for InMemoryRawStore {
 
     async fn read_all(
         &self,
-        _from: nexus_store::store::GlobalSeq,
+        _from: Option<Self::AllPosition>,
     ) -> Result<Self::AllStream, Self::Error> {
-        // InMemoryRawStore is a benchmark-only adapter that does not implement the global index.
-        Ok(InMemoryStream {
-            events: Vec::new(),
-            pos: 0,
-        })
+        // InMemoryRawStore is a benchmark-only adapter that does not implement the $all index.
+        Ok(futures::stream::empty())
     }
 }
 
@@ -271,7 +265,6 @@ fn bench_persisted_envelope_construction(c: &mut Criterion) {
         b.iter(|| {
             black_box(build_persisted(
                 1,
-                GlobalSeq::INITIAL,
                 black_box(event_type),
                 black_box(&payload),
             ))
