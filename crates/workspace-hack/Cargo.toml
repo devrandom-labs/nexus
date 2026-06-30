@@ -12,31 +12,59 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+crossbeam-utils = { version = "0.8" }
+crypto-common = { version = "0.1", default-features = false, features = ["std"] }
+digest = { version = "0.10", features = ["mac", "std"] }
+either = { version = "1", features = ["serde", "use_std"] }
+futures-io = { version = "0.3" }
+futures-sink = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 memchr = { version = "2" }
 num-traits = { version = "0.2" }
 once_cell = { version = "1" }
+ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "rc", "result", "std"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = { version = "0.10" }
+smallvec = { version = "1", default-features = false, features = ["const_generics", "serde"] }
+sqlx-core = { version = "0.8", features = ["_rt-tokio", "any", "json", "migrate", "offline"] }
+sqlx-postgres = { version = "0.8", default-features = false, features = ["migrate", "offline"] }
+tokio = { version = "1", features = ["full"] }
 trybuild = { version = "1", default-features = false, features = ["diff"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [build-dependencies]
+crossbeam-utils = { version = "0.8" }
+crypto-common = { version = "0.1", default-features = false, features = ["std"] }
+digest = { version = "0.10", features = ["mac", "std"] }
+either = { version = "1", features = ["serde", "use_std"] }
+futures-io = { version = "0.3" }
+futures-sink = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 memchr = { version = "2" }
 num-traits = { version = "0.2" }
 once_cell = { version = "1" }
+ppv-lite86 = { version = "0.2", default-features = false, features = ["simd", "std"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1", default-features = false, features = ["alloc", "rc", "result", "std"] }
-syn = { version = "2", features = ["extra-traits", "full", "visit"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = { version = "0.10" }
+smallvec = { version = "1", default-features = false, features = ["const_generics", "serde"] }
+sqlx-core = { version = "0.8", features = ["_rt-tokio", "any", "json", "migrate", "offline"] }
+sqlx-postgres = { version = "0.8", default-features = false, features = ["migrate", "offline"] }
+syn = { version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
+tokio = { version = "1", features = ["full"] }
 trybuild = { version = "1", default-features = false, features = ["diff"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
+bitflags = { version = "2", default-features = false, features = ["std"] }
 getrandom = { version = "0.3", default-features = false, features = ["std"] }
-libc = { version = "0.2" }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
+bitflags = { version = "2", default-features = false, features = ["std"] }
 getrandom = { version = "0.3", default-features = false, features = ["std"] }
-libc = { version = "0.2" }
 
 ### END HAKARI SECTION

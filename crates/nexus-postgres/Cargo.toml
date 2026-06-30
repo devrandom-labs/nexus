@@ -1,0 +1,29 @@
+[package]
+name = "nexus-postgres"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "PostgreSQL-backed event store adapter for the Nexus event-sourcing framework"
+readme = "../../README.md"
+keywords = ["event-sourcing", "event-store", "postgres"]
+categories = ["database"]
+
+[dependencies]
+bytes = { workspace = true }
+futures = { workspace = true }
+nexus = { version = "0.1.0", path = "../nexus" }
+nexus-store = { version = "0.1.0", path = "../nexus-store", features = ["subscription"] }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+nexus-store-testing = { version = "0.1.0", path = "../nexus-store-testing" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
