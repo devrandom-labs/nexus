@@ -1,4 +1,12 @@
 //! PostgreSQL-backed event store adapter for nexus.
+// `PostgresError` and `AppendError<PostgresError>` are intentionally
+// stack-allocated (using `ErrorId` array-strings) for IoT targets — same
+// rationale as `FjallError`. The large-Err lint fires at every return site;
+// suppress it crate-wide.
+#![allow(
+    clippy::result_large_err,
+    reason = "PostgresError is intentionally stack-allocated (~208 bytes) for IoT targets; same rationale as FjallError"
+)]
 //!
 //! Implements [`RawEventStore`](nexus_store::RawEventStore) +
 //! [`WakeSource`](nexus_store::wake::WakeSource) over `sqlx`-postgres, with
