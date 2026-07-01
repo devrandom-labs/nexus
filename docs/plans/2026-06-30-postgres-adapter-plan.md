@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS events (
     version        BIGINT   NOT NULL,
     txid           xid8     NOT NULL DEFAULT pg_current_xact_id(),
     event_type     TEXT     NOT NULL,
-    schema_version INTEGER  NOT NULL,
+    schema_version BIGINT   NOT NULL,
     payload        BYTEA    NOT NULL,
     metadata       BYTEA,                         -- NULL = absent metadata
     PRIMARY KEY (global_seq),
@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS events (
     version        BIGINT   NOT NULL,
     txid           xid8     NOT NULL DEFAULT pg_current_xact_id(),
     event_type     TEXT     NOT NULL,
-    schema_version INTEGER  NOT NULL,
+    schema_version BIGINT   NOT NULL,
     payload        BYTEA    NOT NULL,
     metadata       BYTEA,
     PRIMARY KEY (global_seq),
@@ -406,7 +406,7 @@ The decision logic (optimistic check + strict-sequential versions + range narrow
 /// carries the post-validation DB scalars that don't exist on `PendingEnvelope`.)
 struct PreparedInsert<'a> {
     version: i64,
-    schema_version: i32,
+    schema_version: i64,
     env: &'a PendingEnvelope,
 }
 
@@ -458,14 +458,12 @@ fn prepare_inserts<'a>(
                     reason: ErrorId::from_display(&"version exceeds i64::MAX"),
                 })
             })?;
-            // `schema_version` column is INTEGER (i32); `env.schema_version()` is
-            // `u32` — narrow with try_from (rule 2), never bind an i64 to int4.
-            let schema_version = i32::try_from(env.schema_version()).map_err(|_| {
-                AppendError::Store(PostgresError::CorruptRow {
-                    stream_id: ErrorId::from_display(id),
-                    reason: ErrorId::from_display(&"schema_version exceeds i32::MAX"),
-                })
-            })?;
+            // `schema_version` column is BIGINT (i64); `env.schema_version()` is
+            // `u32`, which widens infallibly — the FULL `SchemaVersion`
+            // (`NonZeroU32`) range is stored, no rejection. (Conformance caught
+            // the earlier INTEGER/i32 column silently rejecting valid high
+            // schema_versions — the adapter must persist every valid one.)
+            let schema_version = i64::from(env.schema_version());
             Ok(PreparedInsert { version, schema_version, env })
         })
         .collect()
@@ -566,7 +564,7 @@ Note: we do not insert `global_seq` or `txid` — `IDENTITY` and the `DEFAULT pg
   - stale `expected` (`Some(4)` when `current = 5`) → `Conflict { expected: Some(4), actual: Some(5) }`.
   - gapped/out-of-order batch (`current = 0`, versions `[1,3]` or `[2,1]`) → `Conflict` at the first offender, with the right `expected`/`actual`.
   - empty batch → `Ok(vec![])` (so `append` short-circuits *after* the version check).
-  - `schema_version > i32::MAX` → `Store(CorruptRow)`, not a panic.
+  - full `SchemaVersion` range accepted — `schema_version = u32::MAX` (> `i32::MAX`) → `Ok`, stored as `i64` (BIGINT column; the adapter must persist every valid `SchemaVersion`, never reject one — a conformance requirement).
   This is the bulk of the append contract (CLAUDE rule 7: sequence + defensive-boundary) proven without a VM; the live-DB tests (Task 8) then only need to cover the genuinely concurrent UNIQUE-violation race and the actual persistence round-trip.
 
 ---
@@ -590,7 +588,7 @@ use nexus_store::envelope::PersistedEnvelope;
 struct EventRow {
     version: i64,
     event_type: String,
-    schema_version: i32,
+    schema_version: i64,
     payload: Vec<u8>,
     metadata: Option<Vec<u8>>,
 }

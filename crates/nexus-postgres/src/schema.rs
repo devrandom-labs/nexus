@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS events (
     version        BIGINT   NOT NULL,
     txid           xid8     NOT NULL DEFAULT pg_current_xact_id(),
     event_type     TEXT     NOT NULL,
-    schema_version INTEGER  NOT NULL,
+    schema_version BIGINT   NOT NULL,
     payload        BYTEA    NOT NULL,
     metadata       BYTEA,
     PRIMARY KEY (global_seq),

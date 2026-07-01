@@ -156,7 +156,10 @@ fn spawn_listener(pool: PgPool, notifiers: Arc<StreamNotifiers>) -> JoinHandle<(
 struct EventRow {
     version: i64,
     event_type: String,
-    schema_version: i32,
+    // BIGINT: `SchemaVersion` is `NonZeroU32`, whose max exceeds `i32::MAX`, so
+    // the column must be `i64` to store the full range (a conformance
+    // requirement — the adapter must persist every valid `SchemaVersion`).
+    schema_version: i64,
     payload: Vec<u8>,
     metadata: Option<Vec<u8>>,
 }
@@ -263,7 +266,7 @@ fn corrupt(stream_id: ErrorId, reason: &str) -> PostgresError {
 #[derive(Debug)]
 struct PreparedInsert<'a> {
     version: i64,
-    schema_version: i32,
+    schema_version: i64,
     env: &'a PendingEnvelope,
 }
 
@@ -315,14 +318,11 @@ fn prepare_inserts<'a>(
                     reason: ErrorId::from_display(&"version exceeds i64::MAX"),
                 })
             })?;
-            // `schema_version` column is INTEGER (i32); `env.schema_version()` is
-            // `u32` — narrow with `try_from` (rule 2), never bind an i64 to int4.
-            let schema_version = i32::try_from(env.schema_version()).map_err(|_| {
-                AppendError::Store(PostgresError::CorruptRow {
-                    stream_id: ErrorId::from_display(id),
-                    reason: ErrorId::from_display(&"schema_version exceeds i32::MAX"),
-                })
-            })?;
+            // `schema_version` column is BIGINT (i64); `env.schema_version()` is
+            // `u32`, which widens to i64 infallibly — so the FULL `SchemaVersion`
+            // (`NonZeroU32`) range is stored, no rejection (conformance: the
+            // adapter must persist every valid `SchemaVersion`).
+            let schema_version = i64::from(env.schema_version());
             Ok(PreparedInsert {
                 version,
                 schema_version,
@@ -595,7 +595,7 @@ mod tests {
     use nexus_store::error::AppendError;
     use nexus_store::value::SchemaVersion;
 
-    use super::{PostgresError, prepare_inserts};
+    use super::prepare_inserts;
 
     fn stream_key() -> StreamKey {
         StreamKey::from_bytes("test-stream")
@@ -659,12 +659,12 @@ mod tests {
         assert!(rows.is_empty());
     }
 
-    /// Schema version round-trips as i32 correctly.
+    /// Schema version widens to the BIGINT column type (i64) correctly.
     #[test]
-    fn schema_version_rounds_to_i32() {
+    fn schema_version_widens_to_i64() {
         let envs = [make_envelope_sv(1, 42)];
         let rows = prepare_inserts(0, None, &envs, &stream_key()).unwrap();
-        assert_eq!(rows[0].schema_version, 42_i32);
+        assert_eq!(rows[0].schema_version, 42_i64);
     }
 
     // 2. Conflict / defensive boundary — failure paths
@@ -724,18 +724,15 @@ mod tests {
         }
     }
 
-    /// `schema_version > i32::MAX` → `Store(CorruptRow)`, not a panic
-    /// (CLAUDE rule 2: checked arithmetic; rule 3: one variant = one domain).
+    /// The FULL `SchemaVersion` (`NonZeroU32`) range is accepted and widened to
+    /// the BIGINT column — including `u32::MAX`, which exceeds `i32::MAX`. This
+    /// is a conformance requirement (the shared `assert_event_stream_conformance`
+    /// suite feeds a boundary `schema_version` near `u32::MAX`): the adapter must
+    /// persist every valid `SchemaVersion`, never reject one.
     #[test]
-    fn schema_version_over_i32_max_is_store_error() {
-        // Build a PendingEnvelope whose schema_version is i32::MAX + 1 = 2^31.
-        // SchemaVersion is NonZeroU32 so 2^31 is a legal u32 value but overflows i32.
-        let overflow_sv: u32 = (i32::MAX as u32) + 1;
-        let envs = [make_envelope_sv(1, overflow_sv)];
-        let err = prepare_inserts(0, None, &envs, &stream_key()).unwrap_err();
-        assert!(
-            matches!(err, AppendError::Store(PostgresError::CorruptRow { .. })),
-            "expected Store(CorruptRow), got {err:?}"
-        );
+    fn schema_version_full_u32_range_is_accepted() {
+        let envs = [make_envelope_sv(1, u32::MAX)];
+        let rows = prepare_inserts(0, None, &envs, &stream_key()).unwrap();
+        assert_eq!(rows[0].schema_version, i64::from(u32::MAX));
     }
 }
