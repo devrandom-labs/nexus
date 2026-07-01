@@ -48,11 +48,16 @@ async fn setup() -> Option<Store<PostgresStore>> {
         .connect(&url)
         .await
         .expect("connect pool");
+    // Create the schema FIRST, then truncate (see conformance_tests::setup — a
+    // fresh DB has no `events` table yet; tests run serially via nextest
+    // `--test-threads=1` so TRUNCATE isolates each one).
+    let pg = PostgresStore::from_pool(pool.clone())
+        .await
+        .expect("from_pool");
     sqlx::query("TRUNCATE events RESTART IDENTITY")
         .execute(&pool)
         .await
         .expect("truncate events");
-    let pg = PostgresStore::from_pool(pool).await.expect("from_pool");
     Some(pg.into_store())
 }
 

@@ -44,14 +44,18 @@ async fn setup() -> Option<(PostgresStore, PgPool)> {
         .connect(&url)
         .await
         .expect("connect pool");
-    // Truncate for isolation — each test gets a clean slate.
+    // Ensure the schema exists FIRST (`from_pool` runs `CREATE TABLE IF NOT
+    // EXISTS`), THEN truncate: on a fresh database the `events` table does not
+    // exist yet, so truncating before creation would fail. Tests run serially
+    // (the nixosTest invokes nextest with `--test-threads=1`), so TRUNCATE gives
+    // each test a clean, isolated slate against the shared table.
+    let store = PostgresStore::from_pool(pool.clone())
+        .await
+        .expect("from_pool");
     sqlx::query("TRUNCATE events RESTART IDENTITY")
         .execute(&pool)
         .await
         .expect("truncate events");
-    let store = PostgresStore::from_pool(pool.clone())
-        .await
-        .expect("from_pool");
     Some((store, pool))
 }
 

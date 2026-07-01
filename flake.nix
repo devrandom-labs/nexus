@@ -158,9 +158,13 @@
               machine.copy_from_host(
                   "${postgresTests}/nexus-postgres.tar.zst", "/tmp/tests.tar.zst"
               )
+              # --test-threads=1: the DB-backed tests share one `events` table
+              # and isolate via TRUNCATE in setup(), so they MUST run serially —
+              # parallel tests would clobber each other's rows (and race on
+              # CREATE TABLE IF NOT EXISTS).
               machine.succeed(
                   "DATABASE_URL='postgres:///nexus_test?host=/run/postgresql' "
-                  "cargo nextest run --archive-file /tmp/tests.tar.zst 2>&1 | tee /tmp/out"
+                  "cargo nextest run --test-threads=1 --archive-file /tmp/tests.tar.zst 2>&1 | tee /tmp/out"
               )
             '';
           };
