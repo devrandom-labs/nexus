@@ -158,17 +158,25 @@
               machine.copy_from_host(
                   "${postgresTests}/nexus-postgres.tar.zst", "/tmp/tests.tar.zst"
               )
+              # The nextest archive ships the compiled test binaries but NOT the
+              # source, yet nextest still needs the workspace manifest at run
+              # time (it records the build-time path, which doesn't exist here).
+              # Copy the toolchain-free source tree in and point --workspace-remap
+              # at it; chmod so nextest can write scratch under it if needed.
+              machine.copy_from_host("${src}", "/tmp/src")
+              machine.succeed("chmod -R u+w /tmp/src")
               # Invoke `cargo-nextest` DIRECTLY, not `cargo nextest`: the VM has
               # no Rust toolchain (only the cargo-nextest binary + the prebuilt
-              # archive), so `cargo` is not on PATH. `cargo-nextest nextest run
-              # --archive-file` is self-contained and needs no cargo/rustc.
+              # archive), so `cargo` is not on PATH. Running from an archive is
+              # self-contained and needs no cargo/rustc.
               # --test-threads=1: the DB-backed tests share one `events` table
               # and isolate via TRUNCATE in setup(), so they MUST run serially —
               # parallel tests would clobber each other's rows (and race on
               # CREATE TABLE IF NOT EXISTS).
               machine.succeed(
                   "DATABASE_URL='postgres:///nexus_test?host=/run/postgresql' "
-                  "cargo-nextest nextest run --test-threads=1 --archive-file /tmp/tests.tar.zst 2>&1 | tee /tmp/out"
+                  "cargo-nextest nextest run --test-threads=1 "
+                  "--workspace-remap /tmp/src --archive-file /tmp/tests.tar.zst 2>&1 | tee /tmp/out"
               )
             '';
           };
