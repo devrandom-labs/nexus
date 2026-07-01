@@ -48,6 +48,25 @@
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+        # nexus-postgres's DB-backed tests are built once as a cargo-nextest
+        # archive, then executed *inside* the NixOS VM below against a live
+        # PostgreSQL — so the VM needs no Rust toolchain, only the archive plus
+        # `cargo-nextest`. The tests skip (pass) when DATABASE_URL is unset, so
+        # they are inert under the normal `nix flake check`; this archive + the
+        # Linux-only `postgres-integration` package are what actually run them.
+        postgresTests = craneLib.mkCargoDerivation (commonArgs // {
+          inherit cargoArtifacts;
+          pname = "nexus-postgres-tests";
+          doInstallCargoArtifacts = false;
+          buildPhaseCargoCommand = ''
+            mkdir -p $out
+            cargo nextest archive --package nexus-postgres \
+              --archive-file $out/nexus-postgres.tar.zst
+          '';
+          nativeBuildInputs = (commonArgs.nativeBuildInputs or [ ])
+            ++ [ pkgs.cargo-nextest ];
+        });
       in with pkgs; {
         checks = {
           nexus-clippy = craneLib.cargoClippy (commonArgs // {
@@ -106,12 +125,45 @@
 
         packages = {
         } // lib.optionalAttrs isLinux {
-          # NixOS integration tests require Linux VMs
-          integration = pkgs.testers.runNixOSTest ({
-            name = "nexus-integration-test";
-            nodes = { };
-            testScript = { nodes, ... }: "\n";
-          });
+          # NixOS integration tests require Linux VMs — Linux-only `packages`
+          # attribute, deliberately NOT a `checks` entry, so the darwin
+          # `nix flake check` dev gate never builds a test archive or boots a VM.
+          # Boots a NixOS VM with services.postgresql (a `nexus_test` DB, local
+          # trust auth), then runs the pre-built nextest archive against it with
+          # DATABASE_URL pointing at the VM's unix-socket Postgres — so the
+          # nexus-postgres tests that skip without DATABASE_URL actually execute.
+          # Run on Linux/CI with: nix build .#postgres-integration
+          postgres-integration = pkgs.testers.runNixOSTest {
+            name = "nexus-postgres-integration";
+            nodes.machine = { pkgs, ... }: {
+              services.postgresql = {
+                enable = true;
+                ensureDatabases = [ "nexus_test" ];
+                # `local all all trust` lets the test process connect over the
+                # unix socket as any role without a password — the simplest auth
+                # for a throwaway CI VM (no networked Postgres, no TLS).
+                authentication = lib.mkForce ''
+                  local all all trust
+                '';
+              };
+              environment.systemPackages = [ pkgs.cargo-nextest pkgs.zstd ];
+            };
+            testScript = ''
+              machine.wait_for_unit("postgresql.service")
+              # The unix-socket DATABASE_URL form needs a role matching the OS
+              # user running the tests. The test script runs as root, so create a
+              # `root` superuser role; `nexus_test` is owned by `postgres` and
+              # granted to root so the tests can create/truncate the events table.
+              machine.succeed("su postgres -c \"psql -c \\\"CREATE ROLE root LOGIN SUPERUSER;\\\"\"")
+              machine.copy_from_host(
+                  "${postgresTests}/nexus-postgres.tar.zst", "/tmp/tests.tar.zst"
+              )
+              machine.succeed(
+                  "DATABASE_URL='postgres:///nexus_test?host=/run/postgresql' "
+                  "cargo nextest run --archive-file /tmp/tests.tar.zst 2>&1 | tee /tmp/out"
+              )
+            '';
+          };
         };
 
         devShells.default = craneLib.devShell {
