@@ -64,6 +64,7 @@ mod builder;
 mod error;
 mod global_seq;
 mod partition;
+mod plan;
 mod scan;
 #[cfg(feature = "snapshot")]
 mod snapshot;

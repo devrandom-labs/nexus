@@ -1,11 +1,10 @@
 use crate::builder::FjallStoreBuilder;
-use crate::error::{FjallError, reason_label};
+use crate::error::FjallError;
 use crate::global_seq::GlobalSeq;
+use crate::plan;
 use crate::scan::{GlobalScan, ScanCursor, StreamScan};
 use crate::subscription_id::OwnedStreamId;
-use crate::wire_key::{
-    decode_stream_version, encode_event_key, encode_global_key, encode_stream_version,
-};
+use crate::wire_key::{decode_stream_version, encode_stream_version};
 use fjall::{Readable, Slice};
 use nexus::{ErrorId, Version};
 use nexus_store::PendingEnvelope;
@@ -14,7 +13,6 @@ use nexus_store::error::AppendError;
 use nexus_store::notify::{NotifyError, StreamNotifiers, WakeReg};
 use nexus_store::store::RawEventStore;
 use nexus_store::wake::WakeSource;
-use nexus_store::wire;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -156,6 +154,29 @@ impl FjallStore {
     }
 }
 
+/// Map a neutral [`plan::PlanError`] into the single-stream [`AppendError`]
+/// domain. A version-sequence overflow becomes a `Store(VersionOverflow)`, NOT
+/// a `Conflict` — overflow is not a retry-eligible concurrency conflict (rule
+/// 3), and this matches the atomic-append path's handling.
+fn append_plan_err(id: &StreamKey, e: &plan::PlanError) -> AppendError<FjallError> {
+    match *e {
+        plan::PlanError::Conflict { expected, actual } => AppendError::Conflict {
+            stream_id: ErrorId::from_display(id),
+            expected,
+            actual,
+        },
+        plan::PlanError::VersionOverflow => AppendError::Store(FjallError::VersionOverflow),
+        plan::PlanError::GlobalSeqOverflow => AppendError::Store(FjallError::GlobalSeqOverflow),
+        plan::PlanError::InvalidInput { version, reason } => {
+            AppendError::Store(FjallError::InvalidInput {
+                stream_id: ErrorId::from_display(id),
+                version,
+                reason,
+            })
+        }
+    }
+}
+
 impl RawEventStore for FjallStore {
     type Error = FjallError;
     type Stream = ScanCursor<StreamScan>;
@@ -187,85 +208,36 @@ impl RawEventStore for FjallStore {
             return Ok(());
         }
 
-        // Validate envelope versions are sequential from current_version + 1.
-        // A running counter advanced by checked_add(1) avoids any usize -> u64
-        // cast and guards against overflow near u64::MAX.
-        let mut expected_version_seq =
-            current_version
-                .checked_add(1)
-                .ok_or_else(|| AppendError::Conflict {
-                    stream_id: ErrorId::from_display(id),
-                    expected: Version::new(current_version),
-                    actual: Some(envelopes[0].version()),
-                })?;
-        for env in envelopes {
-            if env.version().as_u64() != expected_version_seq {
-                return Err(AppendError::Conflict {
-                    stream_id: ErrorId::from_display(id),
-                    expected: Version::new(expected_version_seq),
-                    actual: Some(env.version()),
-                });
-            }
-            expected_version_seq =
-                expected_version_seq
-                    .checked_add(1)
-                    .ok_or_else(|| AppendError::Conflict {
-                        stream_id: ErrorId::from_display(id),
-                        expected: Version::new(current_version),
-                        actual: Some(env.version()),
-                    })?;
-        }
-
         // Read the current store-global sequence counter (monotonic, shared
         // across all streams). Absent key = no events appended yet.
         let current_global = self.read_current_global(&tx, id)?;
 
-        // Write each envelope into the events partition, stamping each with
-        // the next GlobalSeq via a running counter (monotonic; gaps permitted).
-        let mut global_seq = current_global;
-        for env in envelopes {
-            global_seq = global_seq
-                .checked_add(1)
-                .ok_or(AppendError::Store(FjallError::GlobalSeqOverflow))?;
+        // Pure plan: validate strict-sequential versions and encode/stage every
+        // event with a running GlobalSeq. The entire write body lives in
+        // `plan::plan_run`, unit-tested with no fjall (mirrors postgres
+        // `prepare_inserts`) — the same core the atomic-append path stages with.
+        let planned = plan::plan_run(current_version, current_global, id, envelopes)
+            .map_err(|e| append_plan_err(id, &e))?;
 
-            let key = encode_event_key(id_bytes, env.version().as_u64()).map_err(|e| {
-                AppendError::Store(FjallError::InvalidInput {
-                    stream_id: ErrorId::from_display(id),
-                    version: env.version().as_u64(),
-                    reason: reason_label(&e),
-                })
-            })?;
-            let frame = wire::encode_frame(
-                env.schema_version_value(),
-                &env.event_type_value(),
-                &env.payload_value(),
-                env.metadata_value().as_ref(),
-            )
-            .map_err(|e| {
-                AppendError::Store(FjallError::InvalidInput {
-                    stream_id: ErrorId::from_display(id),
-                    version: env.version().as_u64(),
-                    reason: reason_label(&e),
-                })
-            })?;
-            let slice = Slice::from(frame.value);
-            tx.insert(&self.events, &key, slice.clone());
-            let global_key = encode_global_key(global_seq, env.version().as_u64());
-            tx.insert(&self.events_global, global_key, slice);
+        for row in &planned.rows {
+            let slice = Slice::from(row.frame.clone());
+            tx.insert(&self.events, &row.event_key, slice.clone());
+            tx.insert(&self.events_global, row.global_key, slice);
         }
 
-        // Advance the global counter to the last assigned GlobalSeq, in the
-        // same transaction as the event writes — counter and events commit
-        // together. The write loop ran at least once (non-empty batch checked
-        // above), so `global_seq` holds the last assigned value.
-        tx.insert(&self.global, GLOBAL_SEQ_KEY, global_seq.to_le_bytes());
-
-        // Update stream version.
-        let new_version = envelopes
-            .last()
-            .map_or(current_version, |last| last.version().as_u64());
-
-        tx.insert(&self.streams, id_bytes, encode_stream_version(new_version));
+        // Advance both counters in the same transaction as the event writes so
+        // they commit together. The batch is non-empty (checked above), so
+        // `plan_run` staged at least one event and advanced the global counter.
+        tx.insert(
+            &self.global,
+            GLOBAL_SEQ_KEY,
+            planned.ending_global.to_le_bytes(),
+        );
+        tx.insert(
+            &self.streams,
+            id_bytes,
+            encode_stream_version(planned.new_version),
+        );
 
         // Atomic cross-partition commit.
         tx.commit()
@@ -389,28 +361,43 @@ mod snapshot_impl {
 mod atomic_append_impl {
     use super::{
         ErrorId, FjallError, FjallStore, GLOBAL_SEQ_KEY, Slice, StreamKey, Version,
-        encode_event_key, encode_global_key, encode_stream_version, reason_label, wire,
+        encode_stream_version,
     };
+    use crate::plan;
     use nexus_store::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
     use std::collections::HashMap;
 
     type Tx<'a> = fjall::SingleWriterWriteTx<'a>;
 
-    /// Map an encode failure (event-key or wire-frame) to a `Store` error,
-    /// preserving the source's message via `reason_label`. Generic over the
-    /// concrete error type so both `encode_event_key`'s `EncodeError` and
-    /// `wire::encode_frame`'s `WireError` flow through one site (rule 3 — keep
-    /// the source's structured detail rather than collapsing it).
-    fn invalid_input<E: std::fmt::Display>(
+    /// Map a neutral [`plan::PlanError`] into the [`AtomicAppendError`] domain.
+    /// A per-run sequential violation surfaces as `Conflict { index }`, but it is
+    /// unreachable in practice: `validate_atomic_writes` already proved every run
+    /// sequential before any staging. Overflow / encode failures map to `Store`,
+    /// never `Conflict` (rule 3).
+    fn atomic_plan_err(
+        index: usize,
         target: &StreamKey,
-        version: u64,
-        source: &E,
+        e: &plan::PlanError,
     ) -> AtomicAppendError<FjallError> {
-        AtomicAppendError::Store(FjallError::InvalidInput {
-            stream_id: ErrorId::from_display(target),
-            version,
-            reason: reason_label(source),
-        })
+        match *e {
+            plan::PlanError::Conflict { .. } => AtomicAppendError::Conflict {
+                index,
+                actual: None,
+            },
+            plan::PlanError::VersionOverflow => {
+                AtomicAppendError::Store(FjallError::VersionOverflow)
+            }
+            plan::PlanError::GlobalSeqOverflow => {
+                AtomicAppendError::Store(FjallError::GlobalSeqOverflow)
+            }
+            plan::PlanError::InvalidInput { version, reason } => {
+                AtomicAppendError::Store(FjallError::InvalidInput {
+                    stream_id: ErrorId::from_display(target),
+                    version,
+                    reason,
+                })
+            }
+        }
     }
 
     impl FjallStore {
@@ -476,47 +463,41 @@ mod atomic_append_impl {
             tx: &mut Tx<'_>,
             writes: &[PlannedAppend],
         ) -> Result<(), AtomicAppendError<FjallError>> {
-            let current_global = self
+            let start_global = self
                 .read_global_raw(tx, &writes[0].target)
                 .map_err(AtomicAppendError::Store)?;
-            let mut global_seq = current_global;
-            for w in writes {
-                let id_bytes = w.target.as_ref();
-                for env in &w.events {
-                    global_seq = global_seq
-                        .checked_add(1)
-                        .ok_or(AtomicAppendError::Store(FjallError::GlobalSeqOverflow))?;
-                    let version = env.version().as_u64();
-                    let key = encode_event_key(id_bytes, version)
-                        .map_err(|e| invalid_input(&w.target, version, &e))?;
-                    let frame = wire::encode_frame(
-                        env.schema_version_value(),
-                        &env.event_type_value(),
-                        &env.payload_value(),
-                        env.metadata_value().as_ref(),
-                    )
-                    .map_err(|e| invalid_input(&w.target, version, &e))?;
-                    let slice = Slice::from(frame.value);
-                    tx.insert(&self.events, &key, slice.clone());
-                    let global_key = encode_global_key(global_seq, env.version().as_u64());
-                    tx.insert(&self.events_global, global_key, slice);
+            let mut global = start_global;
+            for (index, w) in writes.iter().enumerate() {
+                // `validate_atomic_writes` already matched this run's head to the
+                // running projected head, so plan from `expected_version` (== the
+                // head). `plan_run` re-derives the very same staged rows the
+                // single-stream `append` does — ONE encode implementation shared
+                // by both write paths, threading the running GlobalSeq across runs.
+                let current_version = w.expected_version.map_or(0, Version::as_u64);
+                let planned = plan::plan_run(current_version, global, &w.target, &w.events)
+                    .map_err(|e| atomic_plan_err(index, &w.target, &e))?;
+                for row in &planned.rows {
+                    let slice = Slice::from(row.frame.clone());
+                    tx.insert(&self.events, &row.event_key, slice.clone());
+                    tx.insert(&self.events_global, row.global_key, slice);
                 }
                 // Advance the stream version counter to the run's last version.
-                // The planner guarantees a non-empty run; an empty run is a
-                // defensive no-op (no version to stamp).
-                if let Some(last) = w.events.last() {
+                // An empty run stages nothing (defensive; the planner guarantees
+                // a non-empty run in practice).
+                if !planned.rows.is_empty() {
                     tx.insert(
                         &self.streams,
-                        id_bytes,
-                        encode_stream_version(last.version().as_u64()),
+                        w.target.as_ref(),
+                        encode_stream_version(planned.new_version),
                     );
                 }
+                global = planned.ending_global;
             }
             // Advance the global counter once, in the same transaction — only
             // when at least one event was assigned (an all-empty batch leaves it
             // untouched, mirroring append's empty-batch path).
-            if global_seq != current_global {
-                tx.insert(&self.global, GLOBAL_SEQ_KEY, global_seq.to_le_bytes());
+            if global != start_global {
+                tx.insert(&self.global, GLOBAL_SEQ_KEY, global.to_le_bytes());
             }
             Ok(())
         }
@@ -648,7 +629,7 @@ impl WakeSource for FjallStore {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
-pub(crate) mod read_test_helpers {
+pub mod read_test_helpers {
     use super::*;
     use nexus_store::envelope::pending_envelope;
 
@@ -683,8 +664,10 @@ pub(crate) mod read_test_helpers {
 #[allow(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
+    use crate::wire_key::encode_global_key;
     use futures::StreamExt;
     use nexus_store::envelope::pending_envelope;
+    use nexus_store::wire;
 
     fn sk(s: &str) -> StreamKey {
         StreamKey::from_slice(s.as_bytes())
