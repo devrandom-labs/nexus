@@ -69,11 +69,16 @@ impl<S, E> FjallStoreBuilder<S, E> {
         }
     }
 
-    /// Customise the `events` partition options.
+    /// Customise the event-storage partitions (`events` **and** its `$all` twin
+    /// `events_global`).
     ///
-    /// The closure receives a pre-configured `KeyspaceCreateOptions` and
-    /// should return the (possibly modified) options. Defaults are tuned
-    /// for scan-heavy event reads (32 KiB blocks, LZ4 compression).
+    /// The closure receives a pre-configured `KeyspaceCreateOptions` and should
+    /// return the (possibly modified) options; the result is applied to **both**
+    /// event-frame partitions, which hold identical scan-heavy data. Defaults are
+    /// tuned for scan-heavy event reads (32 KiB blocks, LZ4 compression). The
+    /// point-read *metadata* partitions (`streams` / `global` / `snapshots`) are
+    /// intentionally not tunable — they carry small counters/blobs for which the
+    /// point-read defaults (bloom filter, 4 KiB blocks) are correct.
     #[must_use]
     pub fn events_config<F>(self, f: F) -> FjallStoreBuilder<S, F>
     where
@@ -104,9 +109,14 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
 
         let streams_opts = self.streams_config.apply(point_read_defaults());
         let streams = db.keyspace("streams", || streams_opts)?;
+        // The two event-frame partitions (`events` + `events_global`) hold the
+        // SAME scan-heavy frame data, so one `events_config` tunes both — no
+        // separate knob, and no silent asymmetry where `events` is tunable but
+        // its `$all` twin is stuck on the raw defaults. `KeyspaceCreateOptions`
+        // is `Clone`, so the computed options apply to both.
         let events_opts = self.events_config.apply(scan_defaults());
-        let events = db.keyspace("events", || events_opts)?;
-        let events_global = db.keyspace("events_global", scan_defaults)?;
+        let events = db.keyspace("events", || events_opts.clone())?;
+        let events_global = db.keyspace("events_global", || events_opts)?;
 
         #[cfg(feature = "snapshot")]
         let snapshots = db.keyspace("snapshots", point_read_defaults)?;
@@ -138,6 +148,22 @@ mod tests {
     fn opens_and_closes_cleanly() {
         let dir = tempfile::tempdir().unwrap();
         let store = FjallStore::builder(dir.path().join("db")).open().unwrap();
+        drop(store);
+    }
+
+    #[test]
+    fn opens_with_custom_events_config_applied_to_both_event_partitions() {
+        // The events_config closure runs, and its options are cloned onto BOTH
+        // `events` and `events_global`; opening succeeds only if both partitions
+        // accept the (cloned) options. A block-size tweak keeps the closure
+        // non-trivial without depending on fjall internals for readback.
+        let dir = tempfile::tempdir().unwrap();
+        let store = FjallStore::builder(dir.path().join("db"))
+            .events_config(|opts| {
+                opts.data_block_size_policy(fjall::config::BlockSizePolicy::all(16_384))
+            })
+            .open()
+            .unwrap();
         drop(store);
     }
 
