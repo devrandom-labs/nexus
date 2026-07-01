@@ -60,19 +60,20 @@
     reason = "FjallError is intentionally stack-allocated (~208 bytes) for IoT targets"
 )]
 
-pub mod builder;
-pub mod error;
+mod builder;
+mod error;
 mod global_seq;
 mod partition;
+mod plan;
 mod scan;
 #[cfg(feature = "snapshot")]
 mod snapshot;
-pub mod store;
+mod store;
 mod subscription_id;
 mod wire_key;
 
 pub use builder::FjallStoreBuilder;
 pub use error::FjallError;
 pub use global_seq::GlobalSeq;
-pub use partition::KeyspaceConfig;
+pub use partition::{AllIndex, KeyspaceConfig};
 pub use store::FjallStore;

@@ -247,6 +247,42 @@ Every test must satisfy ALL of these:
 - **Benchmarks measure production code**, not test fixtures. Use official testing adapters, not hand-rolled ones. Separate setup from measurement — don't benchmark `tempdir() + open()` when you want to measure `append()`.
 - **No `Box::leak` in proptest** without documentation and bounded iteration counts.
 
+### 9. Architectural Decisions — Measure, Question, Decide (principal-engineer bar)
+
+Refactors and adapter/kernel design are not "make it compile cleaner." Every
+load-bearing design choice must be **surfaced, measured, and decided against the
+real target** — not inherited by default. This rule exists because the
+`nexus-fjall` `$all` index (#270) stored a full second copy of every event
+*implicitly*, and the cost was never stated or measured.
+
+- **Don't take the premise (or the existing design) at face value.** A task that
+  says "this is bloated / badly designed" is a hypothesis to verify, not a fact to
+  execute. Measure first: the fjall "1754-LOC bloat" was ~61% inline tests; the
+  production code was already clean. Report the honest reframe.
+- **Surface the implicit load-bearing decision.** Every adapter hides one or two
+  choices that dominate its cost/behavior (here: the `$all` denormalization —
+  `events_global` stores a full frame copy, ~27%–2× write/storage, to buy a
+  point-read-free `$all` scan). Make it explicit in code + docs; a silent
+  architectural trade is a defect even when the code "works."
+- **Measure the fork, don't assert it.** A design fork ("copy vs pointer",
+  "denormalize vs normalize") ships with **data attached**. Benchmark it (fjall:
+  9.3 MB denormalized vs 6.8 MB pointer for 20k events @120B). "Facts only" (rule
+  0) applies to *design* tradeoffs, not just APIs.
+- **Weight by the real target: `IoT`/mobile-first.** Decide by the *primary*
+  deployment's binding constraint (flash-write + storage on-device), not the
+  convenient server/default case. Ask "what does this cost on the constrained
+  device?" — and whether the benefit is even *used* there (a produce-and-sync
+  device that never reads `$all` pays the index cost for nothing). See
+  [Target Platforms].
+- **Make genuine either-way forks configurable, with a safe default.** When two
+  real deployments have opposite optima (projection-heavy server wants the `$all`
+  index; produce-sync `IoT` device wants it gone), expose a knob
+  (`AllIndex::{Denormalized default, Disabled}`) rather than hardcoding one — and
+  keep the default safe/least-surprising.
+- **A "keep it as-is" conclusion is legitimate — but only once measured.** The
+  answer can be "the existing design is right for the domain," but you must have
+  the numbers and the explicit rationale, not a shrug.
+
 ## Key Conventions
 
 - **Rust edition 2024** with `rustfmt` edition 2024

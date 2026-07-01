@@ -12,10 +12,8 @@ use nexus_store::PersistedEnvelope;
 use crate::error::{FjallError, reason_label};
 use crate::global_seq::GlobalSeq;
 use crate::subscription_id::OwnedStreamId;
-use crate::wire_key::{
-    DecodedEvent, decode_event_key, decode_event_value, decode_global_key, encode_event_key,
-    encode_global_key,
-};
+use crate::wire_key::{decode_event_key, decode_global_key, encode_event_key, encode_global_key};
+use nexus_store::wire;
 
 /// The differing parts of a bounded keyset scan, factored so one cursor can
 /// drive both the per-stream and `$all` reads.
@@ -56,7 +54,7 @@ pub struct GlobalScan;
 /// the key; it appears verbatim in the error fields.
 fn build_envelope(
     bytes_value: Bytes,
-    decoded: DecodedEvent,
+    decoded: wire::DecodedFrame,
     raw_version: u64,
     stream_id: ErrorId,
 ) -> Result<PersistedEnvelope, FjallError> {
@@ -69,9 +67,9 @@ fn build_envelope(
         version,
         bytes_value,
         decoded.schema_version,
-        decoded.event_type_range,
-        decoded.payload_range,
-        decoded.metadata_range,
+        decoded.offsets.event_type,
+        decoded.offsets.payload,
+        decoded.offsets.metadata,
     )
     .map_err(|source| FjallError::EnvelopeCorrupt {
         stream_id,
@@ -107,10 +105,11 @@ impl ScanStrategy for StreamScan {
         })?;
 
         let bytes_value: Bytes = value.into();
-        let decoded = decode_event_value(&bytes_value).map_err(|_| FjallError::CorruptValue {
-            stream_id: self.label,
-            version: Some(version),
-        })?;
+        let decoded =
+            wire::decode_frame(bytes_value.as_ref()).map_err(|_| FjallError::CorruptValue {
+                stream_id: self.label,
+                version: Some(version),
+            })?;
 
         build_envelope(bytes_value, decoded, version, self.label)
     }
@@ -142,10 +141,11 @@ impl ScanStrategy for GlobalScan {
         })?;
 
         let bytes_value: Bytes = value.into();
-        let decoded = decode_event_value(&bytes_value).map_err(|_| FjallError::CorruptValue {
-            stream_id: ErrorId::default(),
-            version: Some(version_raw),
-        })?;
+        let decoded =
+            wire::decode_frame(bytes_value.as_ref()).map_err(|_| FjallError::CorruptValue {
+                stream_id: ErrorId::default(),
+                version: Some(version_raw),
+            })?;
 
         // Tag the envelope with the key-derived position — the `$all` stream
         // contract. The frame no longer stores global_seq, so there is no
@@ -293,7 +293,7 @@ mod tests {
         append_versions(&store, &id, 1..=3).await;
 
         let cursor = ScanCursor::open(
-            &store.events,
+            store.partitions.events(),
             StreamScan {
                 id: OwnedStreamId::from_id(&id),
                 label: ErrorId::from_display(&id),
@@ -316,7 +316,7 @@ mod tests {
         append_versions(&store, &id, 1..=5).await;
 
         let cursor = ScanCursor::open(
-            &store.events,
+            store.partitions.events(),
             StreamScan {
                 id: OwnedStreamId::from_id(&id),
                 label: ErrorId::from_display(&id),
@@ -345,8 +345,12 @@ mod tests {
         append_versions(&store, &a, 2..=2).await; // global_seq 3
         append_versions(&store, &b, 2..=2).await; // global_seq 4
 
-        let cursor =
-            ScanCursor::open(&store.events_global, GlobalScan, GlobalSeq::INITIAL).unwrap();
+        let cursor = ScanCursor::open(
+            store.partitions.events_global(),
+            GlobalScan,
+            GlobalSeq::INITIAL,
+        )
+        .unwrap();
 
         // The `$all` scan is position-tagged; the tag is the key-derived position.
         let seqs: Vec<u64> = cursor.map(|item| item.unwrap().0.as_u64()).collect().await;
@@ -405,7 +409,7 @@ mod tests {
 
     #[test]
     fn stream_decode_rejects_non_utf8_event_type() {
-        // `decode_event_value` no longer UTF-8-validates `event_type`; the
+        // `wire::decode_frame` does not UTF-8-validate `event_type`; the
         // read path's `PersistedEnvelope::try_new` does, surfacing it as
         // `FjallError::EnvelopeCorrupt`. Build a valid frame, then overwrite
         // the `event_type` bytes in place (same length) with invalid UTF-8.

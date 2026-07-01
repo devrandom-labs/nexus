@@ -13,6 +13,10 @@
 //!    through the CBOR box to a file on disk, restore into a fresh store, and
 //!    assert the restored aggregates rehydrate **identical** to the originals;
 //!    plus the `Corrupt` (per-block crc) vs `Malformed` (framing) distinction.
+//! 4. **Produce-and-sync `IoT`** ([`run_produce_and_sync`]) — build a device store
+//!    with `AllIndex::Disabled`: append + per-stream rehydrate work as before,
+//!    the `$all` (`events_global`) frame copy is skipped (smaller on-disk store),
+//!    and `read_all` reports `AllIndexDisabled` explicitly (#270).
 //!
 //! The proofs live in `#[tokio::test]`s (run by the gate's nextest); `main.rs`
 //! drives the same three functions for a human. Nothing here touches a
@@ -65,7 +69,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use nexus::Version;
-use nexus_fjall::FjallStore;
+use nexus_fjall::{AllIndex, FjallStore};
 use nexus_store::cbor::{ChunkWriter, decode_chunk};
 use nexus_store::export::{EventExporter, StreamLister};
 use nexus_store::import::{Atomicity, EventImporter, StreamOutcome};
@@ -395,6 +399,51 @@ pub async fn run_export_import(work_dir: &Path) -> Result<RoundTripOutcome, BoxE
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// Phase 4 — produce-and-sync IoT device: AllIndex::Disabled (#270)
+// ════════════════════════════════════════════════════════════════════════════
+
+/// What the produce-and-sync phase observed.
+#[derive(Debug)]
+pub struct ProduceSyncOutcome {
+    /// Balance rehydrated from the on-disk per-stream log — the produce +
+    /// per-stream-read path is unaffected by disabling `$all`.
+    pub rehydrated_balance: u64,
+    /// `true` if `read_all` reported the `$all` index disabled — proof the
+    /// device maintains no `events_global` copy.
+    pub all_index_disabled: bool,
+}
+
+/// A produce-and-sync `IoT` device: it appends per-stream and would export/sync
+/// upward, but never reads `$all` locally. Built with
+/// [`AllIndex::Disabled`](nexus_fjall::AllIndex::Disabled), it **skips the
+/// `events_global` frame copy** on every append (a smaller on-disk store, less
+/// flash write) — and `read_all` says so explicitly rather than silently
+/// returning nothing. Append + per-stream rehydrate still work exactly as before.
+pub async fn run_produce_and_sync(path: &Path) -> Result<ProduceSyncOutcome, BoxErr> {
+    let store = FjallStore::builder(path)
+        .all_index(AllIndex::Disabled)
+        .open()?
+        .into_store();
+    let id = AccountId("device-1".to_owned());
+
+    // The produce path is unaffected: append + per-stream rehydrate both work.
+    let repo = store.repository::<BankAccount>().build();
+    seed_account(&repo, &id, "Device", &[10, 20, 30]).await?;
+    let rehydrated_balance = repo.load(id).await?.state().balance;
+
+    // The `$all` index is not maintained — `read_all` surfaces that explicitly.
+    let all_index_disabled = matches!(
+        store.read_all(None).await,
+        Err(nexus_fjall::FjallError::AllIndexDisabled)
+    );
+
+    Ok(ProduceSyncOutcome {
+        rehydrated_balance,
+        all_index_disabled,
+    })
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Tests — the gate's nextest runs these (the real proofs).
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -460,6 +509,21 @@ mod tests {
         assert!(
             outcome.malformed_detected,
             "unparseable framing must surface as ChunkError::Malformed",
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn produce_and_sync_disables_the_all_index() -> Result<(), BoxErr> {
+        let dir = tempfile::tempdir()?;
+        let outcome = run_produce_and_sync(&dir.path().join("db")).await?;
+
+        // The produce + per-stream-read path is unaffected: 10 + 20 + 30 = 60.
+        assert_eq!(outcome.rehydrated_balance, 60);
+        // read_all reports the $all index disabled — no events_global copy kept.
+        assert!(
+            outcome.all_index_disabled,
+            "read_all must report AllIndexDisabled on an AllIndex::Disabled store",
         );
         Ok(())
     }

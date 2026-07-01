@@ -5,7 +5,7 @@ use thiserror::Error;
 /// Format a `Display` value into a stack-allocated reason label, truncating
 /// at 128 bytes on a char boundary with a trailing `…` if it overflows
 /// (truncation is visually signalled, per CLAUDE.md).
-pub(crate) fn reason_label(value: &impl std::fmt::Display) -> ErrorId<128> {
+pub fn reason_label(value: &impl std::fmt::Display) -> ErrorId<128> {
     ErrorId::from_display(value)
 }
 
@@ -61,6 +61,13 @@ pub enum FjallError {
     /// The store-global sequence counter would overflow `u64::MAX`.
     #[error("global sequence overflow: cannot advance past u64::MAX")]
     GlobalSeqOverflow,
+
+    /// `read_all` was called on a store built with
+    /// [`AllIndex::Disabled`](crate::AllIndex): it maintains no `$all` index, so
+    /// there is nothing to read. Append + per-stream reads still work; this is
+    /// the deliberate produce-and-sync configuration, not a failure.
+    #[error("the $all index is disabled on this store (AllIndex::Disabled)")]
+    AllIndexDisabled,
 
     /// Failed to register a per-stream subscription wake handle.
     ///

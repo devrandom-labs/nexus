@@ -6,7 +6,9 @@
 
 #![allow(clippy::print_stdout, reason = "example narrates progress to stdout")]
 
-use nexus_example_fjall_end_to_end::{run_export_import, run_persistence, run_subscription};
+use nexus_example_fjall_end_to_end::{
+    run_export_import, run_persistence, run_produce_and_sync, run_subscription,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -53,6 +55,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         round_trip.corrupt_outcome, round_trip.malformed_detected
     );
 
-    println!("\nDone — fjall persistence + live subscription + export/import all demonstrated.");
+    println!("\n=== Phase 4: IoT produce-and-sync (AllIndex::Disabled) ===");
+    let iot = run_produce_and_sync(&dir.path().join("iot")).await?;
+    println!(
+        "  appended 3 readings, per-stream rehydrated balance {} (produce path unaffected)",
+        iot.rehydrated_balance
+    );
+    println!(
+        "  read_all → AllIndexDisabled: {} (no $all index maintained → smaller on-disk store)",
+        iot.all_index_disabled
+    );
+
+    println!(
+        "\nDone — fjall persistence + live subscription + export/import + \
+         produce-and-sync all demonstrated."
+    );
     Ok(())
 }

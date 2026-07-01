@@ -1,5 +1,0 @@
----
-source: crates/nexus-fjall/src/wire_key.rs
-expression: hex_dump(&buf)
----
-02 ff ff ff ff 01 00 ff ff ff ff 58 00 00 00 00 00 ff
