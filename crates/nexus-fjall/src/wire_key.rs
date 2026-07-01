@@ -162,19 +162,13 @@ pub fn decode_stream_version(value: &[u8]) -> Result<u64, DecodeError> {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
-#[allow(clippy::expect_used, reason = "test code")]
 #[allow(
     clippy::panic,
     reason = "proptest macros and test assertions use panic"
 )]
-#[allow(clippy::print_stdout, reason = "diagnostic output in evil-input tests")]
-#[allow(clippy::indexing_slicing, reason = "test code")]
-#[allow(clippy::missing_panics_doc, reason = "test helpers")]
-#[allow(clippy::shadow_reuse, reason = "test code reuses local bindings")]
-#[allow(clippy::shadow_unrelated, reason = "test code reuses local bindings")]
 #[allow(
-    clippy::as_conversions,
-    reason = "u32→usize casts in tests are safe on 32-bit+ platforms"
+    clippy::indexing_slicing,
+    reason = "test code slices fixed byte arrays"
 )]
 mod tests {
     use super::*;
