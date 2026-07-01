@@ -293,7 +293,7 @@ mod tests {
         append_versions(&store, &id, 1..=3).await;
 
         let cursor = ScanCursor::open(
-            &store.events,
+            store.partitions.events(),
             StreamScan {
                 id: OwnedStreamId::from_id(&id),
                 label: ErrorId::from_display(&id),
@@ -316,7 +316,7 @@ mod tests {
         append_versions(&store, &id, 1..=5).await;
 
         let cursor = ScanCursor::open(
-            &store.events,
+            store.partitions.events(),
             StreamScan {
                 id: OwnedStreamId::from_id(&id),
                 label: ErrorId::from_display(&id),
@@ -345,8 +345,12 @@ mod tests {
         append_versions(&store, &a, 2..=2).await; // global_seq 3
         append_versions(&store, &b, 2..=2).await; // global_seq 4
 
-        let cursor =
-            ScanCursor::open(&store.events_global, GlobalScan, GlobalSeq::INITIAL).unwrap();
+        let cursor = ScanCursor::open(
+            store.partitions.events_global(),
+            GlobalScan,
+            GlobalSeq::INITIAL,
+        )
+        .unwrap();
 
         // The `$all` scan is position-tagged; the tag is the key-derived position.
         let seqs: Vec<u64> = cursor.map(|item| item.unwrap().0.as_u64()).collect().await;

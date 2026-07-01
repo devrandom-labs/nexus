@@ -1,5 +1,5 @@
 use crate::error::FjallError;
-use crate::partition::{KeyspaceConfig, point_read_defaults, scan_defaults};
+use crate::partition::{KeyspaceConfig, Partitions, point_read_defaults, scan_defaults};
 use crate::store::FjallStore;
 use fjall::KeyspaceCreateOptions;
 use nexus_store::notify::StreamNotifiers;
@@ -98,12 +98,14 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
 
         Ok(FjallStore {
             db,
-            streams,
-            events,
-            events_global,
-            #[cfg(feature = "snapshot")]
-            snapshots,
-            global,
+            partitions: Partitions::new(
+                streams,
+                events,
+                events_global,
+                global,
+                #[cfg(feature = "snapshot")]
+                snapshots,
+            ),
             notifiers: StreamNotifiers::new(),
         })
     }

@@ -1,11 +1,10 @@
 use crate::builder::FjallStoreBuilder;
 use crate::error::FjallError;
 use crate::global_seq::GlobalSeq;
+use crate::partition::Partitions;
 use crate::plan;
 use crate::scan::{GlobalScan, ScanCursor, StreamScan};
 use crate::subscription_id::OwnedStreamId;
-use crate::wire_key::{decode_stream_version, encode_stream_version};
-use fjall::{Readable, Slice};
 use nexus::{ErrorId, Version};
 use nexus_store::PendingEnvelope;
 use nexus_store::StreamKey;
@@ -15,10 +14,6 @@ use nexus_store::store::RawEventStore;
 use nexus_store::wake::WakeSource;
 use std::path::Path;
 use std::sync::Arc;
-
-/// The single key under which the store-global sequence counter is kept
-/// in the `global` partition.
-const GLOBAL_SEQ_KEY: &[u8] = b"global_seq";
 
 /// Fjall-backed event store.
 ///
@@ -33,15 +28,9 @@ const GLOBAL_SEQ_KEY: &[u8] = b"global_seq";
 /// Use [`FjallStore::builder`] to configure and open a store.
 pub struct FjallStore {
     pub(crate) db: fjall::SingleWriterTxDatabase,
-    pub(crate) streams: fjall::SingleWriterTxKeyspace,
-    pub(crate) events: fjall::SingleWriterTxKeyspace,
-    /// `$all` index: every event's wire frame keyed by
-    /// `[u64 BE global_seq][u64 BE version]`. Same scan-optimized config as
-    /// `events`; written in the same transaction as the primary row.
-    pub(crate) events_global: fjall::SingleWriterTxKeyspace,
-    #[cfg(feature = "snapshot")]
-    pub(crate) snapshots: fjall::SingleWriterTxKeyspace,
-    pub(crate) global: fjall::SingleWriterTxKeyspace,
+    /// The opened keyspaces and the on-disk layout — the one owner of every
+    /// partition read/write (see [`Partitions`]).
+    pub(crate) partitions: Partitions,
     /// Per-stream wake registry. After a durable commit to stream `X`,
     /// `append` calls `wake(X)`, rousing only the subscribers parked on
     /// `X` rather than every subscriber in the store.
@@ -53,40 +42,6 @@ impl FjallStore {
     #[must_use]
     pub fn builder(path: impl AsRef<Path>) -> FjallStoreBuilder {
         FjallStoreBuilder::new(path)
-    }
-
-    /// Point-read the current version counter for `id` from the `streams`
-    /// partition within `tx`, in the bare [`FjallError`] domain. Returns `0`
-    /// for a stream that does not yet exist.
-    ///
-    /// The atomic-append path consumes this directly (it lives in the
-    /// [`AtomicAppendError`](nexus_store::import::AtomicAppendError) domain, not
-    /// `AppendError`); [`read_current_version`](Self::read_current_version)
-    /// wraps it for the single-stream `append` path. Splitting the bare core
-    /// out keeps the error mapping honest — neither caller invents a variant
-    /// the read can never produce.
-    fn read_version_raw(
-        &self,
-        tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &StreamKey,
-    ) -> Result<u64, FjallError> {
-        tx.get(&self.streams, id.as_ref())
-            .map_err(FjallError::Io)?
-            .map_or(Ok(0), |version_bytes| {
-                decode_stream_version(&version_bytes).map_err(|_| FjallError::CorruptMeta {
-                    stream_id: ErrorId::from_display(id),
-                })
-            })
-    }
-
-    /// Point-read the current version counter for `id` from the `streams`
-    /// partition within `tx`. Returns `0` for a stream that does not yet exist.
-    fn read_current_version(
-        &self,
-        tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &StreamKey,
-    ) -> Result<u64, AppendError<FjallError>> {
-        self.read_version_raw(tx, id).map_err(AppendError::Store)
     }
 
     /// Optimistic-concurrency check: the caller's `expected` version must match
@@ -117,40 +72,6 @@ impl FjallStore {
             });
         }
         Ok(())
-    }
-
-    /// Point-read the store-global sequence counter (monotonic, shared across
-    /// all streams) from the `global` partition within `tx`, in the bare
-    /// [`FjallError`] domain. Absent key = `0`. `id` only labels a corrupt-meta
-    /// error. The atomic-append path consumes this directly; see
-    /// [`read_version_raw`](Self::read_version_raw).
-    fn read_global_raw(
-        &self,
-        tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &StreamKey,
-    ) -> Result<u64, FjallError> {
-        tx.get(&self.global, GLOBAL_SEQ_KEY)
-            .map_err(FjallError::Io)?
-            .map_or(Ok(0), |bytes| {
-                let raw: [u8; 8] =
-                    bytes
-                        .as_ref()
-                        .try_into()
-                        .map_err(|_| FjallError::CorruptMeta {
-                            stream_id: ErrorId::from_display(id),
-                        })?;
-                Ok(u64::from_le_bytes(raw))
-            })
-    }
-
-    /// Point-read the store-global sequence counter (monotonic, shared across
-    /// all streams) from the `global` partition within `tx`. Absent key = `0`.
-    fn read_current_global(
-        &self,
-        tx: &fjall::SingleWriterWriteTx<'_>,
-        id: &StreamKey,
-    ) -> Result<u64, AppendError<FjallError>> {
-        self.read_global_raw(tx, id).map_err(AppendError::Store)
     }
 }
 
@@ -200,7 +121,10 @@ impl RawEventStore for FjallStore {
         // conflict even though no data would be written.
         let mut tx = self.db.write_tx();
 
-        let current_version = self.read_current_version(&tx, id)?;
+        let current_version = self
+            .partitions
+            .read_version(&tx, id)
+            .map_err(AppendError::Store)?;
         Self::check_optimistic(current_version, expected_version, id)?;
 
         // Empty batch: version was checked (or new stream with None), no work to do.
@@ -210,7 +134,10 @@ impl RawEventStore for FjallStore {
 
         // Read the current store-global sequence counter (monotonic, shared
         // across all streams). Absent key = no events appended yet.
-        let current_global = self.read_current_global(&tx, id)?;
+        let current_global = self
+            .partitions
+            .read_global(&tx, id)
+            .map_err(AppendError::Store)?;
 
         // Pure plan: validate strict-sequential versions and encode/stage every
         // event with a running GlobalSeq. The entire write body lives in
@@ -219,25 +146,16 @@ impl RawEventStore for FjallStore {
         let planned = plan::plan_run(current_version, current_global, id, envelopes)
             .map_err(|e| append_plan_err(id, &e))?;
 
+        // Stage each event into both indexes via the one dual-write site, then
+        // advance both counters — all in the same transaction so they commit
+        // together. The batch is non-empty (checked above), so `plan_run` staged
+        // at least one event and advanced the global counter.
         for row in &planned.rows {
-            let slice = Slice::from(row.frame.clone());
-            tx.insert(&self.events, &row.event_key, slice.clone());
-            tx.insert(&self.events_global, row.global_key, slice);
+            self.partitions.stage_event(&mut tx, row);
         }
-
-        // Advance both counters in the same transaction as the event writes so
-        // they commit together. The batch is non-empty (checked above), so
-        // `plan_run` staged at least one event and advanced the global counter.
-        tx.insert(
-            &self.global,
-            GLOBAL_SEQ_KEY,
-            planned.ending_global.to_le_bytes(),
-        );
-        tx.insert(
-            &self.streams,
-            id_bytes,
-            encode_stream_version(planned.new_version),
-        );
+        self.partitions.set_global(&mut tx, planned.ending_global);
+        self.partitions
+            .set_version(&mut tx, id_bytes, planned.new_version);
 
         // Atomic cross-partition commit.
         tx.commit()
@@ -260,7 +178,7 @@ impl RawEventStore for FjallStore {
         // A single bounded range scan; a nonexistent stream simply yields an
         // empty range, so no separate existence check is needed.
         ScanCursor::open(
-            &self.events,
+            self.partitions.events(),
             StreamScan {
                 id: OwnedStreamId::from_id(id),
                 label: ErrorId::from_display(id),
@@ -278,8 +196,13 @@ impl RawEventStore for FjallStore {
         // the ceiling event. Mirrors `StreamCatchup::read_after` in nexus-store.
         from.map_or(Some(GlobalSeq::INITIAL), GlobalSeq::next)
             .map_or_else(
-                || Ok(ScanCursor::open_empty(&self.events_global, GlobalScan)),
-                |after| ScanCursor::open(&self.events_global, GlobalScan, after),
+                || {
+                    Ok(ScanCursor::open_empty(
+                        self.partitions.events_global(),
+                        GlobalScan,
+                    ))
+                },
+                |after| ScanCursor::open(self.partitions.events_global(), GlobalScan, after),
             )
     }
 }
@@ -305,7 +228,7 @@ mod snapshot_impl {
             schema_version: NonZeroU32,
         ) -> Result<Option<(Version, Vec<u8>)>, FjallError> {
             // Snapshot key is the ID bytes directly.
-            let Some(bytes) = self.snapshots.get(id.as_ref())? else {
+            let Some(bytes) = self.partitions.read_snapshot(id.as_ref())? else {
                 return Ok(None);
             };
 
@@ -337,9 +260,7 @@ mod snapshot_impl {
         ) -> Result<(), FjallError> {
             let mut buf = Vec::new();
             encode_snapshot_value(&mut buf, schema_version.get(), position.as_u64(), state);
-            self.snapshots
-                .insert(id.as_ref(), fjall::Slice::from(&*buf))?;
-            Ok(())
+            self.partitions.write_snapshot(id.as_ref(), &buf)
         }
     }
 }
@@ -359,10 +280,7 @@ mod snapshot_impl {
 /// this is built to prevent.
 #[cfg(feature = "import")]
 mod atomic_append_impl {
-    use super::{
-        ErrorId, FjallError, FjallStore, GLOBAL_SEQ_KEY, Slice, StreamKey, Version,
-        encode_stream_version,
-    };
+    use super::{ErrorId, FjallError, FjallStore, StreamKey, Version};
     use crate::plan;
     use nexus_store::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
     use std::collections::HashMap;
@@ -418,7 +336,8 @@ mod atomic_append_impl {
                 let actual = match projected.get(&key) {
                     Some(&head) => head,
                     None => self
-                        .read_version_raw(tx, &w.target)
+                        .partitions
+                        .read_version(tx, &w.target)
                         .map_err(AtomicAppendError::Store)?,
                 };
                 let expected = w.expected_version.map_or(0, Version::as_u64);
@@ -464,7 +383,8 @@ mod atomic_append_impl {
             writes: &[PlannedAppend],
         ) -> Result<(), AtomicAppendError<FjallError>> {
             let start_global = self
-                .read_global_raw(tx, &writes[0].target)
+                .partitions
+                .read_global(tx, &writes[0].target)
                 .map_err(AtomicAppendError::Store)?;
             let mut global = start_global;
             for (index, w) in writes.iter().enumerate() {
@@ -477,19 +397,14 @@ mod atomic_append_impl {
                 let planned = plan::plan_run(current_version, global, &w.target, &w.events)
                     .map_err(|e| atomic_plan_err(index, &w.target, &e))?;
                 for row in &planned.rows {
-                    let slice = Slice::from(row.frame.clone());
-                    tx.insert(&self.events, &row.event_key, slice.clone());
-                    tx.insert(&self.events_global, row.global_key, slice);
+                    self.partitions.stage_event(tx, row);
                 }
                 // Advance the stream version counter to the run's last version.
                 // An empty run stages nothing (defensive; the planner guarantees
                 // a non-empty run in practice).
                 if !planned.rows.is_empty() {
-                    tx.insert(
-                        &self.streams,
-                        w.target.as_ref(),
-                        encode_stream_version(planned.new_version),
-                    );
+                    self.partitions
+                        .set_version(tx, w.target.as_ref(), planned.new_version);
                 }
                 global = planned.ending_global;
             }
@@ -497,7 +412,7 @@ mod atomic_append_impl {
             // when at least one event was assigned (an all-empty batch leaves it
             // untouched, mirroring append's empty-batch path).
             if global != start_global {
-                tx.insert(&self.global, GLOBAL_SEQ_KEY, global.to_le_bytes());
+                self.partitions.set_global(tx, global);
             }
             Ok(())
         }
@@ -597,7 +512,7 @@ mod stream_lister_impl {
 
         async fn list_streams(&self) -> Result<Self::StreamList, FjallError> {
             Ok(StreamIdCursor {
-                iter: self.streams.inner().iter(),
+                iter: self.partitions.stream_ids(),
                 poisoned: false,
             })
         }
@@ -665,6 +580,7 @@ pub mod read_test_helpers {
 mod tests {
     use super::*;
     use crate::wire_key::encode_global_key;
+    use fjall::Slice;
     use futures::StreamExt;
     use nexus_store::envelope::pending_envelope;
     use nexus_store::wire;
@@ -808,13 +724,13 @@ mod tests {
 
         // The index holds exactly one row, keyed by [global_seq=1][version=1].
         let key = crate::wire_key::encode_global_key(1, 1);
-        let got = store.events_global.inner().get(key).unwrap();
+        let got = store.partitions.events_global().inner().get(key).unwrap();
         assert!(
             got.is_some(),
             "append must write an events_global index row"
         );
         assert_eq!(
-            store.events_global.inner().iter().count(),
+            store.partitions.events_global().inner().iter().count(),
             1,
             "events_global must contain exactly one row after one append"
         );
@@ -1121,7 +1037,7 @@ mod tests {
             // with too few bytes to be a valid frame, committed durably.
             let mut tx = store.db.write_tx();
             tx.insert(
-                &store.events_global,
+                store.partitions.events_global(),
                 encode_global_key(1, 1),
                 Slice::from(&[0u8, 1, 2][..]),
             );
@@ -1171,12 +1087,12 @@ mod tests {
         {
             let mut tx = store.db.write_tx();
             tx.insert(
-                &store.events_global,
+                store.partitions.events_global(),
                 encode_global_key(1, 1),
                 frame_value("E", b"p1"),
             );
             tx.insert(
-                &store.events_global,
+                store.partitions.events_global(),
                 encode_global_key(3, 1),
                 frame_value("E", b"p3"),
             );
@@ -1293,6 +1209,7 @@ mod tests {
 mod atomic_append_tests {
     use super::*;
     use crate::store::read_test_helpers::{sk, temp_store};
+    use crate::wire_key::decode_stream_version;
     use futures::StreamExt;
     use nexus_store::envelope::pending_envelope;
     use nexus_store::import::{AtomicAppend, AtomicAppendError, PlannedAppend};
@@ -1332,7 +1249,8 @@ mod atomic_append_tests {
 
     fn stream_counter(store: &FjallStore, id: &StreamKey) -> Option<u64> {
         store
-            .streams
+            .partitions
+            .streams()
             .inner()
             .get(id.as_ref())
             .unwrap()
@@ -1341,9 +1259,10 @@ mod atomic_append_tests {
 
     fn global_counter(store: &FjallStore) -> Option<u64> {
         store
-            .global
+            .partitions
+            .global()
             .inner()
-            .get(GLOBAL_SEQ_KEY)
+            .get(b"global_seq")
             .unwrap()
             .map(|b| u64::from_le_bytes(<[u8; 8]>::try_from(b.as_ref()).unwrap()))
     }
@@ -1352,8 +1271,8 @@ mod atomic_append_tests {
     /// changed across ANY partition" after a rolled-back transaction.
     fn partition_snapshot(store: &FjallStore) -> (usize, usize, Option<u64>) {
         (
-            row_count(&store.events),
-            row_count(&store.events_global),
+            row_count(store.partitions.events()),
+            row_count(store.partitions.events_global()),
             global_counter(store),
         )
     }
@@ -1370,8 +1289,8 @@ mod atomic_append_tests {
         assert_eq!(read_versions(&store, &sk("b")).await, vec![1]);
         // Three events total → events + events_global each hold 3 rows, and the
         // shared global counter advanced to 3.
-        assert_eq!(row_count(&store.events), 3);
-        assert_eq!(row_count(&store.events_global), 3);
+        assert_eq!(row_count(store.partitions.events()), 3);
+        assert_eq!(row_count(store.partitions.events_global()), 3);
         assert_eq!(global_counter(&store), Some(3));
         assert_eq!(stream_counter(&store, &sk("a")), Some(2));
         assert_eq!(stream_counter(&store, &sk("b")), Some(1));
