@@ -24,13 +24,12 @@ const EVENT_KEY_HEADER_SIZE: usize = 2;
 const EVENT_KEY_VERSION_SIZE: usize = 8;
 
 /// Size of an encoded stream version value in bytes: `[u64 LE version]`.
-pub const STREAM_VERSION_SIZE: usize = 8;
+const STREAM_VERSION_SIZE: usize = 8;
 
 /// Compute the total size of an event key for a given ID length.
 ///
 /// Format: `[u16 BE id_len][id_bytes][u64 BE version]`.
-#[must_use]
-pub const fn event_key_size(id_len: usize) -> usize {
+const fn event_key_size(id_len: usize) -> usize {
     EVENT_KEY_HEADER_SIZE + id_len + EVENT_KEY_VERSION_SIZE
 }
 
@@ -98,7 +97,7 @@ pub fn decode_event_key(key: &[u8]) -> Result<(&[u8], u64), DecodeError> {
 }
 
 /// Size of a `$all` index key: `[u64 BE global_seq][u64 BE version]`.
-pub const GLOBAL_KEY_SIZE: usize = 16;
+const GLOBAL_KEY_SIZE: usize = 16;
 
 /// Encode an `events_global` key as `[u64 BE global_seq][u64 BE version]`.
 ///

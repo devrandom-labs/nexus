@@ -5,7 +5,7 @@ use thiserror::Error;
 /// Format a `Display` value into a stack-allocated reason label, truncating
 /// at 128 bytes on a char boundary with a trailing `…` if it overflows
 /// (truncation is visually signalled, per CLAUDE.md).
-pub(crate) fn reason_label(value: &impl std::fmt::Display) -> ErrorId<128> {
+pub fn reason_label(value: &impl std::fmt::Display) -> ErrorId<128> {
     ErrorId::from_display(value)
 }
 
