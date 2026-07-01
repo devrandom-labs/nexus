@@ -62,6 +62,13 @@ pub enum FjallError {
     #[error("global sequence overflow: cannot advance past u64::MAX")]
     GlobalSeqOverflow,
 
+    /// `read_all` was called on a store built with
+    /// [`AllIndex::Disabled`](crate::AllIndex): it maintains no `$all` index, so
+    /// there is nothing to read. Append + per-stream reads still work; this is
+    /// the deliberate produce-and-sync configuration, not a failure.
+    #[error("the $all index is disabled on this store (AllIndex::Disabled)")]
+    AllIndexDisabled,
+
     /// Failed to register a per-stream subscription wake handle.
     ///
     /// Surfaces [`NotifyError`](nexus_store::notify::NotifyError) from the

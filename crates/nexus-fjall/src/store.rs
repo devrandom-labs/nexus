@@ -1,7 +1,7 @@
 use crate::builder::FjallStoreBuilder;
 use crate::error::FjallError;
 use crate::global_seq::GlobalSeq;
-use crate::partition::Partitions;
+use crate::partition::{AllIndex, Partitions};
 use crate::plan;
 use crate::scan::{GlobalScan, ScanCursor, StreamScan};
 use crate::subscription_id::OwnedStreamId;
@@ -188,6 +188,12 @@ impl RawEventStore for FjallStore {
     }
 
     async fn read_all(&self, from: Option<GlobalSeq>) -> Result<Self::AllStream, Self::Error> {
+        // A store built with `AllIndex::Disabled` maintains no `$all` index, so
+        // there is nothing to scan — surface it explicitly (produce-and-sync
+        // configuration; append + per-stream reads are unaffected).
+        if self.partitions.all_index() == AllIndex::Disabled {
+            return Err(FjallError::AllIndexDisabled);
+        }
         // `$all` resume is **exclusive**: open strictly after `from`. The
         // `ScanCursor` keyset bound is inclusive, so resume at `from.next()`
         // (None = from the first position). At the `GlobalSeq::MAX` ceiling
@@ -1191,6 +1197,69 @@ mod tests {
             seen.push(item.unwrap().version().as_u64());
         }
         assert_eq!(seen, (1..=20).collect::<Vec<_>>());
+    }
+
+    // --- AllIndex::Disabled (produce-and-sync IoT config, #270) ---
+
+    #[tokio::test]
+    async fn all_index_disabled_skips_events_global_but_keeps_per_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FjallStore::builder(dir.path().join("db"))
+            .all_index(AllIndex::Disabled)
+            .open()
+            .unwrap();
+        let id = sk("device-1");
+        for v in 1..=5u64 {
+            let env = pending_envelope(Version::new(v).unwrap())
+                .event_type("Reading")
+                .payload(b"p".to_vec())
+                .unwrap()
+                .build();
+            store
+                .append(&id, Version::new(v - 1), &[env])
+                .await
+                .unwrap();
+        }
+
+        // Per-stream reads are unaffected — the events partition is written.
+        let mut cur = store.read_stream(&id, Version::INITIAL).await.unwrap();
+        let mut seen = Vec::new();
+        while let Some(item) = cur.next().await {
+            seen.push(item.unwrap().version().as_u64());
+        }
+        assert_eq!(seen, vec![1, 2, 3, 4, 5]);
+
+        // The $all index was NOT written (the whole point — reclaim the copy).
+        assert_eq!(
+            store.partitions.events_global().inner().iter().count(),
+            0,
+            "AllIndex::Disabled must not write the events_global index"
+        );
+
+        // read_all surfaces the disabled state explicitly, not an empty stream.
+        // (matches! avoids requiring the AllStream Ok-type to impl Debug.)
+        assert!(
+            matches!(
+                store.read_all(None).await,
+                Err(FjallError::AllIndexDisabled)
+            ),
+            "expected AllIndexDisabled from an AllIndex::Disabled store"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_index_default_is_denormalized_and_writes_events_global() {
+        let (store, _dir) = temp_store();
+        let id = sk("s");
+        let env = pending_envelope(Version::new(1).unwrap())
+            .event_type("E")
+            .payload(b"p".to_vec())
+            .unwrap()
+            .build();
+        store.append(&id, None, &[env]).await.unwrap();
+        // Default (Denormalized) writes the $all index and read_all works.
+        assert_eq!(store.partitions.events_global().inner().iter().count(), 1);
+        assert!(store.read_all(None).await.is_ok());
     }
 }
 

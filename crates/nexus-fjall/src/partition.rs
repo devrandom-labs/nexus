@@ -75,6 +75,33 @@ pub fn scan_defaults() -> KeyspaceCreateOptions {
 /// `global` partition.
 const GLOBAL_SEQ_KEY: &[u8] = b"global_seq";
 
+/// Whether the store maintains the `$all` cross-stream index (the
+/// `events_global` partition).
+///
+/// The `$all` index is a **denormalization**: `append` writes a second full copy
+/// of every event's frame keyed by global sequence, so `read_all` is a single
+/// sequential scan with no per-row lookup (the read-optimized, `EventStoreDB`-style
+/// default). Measured, that copy adds ~27% (120-byte payloads) up to ~2× (large
+/// payloads) to on-disk / journal write volume.
+///
+/// On a **produce-and-sync `IoT` device** — one that appends per-stream and exports
+/// upward but never reads `$all` locally — that copy is pure write/storage
+/// overhead the device pays but never uses (flash wear + space are the binding
+/// constraints there). [`Disabled`](Self::Disabled) skips it entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AllIndex {
+    /// Maintain the read-optimized `$all` index (default). `read_all` is a single
+    /// sequential scan. Costs the frame copy on every `append`.
+    #[default]
+    Denormalized,
+    /// Do **not** maintain the `$all` index: `append` skips the `events_global`
+    /// write (reclaiming the copy) and `read_all` returns
+    /// [`FjallError::AllIndexDisabled`](crate::FjallError::AllIndexDisabled). For
+    /// produce-and-sync devices that never read `$all` locally. Opt-in and
+    /// explicit — a store built this way advertises no working `$all`.
+    Disabled,
+}
+
 /// The opened fjall keyspaces plus the codecs that read and write them — the
 /// crate's **one** owner of the physical layout.
 ///
@@ -96,10 +123,15 @@ pub struct Partitions {
     global: SingleWriterTxKeyspace,
     #[cfg(feature = "snapshot")]
     snapshots: SingleWriterTxKeyspace,
+    /// Whether the `$all` index (`events_global`) is maintained — gates the
+    /// second write in [`stage_event`](Self::stage_event) and `read_all`.
+    mode: AllIndex,
 }
 
 impl Partitions {
-    /// Assemble from the keyspaces the builder opened.
+    /// Assemble from the keyspaces the builder opened, with the default
+    /// (`Denormalized`) `$all` index. Use [`with_all_index`](Self::with_all_index)
+    /// to select a different mode.
     pub const fn new(
         streams: SingleWriterTxKeyspace,
         events: SingleWriterTxKeyspace,
@@ -114,7 +146,15 @@ impl Partitions {
             global,
             #[cfg(feature = "snapshot")]
             snapshots,
+            mode: AllIndex::Denormalized,
         }
+    }
+
+    /// Set the `$all` index mode (builder-style; consumes and returns `self`).
+    #[must_use]
+    pub const fn with_all_index(mut self, mode: AllIndex) -> Self {
+        self.mode = mode;
+        self
     }
 
     // ----- write-transaction reads --------------------------------------
@@ -158,13 +198,27 @@ impl Partitions {
 
     // ----- write-transaction writes -------------------------------------
 
-    /// Stage one event into BOTH the per-stream `events` index and the `$all`
-    /// `events_global` index within `tx`. **This is the only site of the `$all`
-    /// denormalization** — the same frame bytes are written under both keys.
+    /// Stage one event into the per-stream `events` index, and — when the `$all`
+    /// index is [`Denormalized`](AllIndex::Denormalized) — a second full copy
+    /// into the `events_global` index within `tx`. **This is the only site of the
+    /// `$all` denormalization.**
+    ///
+    /// The second write is the denormalization that makes `read_all` a
+    /// point-read-free sequential scan (see [`AllIndex`]); under
+    /// [`AllIndex::Disabled`] it is skipped, reclaiming the ~27%–2× write/storage
+    /// the copy costs, at the price of no working `$all` on this store.
     pub fn stage_event(&self, tx: &mut SingleWriterWriteTx<'_>, row: &StagedRow) {
         let slice = Slice::from(row.frame.clone());
         tx.insert(&self.events, &row.event_key, slice.clone());
-        tx.insert(&self.events_global, row.global_key, slice);
+        if self.mode == AllIndex::Denormalized {
+            tx.insert(&self.events_global, row.global_key, slice);
+        }
+    }
+
+    /// The configured `$all` index mode. `read_all` consults this to reject
+    /// reads on a store built with [`AllIndex::Disabled`].
+    pub const fn all_index(&self) -> AllIndex {
+        self.mode
     }
 
     /// Advance the stream version counter for `id` within `tx`.

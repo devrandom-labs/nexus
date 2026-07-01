@@ -75,5 +75,5 @@ mod wire_key;
 pub use builder::FjallStoreBuilder;
 pub use error::FjallError;
 pub use global_seq::GlobalSeq;
-pub use partition::KeyspaceConfig;
+pub use partition::{AllIndex, KeyspaceConfig};
 pub use store::FjallStore;

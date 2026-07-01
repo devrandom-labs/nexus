@@ -1,5 +1,5 @@
 use crate::error::FjallError;
-use crate::partition::{KeyspaceConfig, Partitions, point_read_defaults, scan_defaults};
+use crate::partition::{AllIndex, KeyspaceConfig, Partitions, point_read_defaults, scan_defaults};
 use crate::store::FjallStore;
 use fjall::KeyspaceCreateOptions;
 use nexus_store::notify::StreamNotifiers;
@@ -22,6 +22,7 @@ pub struct FjallStoreBuilder<S = (), E = ()> {
     path: PathBuf,
     streams_config: S,
     events_config: E,
+    all_index: AllIndex,
 }
 
 impl FjallStoreBuilder {
@@ -31,11 +32,25 @@ impl FjallStoreBuilder {
             path: path.as_ref().to_path_buf(),
             streams_config: (),
             events_config: (),
+            all_index: AllIndex::default(),
         }
     }
 }
 
 impl<S, E> FjallStoreBuilder<S, E> {
+    /// Choose whether the store maintains the `$all` cross-stream index.
+    ///
+    /// Defaults to [`AllIndex::Denormalized`] (a read-optimized `$all`). Set
+    /// [`AllIndex::Disabled`] for produce-and-sync `IoT` devices that never read
+    /// `$all` locally — `append` then skips the second write, reclaiming ~27%–2×
+    /// of write/storage, and `read_all` returns
+    /// [`FjallError::AllIndexDisabled`](crate::FjallError::AllIndexDisabled).
+    #[must_use]
+    pub const fn all_index(mut self, mode: AllIndex) -> Self {
+        self.all_index = mode;
+        self
+    }
+
     /// Customise the `streams` partition options.
     ///
     /// The closure receives a pre-configured `KeyspaceCreateOptions` and
@@ -50,6 +65,7 @@ impl<S, E> FjallStoreBuilder<S, E> {
             path: self.path,
             streams_config: f,
             events_config: self.events_config,
+            all_index: self.all_index,
         }
     }
 
@@ -67,6 +83,7 @@ impl<S, E> FjallStoreBuilder<S, E> {
             path: self.path,
             streams_config: self.streams_config,
             events_config: f,
+            all_index: self.all_index,
         }
     }
 }
@@ -105,7 +122,8 @@ impl<S: KeyspaceConfig, E: KeyspaceConfig> FjallStoreBuilder<S, E> {
                 global,
                 #[cfg(feature = "snapshot")]
                 snapshots,
-            ),
+            )
+            .with_all_index(self.all_index),
             notifiers: StreamNotifiers::new(),
         })
     }
