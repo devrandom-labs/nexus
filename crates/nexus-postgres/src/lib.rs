@@ -18,6 +18,7 @@
 
 mod builder;
 mod error;
+mod hex;
 mod position;
 mod schema;
 mod store;

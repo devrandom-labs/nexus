@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use nexus::{ErrorId, Version};
@@ -6,13 +7,51 @@ use nexus_store::PendingEnvelope;
 use nexus_store::StreamKey;
 use nexus_store::envelope::PersistedEnvelope;
 use nexus_store::error::AppendError;
+use nexus_store::notify::StreamNotifiers;
 use nexus_store::store::RawEventStore;
 use nexus_store::value::{EventType, Metadata, Payload, SchemaVersion};
 use nexus_store::wire;
 use sqlx::PgPool;
+use sqlx::postgres::PgListener;
+use tokio::task::JoinHandle;
 
 use crate::error::PostgresError;
+use crate::hex;
 use crate::position::PgAllPos;
+
+/// The `LISTEN/NOTIFY` channel every store instance shares. The write side
+/// (`notify_committed`) publishes on it; each store's listener task subscribes.
+const NOTIFY_CHANNEL: &str = "nexus_events";
+
+/// Shared, `Arc`-owned interior of a [`PostgresStore`].
+///
+/// One `Inner` is created per `from_pool`; every [`PostgresStore`] clone shares
+/// it. The `LISTEN/NOTIFY` listener task lives exactly as long as this `Inner`:
+/// [`Drop`] aborts it, so the background connection is released when the last
+/// clone of the store is dropped — a test that creates and drops many stores
+/// does not leak one listener connection per store (the reason `PostgresStore`
+/// is a thin `Arc<Inner>` handle rather than a bare `PgPool`).
+struct Inner {
+    pool: PgPool,
+    /// In-process wake registry. The `LISTEN/NOTIFY` listener task drives it:
+    /// every `NOTIFY` becomes a `notifiers.wake(id)`, which rouses both the
+    /// per-stream and `$all` armed registrations. Reusing this audited registry
+    /// keeps `LISTEN/NOTIFY` a thin transport that merely *hints* "scan sooner".
+    notifiers: Arc<StreamNotifiers>,
+    /// The background `PgListener` task's handle. Aborted on drop so the task
+    /// (and its dedicated connection) stops with the store.
+    listener_task: JoinHandle<()>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // Stop the listener task with the store. Its `PgListener` holds a
+        // connection for the life of the task; aborting here prevents a
+        // per-store connection leak across the many create/drop cycles the
+        // tests perform.
+        self.listener_task.abort();
+    }
+}
 
 /// PostgreSQL-backed event store.
 ///
@@ -21,10 +60,86 @@ use crate::position::PgAllPos;
 /// [`connect`](Self::connect) or [`from_pool`](Self::from_pool) in
 /// [`builder`](crate::builder).
 ///
-/// Clone is cheap: `PgPool` is already `Arc`-backed.
+/// Clone is cheap: it is a single `Arc` bump over the shared [`Inner`]
+/// (`PgPool` is itself `Arc`-backed). All clones share one wake registry and
+/// one `LISTEN/NOTIFY` listener task.
 #[derive(Clone)]
 pub struct PostgresStore {
-    pub(crate) pool: PgPool,
+    inner: Arc<Inner>,
+}
+
+impl PostgresStore {
+    /// Assemble a store from a pool: build the wake registry, spawn the single
+    /// `LISTEN/NOTIFY` listener task, and wrap it all in the shared [`Inner`].
+    ///
+    /// Called by [`from_pool`](Self::from_pool) *after* the schema is ensured.
+    pub(crate) fn assemble(pool: PgPool) -> Self {
+        let notifiers = StreamNotifiers::new();
+        let listener_task = spawn_listener(pool.clone(), Arc::clone(&notifiers));
+        Self {
+            inner: Arc::new(Inner {
+                pool,
+                notifiers,
+                listener_task,
+            }),
+        }
+    }
+
+    /// The connection pool. `pub(crate)` for the sibling modules (`builder`,
+    /// tests) that need the raw pool.
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.inner.pool
+    }
+
+    /// The shared wake registry, driven by the `LISTEN/NOTIFY` listener task.
+    /// `pub(crate)` so the `WakeSource` impl in [`crate::wake`] can delegate to
+    /// it.
+    pub(crate) fn wake_registry(&self) -> &Arc<StreamNotifiers> {
+        &self.inner.notifiers
+    }
+}
+
+/// Spawn the single background task that owns a [`PgListener`] and forwards each
+/// `NOTIFY` into the store's [`StreamNotifiers`].
+///
+/// # Correctness — this redundant catch-up scan must NOT be optimized away
+///
+/// `PgListener` **auto-reconnects** on connection loss and, per the sqlx 0.8
+/// docs, *"any notifications received while the connection was lost will not be
+/// returned"* — a `NOTIFY` can be silently dropped. This is tolerable ONLY
+/// because [`StreamNotifiers`] drives nexus-store's arm-before-confirm-rescan
+/// discipline: every `wake()` (and every reopen of the generic live loop)
+/// re-scans the store via `read_stream`/`read_all`, so a dropped `NOTIFY` merely
+/// **delays** a wake until the next scan — it never loses the event. The
+/// `NOTIFY` is a *hint to scan sooner*, never the source of truth. A future
+/// refactor MUST NOT remove that redundant catch-up scan: without it, a dropped
+/// `NOTIFY` would become a lost event.
+fn spawn_listener(pool: PgPool, notifiers: Arc<StreamNotifiers>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        // Obtain a dedicated listener connection from the pool and subscribe.
+        // On setup failure there is nothing to wake from; exit — the store
+        // still works, wakes just fall back entirely to the catch-up scan.
+        let Ok(mut listener) = PgListener::connect_with(&pool).await else {
+            return;
+        };
+        if listener.listen(NOTIFY_CHANNEL).await.is_err() {
+            return;
+        }
+        // `recv()` transparently reconnects on connection loss (dropping any
+        // NOTIFYs sent while disconnected — see the correctness note above). It
+        // only errors when the pool is closed, i.e. the store is being torn
+        // down; exit the loop then so the task ends cleanly.
+        while let Ok(notification) = listener.recv().await {
+            // The payload is the hex-encoded raw stream id. A malformed payload
+            // is dropped (see `hex::decode`): a mis-routed wake could rouse the
+            // wrong stream, whereas a dropped one is caught by the next scan.
+            if let Some(stream) = hex::decode(notification.payload()) {
+                // `wake` bumps BOTH the per-stream and `$all` paths, so one
+                // NOTIFY rouses per-stream and `$all` armed registrations alike.
+                notifiers.wake(&stream);
+            }
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -262,21 +377,15 @@ impl PostgresStore {
     /// commit. Best-effort — a failed `NOTIFY` must not fail an already-durable
     /// append (the catch-up scan will still pick the event up on the next poll).
     pub(crate) async fn notify_committed(&self, stream: &[u8]) {
-        // Inline hex encoder — avoids a `hex` crate dep for a tiny operation.
-        // Each byte → two lowercase hex chars; the channel 'nexus_events' needs
-        // an ASCII-safe payload.
-        let payload: String = stream
-            .iter()
-            .flat_map(|b| {
-                let hi = b"0123456789abcdef"[usize::from(*b >> 4)];
-                let lo = b"0123456789abcdef"[usize::from(*b & 0x0f)];
-                [hi, lo]
-            })
-            .map(char::from)
-            .collect();
-        let _ = sqlx::query("SELECT pg_notify('nexus_events', $1)")
+        // The payload is the hex-encoded raw stream id (a `NOTIFY` payload must
+        // be ASCII text, but a stream id is arbitrary bytes). The listener task
+        // reverses this via `hex::decode` before calling `wake` — one shared,
+        // unit-tested codec on both ends (see `crate::hex`).
+        let payload = hex::encode(stream);
+        let _ = sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(NOTIFY_CHANNEL)
             .bind(payload)
-            .execute(&self.pool)
+            .execute(self.pool())
             .await;
     }
 }
@@ -314,7 +423,7 @@ impl RawEventStore for PostgresStore {
         expected_version: Option<Version>,
         envelopes: &[PendingEnvelope],
     ) -> Result<(), AppendError<Self::Error>> {
-        let mut tx = self.pool.begin().await.map_err(store_err)?;
+        let mut tx = self.pool().begin().await.map_err(store_err)?;
 
         let current = read_current_version(&mut tx, id).await?; // IO
         let rows = prepare_inserts(current, expected_version, envelopes, id)?; // PURE
@@ -376,7 +485,7 @@ impl RawEventStore for PostgresStore {
         )
         .bind(id.as_bytes())
         .bind(from_i64)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .map_err(PostgresError::Sqlx)?;
 
@@ -443,7 +552,7 @@ impl RawEventStore for PostgresStore {
         )
         .bind(from_txid)
         .bind(from_seq)
-        .fetch_all(&self.pool)
+        .fetch_all(self.pool())
         .await
         .map_err(PostgresError::Sqlx)?;
 

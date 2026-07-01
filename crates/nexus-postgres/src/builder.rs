@@ -30,6 +30,6 @@ impl PostgresStore {
     /// Returns [`PostgresError::Sqlx`] if the schema DDL fails.
     pub async fn from_pool(pool: PgPool) -> Result<Self, PostgresError> {
         ensure_schema(&pool).await?;
-        Ok(Self { pool })
+        Ok(Self::assemble(pool))
     }
 }
